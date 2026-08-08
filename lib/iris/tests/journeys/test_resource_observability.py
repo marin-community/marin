@@ -7,7 +7,8 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.controller.resources.rpc import ResourceServiceImpl
-from iris.rpc import job_pb2, resource_pb2, worker_pb2
+from iris.cluster.resources.endpoint import ExecResult, ProfileResult
+from iris.rpc import job_pb2, resource_pb2
 
 
 def _key(key) -> resource_pb2.ResourceKey:
@@ -60,10 +61,10 @@ def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> No
     selected = journey.submit("logs-selected", tasks=2, preemption_retries=1)
     other = journey.submit("logs-other")
     journey.settle()
-    first_attempt = journey.resource_attempt(selected[0]).summary.identity
+    first_attempt = journey.attempt(selected[0]).summary.identity
     journey.preempt(selected[0])
     journey.settle()
-    current_attempt = journey.resource_attempt(selected[0]).summary.identity
+    current_attempt = journey.attempt(selected[0]).summary.identity
 
     journey.push_task_logs(selected[0], ["selected-first-attempt"], attempt_id=0)
     journey.push_task_logs(selected[0], ["selected-current-attempt"], attempt_id=1)
@@ -71,8 +72,8 @@ def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> No
     journey.push_task_logs(other[0], ["other-job"], attempt_id=0)
 
     service = ResourceServiceImpl(journey.controller.resources)
-    job = journey.resource_job(selected).summary.identity
-    task = journey.resource_task(selected[0]).summary.identity
+    job = journey.job(selected).summary.identity
+    task = journey.task(selected[0]).summary.identity
 
     assert _log_lines(service, _job_target(job)) == {
         "selected-first-attempt",
@@ -100,10 +101,10 @@ def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> No
 def test_activity_keeps_durable_actions_when_task_events_are_unavailable(journey, monkeypatch) -> None:
     job = journey.submit("activity-partial", preemption_retries=1)
     journey.settle()
-    task = journey.resource_task(job[0]).summary
+    task = journey.task(job[0]).summary
     current = task.current_attempt
     assert current is not None
-    receipt = journey.retry_resource_task(
+    receipt = journey.retry_task(
         task.identity,
         expected_attempt_uid=current.attempt_uid,
         idempotency_key="activity-partial",
@@ -150,15 +151,15 @@ def test_exec_and_profile_refuse_a_superseded_attempt_before_the_runtime_boundar
     journey.settle()
     journey.preempt(job[0])
     journey.settle()
-    task_key = journey.resource_task(job[0]).summary.identity.key
-    current = journey.resource_attempt(job[0]).summary.identity
+    task_key = journey.task(job[0]).summary.identity.key
+    current = journey.attempt(job[0]).summary.identity
     assert current.attempt_number == 1
 
-    def exec_in_container(*_args, **_kwargs) -> worker_pb2.Worker.ExecInContainerResponse:
-        return worker_pb2.Worker.ExecInContainerResponse(exit_code=0, stdout="current exec")
+    def exec_in_container(*_args, **_kwargs) -> ExecResult:
+        return ExecResult(0, "current exec", "", "")
 
-    def profile_task(*_args, **_kwargs) -> job_pb2.ProfileTaskResponse:
-        return job_pb2.ProfileTaskResponse(profile_data=b"current profile")
+    def profile_task(*_args, **_kwargs) -> ProfileResult:
+        return ProfileResult(b"current profile", "")
 
     monkeypatch.setattr(journey.backend, "exec_in_container", exec_in_container)
     monkeypatch.setattr(journey.backend, "profile_task", profile_task)

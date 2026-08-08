@@ -26,18 +26,27 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName
+from iris.cluster.federation.peer import (
+    FederationPeer,
+    HandoffDelivery,
+    legacy_handoff_request,
+)
+from iris.cluster.federation.store import FederationSyncBatch
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.profile_codec import profile_configuration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
 from .conftest import (
     MockController,
     dispatch_task,
+    make_controller_service,
     make_controller_state,
     make_direct_job_request,
     promote_queued_federation,
@@ -71,33 +80,47 @@ class _ProxyPeerConnection:
     def shutdown(self) -> None:
         pass
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
+    def launch_job(self, delivery: HandoffDelivery) -> None:
         with identity_scope(_PEER_IDENTITY):
-            return self._service.launch_job(request, None)
+            self._service.launch_job(legacy_handoff_request(delivery), None)
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         with identity_scope(_PEER_IDENTITY):
-            return self._service.federation_sync(request, None)
+            response = self._service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+            )
+        return federation_batch_from_legacy(response)
 
     def terminate_job(self, job_id: JobName) -> None:
         with identity_scope(_PEER_IDENTITY):
             self._service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
 
-    def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
+    def profile_task(self, request: ProfileRequest) -> ProfileResult:
         self.profile_calls += 1
+        assert request.attempt is not None
         with identity_scope(_PEER_IDENTITY):
-            return self._service.profile_task(request, None)
+            response = self._service.profile_task(
+                job_pb2.ProfileTaskRequest(
+                    target=f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}",
+                    duration_seconds=int(request.duration.to_seconds()) if request.duration is not None else 0,
+                    profile_type=profile_configuration_to_proto(request.profile),
+                ),
+                None,
+            )
+        return ProfileResult(response.profile_data, response.error)
 
-    def exec_in_container(
-        self, request: controller_pb2.Controller.ExecInContainerRequest
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    def exec_in_container(self, request: ExecRequest) -> ExecResult:
         self.exec_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            return self._service.exec_in_container(request, None)
+            response = self._service.exec_in_container(
+                controller_pb2.Controller.ExecInContainerRequest(
+                    task_id=request.attempt.task.resource_id,
+                    command=request.command,
+                    timeout_seconds=int(request.timeout.to_seconds()) if request.timeout is not None else 0,
+                ),
+                None,
+            )
+        return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         self.status_calls += 1
@@ -111,7 +134,7 @@ def _make_service(
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
@@ -162,6 +185,8 @@ def _handoff_and_mirror_running_task(
 
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
+    with peer_state._db.transaction() as tx:
+        writes.stamp_backend(tx, [(job_id, DEFAULT_BACKEND_ID)])
     dispatch_task(peer_state, task, worker)
     manager.sync_once()
     return job_id
@@ -174,9 +199,7 @@ def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.profile_task.return_value = job_pb2.ProfileTaskResponse(
-            profile_data=b"peer-profile"
-        )
+        peer_service._controller.provider.profile_task.return_value = ProfileResult(b"peer-profile", "")
         resp = parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=job_id.task(0).to_wire(),
@@ -204,7 +227,7 @@ def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_cli
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"ok")
+        peer_service._controller.provider.profile_task.return_value = ProfileResult(b"ok", "")
         parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=f"{job_id.task(0).to_wire()}:0",
@@ -216,7 +239,8 @@ def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_cli
 
         (call,) = peer_service._controller.provider.profile_task.call_args_list
         # The forwarded request carries the target verbatim, with the attempt kept.
-        assert call.args[1].target == f"{job_id.task(0).to_wire()}:0"
+        assert call.args[1].attempt is not None
+        assert call.args[1].attempt.attempt_number == 0
 
 
 def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
@@ -226,9 +250,7 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
-            exit_code=0, stdout="hello"
-        )
+        peer_service._controller.provider.exec_in_container.return_value = ExecResult(0, "hello", "", "")
         resp = parent_service.exec_in_container(
             controller_pb2.Controller.ExecInContainerRequest(
                 task_id=job_id.task(0).to_wire(),
@@ -246,7 +268,7 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         # same, cluster-invariant task id.
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
-        assert call.args[1].task_id == job_id.task(0).to_wire()
+        assert call.args[1].attempt.task.resource_id == job_id.task(0).to_wire()
 
 
 def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
@@ -286,7 +308,7 @@ def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_pa
 
         # An auth-enforcing view of the peer over the same state. The handoff above ran
         # through the null-auth service (scoping skipped); this one activates it.
-        enforcing_peer = ControllerServiceImpl(
+        enforcing_peer = make_controller_service(
             controller=peer_service._controller,
             bundle_store=BundleStore(storage_dir=str(tmp_path / "peer" / "bundles")),
             log_client=log_client,
@@ -323,9 +345,7 @@ def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_c
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager, name="train:debug")
 
-        peer_service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
-            exit_code=0
-        )
+        peer_service._controller.provider.exec_in_container.return_value = ExecResult(0, "", "", "")
         resp = parent_service.exec_in_container(
             controller_pb2.Controller.ExecInContainerRequest(task_id=job_id.task(0).to_wire(), command=["true"]),
             None,

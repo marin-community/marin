@@ -110,12 +110,12 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
-    _tasks_for_listing,
     _worker_roster,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.resources.job import JobSpec
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, ResourceSpec, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -126,21 +126,6 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import CursorTransitionReader
-
-
-def _worker_addresses_for_tasks(db, tasks):
-    """Inlined for the branch: service.py removed this helper."""
-    worker_ids = {t.current_worker_id for t in tasks if getattr(t, "current_worker_id", None)}
-    if not worker_ids:
-        return {}
-    with db.read_snapshot() as q:
-        rows = q.execute(
-            select(workers_table.c.worker_id, workers_table.c.address).where(
-                workers_table.c.worker_id.in_(list(worker_ids))
-            )
-        ).all()
-    return {r.worker_id: r.address for r in rows}
-
 
 # ---------------------------------------------------------------------------
 # Result accumulation
@@ -1543,8 +1528,13 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
         def _list_tasks():
             with db.read_snapshot() as snap:
-                tasks = _tasks_for_listing(snap, job_id=sample_job)
-            _worker_addresses_for_tasks(db, tasks)
+                rows = snap.execute(reads.task_detail_query().where(tasks_table.c.job_id == sample_job)).all()
+                task_ids = [row.task_id for row in rows]
+                reads.bulk_get_attempts(
+                    snap,
+                    [(row.task_id, int(row.current_attempt_id)) for row in rows if int(row.current_attempt_id) >= 0],
+                )
+                reads.attempt_counts_for_tasks(snap, task_ids)
 
         bench("RPC: ListTasks (one job)", _list_tasks)
 
@@ -2446,8 +2436,8 @@ def _reconcile_launch_request(
     *,
     replicas: int,
     payload_bytes: int,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Build a zephyr-shaped LaunchJobRequest with an inflated workdir file.
+) -> JobSpec:
+    """Build a Zephyr-shaped JobSpec with an inflated workdir file.
 
     The workdir file lives on the job (not the task), and the controller
     pulls it once per job and embeds it in the cached RunTaskRequest
@@ -2460,13 +2450,30 @@ def _reconcile_launch_request(
     if payload_bytes > 0:
         entrypoint.workdir_files["state.pkl"] = (b"x" * 64 + b"\x00" * 8) * (payload_bytes // 72 + 1)
 
-    return controller_pb2.Controller.LaunchJobRequest(
+    return JobSpec(
+        version=1,
         name=job_id.to_wire(),
         entrypoint=entrypoint,
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=ResourceSpec(cpu=1, memory=1024**3),
         environment=job_pb2.EnvironmentConfig(),
+        bundle_id="",
+        scheduling_timeout=None,
+        ports=(),
+        max_task_failures=0,
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        constraints=(),
+        coscheduling=None,
         replicas=replicas,
+        timeout=None,
+        fail_if_exists=False,
+        preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         task_image="bench:latest",
+        submit_argv=(),
+        client_revision_date="",
+        container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     )
 
 
@@ -2502,7 +2509,7 @@ def _build_synthetic_reconcile_state(
     txns = ControllerTestState(db, health=health)
 
     job_id = JobName.root("bench", "zephyr")
-    request = _reconcile_launch_request(job_id, replicas=num_tasks, payload_bytes=payload_bytes)
+    spec = _reconcile_launch_request(job_id, replicas=num_tasks, payload_bytes=payload_bytes)
 
     meta = _reconcile_worker_metadata()
     worker_ids: list[WorkerId] = []
@@ -2529,9 +2536,9 @@ def _build_synthetic_reconcile_state(
         ops.job.submit(
             cur,
             job_id=job_id,
-            request=request,
+            spec=spec,
             ts=now,
-            priority_band=ops.job.resolve_priority_band(int(request.priority_band), None),
+            priority_band=ops.job.resolve_priority_band(int(spec.priority_band), None),
         )
 
     with db.read_snapshot() as tx:

@@ -94,6 +94,7 @@ from iris.cluster.controller.reconcile.dispatch import (
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.resources import ResourceController, ResourceServiceImpl
+from iris.cluster.controller.resources.facade import CapabilityUrlConfig
 from iris.cluster.controller.scheduling.meta_scheduler import (
     BackendRouting,
     RoutableJob,
@@ -107,7 +108,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
@@ -340,21 +341,6 @@ class Controller:
     as phases over a single read snapshot, committed through one end-of-tick write
     transaction — alongside the prune and checkpoint housekeeping threads.
 
-    Example:
-        ```python
-        config = ControllerConfig(port=8080, cluster_id="local")
-        controller = Controller(
-            config=config,
-            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
-        )
-        controller.start()
-        try:
-            job_id = controller.launch_job(request)
-            status = controller.get_job_status(job_id)
-        finally:
-            controller.stop()
-        ```
-
     Args:
         config: Controller configuration
         backends: The ``{backend_id: TaskBackend}`` collection the controller
@@ -511,26 +497,32 @@ class Controller:
             db=self._db,
             system_endpoints={},
         )
+        capability_url_config = CapabilityUrlConfig(
+            cluster_name=config.cluster_id,
+            local_origin=config.dashboard_url,
+            parent_origin=config.federation_public_parent,
+        )
+        self._resources = ResourceController(
+            cluster_id=config.cluster_id,
+            db=self._db,
+            runtime=self,
+            bundle_store=self._bundle_store,
+            endpoint_service=self._endpoint_service,
+            auth=config.auth or ControllerAuth(),
+            user_budget_defaults=config.user_budget_defaults,
+            capability_url_config=capability_url_config,
+            backends=self._backends,
+            log_client=self._log_client,
+        )
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
             log_client=self._log_client,
             db=self._db,
             endpoint_service=self._endpoint_service,
+            resources=self._resources,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
-            capability_url_config=CapabilityUrlConfig(
-                cluster_name=config.cluster_id,
-                local_origin=config.dashboard_url,
-                parent_origin=config.federation_public_parent,
-            ),
-        )
-        self._resources = ResourceController(
-            cluster_id=config.cluster_id,
-            db=self._db,
-            legacy=self._service,
-            backends=self._backends,
-            log_client=self._log_client,
         )
         self._resource_service = ResourceServiceImpl(self._resources)
         # Forwards a /proxy request for an endpoint that lives on a federated child
@@ -1784,13 +1776,6 @@ class Controller:
         )
         return path, result
 
-    def launch_job(
-        self,
-        request: controller_pb2.Controller.LaunchJobRequest,
-    ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Submit a job to the controller."""
-        return self._service.launch_job(request, None)
-
     def run_control_tick(self) -> None:
         """Run one complete control cycle synchronously before :meth:`start`.
 
@@ -1810,49 +1795,9 @@ class Controller:
             force_timeout_scan=True,
         )
 
-    def get_job_status(
-        self,
-        job_id: str,
-    ) -> controller_pb2.Controller.GetJobStatusResponse:
-        """Get the status of a job."""
-        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
-        return self._service.get_job_status(request, None)
-
-    def list_jobs(
-        self,
-        request: controller_pb2.Controller.ListJobsRequest | None = None,
-    ) -> controller_pb2.Controller.ListJobsResponse:
-        """Return Jobs matching the request query."""
-        return self._service.list_jobs(request or controller_pb2.Controller.ListJobsRequest(), None)
-
-    def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
-        """Return current public Task rows for a Job."""
-        request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
-        return self._service.list_tasks(request, None)
-
     @property
     def resources(self) -> ResourceController:
         return self._resources
-
-    def get_task_status(self, task_id: str) -> controller_pb2.Controller.GetTaskStatusResponse:
-        """Get one Task and its Attempt history."""
-        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
-        return self._service.get_task_status(request, None)
-
-    def terminate_job(
-        self,
-        job_id: str,
-    ) -> job_pb2.Empty:
-        """Terminate a running job."""
-        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
-        return self._service.terminate_job(request, None)
-
-    def kick_tasks(
-        self,
-        request: controller_pb2.Controller.KickTasksRequest,
-    ) -> controller_pb2.Controller.KickTasksResponse:
-        """Queue validated administrative state overrides for Tasks."""
-        return self._service.kick_tasks(request, None)
 
     def register_endpoint(
         self,
@@ -1860,16 +1805,6 @@ class Controller:
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
         """Register or renew a Task endpoint."""
         return self._service.endpoint_service.register_endpoint(request, None)
-
-    def list_endpoints(
-        self,
-        request: controller_pb2.Controller.ListEndpointsRequest | None = None,
-    ) -> controller_pb2.Controller.ListEndpointsResponse:
-        """Return Task endpoints matching the optional query."""
-        return self._service.endpoint_service.list_endpoints(
-            request or controller_pb2.Controller.ListEndpointsRequest(),
-            None,
-        )
 
     def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
         """Remove a Task endpoint by ID."""

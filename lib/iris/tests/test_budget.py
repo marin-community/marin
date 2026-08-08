@@ -22,6 +22,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from tests.cluster.controller.conftest import (
     MockController,
+    make_controller_service,
     make_controller_state,
     make_test_entrypoint,
 )
@@ -150,7 +151,7 @@ def test_effective_band_no_limit_row_uses_defaults():
 def service(state, tmp_path, log_client) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

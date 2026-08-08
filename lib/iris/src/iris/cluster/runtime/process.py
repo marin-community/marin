@@ -54,6 +54,8 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
+_IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+
 
 # =============================================================================
 # Subprocess cleanup on parent exit
@@ -433,7 +435,13 @@ class ProcessContainerHandle:
 
         # Remap container paths to host paths in env vars
         mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
-        env = {key: _remap_container_path(value, mount_map) for key, value in config.env.items()}
+        # Task IDs use slash-prefixed wire syntax, but are identities rather than
+        # container paths. Rewriting one through the /app workdir mount makes
+        # in-task endpoint registration and child submission address a fake Job.
+        env = {
+            key: value if key == _IRIS_TASK_ID_ENV else _remap_container_path(value, mount_map)
+            for key, value in config.env.items()
+        }
 
         # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
         for mount in config.mounts:

@@ -28,23 +28,22 @@ from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
 )
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
-from iris.rpc import controller_pb2, job_pb2
-from iris.time_proto import duration_from_proto
+from iris.cluster.resources.job import JobSpec
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName, ResourceSpec
+from iris.rpc import job_pb2
 
 
-def _extract_resource_cols(resources: job_pb2.ResourceSpecProto | None) -> tuple[int, int, int, str | None]:
+def _extract_resource_cols(resources: ResourceSpec) -> tuple[int, int, int, str | None]:
     """Return ``(cpu_millicores, memory_bytes, disk_bytes, device_json)`` columns.
 
     Missing resources map to zeros and a NULL device json.
     """
-    if resources is None:
-        return 0, 0, 0, None
+    proto = resources.to_exact_proto()
     return (
-        int(resources.cpu_millicores),
-        int(resources.memory_bytes),
-        int(resources.disk_bytes),
-        proto_to_json(resources.device),
+        int(proto.cpu_millicores),
+        int(proto.memory_bytes),
+        int(proto.disk_bytes),
+        proto_to_json(proto.device) if proto.HasField("device") else None,
     )
 
 
@@ -108,14 +107,22 @@ class JobInsertResult:
     validation_error: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReceivedHandoff:
+    requester_id: str
+    owner_principal: str
+    handoff_nonce: str
+
+
 def submit(
     cur: Tx,
     *,
     job_id: JobName,
-    request: controller_pb2.Controller.LaunchJobRequest,
+    spec: JobSpec,
     ts: Timestamp,
     priority_band: int,
     submitting_user: str | None = None,
+    received_handoff: ReceivedHandoff | None = None,
 ) -> None:
     """Insert the job row and expand its tasks. Caller owns the transaction.
 
@@ -126,10 +133,11 @@ def submit(
     inserted = insert_job_and_config(
         cur,
         job_id=job_id,
-        request=request,
+        spec=spec,
         ts=ts,
         priority_band=priority_band,
         submitting_user=submitting_user,
+        received_handoff=received_handoff,
     )
     if inserted.validation_error is None:
         _materialize_tasks(
@@ -137,8 +145,8 @@ def submit(
             job_id=job_id,
             num_tasks=inserted.replicas,
             submitted_at_ms=inserted.effective_submission_ms,
-            max_retries_failure=int(request.max_retries_failure),
-            max_retries_preemption=int(request.max_retries_preemption),
+            max_retries_failure=spec.max_retries_failure,
+            max_retries_preemption=spec.max_retries_preemption,
             priority_root_submitted_ms=inserted.root_submitted_ms,
             priority_band=priority_band,
         )
@@ -156,11 +164,12 @@ def insert_job_and_config(
     cur: Tx,
     *,
     job_id: JobName,
-    request: controller_pb2.Controller.LaunchJobRequest,
+    spec: JobSpec,
     ts: Timestamp,
     priority_band: int,
     cluster: str = LOCAL_CLUSTER,
     submitting_user: str | None = None,
+    received_handoff: ReceivedHandoff | None = None,
 ) -> JobInsertResult:
     """Insert the ``jobs`` + ``job_config`` (+ workdir file) rows for one job.
 
@@ -211,12 +220,10 @@ def insert_job_and_config(
         submitting_user = LOCAL_ADMIN_SUBMITTER
 
     deadline_epoch_ms: int | None = None
-    if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
-        deadline_epoch_ms = (
-            Timestamp.from_ms(effective_submission_ms).add(duration_from_proto(request.scheduling_timeout)).epoch_ms()
-        )
+    if spec.scheduling_timeout is not None and spec.scheduling_timeout.to_ms() > 0:
+        deadline_epoch_ms = Timestamp.from_ms(effective_submission_ms).add(spec.scheduling_timeout).epoch_ms()
 
-    replicas = int(request.replicas)
+    replicas = spec.replicas
     validation_error: str | None = None
     if replicas < 1:
         validation_error = f"Job {job_id} has invalid replicas={replicas}; must be >= 1"
@@ -228,23 +235,20 @@ def insert_job_and_config(
     state = job_pb2.JOB_STATE_PENDING if validation_error is None else job_pb2.JOB_STATE_FAILED
     finished_ms = None if validation_error is None else effective_submission_ms
 
-    res = request.resources if request.HasField("resources") else None
-    res_cpu, res_mem, res_disk, res_device = _extract_resource_cols(res)
-    constraints_json = constraints_to_json(list(request.constraints))
-    has_cosched = 1 if request.HasField("coscheduling") else 0
-    cosched_group = request.coscheduling.group_by if has_cosched else ""
+    res_cpu, res_mem, res_disk, res_device = _extract_resource_cols(spec.resources)
+    constraints_json = constraints_to_json(constraint.to_proto() for constraint in spec.constraints)
+    has_cosched = spec.coscheduling is not None
+    cosched_group = spec.coscheduling.group_by if spec.coscheduling is not None else ""
     sched_timeout: int | None = (
-        int(request.scheduling_timeout.milliseconds)
-        if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0
+        spec.scheduling_timeout.to_ms()
+        if spec.scheduling_timeout is not None and spec.scheduling_timeout.to_ms() > 0
         else None
     )
-    max_failures = int(request.max_task_failures)
-    entrypoint_json = entrypoint_to_json(request.entrypoint)
-    environment_json = proto_to_json(request.environment)
-    ports_json = list(request.ports)
-    timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
+    entrypoint_json = entrypoint_to_json(spec.entrypoint)
+    environment_json = proto_to_json(spec.environment)
+    timeout_ms = spec.timeout.to_ms() if spec.timeout is not None else None
 
-    job_name_lower = request.name.lower()
+    job_name_lower = spec.name.lower()
     writes.insert_job(
         cur,
         job_id=job_id,
@@ -274,27 +278,27 @@ def insert_job_and_config(
         res_disk_bytes=res_disk,
         res_device_json=res_device,
         constraints_json=constraints_json,
-        has_coscheduling=bool(has_cosched),
+        has_coscheduling=has_cosched,
         coscheduling_group_by=cosched_group,
         scheduling_timeout_ms=sched_timeout,
-        max_task_failures=max_failures,
+        max_task_failures=spec.max_task_failures,
         entrypoint_json=entrypoint_json,
         environment_json=environment_json,
-        bundle_id=request.bundle_id,
-        ports_json=ports_json,
-        max_retries_failure=int(request.max_retries_failure),
-        max_retries_preemption=int(request.max_retries_preemption),
+        bundle_id=spec.bundle_id,
+        ports_json=list(spec.ports),
+        max_retries_failure=spec.max_retries_failure,
+        max_retries_preemption=spec.max_retries_preemption,
         timeout_ms=timeout_ms,
-        preemption_policy=int(request.preemption_policy),
-        existing_job_policy=int(request.existing_job_policy),
+        preemption_policy=int(spec.preemption_policy),
+        existing_job_policy=int(spec.existing_job_policy),
         priority_band=priority_band,
-        task_image=request.task_image,
-        container_profile=int(request.container_profile),
-        submit_argv_json=list(request.submit_argv),
-        fail_if_exists=bool(request.fail_if_exists),
+        task_image=spec.task_image,
+        container_profile=int(spec.container_profile),
+        submit_argv_json=list(spec.submit_argv),
+        fail_if_exists=spec.fail_if_exists,
     )
 
-    workdir_files = dict(request.entrypoint.workdir_files)
+    workdir_files = dict(spec.entrypoint.workdir_files)
     if workdir_files:
         cur.execute(
             insert(job_workdir_files_table),
@@ -305,13 +309,13 @@ def insert_job_and_config(
     # RECEIVED federated_jobs row (after the jobs row, per the FK) naming the
     # requester, so FederationSync reports it back only to that requester and the
     # changelog events below (and its tasks') resolve their requester from it.
-    if request.HasField("federation"):
+    if received_handoff is not None:
         writes.insert_received_handle(
             cur,
             job_id=job_id,
-            requester_id=request.federation.requester_id,
-            owner_principal=request.federation.owner_principal,
-            handoff_nonce=request.federation.handoff_nonce,
+            requester_id=received_handoff.requester_id,
+            owner_principal=received_handoff.owner_principal,
+            handoff_nonce=received_handoff.handoff_nonce,
         )
 
     # Record the job-level creation for any requester federating with this peer (a

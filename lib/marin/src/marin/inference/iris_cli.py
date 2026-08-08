@@ -56,6 +56,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
+from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
@@ -231,6 +232,11 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
+def _endpoint_details(client: IrisClient, endpoint_name: str) -> list[EndpointDetail]:
+    page = client.list_endpoints(EndpointQuery(name_prefix=endpoint_name, page_size=100))
+    return [client.describe_endpoint(summary.key) for summary in page.items if summary.name == endpoint_name]
+
+
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
     """Poll the controller registry until the endpoint registers; return its address."""
     deadline = time.monotonic() + timeout_seconds
@@ -241,7 +247,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = client.list_endpoint_instances(endpoint_name)
+        endpoints = _endpoint_details(client, endpoint_name)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -262,8 +268,11 @@ def _mint_and_print_capability_url(
     authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
     controller's maximum).
     """
-    resp = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
-    hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    endpoints = _endpoint_details(client, endpoint)
+    if not endpoints:
+        raise click.ClickException(f"Endpoint {endpoint!r} is not registered")
+    resp = client.mint_endpoint_token(endpoints[0].summary.key, ttl=Duration.from_hours(ttl_hours))
+    hours_left = max(0.0, (resp.expires_at.epoch_ms() - int(time.time() * 1000)) / 3_600_000)
     # The controller assembles the origin (a cluster-tagged parent URL when it has a
     # public parent, else its local origin); fall back to a passed dashboard origin.
     origin_url = resp.capability_url or (

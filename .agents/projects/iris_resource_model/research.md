@@ -55,10 +55,11 @@ losing submissions during a short disaster rollback. Therefore the mega PR
 should have:
 
 - no old-image compatibility writes;
-- no compatibility RPC or CLI aliases;
+- no compatibility CLI or internal aliases; the old Job/Task RPC wire may remain
+  as a translation-only boundary while external callers migrate;
 - no dual-read or dual-write interval;
 - no telemetry waiting period before contraction;
-- one exact current-schema-to-resource-schema migration;
+- ordinary ordered migrations on the one active schema;
 - a pre-migration checkpoint and quiesced controller;
 - restore of that checkpoint plus the old image as disaster recovery, with the
   possible loss window stated plainly;
@@ -112,14 +113,13 @@ tests remain green.
 - Mutations target exact incarnations and have durable, idempotent receipts.
 - Activity uses the existing task-event stream plus action receipts; do not add
   a second event store.
-- Fresh and upgraded databases must have the same final schema fingerprint.
-- The migration supports one declared source fingerprint and rejects unknown
-  or partially migrated databases without mutation.
+- Fresh and upgraded databases must pass the same ordered migration chain.
+- Do not add a parallel schema implementation or handwritten SQL parser.
 
 ## Risks to resolve in design review
 
-- A single schema cutover makes the first commit group large even when its
-  behavior is intentionally unchanged.
+- Moving every internal caller in one group is large even when its behavior is
+  intentionally unchanged.
 - The final public surface spans CLI, Python SDK, dashboard, federation, and
   providers; leaving one out would preserve the vocabulary split.
 - Durable actions add real product behavior, not only cleanup. Their supported
@@ -134,7 +134,8 @@ tests remain green.
 - Use `activity` for the public history verb and remove `task events`.
 - Implement Job cancel, Task retry, and Attempt terminate. Manual Slice deletion
   is outside the PR.
-- Accept only the exact merge-base schema fingerprint during upgrade.
-- Cut independent controllers over separately. A connected federation component
-  must quiesce and cut over together because the design has no compatibility
-  wire bridge.
+- Evolve the active schema through ordinary ordered migrations. Defer physical
+  rollup and auth-sidecar removal until they can replace migration history
+  directly.
+- Cut independent controllers over separately. Federation translates the old
+  wire request to resource records at the receiving RPC boundary.

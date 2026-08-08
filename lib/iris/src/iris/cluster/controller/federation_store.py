@@ -16,14 +16,13 @@ import uuid
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import (
-    Constraint,
     peer_availability_gate,
     routing_constraints,
     strip_backend_constraints,
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.codec import reconstruct_launch_job_request
+from iris.cluster.controller.codec import reconstruct_job_spec
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
@@ -31,12 +30,16 @@ from iris.cluster.controller.projections.run_templates import RunTemplatesProjec
 from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
     CancelTarget,
+    FederationJobDelta,
     HandoffAdmission,
     HandoffSpec,
     HandoffState,
+    SyncedEndpoint,
+    SyncedJob,
+    SyncedTask,
 )
+from iris.cluster.resources.endpoint import EndpointAccess
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
-from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ logger = logging.getLogger(__name__)
 # stale mirror keeps forwarding after the peer goes silent — short enough to stop
 # routing to a lost peer, long enough to ride out sync jitter.
 FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
+_STORED_ENDPOINT_ACCESS = {EndpointAccess.PRIVATE: 0, EndpointAccess.LINK: 2}
 
 
 def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
@@ -64,9 +68,8 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         if job is None or job.state in TERMINAL_JOB_STATES:
             continue
         # Shape only — this pass reads constraints and resources, never the payload.
-        request = reconstruct_launch_job_request(job, workdir_files={})
-        constraints = [Constraint.from_proto(c) for c in request.constraints]
-        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        spec = reconstruct_job_spec(job, workdir_files={})
+        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(list(spec.constraints))))
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,
@@ -74,19 +77,18 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
                 priority_band=job.priority_band,
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
-                availability_gate=peer_availability_gate(request.resources.device, request.replicas),
+                availability_gate=peer_availability_gate(spec.resources.device, spec.replicas),
             )
         )
     candidates.sort(key=lambda c: (c.priority_band, c.submitted_at_ms))
     return candidates
 
 
-def _proto_ms(has: bool, ts) -> int | None:
-    """Epoch ms of a proto ``Timestamp`` field, or ``None`` when unset."""
-    return timestamp_from_proto(ts).epoch_ms() if has else None
+def _epoch_ms(value: Timestamp | None) -> int | None:
+    return value.epoch_ms() if value is not None else None
 
 
-def _endpoint_rows_from_protos(peer_id: str, protos, now: Timestamp) -> list[EndpointRow]:
+def _endpoint_rows(peer_id: str, endpoints: tuple[SyncedEndpoint, ...], now: Timestamp) -> list[EndpointRow]:
     """Build mirror ``EndpointRow``s from a peer's reported endpoint snapshot.
 
     The lease deadline is ``now`` plus the reported remaining time, capped at
@@ -94,20 +96,20 @@ def _endpoint_rows_from_protos(peer_id: str, protos, now: Timestamp) -> list[End
     the peer. A snapshot without ``lease_remaining`` still expires under the cap.
     """
     rows: list[EndpointRow] = []
-    for ep in protos:
-        remaining = duration_from_proto(ep.lease_remaining) if ep.HasField("lease_remaining") else None
+    for endpoint in endpoints:
+        remaining = endpoint.lease_remaining
         remaining_ms = FEDERATED_ENDPOINT_MIRROR_TTL.to_ms() if remaining is None else remaining.to_ms()
         remaining_ms = min(remaining_ms, FEDERATED_ENDPOINT_MIRROR_TTL.to_ms())
         rows.append(
             EndpointRow(
-                endpoint_id=ep.endpoint_id,
-                name=ep.name,
-                address=ep.address,
-                task_id=JobName.from_wire(ep.task_id),
-                metadata=dict(ep.metadata),
+                endpoint_id=endpoint.endpoint_id,
+                name=endpoint.name,
+                address=endpoint.address,
+                task_id=endpoint.task_id,
+                metadata=dict(endpoint.metadata),
                 registered_at=now,
                 lease_deadline=now.add_ms(remaining_ms),
-                access=ep.access,
+                access=_STORED_ENDPOINT_ACCESS[endpoint.access],
                 peer_id=peer_id,
             )
         )
@@ -139,9 +141,9 @@ class ControllerFederationStore:
             ops.job.insert_job_and_config(
                 cur,
                 job_id=spec.local_job_id,
-                request=spec.request,
+                spec=spec.spec,
                 ts=now,
-                priority_band=int(spec.request.priority_band),
+                priority_band=int(spec.spec.priority_band),
                 cluster=spec.peer_id,
                 submitting_user=spec.submitting_user,
             )
@@ -185,9 +187,7 @@ class ControllerFederationStore:
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
                         submitting_user=job.submitting_user,
-                        request=reconstruct_launch_job_request(
-                            job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
-                        ),
+                        spec=reconstruct_job_spec(job, workdir_files=reads.get_workdir_files(tx, handle.job_id)),
                         handoff_nonce=handle.handoff_nonce,
                     )
                 )
@@ -248,11 +248,11 @@ class ControllerFederationStore:
     def apply_sync_batch(
         self,
         peer_id: str,
-        deltas,
+        deltas: tuple[FederationJobDelta, ...],
         *,
         next_cursor: str,
         cursor_stale: bool,
-        endpoints=(),
+        endpoints: tuple[SyncedEndpoint, ...] = (),
     ) -> None:
         with self._db.transaction() as cur:
             for delta in deltas:
@@ -262,7 +262,7 @@ class ControllerFederationStore:
                 # part of that subtree, whether it is the root itself or a child the
                 # peer spawned under it. A delta whose root was never handed here is
                 # a disagreement, not normal traffic, so log and ignore it.
-                local_job_id = JobName.from_wire(delta.job_id)
+                local_job_id = delta.job_id
                 if reads.federated_sent_job(cur, peer_id, local_job_id.root_job) is None:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
@@ -278,32 +278,35 @@ class ControllerFederationStore:
             # Set-replace this peer's mirrored endpoints from its full reported set
             # (applied after the job/task deltas above create the FK targets).
             cur.caches[EndpointsProjection].replace_remote_for_peer(
-                cur, peer_id, _endpoint_rows_from_protos(peer_id, endpoints, Timestamp.now())
+                cur, peer_id, _endpoint_rows(peer_id, endpoints, Timestamp.now())
             )
 
             writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 
-    def _mirror_delta(self, cur: Tx, peer_id: str, local_job_id: JobName, delta) -> None:
+    def _mirror_delta(self, cur: Tx, peer_id: str, local_job_id: JobName, delta: FederationJobDelta) -> None:
         summary = delta.summary
+        if summary is None:
+            raise ValueError(f"federation delta for {local_job_id} has no summary")
+        existing = reads.get_job_detail(cur, local_job_id)
+        backend_id = _canonical_delta_backend(existing, summary, delta.changed_tasks)
         # The root's mirror row is created at handoff; a child the peer spawned under
         # it has none until its first delta, so create it before mirroring state (and
         # before its tasks, which FK to the job row).
-        if reads.get_job_state(cur, local_job_id) is None and not self._insert_child_mirror(
-            cur, peer_id, local_job_id, summary
-        ):
+        if existing is None and not self._insert_child_mirror(cur, peer_id, local_job_id, summary):
             return
         writes.mirror_federated_job(
             cur,
             job_id=local_job_id,
             state=summary.state,
-            error=summary.error or None,
-            exit_code=summary.exit_code or None,
-            started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
-            finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
+            error=summary.error_message or None,
+            exit_code=summary.exit_code,
+            started_at_ms=_epoch_ms(summary.started_at),
+            finished_at_ms=_epoch_ms(summary.finished_at),
             num_tasks=summary.task_count,
+            backend_id=backend_id,
         )
         for task in delta.changed_tasks:
-            peer_task_id = JobName.from_wire(task.task_id)
+            peer_task_id = task.task_id
             index = peer_task_id.task_index
             if index is None:
                 continue
@@ -315,22 +318,28 @@ class ControllerFederationStore:
                 task_index=index,
                 peer_id=peer_id,
                 state=task.state,
-                error=task.error or None,
-                exit_code=task.exit_code or None,
-                submitted_at_ms=_proto_ms(task.HasField("submitted_at"), task.submitted_at),
-                started_at_ms=_proto_ms(task.HasField("started_at"), task.started_at),
-                finished_at_ms=_proto_ms(task.HasField("finished_at"), task.finished_at),
+                error=task.error_message or None,
+                exit_code=task.exit_code,
+                submitted_at_ms=_epoch_ms(task.submitted_at),
+                started_at_ms=_epoch_ms(task.started_at),
+                finished_at_ms=_epoch_ms(task.finished_at),
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
-                peer_worker_label=task.worker_id or task.worker_address,
+                peer_worker_label=task.worker_label,
                 status_message=task.status_message or None,
+                backend_id=backend_id,
             )
-            writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
+            writes.mirror_federated_attempts(
+                cur,
+                task_id=local_task_id,
+                attempts=task.attempts,
+                backend_id=backend_id,
+            )
             # The parent derives the federated task's counts from these mirrored
             # attempts, so drop the job's cached totals via the cursor's memo.
             cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
 
-    def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
+    def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary: SyncedJob) -> bool:
         """Create the local mirror rows for a child a peer spawned under a received root.
 
         The whole federated subtree shares the root's submitter, root submit time, and
@@ -362,13 +371,13 @@ class ControllerFederationStore:
             root_job_id=local_job_id.root_job.to_wire(),
             depth=local_job_id.depth,
             state=summary.state,
-            submitted_at_ms=_proto_ms(summary.HasField("submitted_at"), summary.submitted_at) or root_submitted_ms,
+            submitted_at_ms=_epoch_ms(summary.submitted_at) or root_submitted_ms,
             root_submitted_at_ms=root_submitted_ms,
-            started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
-            finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
+            started_at_ms=_epoch_ms(summary.started_at),
+            finished_at_ms=_epoch_ms(summary.finished_at),
             scheduling_deadline_epoch_ms=None,
-            error=summary.error or None,
-            exit_code=summary.exit_code or None,
+            error=summary.error_message or None,
+            exit_code=summary.exit_code,
             num_tasks=summary.task_count,
             name=local_job_id.name,
             cluster=peer_id,
@@ -377,7 +386,7 @@ class ControllerFederationStore:
             cur,
             job_id=local_job_id,
             name=local_job_id.name,
-            resources=summary.resources,
+            resources=summary.resources.to_exact_proto(),
             priority_band=int(seed.priority_band),
         )
         # job_config backs RunTemplatesProjection; invalidate post-commit per its
@@ -385,11 +394,22 @@ class ControllerFederationStore:
         cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         return True
 
-    def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:
+    def _set_replace(self, cur: Tx, peer_id: str, deltas: tuple[FederationJobDelta, ...]) -> None:
         """Full-resync set-replacement: drop any local handle for ``peer_id``
         absent from the peer's active set, reclaiming a job the parent never saw
         tombstoned."""
         active = {delta.job_id for delta in deltas if not delta.tombstone}
         for local_job_id in reads.federated_handles_for_peer(cur, peer_id):
-            if local_job_id.to_wire() not in active:
+            if local_job_id not in active:
                 writes.delete_job(cur, local_job_id)
+
+
+def _canonical_delta_backend(existing, summary: SyncedJob, tasks: tuple[SyncedTask, ...]) -> str:
+    stored = str(existing.backend_id or "") if existing is not None else ""
+    reported = {str(value) for value in (summary.backend_id, *(task.backend_id for task in tasks)) if value}
+    if len(reported) > 1:
+        raise ValueError(f"federation delta reports conflicting backend coordinates: {sorted(reported)}")
+    asserted = next(iter(reported), "")
+    if stored and asserted and stored != asserted:
+        raise ValueError(f"federation delta changed backend coordinate from {stored!r} to {asserted!r}")
+    return stored or asserted

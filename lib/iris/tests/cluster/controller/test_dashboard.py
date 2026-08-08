@@ -42,7 +42,6 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
@@ -61,6 +60,7 @@ from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_
 
 from .conftest import (
     check_task_can_be_scheduled,
+    make_controller_service,
     make_test_entrypoint,
     make_worker_metadata,
     register_worker,
@@ -276,7 +276,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 @pytest.fixture
 def service(state, scheduler, tmp_path, embedded_log_server, log_client):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -312,7 +312,7 @@ def test_dashboard_serves_the_resource_service_surface(service) -> None:
 @pytest.fixture
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_client):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1491,7 +1491,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
     controller_mock.provider = Mock(capabilities=cluster_caps)
     controller_mock.provider.name = "kubernetes"
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1527,7 +1527,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
     controller_mock.backends = {DEFAULT_BACKEND_ID: provider}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1743,7 +1743,7 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
     controller_mock.backends = dict(backends)
     controller_mock.provider = next(iter(backends.values()))
     controller_mock.capabilities = frozenset(cap for backend in backends.values() for cap in backend.capabilities)
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1837,10 +1837,10 @@ def test_task_backend_id_propagated_to_proto(client, state, job_request):
     tasks = _query_tasks_with_attempts(state, job_id)
     task_id = tasks[0].task_id
     with state._db.transaction() as tx:
-        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id="gcp"))
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id=DEFAULT_BACKEND_ID))
 
     resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
-    assert resp["task"]["backendId"] == "gcp"
+    assert resp["task"]["backendId"] == DEFAULT_BACKEND_ID
 
 
 def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
@@ -1886,7 +1886,8 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
     """ListWorkers stamps backend_id (resolved via backend_id_for_scale_group) and scale_group."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
-    svc = ControllerServiceImpl(
+    controller_mock.backends["gcp"] = _worker_backend(state, None, "gcp")
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1908,7 +1909,7 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
     """GetWorkerStatus stamps backend_id (resolved via scale_group) and scale_group (worker detail page)."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1928,7 +1929,13 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
     """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend_id_for_scale_group = lambda sg: {"tpu-v5e": "gcp", "h100": "cw"}.get(sg, DEFAULT_BACKEND_ID)
-    svc = ControllerServiceImpl(
+    controller_mock.backends.update(
+        {
+            "gcp": _worker_backend(state, None, "gcp"),
+            "cw": _worker_backend(state, None, "cw"),
+        }
+    )
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1965,7 +1972,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         sg, DEFAULT_BACKEND_ID
     )
     controller_mock.last_unroutable_jobs = {"/alice/exp": "no backend matches the job's constraints"}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

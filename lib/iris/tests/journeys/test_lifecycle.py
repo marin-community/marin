@@ -12,7 +12,7 @@ def test_job_when_every_task_succeeds_reports_exact_public_fold(journey):
     journey.succeed_all(job)
     journey.settle()
 
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
     assert [task.state for task in journey.tasks(job)] == [job_pb2.TASK_STATE_SUCCEEDED] * 8
     assert len(journey.backend_events(kind="launched")) == 8
 
@@ -34,7 +34,7 @@ def test_task_7_when_application_fails_once_retries_without_affecting_siblings(j
         job_pb2.TASK_STATE_SUCCEEDED,
     ]
     assert all(len(journey.task(job[index]).attempts) == 1 for index in range(7))
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_when_failure_budget_is_exhausted_fails_job(journey):
@@ -51,7 +51,7 @@ def test_task_when_failure_budget_is_exhausted_fails_job(journey):
         job_pb2.TASK_STATE_FAILED,
         job_pb2.TASK_STATE_FAILED,
     ]
-    assert journey.job(job).state == job_pb2.JOB_STATE_FAILED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_FAILED
 
 
 def test_task_when_runtime_disappears_retries_without_charging_failure_budget(journey):
@@ -68,7 +68,7 @@ def test_task_when_runtime_disappears_retries_without_charging_failure_budget(jo
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_SUCCEEDED,
     ]
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_when_preempted_retries_under_separate_budget(journey):
@@ -84,7 +84,7 @@ def test_task_when_preempted_retries_under_separate_budget(journey):
         job_pb2.TASK_STATE_PREEMPTED,
         job_pb2.TASK_STATE_SUCCEEDED,
     ]
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_when_preemption_budget_is_exhausted_ends_job_as_worker_failed(journey):
@@ -100,7 +100,7 @@ def test_task_when_preemption_budget_is_exhausted_ends_job_as_worker_failed(jour
         job_pb2.TASK_STATE_PREEMPTED,
         job_pb2.TASK_STATE_PREEMPTED,
     ]
-    assert journey.job(job).state == job_pb2.JOB_STATE_WORKER_FAILED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_WORKER_FAILED
 
 
 def test_job_when_cumulative_failure_budget_is_crossed_stops_live_siblings(journey):
@@ -112,8 +112,8 @@ def test_job_when_cumulative_failure_budget_is_crossed_stops_live_siblings(journ
     journey.fail(job[1])
     journey.settle()
 
-    assert journey.job(job).state == job_pb2.JOB_STATE_FAILED
-    assert journey.task(job[2]).state == job_pb2.TASK_STATE_KILLED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_FAILED
+    assert journey.task(job[2]).summary.state == job_pb2.TASK_STATE_KILLED
 
 
 @pytest.mark.timeout(30)
@@ -124,7 +124,7 @@ def test_job_with_128_tasks_converges_without_duplicate_launches(journey):
     journey.succeed_all(job)
     journey.settle()
 
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
     assert len(journey.backend_events(kind="launched")) == 128
 
 
@@ -136,7 +136,7 @@ def test_late_observation_from_abandoned_attempt_cannot_finish_replacement(journ
 
     journey.succeed(job[0], attempt_id=0)
     journey.settle()
-    assert journey.task(job[0]).state == job_pb2.TASK_STATE_RUNNING
+    assert journey.task(job[0]).summary.state == job_pb2.TASK_STATE_RUNNING
 
     journey.succeed(job[0])
     journey.settle()

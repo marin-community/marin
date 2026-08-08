@@ -20,6 +20,9 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller import db as controller_db
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.resources.action import ActionResult, ActionState
+from iris.rpc import job_pb2
+from tests.journeys.world import journey_world
 
 MIGRATIONS_DIR = Path(controller_db.__file__).with_name("migrations")
 
@@ -222,3 +225,40 @@ def test_reopening_a_migrated_db_changes_nothing(tmp_path: Path) -> None:
     _migrate(db_dir)
 
     assert (_schema(db_dir), _recorded_migrations(db_dir)) == before
+
+
+def test_0051_upgrade_preserves_resources_and_reopens_idempotent_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the additive migration over a populated pre-0051 database."""
+    with journey_world(tmp_path, monkeypatch) as before_upgrade:
+        job = before_upgrade.submit("pre-0051", tasks=2)
+        before_upgrade.settle()
+        job_before = before_upgrade.job(job).summary
+        tasks_before = before_upgrade.tasks(job)
+
+    db_dir = tmp_path / "db"
+    with closing(_connect(db_dir)) as conn:
+        conn.execute("DROP TABLE action_receipts")
+        conn.execute("DELETE FROM schema_migrations WHERE name = ?", ("0051_action_receipts.py",))
+        conn.commit()
+
+    with journey_world(tmp_path, monkeypatch) as upgraded:
+        job_after = upgraded.job(job).summary
+        tasks_after = upgraded.tasks(job)
+        assert (job_after.identity, job_after.state) == (job_before.identity, job_before.state)
+        assert [(task.identity, task.state) for task in tasks_after] == [
+            (task.identity, task.state) for task in tasks_before
+        ]
+
+        accepted = upgraded.cancel_job(job_after.identity, idempotency_key="pre-0051-cancel")
+        assert accepted.state is ActionState.SUCCEEDED
+        assert accepted.result_code is ActionResult.SATISFIED
+
+    with journey_world(tmp_path, monkeypatch) as reopened:
+        duplicate = reopened.cancel_job(job_after.identity, idempotency_key="pre-0051-cancel")
+        assert duplicate == accepted
+        assert reopened.action_receipt(accepted.action_id) == accepted
+        assert reopened.job(job).summary.state == job_pb2.JOB_STATE_KILLED
+        assert {task.state for task in reopened.tasks(job)} == {job_pb2.TASK_STATE_KILLED}

@@ -1,71 +1,134 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ClusterClient protocol defining the interface for cluster client implementations."""
+"""Typed protocols for first-party Iris clients."""
 
+from collections.abc import Iterator, Sequence
 from typing import Protocol
 
-from finelog.rpc import logging_pb2
 from rigging.timing import Duration
 
-from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.client.endpoint_client import EndpointInstance
+from iris.cluster.resources.action import ActionReceipt
+from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
+from iris.cluster.resources.attempt import AttemptDetail
+from iris.cluster.resources.endpoint import (
+    EndpointDetail,
+    EndpointQuery,
+    EndpointSummary,
+    EndpointToken,
+    ExecResult,
+    ProfileResult,
+)
+from iris.cluster.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    NodeLocator,
+    ResourceKey,
+    SliceLocator,
+    TaskIdentity,
+)
+from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
+from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
+from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
+from iris.cluster.resources.source import Page
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
+from iris.rpc import iris_logging_pb2, job_pb2
 
 
-class ClusterClient(Protocol):
-    """Protocol for cluster client implementations.
+class ResourceClientProtocol(Protocol):
+    """The public resource API shared by local and remote clients."""
 
-    RemoteClusterClient satisfies this protocol, enabling callers to depend
-    on the interface rather than concrete types.
-    """
+    def submit_job(self, spec: JobSpec, *, bundle: bytes | None = None) -> JobIdentity: ...
 
-    def submit_job(
+    def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]: ...
+
+    def describe_job(self, key: ResourceKey) -> JobDetail: ...
+
+    def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]: ...
+
+    def describe_task(self, key: ResourceKey) -> TaskDetail: ...
+
+    def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail: ...
+
+    def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]: ...
+
+    def describe_node(self, locator: NodeLocator) -> NodeDetail: ...
+
+    def list_slices(self, query: SliceQuery = SliceQuery()) -> Page[SliceSummary]: ...
+
+    def describe_slice(self, locator: SliceLocator) -> SliceDetail: ...
+
+    def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]: ...
+
+    def describe_endpoint(self, key: ResourceKey) -> EndpointDetail: ...
+
+    def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken: ...
+
+    def list_activity(self, query: ActivityQuery) -> Page[ActivityEntry]: ...
+
+    def fetch_job_logs(self, identity: JobIdentity, query: LogQuery = LogQuery()) -> LogPage: ...
+
+    def fetch_task_logs(self, identity: TaskIdentity, query: LogQuery = LogQuery()) -> LogPage: ...
+
+    def fetch_attempt_logs(self, identity: AttemptIdentity, query: LogQuery = LogQuery()) -> LogPage: ...
+
+    def stream_job_logs(
         self,
-        job_id: JobName,
-        entrypoint: Entrypoint,
-        resources: job_pb2.ResourceSpecProto,
-        environment: job_pb2.EnvironmentConfig | None = None,
-        ports: list[str] | None = None,
-        scheduling_timeout: Duration | None = None,
-        constraints: list[job_pb2.Constraint] | None = None,
-        coscheduling: job_pb2.CoschedulingConfig | None = None,
-        replicas: int = 1,
-        max_retries_failure: int = 0,
-        max_retries_preemption: int = 1000,
-        max_task_failures: int = 0,
-        timeout: Duration | None = None,
-        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-        task_image: str | None = None,
-        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
-        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
-        submit_argv: list[str] | None = None,
-    ) -> JobName: ...
+        identity: JobIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
 
-    def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...
-
-    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
-        """Lightweight batch query returning only the state enum per job."""
-        ...
-
-    def wait_for_job(
+    def stream_task_logs(
         self,
-        job_id: JobName,
-        timeout: float = 300.0,
-        poll_interval: float = 30.0,
-    ) -> job_pb2.JobStatus: ...
+        identity: TaskIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
 
-    def wait_for_job_with_streaming(
+    def stream_attempt_logs(
         self,
-        job_id: JobName,
+        identity: AttemptIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
         *,
-        timeout: float,
-        poll_interval: float = 30.0,
-        since_ms: int = 0,
-        min_level: str = "",
-    ) -> job_pb2.JobStatus: ...
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt: ...
 
-    def terminate_job(self, job_id: JobName) -> None: ...
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+
+    def get_action_receipt(self, action_id: str) -> ActionReceipt: ...
+
+    def wait_for_action(self, action_id: str, *, timeout: Duration) -> ActionReceipt: ...
+
+    def exec_attempt(
+        self,
+        locator: AttemptLocator,
+        *,
+        command: Sequence[str],
+        timeout: Duration,
+    ) -> ExecResult: ...
+
+    def profile_attempt(
+        self,
+        locator: AttemptLocator,
+        *,
+        profile: job_pb2.ProfileType,
+        duration: Duration,
+    ) -> ProfileResult: ...
+
+
+class ClusterClient(ResourceClientProtocol, Protocol):
+    """Resource client plus task-runtime transports used by ``IrisClient``."""
 
     def register_endpoint(
         self,
@@ -78,53 +141,16 @@ class ClusterClient(Protocol):
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
 
-    def mint_endpoint_token(
-        self, endpoint_name: str, ttl: Duration | None = None
-    ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
-
-    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]: ...
-
-    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]: ...
-
-    def list_workers(
-        self,
-        query: controller_pb2.Controller.WorkerQuery | None = None,
-    ) -> list[controller_pb2.Controller.WorkerHealthStatus]: ...
-
-    def list_jobs(
-        self,
-        *,
-        query: controller_pb2.Controller.JobQuery | None = None,
-        limit: int | None = None,
-        page_size: int = 500,
-    ) -> list[job_pb2.JobStatus]: ...
-
-    def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
-
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
-
-    def kick_tasks(
-        self,
-        targets: list[str],
-        desired_state: job_pb2.TaskState,
-        reason: str,
-    ) -> list[controller_pb2.Controller.KickResult]: ...
-
-    def fetch_logs(
-        self,
-        source: str,
-        *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
-        since_ms: int = 0,
-        cursor: int = 0,
-        max_lines: int = 0,
-        substring: str = "",
-        min_level: str = "",
-        tail: bool = False,
-    ) -> logging_pb2.FetchLogsResponse: ...
-
-    def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse: ...
+    def list_endpoint_instances(self, name: str) -> list[EndpointInstance]: ...
 
     def resolve_endpoint(self, endpoint_name: str) -> str: ...
+
+    def report_task_status_text(
+        self,
+        task_id: JobName,
+        attempt_id: int,
+        detail_md: str,
+        summary_md: str,
+    ) -> None: ...
 
     def shutdown(self, wait: bool = True) -> None: ...

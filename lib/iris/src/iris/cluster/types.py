@@ -9,7 +9,8 @@ This module provides Python types for the Iris cluster API:
 - Entrypoint: Callable wrapper for job execution
 - Namespace: Type-safe namespace identifier
 
-Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
+Generated messages in :mod:`iris.rpc` are serialization types, not the public
+Job and Task model. Public resource records live in :mod:`iris.cluster.resources`.
 """
 
 import functools
@@ -648,11 +649,16 @@ class ResourceSpec:
 
     def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
+        spec = self.to_exact_proto()
+        if self.device is not None and spec.cpu_millicores < self.MIN_ACCELERATOR_CPU_MILLICORES:
+            spec.cpu_millicores = self.MIN_ACCELERATOR_CPU_MILLICORES
+        return spec
+
+    def to_exact_proto(self) -> job_pb2.ResourceSpecProto:
+        """Convert without applying client-side resource defaults."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         cpu_mc = int(self.cpu * 1000)
-        if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
-            cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
         spec = job_pb2.ResourceSpecProto(
             cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,

@@ -20,6 +20,7 @@ from iris.cluster.resources.errors import (
     InvalidResourceKey,
     ResourceNotFound,
     ResourceReplaced,
+    ResourceSourceUnavailable,
 )
 from iris.cluster.resources.identity import (
     AttemptIdentity,
@@ -38,8 +39,9 @@ from iris.cluster.resources.slice import MembershipState, SliceLifecycle, SliceQ
 from iris.cluster.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.cluster.resources.task import TaskQuery
 from iris.cluster.types import CoschedulingConfig, JobName, ResourceSpec
-from iris.rpc import controller_pb2, resource_pb2
+from iris.rpc import resource_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, authorize_resource_owner
+from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
 _RESOURCE_KIND_FROM_PROTO = {
@@ -254,6 +256,7 @@ def _job_summary_to_proto(value) -> resource_pb2.JobSummary:
         num_tasks=value.num_tasks,
         submitted_at=timestamp_to_proto(value.submitted_at),
         error_message=value.error_message,
+        pending_reason=value.pending_reason,
     )
     if value.parent is not None:
         result.parent.CopyFrom(_job_identity_to_proto(value.parent))
@@ -421,10 +424,11 @@ def _job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
 
 
 def _job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
-    launch = controller_pb2.Controller.LaunchJobRequest(
+    result = resource_pb2.JobSpec(
+        version=value.version,
         name=value.name,
         entrypoint=value.entrypoint,
-        resources=value.resources.to_proto(),
+        resources=value.resources.to_exact_proto(),
         environment=value.environment,
         bundle_id=value.bundle_id,
         ports=value.ports,
@@ -443,38 +447,11 @@ def _job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
         container_profile=value.container_profile,
     )
     if value.scheduling_timeout is not None:
-        launch.scheduling_timeout.CopyFrom(duration_to_proto(value.scheduling_timeout))
+        result.scheduling_timeout.CopyFrom(duration_to_proto(value.scheduling_timeout))
     if value.coscheduling is not None:
-        launch.coscheduling.CopyFrom(value.coscheduling.to_proto())
+        result.coscheduling.CopyFrom(value.coscheduling.to_proto())
     if value.timeout is not None:
-        launch.timeout.CopyFrom(duration_to_proto(value.timeout))
-    result = resource_pb2.JobSpec()
-    result.version = value.version
-    result.name = launch.name
-    result.entrypoint.CopyFrom(launch.entrypoint)
-    result.resources.CopyFrom(launch.resources)
-    result.environment.CopyFrom(launch.environment)
-    result.bundle_id = launch.bundle_id
-    if launch.HasField("scheduling_timeout"):
-        result.scheduling_timeout.CopyFrom(launch.scheduling_timeout)
-    result.ports.extend(launch.ports)
-    result.max_task_failures = launch.max_task_failures
-    result.max_retries_failure = launch.max_retries_failure
-    result.max_retries_preemption = launch.max_retries_preemption
-    result.constraints.extend(launch.constraints)
-    if launch.HasField("coscheduling"):
-        result.coscheduling.CopyFrom(launch.coscheduling)
-    result.replicas = launch.replicas
-    if launch.HasField("timeout"):
-        result.timeout.CopyFrom(launch.timeout)
-    result.fail_if_exists = launch.fail_if_exists
-    result.preemption_policy = launch.preemption_policy
-    result.existing_job_policy = launch.existing_job_policy
-    result.priority_band = launch.priority_band
-    result.task_image = launch.task_image
-    result.submit_argv.extend(launch.submit_argv)
-    result.client_revision_date = launch.client_revision_date
-    result.container_profile = launch.container_profile
+        result.timeout.CopyFrom(duration_to_proto(value.timeout))
     return result
 
 
@@ -917,11 +894,13 @@ class ResourceServiceImpl:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         except ResourceReplaced as exc:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        except ResourceSourceUnavailable as exc:
+            raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
         return resource_pb2.ExecAttemptResponse(
             exit_code=response.exit_code,
             stdout=response.stdout,
             stderr=response.stderr,
-            error_message=response.error,
+            error_message=response.error_message,
         )
 
     def profile_attempt(
@@ -935,7 +914,7 @@ class ResourceServiceImpl:
             _action_principal(locator.task.resource_id)
             response = self._resources.profile_attempt(
                 locator,
-                request.profile,
+                profile_configuration_from_proto(request.profile),
                 duration_from_proto(request.duration) if request.HasField("duration") else None,
             )
         except (InvalidResourceKey, ValueError) as exc:
@@ -944,7 +923,9 @@ class ResourceServiceImpl:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         except ResourceReplaced as exc:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        except ResourceSourceUnavailable as exc:
+            raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
         return resource_pb2.ProfileAttemptResponse(
             profile_data=response.profile_data,
-            error_message=response.error,
+            error_message=response.error_message,
         )

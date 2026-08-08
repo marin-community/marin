@@ -68,7 +68,7 @@ class EvalPipelineError(RuntimeError):
 def job_log_tail(job: Job, limit: int = LOG_TAIL_LINES) -> tuple[str, ...]:
     """Fetch the final log lines without masking the original job failure."""
     try:
-        entries = job.logs(max_lines=limit, tail=True)
+        entries = job.logs(max_lines=limit, tail=True).entries
     except Exception:
         logger.warning("could not fetch log tail for %s", job, exc_info=True)
         return ()

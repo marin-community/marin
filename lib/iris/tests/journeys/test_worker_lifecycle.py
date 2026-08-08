@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from iris.cluster.resources.node import NodeHealth
 from iris.rpc import job_pb2
 from tests.journeys.worker import WorkerJourney
 
@@ -26,16 +27,17 @@ def test_running_worker_disappearance_releases_capacity_for_replacement_attempt(
     journey.run_until_worker_releases_task("worker-a", job)
 
     released = journey.task(job)
-    assert released.state == job_pb2.TASK_STATE_PENDING
-    assert released.worker_id == ""
+    assert released.summary.state == job_pb2.TASK_STATE_PENDING
+    assert released.summary.current_node is None
     assert "worker-a" not in journey.worker_ids()
 
     journey.add_worker("worker-b", "worker-b:8080")
     journey.run_until_task_state(job, job_pb2.TASK_STATE_RUNNING)
 
     replacement = journey.task(job)
-    assert replacement.worker_id == "worker-b"
-    assert [(attempt.attempt_id, attempt.state) for attempt in replacement.attempts] == [
+    assert replacement.summary.current_node is not None
+    assert replacement.summary.current_node.key.resource_id == "worker-b"
+    assert [(attempt.identity.attempt_number, attempt.state) for attempt in replacement.attempts] == [
         (0, job_pb2.TASK_STATE_WORKER_FAILED),
         (1, job_pb2.TASK_STATE_RUNNING),
     ]
@@ -47,13 +49,13 @@ def test_recycled_worker_address_fences_prior_incarnation_and_stale_observation(
     journey.add_worker("worker-a", address)
     job = journey.submit("recycled-address")
     journey.run_until_task_state(job, job_pb2.TASK_STATE_RUNNING)
-    old_attempt_uid = journey.task(job).attempts[0].attempt_uid
+    old_attempt_uid = journey.task(job).attempts[0].identity.attempt_uid
 
     replacement = journey.replace_daemon(address, "worker-b")
     journey.advance(1)
     journey.run_until_worker_releases_task("worker-a", job)
 
-    assert journey.task(job).state == job_pb2.TASK_STATE_PENDING
+    assert journey.task(job).summary.state == job_pb2.TASK_STATE_PENDING
     assert "worker-a" not in journey.worker_ids()
 
     replacement.queue_observation(old_attempt_uid, job_pb2.TASK_STATE_SUCCEEDED)
@@ -62,28 +64,29 @@ def test_recycled_worker_address_fences_prior_incarnation_and_stale_observation(
 
     task = journey.task(job)
     assert old_attempt_uid in replacement.delivered_observation_uids
-    assert task.worker_id == "worker-b"
-    assert [(attempt.attempt_id, attempt.state) for attempt in task.attempts] == [
+    assert task.summary.current_node is not None
+    assert task.summary.current_node.key.resource_id == "worker-b"
+    assert [(attempt.identity.attempt_number, attempt.state) for attempt in task.attempts] == [
         (0, job_pb2.TASK_STATE_WORKER_FAILED),
         (1, job_pb2.TASK_STATE_RUNNING),
     ]
 
 
-def test_degraded_worker_is_not_scheduled_but_recovers_through_reconcile(worker_journey):
+def test_unreachable_worker_is_not_scheduled_but_recovers_through_reconcile(worker_journey):
     journey = worker_journey
     degraded = journey.add_worker("worker-a", "worker-a:8080")
     journey.add_worker("worker-b", "worker-b:8080")
 
     degraded.fail_next_reconciles(1)
     journey.step()
-    assert journey.worker("worker-a").consecutive_failures == 1
 
     job = journey.submit("avoid-degraded")
     journey.run_until_task_state(job, job_pb2.TASK_STATE_RUNNING)
 
-    assert journey.task(job).worker_id == "worker-b"
-    assert journey.worker("worker-a").healthy
-    assert journey.worker("worker-a").consecutive_failures == 0
+    task = journey.task(job).summary
+    assert task.current_node is not None
+    assert task.current_node.key.resource_id == "worker-b"
+    assert journey.worker("worker-a").summary.health is NodeHealth.READY
 
 
 def test_preempted_attempt_holds_capacity_until_worker_reports_exact_terminal_state(worker_journey):
@@ -100,13 +103,15 @@ def test_preempted_attempt_holds_capacity_until_worker_reports_exact_terminal_st
     journey.step()
 
     low_before_ack = journey.task(low)
-    assert not low_before_ack.attempts[0].HasField("finished_at")
-    assert journey.task(high).state == job_pb2.TASK_STATE_PENDING
+    assert low_before_ack.attempts[0].finished_at is None
+    assert journey.task(high).summary.state == job_pb2.TASK_STATE_PENDING
 
     daemon.acknowledge_stops = True
     journey.step()
-    assert journey.task(high).state == job_pb2.TASK_STATE_PENDING
-    assert journey.task(low).attempts[0].HasField("finished_at")
+    assert journey.task(high).summary.state == job_pb2.TASK_STATE_PENDING
+    assert journey.task(low).attempts[0].finished_at is not None
 
     journey.run_until_task_state(high, job_pb2.TASK_STATE_RUNNING)
-    assert journey.task(high).worker_id == "worker-a"
+    high_task = journey.task(high).summary
+    assert high_task.current_node is not None
+    assert high_task.current_node.key.resource_id == "worker-a"

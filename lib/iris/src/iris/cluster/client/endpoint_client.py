@@ -13,7 +13,7 @@ drives; a crashed task simply stops renewing and its lease expires.
 import logging
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -80,6 +80,16 @@ class EndpointStub(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class EndpointInstance:
+    """One live private-registry endpoint decoded from the lease RPC."""
+
+    endpoint_id: str
+    name: str
+    address: str
+    metadata: Mapping[str, str]
+
+
 class EndpointClient:
     """Registers service endpoints and keeps their leases renewed.
 
@@ -132,18 +142,22 @@ class EndpointClient:
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
 
-    def _list_endpoints(self, prefix: str, *, exact: bool) -> list[controller_pb2.Controller.Endpoint]:
-        def _call() -> list[controller_pb2.Controller.Endpoint]:
+    def _list_endpoints(self, prefix: str, *, exact: bool) -> list[EndpointInstance]:
+        def _call() -> list[EndpointInstance]:
             request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
-            return list(self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS).endpoints)
+            response = self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS)
+            return [
+                EndpointInstance(endpoint.endpoint_id, endpoint.name, endpoint.address, dict(endpoint.metadata))
+                for endpoint in response.endpoints
+            ]
 
         return call_with_retry("list_endpoints", _call)
 
-    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+    def list_endpoints(self, prefix: str) -> list[EndpointInstance]:
         """List endpoints whose names start with ``prefix``."""
         return self._list_endpoints(prefix, exact=False)
 
-    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+    def list_endpoint_instances(self, name: str) -> list[EndpointInstance]:
         """List every registered instance with the exact endpoint ``name``."""
         return self._list_endpoints(name, exact=True)
 

@@ -18,10 +18,8 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Duration, ExponentialBackoff
 
 from iris.cli.connect import require_controller_url, resource_client_for_ctx
 from iris.cli.resource_commands import (
@@ -60,24 +58,16 @@ from iris.cluster.resources.job import JobQuery
 from iris.cluster.resources.log import LogQuery
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
-    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
-    JobName,
     ResourceSpec,
     gpu_device,
     is_job_finished,
     tpu_device,
 )
 from iris.rpc import job_pb2
-from iris.rpc.proto_display import (
-    CONTAINER_PROFILE_NAMES,
-    PRIORITY_BAND_NAMES,
-    job_state_friendly,
-    priority_band_value,
-    task_state_friendly,
-)
+from iris.rpc.proto_display import CONTAINER_PROFILE_NAMES, PRIORITY_BAND_NAMES, priority_band_value
 
 logger = logging.getLogger(__name__)
 
@@ -96,33 +86,6 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
-
-
-def _terminate_jobs(
-    client: IrisClient,
-    job_ids: tuple[str, ...],
-    prefix: bool,
-) -> list[JobName]:
-    terminated: list[JobName] = []
-    for raw in job_ids:
-        if prefix:
-            terminated.extend(client.terminate_prefix(raw))
-            continue
-
-        name = JobName.from_wire(raw)
-        try:
-            client.terminate(name)
-        except ConnectError as exc:
-            if exc.code != Code.NOT_FOUND:
-                raise
-            candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
-            suggestion = ""
-            if candidates:
-                candidate_names = ", ".join(job.job_id for job in candidates)
-                suggestion = f" Did you mean: {candidate_names}?"
-            raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
-        terminated.append(name)
-    return terminated
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -795,10 +758,8 @@ def _submit_and_wait_job(
             return 1
     except KeyboardInterrupt:
         if terminate_on_exit:
-            logger.info(f"Terminating job {job.job_id}...")
-            terminated = _terminate_jobs(client, (str(job.job_id),), prefix=False)
-            for t in terminated:
-                logger.info(f"  Terminated: {t}")
+            logger.info("Cancelling job %s...", job.job_id)
+            job.cancel()
         return 130
     except Exception:
         logger.warning(
@@ -1058,65 +1019,6 @@ def run(
         raise
 
     sys.exit(exit_code)
-
-
-def _task_index(task_id: str) -> str:
-    last = task_id.rsplit("/", 1)[-1]
-    return last or task_id
-
-
-def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
-    if not task.started_at.epoch_ms:
-        return None
-    end_ms = task.finished_at.epoch_ms or Timestamp.now().epoch_ms()
-    return max(0, end_ms - task.started_at.epoch_ms)
-
-
-def build_job_summary(
-    job_status: job_pb2.JobStatus,
-    tasks: list[job_pb2.TaskStatus],
-) -> dict:
-    """Build the JSON-compatible Job and Task status summary."""
-
-    def sort_key(task: job_pb2.TaskStatus) -> tuple[int, str]:
-        index = _task_index(task.task_id)
-        try:
-            return int(index), ""
-        except ValueError:
-            return 2**31, index
-
-    task_summaries = []
-    for task in sorted(tasks, key=sort_key):
-        usage = task.resource_usage
-        task_summaries.append(
-            {
-                "task_id": task.task_id,
-                "index": _task_index(task.task_id),
-                "state": task_state_friendly(task.state),
-                "exit_code": int(task.exit_code) if task.state in TERMINAL_TASK_STATES else None,
-                "duration_ms": _task_duration_ms(task),
-                "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
-                "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
-                "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
-                "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
-                "worker_id": task.worker_id,
-                "status_message": task.status_message,
-                "error": task.error,
-            }
-        )
-    return {
-        "job_id": job_status.job_id,
-        "name": job_status.name,
-        "state": job_state_friendly(job_status.state),
-        "exit_code": int(job_status.exit_code),
-        "error": job_status.error,
-        "failure_count": int(job_status.failure_count),
-        "preemption_count": int(job_status.preemption_count),
-        "task_count": int(job_status.task_count),
-        "completed_count": int(job_status.completed_count),
-        "task_state_counts": dict(job_status.task_state_counts),
-        "tasks": task_summaries,
-    }
 
 
 @job.command("list")

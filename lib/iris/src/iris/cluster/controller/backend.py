@@ -68,8 +68,9 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -657,18 +658,16 @@ class TaskBackend(Protocol):
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         """Profile a task attempt. Raises ProviderUnsupportedError if N/A."""
         ...
 
     def exec_in_container(
         self,
         target: TaskTarget,
-        request: worker_pb2.Worker.ExecInContainerRequest,
-        timeout_seconds: int = 60,
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        request: ExecRequest,
+    ) -> ExecResult:
         """Exec a command in a task's container. Raises ProviderUnsupportedError if N/A."""
         ...
 

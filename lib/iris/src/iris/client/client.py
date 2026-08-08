@@ -18,17 +18,19 @@ Example:
 """
 
 import logging
-from collections.abc import Generator, Sequence
+import time
+import uuid
+from collections.abc import Generator, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
@@ -45,7 +47,34 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.log_keys import build_log_source
+from iris.cluster.resources.action import ActionReceipt
+from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
+from iris.cluster.resources.attempt import AttemptDetail
+from iris.cluster.resources.endpoint import (
+    EndpointDetail,
+    EndpointQuery,
+    EndpointSummary,
+    EndpointToken,
+    ExecResult,
+    ProfileResult,
+)
+from iris.cluster.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    NodeLocator,
+    ResourceKey,
+    SliceLocator,
+    TaskIdentity,
+)
+from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
+from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
+from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
+from iris.cluster.resources.source import Page
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import (
     CoschedulingConfig,
     EndpointAccess,
@@ -58,9 +87,8 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
-from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.proto_display import job_state_friendly
-from iris.time_proto import timestamp_from_proto
+from iris.rpc import iris_logging_pb2, job_pb2
+from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
@@ -71,45 +99,16 @@ class _ClusterLifecycle(Protocol):
     def close(self) -> None: ...
 
 
-@dataclass
-class TaskLogEntry:
-    """A log entry with task context.
-
-    Attributes:
-        timestamp: When the log line was produced
-        task_id: Task that produced this log
-        source: Log source - "stdout", "stderr", or "build"
-        data: Log line content
-        attempt_id: Which attempt produced this log (0-indexed)
-        key: Log store key (populated on multi-key queries)
-    """
-
-    timestamp: Timestamp
-    task_id: JobName
-    source: str
-    data: str
-    attempt_id: int = 0
-    key: str = ""
-
-
-def _task_id_from_key(key: str) -> JobName:
-    """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
-    colon = key.rfind(":")
-    if colon >= 0:
-        return JobName.from_wire(key[:colon])
-    return JobName.from_wire(key)
-
-
 class JobFailedError(Exception):
     """Raised when a job ends in a non-SUCCESS terminal state."""
 
-    def __init__(self, job_id: JobName, status: job_pb2.JobStatus):
+    def __init__(self, job_id: JobName, status: JobSummary):
         self.job_id = job_id
         self.status = status
         state_name = job_pb2.JobState.Name(status.state)
         msg = f"Job {job_id} {state_name}"
-        if status.error:
-            msg += f": {status.error}"
+        if status.error_message:
+            msg += f": {status.error_message}"
         super().__init__(msg)
 
 
@@ -131,70 +130,65 @@ class Task:
         job.wait()
         for task in job.tasks():
             print(f"Task {task.task_index}: {task.state}")
-            for entry in task.logs():
+            for entry in task.logs().entries:
                 print(entry.data)
     """
 
-    def __init__(self, client: "IrisClient", task_name: JobName):
+    def __init__(self, client: "IrisClient", identity: TaskIdentity):
         self._client = client
-        self._task_name = task_name
+        self._identity = identity
+
+    @property
+    def identity(self) -> TaskIdentity:
+        return self._identity
 
     @property
     def task_index(self) -> int:
         """0-indexed task number within the job."""
-        return self._task_name.require_task()[1]
+        return JobName.from_wire(self._identity.key.resource_id).require_task()[1]
 
     @property
     def task_id(self) -> JobName:
         """Full task identifier (/job/.../index)."""
-        return self._task_name
+        return JobName.from_wire(self._identity.key.resource_id)
 
     @property
     def job_id(self) -> JobName:
         """Parent job identifier."""
-        return self._task_name.parent or self._task_name
+        return self.task_id.parent or self.task_id
 
-    def status(self) -> job_pb2.TaskStatus:
-        """Get current task status.
+    def describe(self) -> TaskDetail:
+        detail = self._client.describe_task(self._identity.key)
+        if detail.summary.identity != self._identity:
+            raise RuntimeError(f"Task {self.task_id} was replaced")
+        return detail
 
-        Returns:
-            TaskStatus proto containing state, worker assignment, and metrics
-        """
-        return self._client._cluster_client.get_task_status(self.task_id)
+    def status(self) -> TaskSummary:
+        """Return the current typed Task summary."""
+        return self.describe().summary
 
     @property
     def state(self) -> job_pb2.TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
-    def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[TaskLogEntry]:
-        """Fetch logs for this task (all attempts).
-
-        Args:
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
-
-        Returns:
-            List of TaskLogEntry objects from the task
-        """
-        source, match_scope = build_log_source(self._task_name)
-        response = self._client._cluster_client.fetch_logs(
-            source,
-            match_scope=match_scope,
-            since_ms=start.epoch_ms() if start else 0,
-            max_lines=max_lines,
+    def logs(self, *, start: Timestamp | None = None, max_lines: int = 1_000) -> LogPage:
+        """Fetch exact-incarnation logs for this Task."""
+        return self._client.fetch_task_logs(
+            self._identity,
+            LogQuery(after=start, max_lines=max_lines),
         )
-        return [
-            TaskLogEntry(
-                timestamp=timestamp_from_proto(e.timestamp),
-                task_id=self.task_id,
-                source=e.source,
-                data=e.data,
-                attempt_id=e.attempt_id,
-                key=e.key,
-            )
-            for e in response.entries
-        ]
+
+    def retry(self, *, idempotency_key: str | None = None) -> ActionReceipt:
+        """Request a retry of the current exact Attempt."""
+        current = self.status().current_attempt
+        if current is None:
+            raise RuntimeError(f"Task {self.task_id} has no current Attempt")
+        return self._client.retry_task(
+            self._identity,
+            expected_attempt_uid=current.attempt_uid,
+            idempotency_key=idempotency_key or uuid.uuid4().hex,
+        )
 
 
 class Job:
@@ -211,36 +205,42 @@ class Job:
 
         for task in job.tasks():
             print(f"Task {task.task_index} logs:")
-            for entry in task.logs():
+            for entry in task.logs().entries:
                 print(entry.data)
     """
 
-    def __init__(self, client: "IrisClient", job_id: JobName):
+    def __init__(self, client: "IrisClient", identity: JobIdentity):
         self._client = client
-        self._job_id = job_id
+        self._identity = identity
+
+    @property
+    def identity(self) -> JobIdentity:
+        return self._identity
 
     @property
     def job_id(self) -> JobName:
         """Unique job identifier."""
-        return self._job_id
+        return JobName.from_wire(self._identity.key.resource_id)
 
     def __str__(self) -> str:
-        return str(self._job_id)
+        return str(self.job_id)
 
     def __repr__(self) -> str:
-        return f"Job({self._job_id!r})"
+        return f"Job({self._identity!r})"
 
-    def status(self) -> job_pb2.JobStatus:
-        """Get current job status.
+    def describe(self) -> JobDetail:
+        detail = self._client.describe_job(self._identity.key)
+        if detail.summary.identity != self._identity:
+            raise RuntimeError(f"Job {self.job_id} was replaced")
+        return detail
 
-        Returns:
-            JobStatus proto with current state, task counts, and error info
-        """
-        return self._client._cluster_client.get_job_status(self._job_id)
+    def status(self) -> JobSummary:
+        """Return the current typed Job summary."""
+        return self.describe().summary
 
     def state_only(self) -> job_pb2.JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers."""
-        return self._client.job_state(self._job_id)
+        return self.status().state
 
     @property
     def state(self) -> job_pb2.JobState:
@@ -253,17 +253,22 @@ class Job:
         Returns:
             List of Task handles, one per task in the job
         """
-        task_statuses = self._client._cluster_client.list_tasks(self._job_id)
-        return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
+        self.describe()
+        tasks: list[Task] = []
+        query = TaskQuery(job=self._identity.key)
+        while True:
+            page = self._client.list_tasks(query)
+            tasks.extend(Task(self._client, summary.identity) for summary in page.items)
+            if page.next_page_token is None:
+                return tasks
+            query = TaskQuery(job=self._identity.key, page_token=page.next_page_token)
 
-    def logs(self, *, max_lines: int = 0, tail: bool = False) -> list[TaskLogEntry]:
-        """Fetch globally timestamp-ordered logs across this job's tasks.
-
-        Args:
-            max_lines: Global maximum number of lines to return. Zero uses the server default.
-            tail: Return the most recent lines instead of the earliest lines.
-        """
-        return self._client.fetch_task_logs(self._job_id, max_lines=max_lines, tail=tail)
+    def logs(self, *, max_lines: int = 1_000, tail: bool = False) -> LogPage:
+        """Fetch exact-incarnation logs across this Job's Tasks."""
+        return self._client.fetch_job_logs(
+            self._identity,
+            LogQuery(max_lines=max_lines, tail=tail),
+        )
 
     def wait(
         self,
@@ -274,46 +279,45 @@ class Job:
         stream_logs: bool = False,
         since_ms: int = 0,
         min_level: str = "",
-    ) -> job_pb2.JobStatus:
-        """Wait for job to complete.
-
-        Args:
-            timeout: Maximum wait time in seconds
-            poll_interval: Upper bound on the state-poll backoff. The loop
-                starts at 100ms and grows exponentially until it reaches this
-                cap (default 30s), so long-running jobs cost ~1 state RPC per
-                ``poll_interval``.
-            raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
-            stream_logs: If True, stream logs from all tasks interleaved
-            since_ms: Only show logs after this epoch millisecond timestamp
-            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-
-        Returns:
-            Final JobStatus
-
-        Raises:
-            TimeoutError: Job didn't complete in time
-            JobFailedError: Job ended in non-SUCCESS state and raise_on_failure=True
-        """
-        if not stream_logs:
-            status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
-        else:
-            status = self._client._cluster_client.wait_for_job_with_streaming(
-                self._job_id,
-                timeout=timeout,
-                poll_interval=poll_interval,
-                since_ms=since_ms,
-                min_level=min_level,
-            )
+    ) -> JobSummary:
+        """Wait for this exact Job incarnation to finish."""
+        deadline = Deadline.from_seconds(timeout)
+        backoff = ExponentialBackoff(initial=0.1, maximum=max(0.1, poll_interval))
+        cursor = 0
+        minimum_level = (
+            iris_logging_pb2.LogLevel.Value(f"LOG_LEVEL_{min_level.upper()}")
+            if min_level
+            else iris_logging_pb2.LOG_LEVEL_UNKNOWN
+        )
+        while True:
+            status = self.status()
+            if stream_logs:
+                page = self._client.fetch_job_logs(
+                    self._identity,
+                    LogQuery(
+                        after=Timestamp.from_ms(since_ms) if since_ms else None,
+                        cursor=cursor,
+                        minimum_level=minimum_level,
+                    ),
+                )
+                for entry in page.entries:
+                    logger.info("task=%s | %s", entry.key, entry.data)
+                cursor = max(cursor, page.next_cursor)
+            if is_job_finished(status.state):
+                break
+            deadline.raise_if_expired(f"Job {self.job_id} did not complete in {timeout}s")
+            time.sleep(min(backoff.next_interval(), deadline.remaining_seconds()))
 
         if raise_on_failure and status.state != job_pb2.JOB_STATE_SUCCEEDED:
-            raise JobFailedError(self._job_id, status)
-
+            raise JobFailedError(self.job_id, status)
         return status
 
-    def terminate(self) -> None:
-        """Terminate this job."""
-        self._client._cluster_client.terminate_job(self._job_id)
+    def cancel(self, *, idempotency_key: str | None = None) -> ActionReceipt:
+        """Cancel this exact Job incarnation."""
+        return self._client.cancel_job(
+            self._identity,
+            idempotency_key=idempotency_key or uuid.uuid4().hex,
+        )
 
 
 # =============================================================================
@@ -503,7 +507,7 @@ class IrisClient:
         job = client.submit(entrypoint, "my-job", resources)
         status = job.wait()
         for task in job.tasks():
-            for entry in task.logs():
+            for entry in task.logs().entries:
                 print(entry.data)
     """
 
@@ -782,141 +786,168 @@ class IrisClient:
         if constraints:
             constraints = [c for c in constraints if not is_any_region_marker(c)]
 
-        # Convert to wire format
+        # Lower the ergonomic submission inputs into the resource contract.
         resources_proto = resources.to_proto()
-        environment_proto = environment.to_proto() if environment else None
-        constraints_proto = [c.to_proto() for c in constraints or []]
-        coscheduling_proto = coscheduling.to_proto() if coscheduling else None
+        environment_proto = (environment or EnvironmentSpec()).to_proto()
+        environment_proto = with_slice_topology_env(environment_proto, resources_proto, replicas)
+        runtime_entrypoint = build_runtime_entrypoint(entrypoint, environment_proto)
+        spec = JobSpec(
+            version=1,
+            name=job_id.to_wire(),
+            entrypoint=runtime_entrypoint,
+            resources=resources,
+            environment=environment_proto,
+            bundle_id="",
+            scheduling_timeout=scheduling_timeout,
+            ports=tuple(ports or ()),
+            max_task_failures=max_task_failures,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            constraints=tuple(constraints or ()),
+            coscheduling=coscheduling,
+            replicas=replicas,
+            timeout=timeout,
+            fail_if_exists=False,
+            preemption_policy=preemption_policy,
+            existing_job_policy=existing_job_policy,
+            priority_band=priority_band,
+            task_image=task_image or "",
+            submit_argv=tuple(submit_argv or ()),
+            client_revision_date=client_revision_date(),
+            container_profile=container_profile,
+        )
 
         try:
-            canonical_id = self._cluster_client.submit_job(
-                job_id=job_id,
-                entrypoint=entrypoint,
-                resources=resources_proto,
-                environment=environment_proto,
-                ports=ports,
-                scheduling_timeout=scheduling_timeout,
-                constraints=constraints_proto,
-                coscheduling=coscheduling_proto,
-                replicas=replicas,
-                max_retries_failure=max_retries_failure,
-                max_retries_preemption=max_retries_preemption,
-                max_task_failures=max_task_failures,
-                timeout=timeout,
-                preemption_policy=preemption_policy,
-                existing_job_policy=existing_job_policy,
-                task_image=task_image,
-                priority_band=priority_band,
-                container_profile=container_profile,
-                submit_argv=submit_argv,
-            )
+            identity = self.submit_job(spec)
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
                 raise JobAlreadyExists(str(e)) from e
             raise
 
-        return Job(self, canonical_id)
+        return Job(self, identity)
 
-    def status(self, job_id: JobName) -> job_pb2.JobStatus:
-        """Get job status.
+    def submit_job(self, spec: JobSpec, *, bundle: bytes | None = None) -> JobIdentity:
+        return self._cluster_client.submit_job(spec, bundle=bundle)
 
-        Args:
-            job_id: Job ID to query
+    def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
+        return self._cluster_client.list_jobs(query)
 
-        Returns:
-            JobStatus proto with current state
-        """
-        return self._cluster_client.get_job_status(job_id)
+    def describe_job(self, key: ResourceKey) -> JobDetail:
+        return self._cluster_client.describe_job(key)
 
-    def job_state(self, job_id: JobName) -> job_pb2.JobState:
-        """Lightweight state query that avoids loading tasks/attempts/workers.
+    def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
+        return self._cluster_client.list_tasks(query)
 
-        Prefer this over ``status(job_id).state`` for polling loops.
-        """
-        states = self._cluster_client.get_job_states([job_id])
-        wire_id = job_id.to_wire()
-        if wire_id not in states:
-            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
-        return cast(job_pb2.JobState, states[wire_id])
+    def describe_task(self, key: ResourceKey) -> TaskDetail:
+        return self._cluster_client.describe_task(key)
 
-    def terminate(self, job_id: JobName) -> None:
-        """Terminate a running job.
+    def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
+        return self._cluster_client.describe_attempt(locator)
 
-        Args:
-            job_id: Job ID to terminate
-        """
-        self._cluster_client.terminate_job(job_id)
+    def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]:
+        return self._cluster_client.list_nodes(query)
 
-    def list_jobs(
+    def describe_node(self, locator: NodeLocator) -> NodeDetail:
+        return self._cluster_client.describe_node(locator)
+
+    def list_slices(self, query: SliceQuery = SliceQuery()) -> Page[SliceSummary]:
+        return self._cluster_client.list_slices(query)
+
+    def describe_slice(self, locator: SliceLocator) -> SliceDetail:
+        return self._cluster_client.describe_slice(locator)
+
+    def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]:
+        return self._cluster_client.list_endpoints(query)
+
+    def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
+        return self._cluster_client.describe_endpoint(key)
+
+    def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
+        return self._cluster_client.mint_endpoint_token(key, ttl=ttl)
+
+    def list_activity(self, query: ActivityQuery) -> Page[ActivityEntry]:
+        return self._cluster_client.list_activity(query)
+
+    def fetch_job_logs(self, identity: JobIdentity, query: LogQuery = LogQuery()) -> LogPage:
+        return self._cluster_client.fetch_job_logs(identity, query)
+
+    def fetch_task_logs(self, identity: TaskIdentity, query: LogQuery = LogQuery()) -> LogPage:
+        return self._cluster_client.fetch_task_logs(identity, query)
+
+    def fetch_attempt_logs(self, identity: AttemptIdentity, query: LogQuery = LogQuery()) -> LogPage:
+        return self._cluster_client.fetch_attempt_logs(identity, query)
+
+    def stream_job_logs(
         self,
+        identity: JobIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]:
+        return self._cluster_client.stream_job_logs(identity, query)
+
+    def stream_task_logs(
+        self,
+        identity: TaskIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]:
+        return self._cluster_client.stream_task_logs(identity, query)
+
+    def stream_attempt_logs(
+        self,
+        identity: AttemptIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> Iterator[iris_logging_pb2.LogEntry]:
+        return self._cluster_client.stream_attempt_logs(identity, query)
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+        return self._cluster_client.cancel_job(identity, idempotency_key=idempotency_key)
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
         *,
-        state: job_pb2.JobState | None = None,
-        prefix: str | None = None,
-        limit: int | None = None,
-    ) -> list[job_pb2.JobStatus]:
-        """List jobs with optional filtering.
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        return self._cluster_client.retry_task(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            idempotency_key=idempotency_key,
+        )
 
-        Filters are pushed down to the server via ``JobQuery``: ``state``
-        becomes ``state_filter`` and ``prefix`` becomes ``job_id_prefix``, an
-        anchored prefix match against the wire-form job_id (e.g.
-        ``"/alice/exp-"``). The prefix is passed through verbatim; callers do
-        not need to provide a parseable ``JobName``.
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
+        return self._cluster_client.terminate_attempt(identity, idempotency_key=idempotency_key)
 
-        Args:
-            state: If provided, only return jobs in this state.
-            prefix: If provided, only return jobs whose ``job_id`` (wire form,
-                e.g. ``"/alice/foo"``) starts with this string.
-            limit: If provided, return at most this many jobs (the most recent,
-                since the server sorts by submission date descending). ``None``
-                walks every matching job, which requires a filter narrow enough
-                to stay under the server's deep-offset cap.
+    def get_action_receipt(self, action_id: str) -> ActionReceipt:
+        return self._cluster_client.get_action_receipt(action_id)
 
-        Returns:
-            List of JobStatus matching the filters.
-        """
-        query = controller_pb2.Controller.JobQuery()
-        if state is not None:
-            query.state_filter = job_state_friendly(state)
-        if prefix:
-            query.job_id_prefix = prefix
+    def wait_for_action(self, action_id: str, *, timeout: Duration) -> ActionReceipt:
+        return self._cluster_client.wait_for_action(action_id, timeout=timeout)
 
-        return list(self._cluster_client.list_jobs(query=query, limit=limit))
-
-    def list_workers(
+    def exec_attempt(
         self,
-        query: controller_pb2.Controller.WorkerQuery | None = None,
-    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
-        """List workers registered with the controller."""
-        return list(self._cluster_client.list_workers(query=query))
+        locator: AttemptLocator,
+        *,
+        command: Sequence[str],
+        timeout: Duration,
+    ) -> ExecResult:
+        return self._cluster_client.exec_attempt(locator, command=command, timeout=timeout)
 
-    def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
-        """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
-        return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
+    def profile_attempt(
+        self,
+        locator: AttemptLocator,
+        *,
+        profile: job_pb2.ProfileType,
+        duration: Duration,
+    ) -> ProfileResult:
+        return self._cluster_client.profile_attempt(locator, profile=profile, duration=duration)
 
-    def terminate_prefix(self, prefix: str) -> list[JobName]:
-        """Terminate all active jobs matching a prefix.
-
-        Args:
-            prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
-
-        Returns:
-            List of job IDs that were terminated
-        """
-        job_ids = self.active_job_names_for_prefix(prefix)
-        for job_id in job_ids:
-            self.terminate(job_id)
-        return job_ids
-
-    def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
-        """Get status of a specific task.
-
-        Args:
-            task_name: Full task name (/job/.../index)
-
-        Returns:
-            TaskStatus proto containing state, worker assignment, and metrics
-        """
-        return self._cluster_client.get_task_status(task_name)
+    def current_job(self, job_id: JobName) -> Job:
+        """Resolve the current Job incarnation for a wire ID."""
+        page = self.list_jobs(JobQuery(job_id_prefix=job_id.to_wire(), page_size=100))
+        match = next((summary for summary in page.items if summary.identity.key.resource_id == job_id.to_wire()), None)
+        if match is None:
+            raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
+        return Job(self, match.identity)
 
     def report_task_status_text(
         self,
@@ -931,105 +962,6 @@ class IrisClient:
     def resolve_endpoint(self, url: str) -> str:
         """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
         return self._cluster_client.resolve_endpoint(url)
-
-    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
-        """List registered endpoints matching a name prefix."""
-        return self._cluster_client.list_endpoints(prefix)
-
-    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
-        """List registered instances with the exact endpoint name."""
-        return self._cluster_client.list_endpoint_instances(name)
-
-    def mint_endpoint_token(
-        self,
-        endpoint_name: str,
-        *,
-        ttl: Duration | None = None,
-    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
-        """Mint a scoped token for a link-accessible endpoint."""
-        return self._cluster_client.mint_endpoint_token(endpoint_name, ttl=ttl)
-
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
-        """List all tasks for a job.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            List of TaskStatus protos, one per task
-        """
-        return self._cluster_client.list_tasks(job_id)
-
-    def kick_tasks(
-        self,
-        targets: list[str],
-        *,
-        desired_state: job_pb2.TaskState,
-        reason: str = "",
-    ) -> list[controller_pb2.Controller.KickResult]:
-        """Force task attempts into a terminal state out-of-band (emergency override).
-
-        ``targets`` are task, task-attempt, or job ids; a job id expands to its
-        active tasks. ``desired_state`` is ``TASK_STATE_PREEMPTED`` (retried if
-        budget remains) or ``TASK_STATE_FAILED`` (no retry). Returns one
-        ``KickResult`` per resolved task reporting whether it was queued.
-        """
-        return self._cluster_client.kick_tasks(targets, desired_state, reason)
-
-    def fetch_task_logs(
-        self,
-        target: JobName,
-        *,
-        start: Timestamp | None = None,
-        max_lines: int = 0,
-        substring: str = "",
-        attempt_id: int = -1,
-        min_level: str = "",
-        tail: bool = False,
-    ) -> list[TaskLogEntry]:
-        """Fetch logs for a task or job.
-
-        Builds a literal source + match scope from the target:
-        - Task + all attempts:     prefix /user/job/0:
-        - Task + specific attempt: exact  /user/job/0:<attempt_id>
-        - Job (all tasks):         prefix /user/job/
-
-        Args:
-            target: Task ID or Job ID
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = server default)
-            substring: Substring filter for log content
-            attempt_id: Filter to specific attempt (-1 = all attempts)
-            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-            tail: If True, return the most recent lines instead of earliest
-
-        Returns:
-            List of TaskLogEntry objects, sorted by timestamp
-        """
-        source, match_scope = build_log_source(target, attempt_id)
-        response = self._cluster_client.fetch_logs(
-            source,
-            match_scope=match_scope,
-            since_ms=start.epoch_ms() if start else 0,
-            max_lines=max_lines,
-            substring=substring,
-            min_level=min_level,
-            tail=tail,
-        )
-
-        result = [
-            TaskLogEntry(
-                timestamp=timestamp_from_proto(e.timestamp),
-                task_id=_task_id_from_key(e.key),
-                source=e.source,
-                data=e.data,
-                attempt_id=e.attempt_id,
-                key=e.key,
-            )
-            for e in response.entries
-        ]
-        result.sort(key=lambda x: x.timestamp.epoch_ms())
-        return result
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client and, in local mode, the controller.

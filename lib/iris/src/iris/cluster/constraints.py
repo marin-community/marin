@@ -378,7 +378,7 @@ def available_key(token: str) -> str:
     return f"{AVAILABLE_PREFIX}{token.strip().lower()}"
 
 
-def required_resource_amounts(device: job_pb2.DeviceConfig, replicas: int) -> dict[str, int]:
+def required_resource_amounts(device: job_pb2.DeviceConfig | None, replicas: int) -> dict[str, int]:
     """Free-capacity amounts a whole job needs from a single peer backend, per token.
 
     A federated root job runs entirely on one peer, so its requirement is the sum
@@ -388,6 +388,8 @@ def required_resource_amounts(device: job_pb2.DeviceConfig, replicas: int) -> di
     advertise TPU-slice availability in v1) — those carry no availability gate and
     fall back to shape-only peer eligibility, exactly as today.
     """
+    if device is None:
+        return {}
     variant = get_device_variant(device)
     if not variant or variant == AUTO_DEVICE_VARIANT:
         return {}
@@ -397,7 +399,7 @@ def required_resource_amounts(device: job_pb2.DeviceConfig, replicas: int) -> di
     return {variant.strip().lower(): max(1, replicas) * per_replica}
 
 
-def peer_availability_gate(device: job_pb2.DeviceConfig, replicas: int) -> list[Constraint]:
+def peer_availability_gate(device: job_pb2.DeviceConfig | None, replicas: int) -> list[Constraint]:
     """The ``ge(available:<token>, amount)`` constraints a peer backend must satisfy to host the job.
 
     One ``GE`` constraint per gated resource token, its threshold the whole job's

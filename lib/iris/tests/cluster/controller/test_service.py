@@ -24,19 +24,17 @@ from iris.cluster.constraints import (
     device_variant_constraint,
 )
 from iris.cluster.controller import ops, writes
-from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.resources import jobs as resource_jobs
+from iris.cluster.controller.resources.jobs import CLIENT_FRESHNESS_WINDOW
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import (
-    FRESHNESS_WINDOW,
-    MAX_LIST_JOBS_OFFSET,
-    ControllerServiceImpl,
-)
+from iris.cluster.controller.service import MAX_LIST_JOBS_OFFSET
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
+from iris.cluster.resources.endpoint import ProfileResult
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
@@ -47,6 +45,7 @@ from tests.cluster.controller._test_support import ControllerTestState, submit_j
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
+    make_controller_service,
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
@@ -215,7 +214,7 @@ def test_profile_worker_routes_to_worker_backend(service, state):
             scale_group="cw-h100",
         )
     cw = Mock()
-    cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
+    cw.profile_task.return_value = ProfileResult(b"cw-profile", "")
     # This mock backend only routes the profile dispatch; the worker's liveness is
     # registered into the default backend's tracker above, so cw owns no tracker.
     cw.health = None
@@ -445,7 +444,7 @@ def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypa
     Only non-terminal tasks count: once the first job's tasks finish, the freed
     budget lets the next submission through.
     """
-    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+    monkeypatch.setattr(resource_jobs, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
     # 3 active tasks for test-user: under the cap.
     service.launch_job(make_job_request("job-a", replicas=3), None)
@@ -471,7 +470,7 @@ def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypa
 
 def test_launch_job_user_task_cap_is_per_user(service, monkeypatch):
     """The cap is scoped per user: one user's tasks don't count against another's."""
-    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+    monkeypatch.setattr(resource_jobs, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
     service.launch_job(make_job_request("/alice/job", replicas=5), None)
 
@@ -566,7 +565,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     """
     # Tighten the drain wait so the test fails fast on regression instead
     # of waiting the production 30s.
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
+    monkeypatch.setattr(resource_jobs, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -633,7 +632,7 @@ def test_existing_job_policy_keep_replaces_after_drain_wait(service, state, monk
     must not block the new submission forever. After the drain wait elapses
     it logs a warning, CASCADE-deletes the predecessor, and proceeds with
     the replacement. (Earlier behavior raised DEADLINE_EXCEEDED.)"""
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
+    monkeypatch.setattr(resource_jobs, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -854,7 +853,7 @@ def test_terminate_job_allowed_by_owner(service):
 
 def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
-    auth_service = ControllerServiceImpl(
+    auth_service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
@@ -881,7 +880,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
 
 def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Cannot submit a child job under another user's hierarchy."""
-    auth_service = ControllerServiceImpl(
+    auth_service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
@@ -1347,7 +1346,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service):
 def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     auth = ControllerAuth(provider="static")
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1375,7 +1374,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
 def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
     auth = ControllerAuth(provider="static")
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -1465,9 +1464,9 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
     "client_date,expected_code",
     [
         pytest.param(date.today().isoformat(), None, id="today_accepted"),
-        pytest.param((date.today() - FRESHNESS_WINDOW).isoformat(), None, id="window_edge_accepted"),
+        pytest.param((date.today() - CLIENT_FRESHNESS_WINDOW).isoformat(), None, id="window_edge_accepted"),
         pytest.param(
-            (date.today() - FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
+            (date.today() - CLIENT_FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
             Code.FAILED_PRECONDITION,
             id="over_window_rejected",
         ),

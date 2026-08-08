@@ -50,10 +50,9 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.federation.store import FederationDirection, HandoffState, SyncedAttempt
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
-from iris.time_proto import timestamp_from_proto
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
 
@@ -932,11 +931,13 @@ def mirror_federated_job(
     started_at_ms: int | None,
     finished_at_ms: int | None,
     num_tasks: int,
+    backend_id: str,
 ) -> None:
     """Mirror a peer's job state onto the local federated ``jobs`` row.
 
-    Never touches ``cluster``/``backend_id`` (the coordinate stays), only the
-    state/timing/counts the local reads render.
+    The execution peer authors ``backend_id``. The parent retains that coordinate
+    with the mirrored state so resource reads do not reinterpret a remote backend
+    through the parent's local backend configuration.
     """
     tx.execute(
         update(jobs_table)
@@ -948,6 +949,7 @@ def mirror_federated_job(
             started_at_ms=started_at_ms,
             finished_at_ms=finished_at_ms,
             num_tasks=num_tasks,
+            backend_id=backend_id,
         )
     )
 
@@ -970,6 +972,7 @@ def mirror_federated_task(
     worker_address: str,
     peer_worker_label: str,
     status_message: str | None,
+    backend_id: str,
 ) -> None:
     """Upsert a mirrored federated task row (``cluster`` set to a peer, no worker FK).
 
@@ -999,7 +1002,7 @@ def mirror_federated_task(
             current_worker_id=None,
             current_worker_address=worker_address,
             status_message=status_message,
-            backend_id="",
+            backend_id=backend_id,
             cluster=peer_id,
             priority_neg_depth=0,
             priority_root_submitted_ms=0,
@@ -1017,6 +1020,7 @@ def mirror_federated_task(
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
                 "status_message": status_message,
+                "backend_id": backend_id,
                 "cluster": peer_id,
             },
         )
@@ -1033,7 +1037,8 @@ def mirror_federated_attempts(
     tx: Tx,
     *,
     task_id: JobName,
-    attempts: Sequence[job_pb2.TaskAttempt],
+    attempts: Sequence[SyncedAttempt],
+    backend_id: str,
 ) -> None:
     """Upsert a federated task's attempt rows from a sync delta.
 
@@ -1044,8 +1049,8 @@ def mirror_federated_attempts(
     is written verbatim.
     """
     for attempt in attempts:
-        started = timestamp_from_proto(attempt.started_at).epoch_ms() if attempt.HasField("started_at") else None
-        finished = timestamp_from_proto(attempt.finished_at).epoch_ms() if attempt.HasField("finished_at") else None
+        started = attempt.started_at.epoch_ms() if attempt.started_at is not None else None
+        finished = attempt.finished_at.epoch_ms() if attempt.finished_at is not None else None
         attempt_uid = attempt.attempt_uid or f"{task_id.to_wire()}:{attempt.attempt_id}"
         tx.execute(
             sqlite_insert(task_attempts_table)
@@ -1058,9 +1063,9 @@ def mirror_federated_attempts(
                 started_at_ms=started,
                 finished_at_ms=finished,
                 exit_code=attempt.exit_code or None,
-                error=attempt.error or None,
+                error=attempt.error_message or None,
                 attempt_uid=attempt_uid,
-                backend_id="",
+                backend_id=backend_id,
             )
             .on_conflict_do_update(
                 index_elements=["task_id", "attempt_id"],
@@ -1069,7 +1074,8 @@ def mirror_federated_attempts(
                     "started_at_ms": started,
                     "finished_at_ms": finished,
                     "exit_code": attempt.exit_code or None,
-                    "error": attempt.error or None,
+                    "error": attempt.error_message or None,
+                    "backend_id": backend_id,
                 },
             )
         )

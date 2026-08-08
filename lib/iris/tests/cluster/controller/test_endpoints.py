@@ -29,7 +29,6 @@ from iris.cluster.controller.endpoint_service import (
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
@@ -38,7 +37,7 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import generate_ed25519_keypair
 from sqlalchemy import update as sa_update
 
-from .conftest import make_job_request, query_task, submit_job
+from .conftest import make_controller_service, make_job_request, query_task, submit_job
 
 
 def _service(state, *, lease: Duration = ENDPOINT_LEASE) -> EndpointServiceImpl:
@@ -391,7 +390,7 @@ def _mint_service(state, mock_controller, log_client, tmp_path):
         signing_key_pem=generate_ed25519_keypair().private_pem,
     )
     endpoint_service = EndpointServiceImpl(db=state._db)
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

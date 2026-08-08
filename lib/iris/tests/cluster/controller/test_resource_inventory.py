@@ -5,14 +5,16 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.resources.facade import ResourceController
+from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
 from iris.cluster.resources.errors import ResourceNotFound
 from iris.cluster.resources.identity import NodeLocator, SliceLocator
 from iris.cluster.resources.node import NodeHealth, NodeQuery
 from iris.cluster.resources.slice import SliceLifecycle, SliceQuery
 from iris.cluster.resources.source import SourceState
+from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
@@ -109,12 +111,17 @@ def _unavailable_backend() -> Mock:
 @pytest.fixture
 def resources(tmp_path: Path):
     db = ControllerDB(tmp_path / "db")
-    legacy = Mock()
-    legacy.list_workers.return_value = controller_pb2.Controller.ListWorkersResponse()
+    runtime = Mock()
+    runtime.all_liveness.return_value = {}
     facade = ResourceController(
         cluster_id="cluster-a",
         db=db,
-        legacy=legacy,
+        runtime=runtime,
+        bundle_store=Mock(),
+        endpoint_service=Mock(),
+        auth=ControllerAuth(),
+        user_budget_defaults=UserBudgetDefaults(),
+        capability_url_config=CapabilityUrlConfig(),
         backends={
             "down": _unavailable_backend(),
             "k8s": _kubernetes_backend(),

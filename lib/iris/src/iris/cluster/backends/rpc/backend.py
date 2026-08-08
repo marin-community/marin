@@ -54,9 +54,11 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
+from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
@@ -470,30 +472,47 @@ class RpcTaskBackend:
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)
-        return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
+        duration_seconds = int(request.duration.to_seconds()) if request.duration is not None else 0
+        wire_request = job_pb2.ProfileTaskRequest(
+            target=(
+                "/system/process"
+                if request.attempt is None
+                else f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}"
+            ),
+            duration_seconds=duration_seconds,
+            profile_type=profile_configuration_to_proto(request.profile),
+        )
+        timeout_ms = (duration_seconds or 10) * 1_000 + 30_000
+        response = asyncio.run(stub.profile_task(wire_request, timeout_ms=timeout_ms))
+        return ProfileResult(response.profile_data, response.error)
 
     def exec_in_container(
         self,
         target: TaskTarget,
-        request: worker_pb2.Worker.ExecInContainerRequest,
-        timeout_seconds: int = 60,
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        request: ExecRequest,
+    ) -> ExecResult:
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)
+        timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 0
+        wire_request = worker_pb2.Worker.ExecInContainerRequest(
+            task_id=request.attempt.task.resource_id,
+            command=request.command,
+            timeout_seconds=timeout_seconds,
+        )
         # Negative timeout means "no caller limit"; still bound the RPC deadline
         # with a generous cap so a hung exec can't pin the handler indefinitely.
         if timeout_seconds < 0:
             rpc_timeout_ms = EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
         else:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
-        return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
+        response = asyncio.run(stub.exec_in_container(wire_request, timeout_ms=rpc_timeout_ms))
+        return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
 
     async def _reconcile_one(
         self,

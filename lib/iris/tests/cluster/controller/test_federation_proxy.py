@@ -48,7 +48,8 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
+from iris.cluster.controller.resources.facade import CapabilityUrlConfig
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2

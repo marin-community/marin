@@ -70,6 +70,14 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.resources.endpoint import (
+    ExecRequest,
+    ProfileRequest,
+    ProfileResult,
+)
+from iris.cluster.resources.endpoint import (
+    ExecResult as AttemptExecResult,
+)
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     STANDARD_MOUNTS,
@@ -102,7 +110,8 @@ from iris.cluster.stats.tables import (
     stats_timestamp,
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
@@ -2541,20 +2550,18 @@ class K8sTaskProvider:
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         """Profile a running task pod via kubectl exec.
 
         On success, writes one IrisProfile row to the finelog profile_table
-        (when not None). On failure, returns ProfileTaskResponse(error=...) and
-        skips the write. ``timeout_ms`` is unused — kubectl exec is bounded by
-        the profile duration itself.
+        (when not None). On failure, returns the error and skips the write.
+        kubectl exec is bounded by the profile duration itself.
         """
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
-        duration = request.duration_seconds or 10
-        profile_type = request.profile_type
+        duration = int(request.duration.to_seconds()) if request.duration is not None else 10
+        profile_type = profile_configuration_to_proto(request.profile)
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
 
         try:
@@ -2565,45 +2572,43 @@ class K8sTaskProvider:
             elif profile_type.HasField("memory"):
                 data = capture_memory_attach(dispatch, profile_type.memory, duration, pid="1")
             else:
-                return job_pb2.ProfileTaskResponse(error="Unknown profile type")
+                return ProfileResult(b"", "Unknown profile type")
         except Exception as e:
-            return job_pb2.ProfileTaskResponse(error=str(e))
+            return ProfileResult(b"", str(e))
 
-        resp = job_pb2.ProfileTaskResponse(profile_data=data)
-
-        if self.profile_table is not None and resp.profile_data:
+        if self.profile_table is not None and data:
             pod_node_name = _get_pod_node_name(self.kubectl, pod_name)
             row = build_profile_row(
-                source=request.target,
+                source=(
+                    "/system/process"
+                    if request.attempt is None
+                    else f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}"
+                ),
                 attempt_id=attempt_id,
                 vm_id=f"k8s/{pod_node_name or pod_name}",
                 duration_seconds=duration,
                 profile_type=profile_type,
-                profile_data=resp.profile_data,
+                profile_data=data,
             )
             self.profile_table.write([row])
 
-        return resp
+        return ProfileResult(data, "")
 
     def exec_in_container(
         self,
         target: TaskTarget,
-        request: worker_pb2.Worker.ExecInContainerRequest,
-        timeout_seconds: int = 60,
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        request: ExecRequest,
+    ) -> AttemptExecResult:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
         pod_name = self._live_pod_name(target)
+        timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 60
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
-            return worker_pb2.Worker.ExecInContainerResponse(
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
-            )
+            return AttemptExecResult(result.returncode, result.stdout, result.stderr, "")
         except Exception as e:
-            return worker_pb2.Worker.ExecInContainerResponse(error=str(e))
+            return AttemptExecResult(0, "", "", str(e))
 
     def get_process_status(
         self,

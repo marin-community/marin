@@ -6,22 +6,36 @@
 import base64
 import hashlib
 import json
+import secrets
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
 from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import capability_path, federated_capability_path
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, bindparam, or_, select
 
-from iris.cluster.constraints import Constraint
-from iris.cluster.controller import reads
+from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.attempt_counts import AttemptCounts
-from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend
+from iris.cluster.controller.auth import (
+    DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
+    MAX_ENDPOINT_TOKEN_TTL_SECONDS,
+    ControllerAuth,
+)
+from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.codec import (
+    decode_attribute_value,
+    reconstruct_job_spec,
+    worker_metadata_to_proto,
+)
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops import job as job_ops
 from iris.cluster.controller.ops.task import finalize
 from iris.cluster.controller.persistence import action as action_persistence
@@ -33,13 +47,19 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointsProjection,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.resources.jobs import FederationSubmission, JobResources
 from iris.cluster.controller.schema import (
     federated_jobs_table,
+    job_config_table,
     jobs_table,
     task_attempts_table,
     tasks_table,
+    worker_attributes_table,
 )
-from iris.cluster.federation.store import FederationDirection
+from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
@@ -50,6 +70,11 @@ from iris.cluster.resources.endpoint import (
     EndpointQuery,
     EndpointSummary,
     EndpointToken,
+    ExecRequest,
+    ExecResult,
+    ProfileConfiguration,
+    ProfileRequest,
+    ProfileResult,
 )
 from iris.cluster.resources.errors import (
     ActionIdempotencyConflict,
@@ -59,6 +84,7 @@ from iris.cluster.resources.errors import (
     InvalidResourceKey,
     ResourceNotFound,
     ResourceReplaced,
+    ResourceSourceUnavailable,
 )
 from iris.cluster.resources.identity import (
     AttemptIdentity,
@@ -101,9 +127,10 @@ from iris.cluster.resources.source import (
 )
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
-from iris.cluster.types import LOCAL_CLUSTER, CoschedulingConfig, JobName, ResourceSpec
+from iris.cluster.types import LOCAL_CLUSTER, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, iris_logging_pb2, job_pb2
-from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto
+from iris.rpc.auth import authorize_resource_owner
+from iris.time_proto import timestamp_from_proto
 
 _RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
 _RESOURCE_UID_PREFIX = "iris-resource-v2"
@@ -111,50 +138,52 @@ _MAX_JOB_PAGE = 500
 _MAX_TASK_PAGE = 500
 
 
-class LegacyResourceReader(Protocol):
-    """Existing controller reads used while their callers move to typed records."""
+class ResourceRuntime(Protocol):
+    """Controller capabilities needed by resource operations."""
 
-    def list_jobs(
-        self,
-        request: controller_pb2.Controller.ListJobsRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.ListJobsResponse: ...
+    @property
+    def backends(self) -> dict[str, TaskBackend]: ...
 
-    def get_job_status(
-        self,
-        request: controller_pb2.Controller.GetJobStatusRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.GetJobStatusResponse: ...
+    @property
+    def federation(self) -> FederationManager: ...
 
-    def launch_job(
-        self,
-        request: controller_pb2.Controller.LaunchJobRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.LaunchJobResponse: ...
+    @property
+    def capabilities(self) -> frozenset[BackendCapability]: ...
 
-    def mint_endpoint_token(
-        self,
-        request: controller_pb2.Controller.MintEndpointTokenRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
+    def wake(self) -> None: ...
 
-    def list_workers(
-        self,
-        request: controller_pb2.Controller.ListWorkersRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.ListWorkersResponse: ...
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
 
-    def exec_in_container(
-        self,
-        request: controller_pb2.Controller.ExecInContainerRequest,
-        ctx: object | None,
-    ) -> controller_pb2.Controller.ExecInContainerResponse: ...
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness: ...
 
-    def profile_task(
-        self,
-        request: job_pb2.ProfileTaskRequest,
-        ctx: object | None,
-    ) -> job_pb2.ProfileTaskResponse: ...
+    def backend_id_for_scale_group(self, scale_group: str) -> str: ...
+
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins used to construct endpoint capability URLs."""
+
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
+
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
+class _JobCoordinates:
+    job_id: JobName
+    submitted_at_ms: Timestamp
+    direction: int | None
+    peer_id: str | None
+    handoff_state: int | None
 
 
 def _uid(kind: ResourceKind, *parts: object) -> str:
@@ -304,7 +333,12 @@ class ResourceController:
         *,
         cluster_id: str,
         db: ControllerDB,
-        legacy: LegacyResourceReader,
+        runtime: ResourceRuntime,
+        bundle_store: BundleStore,
+        endpoint_service: EndpointServiceImpl,
+        auth: ControllerAuth,
+        user_budget_defaults: UserBudgetDefaults,
+        capability_url_config: CapabilityUrlConfig,
         backends: Mapping[str, TaskBackend],
         log_client: LogClient | None = None,
     ) -> None:
@@ -312,13 +346,53 @@ class ResourceController:
             raise ValueError("cluster_id is required for resource identities")
         self._cluster_id = cluster_id
         self._db = db
-        self._legacy = legacy
+        self._runtime = runtime
+        self._jobs = JobResources(
+            db=db,
+            runtime=runtime,
+            bundle_store=bundle_store,
+            auth=auth,
+            user_budget_defaults=user_budget_defaults,
+        )
+        self._endpoint_service = endpoint_service
+        self._auth = auth
+        self._capability_url_config = capability_url_config
         self._backends = dict(backends)
         self._log_client = log_client
 
-    def submit_job(self, spec: JobSpec, bundle_blob: bytes = b"") -> JobIdentity:
-        response = self._legacy.launch_job(_launch_request(spec, bundle_blob), None)
-        key = ResourceKey(self._cluster_id, ResourceKind.JOB, response.job_id)
+    @property
+    def cluster_id(self) -> str:
+        return self._cluster_id
+
+    def submit_job(
+        self,
+        spec: JobSpec,
+        bundle_blob: bytes = b"",
+        *,
+        enforce_client_freshness: bool = True,
+    ) -> JobIdentity:
+        job_id = self._jobs.submit(
+            spec,
+            bundle_blob,
+            enforce_client_freshness=enforce_client_freshness,
+        )
+        authority = self._job_authorities({job_id})[job_id]
+        key = ResourceKey(authority, ResourceKind.JOB, job_id.to_wire())
+        return self.describe_job(key).summary.identity
+
+    def submit_federated_job(
+        self,
+        spec: JobSpec,
+        bundle_blob: bytes,
+        federation: FederationSubmission,
+    ) -> JobIdentity:
+        job_id = self._jobs.submit(
+            spec,
+            bundle_blob,
+            federation=federation,
+            enforce_client_freshness=False,
+        )
+        key = ResourceKey(federation.requester_id, ResourceKind.JOB, job_id.to_wire())
         return self.describe_job(key).summary.identity
 
     def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
@@ -337,28 +411,50 @@ class ResourceController:
         )
         position = _decode_page_token(query.page_token, fingerprint)
         offset = int(position["offset"]) if position is not None else 0
-        old_query = controller_pb2.Controller.JobQuery(
-            job_id_prefix=query.job_id_prefix or (f"/{query.owner_id}/" if query.owner_id else ""),
-            backend_id=query.backend_id or "",
-            cluster=_stored_cluster(self._cluster_id, query.execution_cluster_id),
-            offset=offset,
-            limit=page_size,
+        stmt = (
+            select(
+                *jobs_table.c,
+                *job_config_table.c,
+                federated_jobs_table.c.direction,
+                federated_jobs_table.c.peer_id,
+                federated_jobs_table.c.handoff_state,
+            )
+            .select_from(
+                jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id).outerjoin(
+                    federated_jobs_table,
+                    federated_jobs_table.c.job_id == jobs_table.c.job_id,
+                )
+            )
+            .order_by(jobs_table.c.submitted_at_ms.desc(), jobs_table.c.job_id.asc())
+            .offset(offset)
+            .limit(page_size + 1)
         )
+        if query.owner_id is not None:
+            stmt = stmt.where(jobs_table.c.user_id == query.owner_id)
+        if query.job_id_prefix is not None:
+            stmt = stmt.where(jobs_table.c.job_id.like(_escaped_prefix(query.job_id_prefix), escape="\\"))
         if query.parent is not None:
-            old_query.scope = controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN
-            old_query.parent_job_id = query.parent.resource_id
-        if len(query.states) == 1:
-            old_query.state_filter = job_pb2.JobState.Name(next(iter(query.states))).removeprefix("JOB_STATE_").lower()
-        response = self._legacy.list_jobs(controller_pb2.Controller.ListJobsRequest(query=old_query), None)
-        statuses = [status for status in response.jobs if not query.states or status.state in query.states]
-        authority = self._job_authorities(JobName.from_wire(status.job_id) for status in statuses)
-        submitted = {JobName.from_wire(status.job_id): timestamp_from_proto(status.submitted_at) for status in statuses}
-        parent_ids = [JobName.from_wire(status.parent_job_id) for status in statuses if status.parent_job_id]
-        parent_submitted = self._job_submission_times(parent_ids)
-        items = tuple(self._job_summary(status, authority, submitted, parent_submitted) for status in statuses)
+            _require_kind(query.parent, ResourceKind.JOB)
+            stmt = stmt.where(jobs_table.c.parent_job_id == JobName.from_wire(query.parent.resource_id))
+        if query.states:
+            stmt = stmt.where(jobs_table.c.state.in_(query.states))
+        if query.backend_id is not None:
+            stmt = stmt.where(jobs_table.c.backend_id == query.backend_id)
+        if query.execution_cluster_id is not None:
+            stmt = stmt.where(jobs_table.c.cluster == _stored_cluster(self._cluster_id, query.execution_cluster_id))
+        with self._db.read_snapshot() as tx:
+            rows = tx.execute(stmt).all()
+            parent_times = self._job_submission_times_in_snapshot(
+                tx,
+                {row.parent_job_id for row in rows[:page_size] if row.parent_job_id is not None},
+            )
+        page_rows = rows[:page_size]
+        items = tuple(self._job_summary_from_row(row, parent_times=parent_times) for row in page_rows)
+        if query.parent is not None:
+            items = tuple(item for item in items if item.parent is not None and item.parent.key == query.parent)
         next_token = None
-        if response.has_more:
-            next_token = _encode_page_token(fingerprint, {"offset": offset + len(response.jobs)})
+        if len(rows) > page_size:
+            next_token = _encode_page_token(fingerprint, {"offset": offset + len(page_rows)})
         return Page(
             items=items,
             next_page_token=next_token,
@@ -366,20 +462,21 @@ class ResourceController:
         )
 
     def describe_job(self, key: ResourceKey) -> JobDetail:
-        _require_key(key, ResourceKind.JOB, self._cluster_id)
-        response = self._legacy.get_job_status(
-            controller_pb2.Controller.GetJobStatusRequest(job_id=key.resource_id),
-            None,
-        )
-        status = response.job
-        if not status.job_id:
+        _require_kind(key, ResourceKind.JOB)
+        job_id = JobName.from_wire(key.resource_id)
+        with self._db.read_snapshot() as tx:
+            row = reads.get_job_detail(tx, job_id)
+            coordinates = self._job_rows(tx, {job_id}).get(job_id)
+            parent_times = self._job_submission_times_in_snapshot(
+                tx,
+                {row.parent_job_id} if row is not None and row.parent_job_id is not None else set(),
+            )
+        if row is None or coordinates is None:
             raise ResourceNotFound(key.resource_id)
-        job_id = JobName.from_wire(status.job_id)
-        authority = self._job_authorities([job_id])
-        submitted = {job_id: timestamp_from_proto(status.submitted_at)}
-        parent_ids = [JobName.from_wire(status.parent_job_id)] if status.parent_job_id else []
-        summary = self._job_summary(status, authority, submitted, self._job_submission_times(parent_ids))
-        return JobDetail(summary=summary, spec=_job_spec(response.request))
+        summary = self._job_summary_from_row(row, coordinates=coordinates, parent_times=parent_times)
+        if summary.identity.key.cluster_id != key.cluster_id:
+            raise ResourceNotFound(key.resource_id)
+        return JobDetail(summary=summary, spec=reconstruct_job_spec(row, workdir_files={}))
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         page_size = _page_size(query.page_size, _MAX_TASK_PAGE)
@@ -399,7 +496,7 @@ class ResourceController:
         with self._db.read_snapshot() as tx:
             stmt = reads.task_detail_query().add_columns(tasks_table.c.task_index)
             if query.job is not None:
-                _require_key(query.job, ResourceKind.JOB, query.job.cluster_id)
+                _require_kind(query.job, ResourceKind.JOB)
                 stmt = stmt.where(tasks_table.c.job_id == JobName.from_wire(query.job.resource_id))
             if query.job_id_prefix:
                 stmt = stmt.where(tasks_table.c.job_id.like(_escaped_prefix(query.job_id_prefix), escape="\\"))
@@ -443,6 +540,8 @@ class ResourceController:
             if query.authority_cluster_id is None
             or self._authority_cluster(jobs[row.job_id]) == query.authority_cluster_id
         )
+        if query.job is not None:
+            items = tuple(item for item in items if item.job.key == query.job)
         next_token = None
         if len(rows) > page_size and page_rows:
             last = page_rows[-1]
@@ -453,7 +552,7 @@ class ResourceController:
         return Page(items=items, next_page_token=next_token, source_statuses=self._source_statuses())
 
     def describe_task(self, key: ResourceKey) -> TaskDetail:
-        _require_key(key, ResourceKind.TASK, self._cluster_id)
+        _require_kind(key, ResourceKind.TASK)
         task_id = JobName.from_wire(key.resource_id)
         with self._db.read_snapshot() as tx:
             row = tx.execute(
@@ -470,12 +569,26 @@ class ResourceController:
             job = self._job_rows(tx, {row.job_id})[row.job_id]
         current = next((candidate for candidate in attempt_rows if candidate.attempt_id == row.current_attempt_id), None)
         summary = self._task_summary(row, current, counts, job)
+        if summary.identity.key.cluster_id != key.cluster_id:
+            raise ResourceNotFound(key.resource_id)
         return TaskDetail(
             summary=summary,
             attempts=tuple(self._attempt_summary(row, candidate, job) for candidate in attempt_rows),
             source_statuses=self._source_statuses(),
-            root_cause_highlights=(),
+            root_cause_highlights=self._root_cause_highlights(task_id, summary.state),
         )
+
+    def _root_cause_highlights(self, task_id: JobName, state: int) -> tuple[str, ...]:
+        if state not in (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED) or self._log_client is None:
+            return ()
+        source, match_scope = build_log_source(task_id)
+        try:
+            response = self._log_client.fetch_logs(
+                logging_pb2.FetchLogsRequest(source=source, match_scope=match_scope, max_lines=200, tail=True)
+            )
+        except Exception:
+            return ()
+        return tuple(extract_failure_highlights([entry.data for entry in response.entries]))
 
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         detail = self.describe_task(locator.task)
@@ -511,6 +624,7 @@ class ResourceController:
         principal_id: str = "local_admin",
     ) -> ActionReceipt:
         payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None)
+        federated = False
         with self._db.transaction() as tx:
             duplicate = _duplicate_action(
                 tx,
@@ -530,7 +644,10 @@ class ResourceController:
             expected = _resource_uid(ResourceKind.JOB, authority, row.job_id.to_wire(), row.submitted_at_ms)
             if identity.key.cluster_id != authority or identity.job_uid != expected:
                 raise ResourceReplaced(identity.key.resource_id)
-            job_ops.cancel(tx, job_id=row.job_id, reason="Cancelled by resource action")
+            federated = reads.federated_handle(tx, row.job_id) is not None
+            if not federated:
+                job_ops.cancel(tx, job_id=row.job_id, reason="Cancelled by resource action")
+                writes.record_federation_change(tx, row.job_id)
             receipt = _completed_action(
                 kind=ActionKind.CANCEL_JOB,
                 target=identity.key,
@@ -549,7 +666,11 @@ class ResourceController:
                 idempotency_key=_require_idempotency_key(idempotency_key),
                 payload_hash=payload_hash,
             )
-            return receipt
+        if federated:
+            self._runtime.federation.cancel_federated(JobName.from_wire(identity.key.resource_id))
+        else:
+            self._runtime.wake()
+        return receipt
 
     def retry_task(
         self,
@@ -631,7 +752,7 @@ class ResourceController:
         )
 
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
-        _require_key(key, ResourceKind.ENDPOINT, key.cluster_id)
+        _require_kind(key, ResourceKind.ENDPOINT)
         row = self._db.caches[EndpointsProjection].get(key.resource_id)
         if row is None:
             raise ResourceNotFound(key.resource_id)
@@ -646,14 +767,27 @@ class ResourceController:
 
     def mint_endpoint_token(self, key: ResourceKey, ttl: Duration | None) -> EndpointToken:
         detail = self.describe_endpoint(key)
-        request = controller_pb2.Controller.MintEndpointTokenRequest(endpoint_name=detail.summary.name)
+        if self._auth.jwt_manager is None:
+            raise RuntimeError("JWT manager not configured")
+        row = self._endpoint_service.resolve_task_endpoint(detail.summary.name)
+        if row is None:
+            raise ResourceNotFound(detail.summary.name)
+        if self._auth.provider:
+            authorize_resource_owner(row.task_id.user)
+        ttl_seconds = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
         if ttl is not None:
-            request.ttl.CopyFrom(duration_to_proto(ttl))
-        response = self._legacy.mint_endpoint_token(request, None)
+            ttl_seconds = max(1, min(int(ttl.to_seconds()), MAX_ENDPOINT_TOKEN_TTL_SECONDS))
+        now = Timestamp.now()
+        expires_at = Timestamp.from_ms(now.epoch_ms() + ttl_seconds * 1_000)
+        token = self._auth.jwt_manager.create_endpoint_token(
+            row.name,
+            f"iris_ket_{secrets.token_urlsafe(8)}",
+            ttl_seconds=ttl_seconds,
+        )
         return EndpointToken(
-            token=response.token,
-            expires_at=timestamp_from_proto(response.expires_at),
-            capability_url=response.capability_url,
+            token=token,
+            expires_at=expires_at,
+            capability_url=self._capability_url_config.build(row.name, token),
         )
 
     def fetch_logs(
@@ -842,33 +976,81 @@ class ResourceController:
         locator: AttemptLocator,
         command: tuple[str, ...],
         timeout: Duration | None,
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    ) -> ExecResult:
         attempt = self.describe_attempt(locator)
         self._require_current_attempt(attempt.summary.identity)
-        return self._legacy.exec_in_container(
-            controller_pb2.Controller.ExecInContainerRequest(
-                task_id=locator.task.resource_id,
-                command=command,
-                timeout_seconds=timeout.to_seconds() if timeout is not None else 0,
-            ),
-            None,
-        )
+        task_id = JobName.from_wire(locator.task.resource_id)
+        request = ExecRequest(attempt.summary.identity, command, timeout)
+        handle = self._federated_handle(task_id)
+        if handle is not None:
+            return self._runtime.federation.proxy_to_peer(
+                handle.peer_id,
+                lambda peer: peer.exec_in_container(request),
+            )
+        target, backend = self._task_target(attempt.summary.identity)
+        return backend.exec_in_container(target, request)
 
     def profile_attempt(
         self,
         locator: AttemptLocator,
-        profile: job_pb2.ProfileType,
+        profile: ProfileConfiguration | None,
         duration: Duration | None,
-    ) -> job_pb2.ProfileTaskResponse:
+    ) -> ProfileResult:
         attempt = self.describe_attempt(locator)
         self._require_current_attempt(attempt.summary.identity)
-        return self._legacy.profile_task(
-            job_pb2.ProfileTaskRequest(
-                target=locator.task.resource_id,
-                duration_seconds=duration.to_seconds() if duration is not None else 0,
-                profile_type=profile,
+        task_id = JobName.from_wire(locator.task.resource_id)
+        request = ProfileRequest(attempt.summary.identity, profile, duration)
+        handle = self._federated_handle(task_id)
+        if handle is not None:
+            return self._runtime.federation.proxy_to_peer(
+                handle.peer_id,
+                lambda peer: peer.profile_task(request),
+            )
+        target, backend = self._task_target(attempt.summary.identity)
+        return backend.profile_task(target, request)
+
+    def _federated_handle(self, task_id: JobName):
+        with self._db.read_snapshot() as tx:
+            return reads.federated_handle(tx, task_id.root_job)
+
+    def _task_target(self, identity: AttemptIdentity) -> tuple[TaskTarget, TaskBackend]:
+        task_id = JobName.from_wire(identity.task.resource_id)
+        with self._db.read_snapshot() as tx:
+            task = reads.get_task_detail(tx, task_id)
+            attempt = tx.execute(
+                select(*reads.ATTEMPT_COLS).where(
+                    task_attempts_table.c.task_id == task_id,
+                    task_attempts_table.c.attempt_id == identity.attempt_number,
+                )
+            ).first()
+        if task is None or attempt is None:
+            raise ResourceNotFound(identity.task.resource_id)
+        backend = self._backends[self._backend_id(str(task.backend_id))]
+        if BackendCapability.CLUSTER_VIEW in backend.capabilities:
+            return (
+                TaskTarget(
+                    task_id=task_id.to_wire(),
+                    attempt_id=identity.attempt_number,
+                    worker_id=None,
+                    address=None,
+                    attempt_uid=identity.attempt_uid,
+                ),
+                backend,
+            )
+        worker_id = attempt.worker_id or task.current_worker_id
+        if worker_id is None:
+            raise ActionPolicyRejected(f"Task {task_id} is not assigned to a node")
+        if not self._runtime.liveness_for_worker(worker_id).healthy:
+            raise ResourceSourceUnavailable(f"Node {worker_id} is unavailable")
+        return (
+            TaskTarget(
+                task_id=task_id.to_wire(),
+                attempt_id=identity.attempt_number,
+                worker_id=worker_id,
+                address=task.current_worker_address,
+                attempt_uid=identity.attempt_uid,
             ),
-            None,
+            backend,
         )
 
     def _validated_log_target(
@@ -1044,13 +1226,16 @@ class ResourceController:
         dict[tuple[str, str], tuple[str | None, tuple[NodeAttribute, ...]]],
         tuple[ResourceSourceStatus, ...],
     ]:
-        worker_response = self._legacy.list_workers(
-            controller_pb2.Controller.ListWorkersRequest(query=controller_pb2.Controller.WorkerQuery()),
-            None,
-        )
-        workers_by_backend: dict[str, list] = {}
-        for worker in worker_response.workers:
-            workers_by_backend.setdefault(worker.backend_id, []).append(worker)
+        workers_by_backend: dict[str, list[tuple[object, Mapping[str, object]]]] = {}
+        for worker, attributes in _worker_roster(self._db):
+            backend_id = self._runtime.backend_id_for_scale_group(str(worker.scale_group or ""))
+            workers_by_backend.setdefault(backend_id, []).append((worker, attributes))
+        liveness_by_id = self._runtime.all_liveness()
+        with self._db.read_snapshot() as tx:
+            running = reads.running_tasks_by_worker(
+                tx,
+                {worker.worker_id for entries in workers_by_backend.values() for worker, _attributes in entries},
+            )
         nodes: list[NodeSummary] = []
         details: dict[tuple[str, str], tuple[str | None, tuple[NodeAttribute, ...]]] = {}
         statuses: list[ResourceSourceStatus] = []
@@ -1106,15 +1291,17 @@ class ResourceController:
                 statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
             if BackendCapability.WORKER_DAEMON not in backend.capabilities:
                 continue
-            for worker in workers_by_backend.get(backend_id, []):
+            for worker, stored_attributes in workers_by_backend.get(backend_id, []):
+                liveness = liveness_by_id.get(worker.worker_id, WorkerLiveness())
+                metadata = worker_metadata_to_proto(worker, dict(stored_attributes))
                 identity = NodeIdentity(
                     ResourceKey(self._cluster_id, ResourceKind.NODE, worker.worker_id),
                     backend_id,
                     worker.worker_id,
                 )
-                accelerator_kind, accelerator_variant, accelerator_count = _worker_accelerator(worker.metadata)
+                accelerator_kind, accelerator_variant, accelerator_count = _worker_accelerator(metadata)
                 slice_identity = None
-                slice_id = str(worker.metadata.tpu_name or "")
+                slice_id = str(metadata.tpu_name or "")
                 if slice_id:
                     slice_identity = SliceIdentity(
                         ResourceKey(self._cluster_id, ResourceKind.SLICE, slice_id),
@@ -1124,25 +1311,25 @@ class ResourceController:
                 nodes.append(
                     NodeSummary(
                         identity=identity,
-                        health=NodeHealth.READY if worker.healthy else NodeHealth.DEGRADED,
-                        schedulable=worker.healthy,
+                        health=NodeHealth.READY if liveness.healthy else NodeHealth.DEGRADED,
+                        schedulable=liveness.healthy,
                         capacity=NodeCapacity(
-                            cpu_millicores=worker.metadata.cpu_count * 1_000,
-                            memory_bytes=worker.metadata.memory_bytes,
-                            disk_bytes=worker.metadata.disk_bytes,
+                            cpu_millicores=metadata.cpu_count * 1_000,
+                            memory_bytes=metadata.memory_bytes,
+                            disk_bytes=metadata.disk_bytes,
                             accelerator_kind=accelerator_kind,
                             accelerator_variant=accelerator_variant,
                             accelerator_count=accelerator_count,
                         ),
-                        scaling_group_id=worker.scale_group or None,
+                        scaling_group_id=str(worker.scale_group or "") or None,
                         slice=slice_identity,
-                        running_task_count=len(worker.running_job_ids),
-                        observed_at=timestamp_from_proto(worker.last_heartbeat),
+                        running_task_count=len(running.get(worker.worker_id, set())),
+                        observed_at=Timestamp.from_ms(liveness.last_heartbeat_ms),
                     )
                 )
                 details[(backend_id, identity.node_uid)] = (
-                    worker.address or None,
-                    _worker_attributes(worker.metadata),
+                    str(worker.address or "") or None,
+                    _worker_attributes(metadata),
                 )
         return tuple(nodes), details, tuple(statuses)
 
@@ -1317,20 +1504,20 @@ class ResourceController:
             )
             return receipt
 
-    def _job_summary(
+    def _job_summary_from_row(
         self,
-        status: job_pb2.JobStatus,
-        authorities: Mapping[JobName, str],
-        submitted: Mapping[JobName, Timestamp],
-        parent_submitted: Mapping[JobName, Timestamp],
+        row,
+        *,
+        coordinates=None,
+        parent_times: Mapping[JobName, Timestamp] | None = None,
     ) -> JobSummary:
-        job_id = JobName.from_wire(status.job_id)
-        authority = authorities.get(job_id, self._cluster_id)
-        submitted_at = submitted[job_id]
+        job_id = row.job_id
+        authority = self._authority_cluster(coordinates or row)
+        submitted_at = row.submitted_at_ms
         parent = None
-        if status.parent_job_id:
-            parent_id = JobName.from_wire(status.parent_job_id)
-            parent_time = parent_submitted.get(parent_id)
+        if row.parent_job_id is not None:
+            parent_id = row.parent_job_id
+            parent_time = (parent_times or {}).get(parent_id)
             if parent_time is not None:
                 parent = JobIdentity(
                     ResourceKey(authority, ResourceKind.JOB, parent_id.to_wire()),
@@ -1343,15 +1530,43 @@ class ResourceController:
             ),
             owner_id=job_id.user,
             parent=parent,
-            state=status.state,
-            execution_cluster_id=_execution_cluster(self._cluster_id, status.cluster),
-            backend_id=status.backend_id,
-            num_tasks=status.task_count,
+            state=row.state,
+            execution_cluster_id=_execution_cluster(self._cluster_id, str(row.cluster)),
+            backend_id=str(row.backend_id or ""),
+            num_tasks=int(row.num_tasks),
             submitted_at=submitted_at,
-            started_at=timestamp_from_proto(status.started_at) if status.HasField("started_at") else None,
-            finished_at=timestamp_from_proto(status.finished_at) if status.HasField("finished_at") else None,
-            error_message=status.error,
+            started_at=row.started_at_ms,
+            finished_at=row.finished_at_ms,
+            error_message=str(row.error or ""),
+            pending_reason=self._job_pending_reason(row, coordinates or row),
         )
+
+    def _job_pending_reason(self, row, coordinates) -> str:
+        if row.state != job_pb2.JOB_STATE_PENDING:
+            return ""
+        if getattr(coordinates, "direction", None) == int(FederationDirection.SENT):
+            peer_id = str(getattr(coordinates, "peer_id", "") or "")
+            handoff_state = getattr(coordinates, "handoff_state", None)
+            if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+                if peer_id:
+                    return f"Queued for peer {peer_id} to report free capacity"
+                return "Queued for a federation peer to report free capacity"
+            if handoff_state == int(HandoffState.PENDING_HANDOFF):
+                return f"Awaiting acceptance by peer {peer_id}"
+            return f"Pending on peer {peer_id}"
+
+        scheduler_reason = self._runtime.get_job_scheduling_diagnostics(row.job_id.to_wire())
+        pending_reason = scheduler_reason or "Pending scheduler feedback"
+        hint = None
+        for backend in self._backends.values():
+            if backend.autoscaler is not None:
+                hint = backend.autoscaler.get_pending_hints().get(row.job_id.to_wire())
+                if hint is not None:
+                    break
+        if hint is None:
+            return pending_reason
+        scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+        return f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
     def _task_summary(self, row, current_attempt, counts: AttemptCounts, job) -> TaskSummary:
         authority = self._authority_cluster(job)
@@ -1363,13 +1578,20 @@ class ResourceController:
         )
         attempt_identity = None
         node_identity = None
-        backend_id = self._backend_id(str(row.backend_id))
+        stored_backend_id = str(row.backend_id)
+        backend_id = (
+            self._execution_backend_id(stored_backend_id, execution)
+            if stored_backend_id or current_attempt is not None
+            else ""
+        )
         if current_attempt is not None:
             attempt_identity = AttemptIdentity(
                 task_key, int(current_attempt.attempt_id), str(current_attempt.attempt_uid)
             )
-            node_id = str(current_attempt.node_name or current_attempt.worker_id or "")
-            if node_id:
+            node_id = str(
+                current_attempt.node_name or current_attempt.worker_id or getattr(row, "peer_worker_label", "") or ""
+            )
+            if node_id and backend_id:
                 node_identity = NodeIdentity(
                     ResourceKey(execution, ResourceKind.NODE, node_id),
                     backend_id,
@@ -1400,8 +1622,8 @@ class ResourceController:
         execution = _execution_cluster(self._cluster_id, str(task.cluster))
         node_id = str(attempt.node_name or attempt.worker_id or "")
         node = None
-        backend_id = self._backend_id(str(task.backend_id))
-        if node_id:
+        backend_id = self._execution_backend_id(str(task.backend_id), execution)
+        if node_id and backend_id:
             node = NodeIdentity(
                 ResourceKey(execution, ResourceKind.NODE, node_id),
                 backend_id,
@@ -1443,6 +1665,11 @@ class ResourceController:
             return next(iter(self._backends))
         raise BackendIdentityUnknown("Task has no retained backend coordinate")
 
+    def _execution_backend_id(self, stored: str, execution_cluster_id: str) -> str:
+        if execution_cluster_id != self._cluster_id:
+            return stored
+        return self._backend_id(stored)
+
     def _endpoint_summary(self, row: EndpointRow, coordinates: tuple[str, str]) -> EndpointSummary:
         authority, execution = coordinates
         task = ResourceKey(authority, ResourceKind.TASK, row.task_id.to_wire())
@@ -1480,22 +1707,29 @@ class ResourceController:
     def _job_rows(self, tx, job_ids: set[JobName]) -> dict[JobName, object]:
         if not job_ids:
             return {}
-        rows = tx.execute(
+        jobs = tx.execute(
+            select(jobs_table.c.job_id, jobs_table.c.submitted_at_ms).where(jobs_table.c.job_id.in_(job_ids))
+        ).all()
+        root_ids = {job_id.root_job for job_id in job_ids}
+        handle_rows = tx.execute(
             select(
-                jobs_table.c.job_id,
-                jobs_table.c.submitted_at_ms,
+                federated_jobs_table.c.job_id,
                 federated_jobs_table.c.direction,
                 federated_jobs_table.c.peer_id,
-            )
-            .select_from(
-                jobs_table.outerjoin(
-                    federated_jobs_table,
-                    federated_jobs_table.c.job_id == jobs_table.c.job_id,
-                )
-            )
-            .where(jobs_table.c.job_id.in_(job_ids))
+                federated_jobs_table.c.handoff_state,
+            ).where(federated_jobs_table.c.job_id.in_(root_ids))
         ).all()
-        return {row.job_id: row for row in rows}
+        handles = {row.job_id: row for row in handle_rows}
+        return {
+            row.job_id: _JobCoordinates(
+                job_id=row.job_id,
+                submitted_at_ms=row.submitted_at_ms,
+                direction=(handles[row.job_id.root_job].direction if row.job_id.root_job in handles else None),
+                peer_id=(handles[row.job_id.root_job].peer_id if row.job_id.root_job in handles else None),
+                handoff_state=(handles[row.job_id.root_job].handoff_state if row.job_id.root_job in handles else None),
+            )
+            for row in jobs
+        }
 
     def _job_authorities(self, job_ids) -> dict[JobName, str]:
         ids = set(job_ids)
@@ -1507,9 +1741,15 @@ class ResourceController:
         if not ids:
             return {}
         with self._db.read_snapshot() as tx:
-            rows = tx.execute(
-                select(jobs_table.c.job_id, jobs_table.c.submitted_at_ms).where(jobs_table.c.job_id.in_(ids))
-            ).all()
+            return self._job_submission_times_in_snapshot(tx, ids)
+
+    @staticmethod
+    def _job_submission_times_in_snapshot(tx: Tx, job_ids: set[JobName]) -> dict[JobName, Timestamp]:
+        if not job_ids:
+            return {}
+        rows = tx.execute(
+            select(jobs_table.c.job_id, jobs_table.c.submitted_at_ms).where(jobs_table.c.job_id.in_(job_ids))
+        ).all()
         return {row.job_id: row.submitted_at_ms for row in rows}
 
     def _source_statuses(self) -> tuple[ResourceSourceStatus, ...]:
@@ -1534,17 +1774,39 @@ class ResourceController:
         return tuple(statuses)
 
 
+def _worker_roster(db: ControllerDB) -> list[tuple[object, dict[str, str | int | float]]]:
+    with db.read_snapshot() as tx:
+        workers = tx.execute(select(*reads.WORKER_DETAIL_COLS)).all()
+        if not workers:
+            return []
+        worker_ids = [worker.worker_id for worker in workers]
+        attribute_rows = tx.execute(
+            select(
+                worker_attributes_table.c.worker_id,
+                worker_attributes_table.c.key,
+                worker_attributes_table.c.value_type,
+                worker_attributes_table.c.str_value,
+                worker_attributes_table.c.int_value,
+                worker_attributes_table.c.float_value,
+            ).where(worker_attributes_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
+            {"worker_ids": worker_ids},
+        ).all()
+    attributes: dict[str, dict[str, str | int | float]] = {}
+    for row in attribute_rows:
+        key, value = decode_attribute_value(row)
+        attributes.setdefault(str(row.worker_id), {})[key] = value
+    return [(worker, attributes.get(str(worker.worker_id), {})) for worker in workers]
+
+
 def _page_size(value: int, maximum: int) -> int:
     if value <= 0 or value > maximum:
         raise ValueError(f"page_size must be between 1 and {maximum}")
     return value
 
 
-def _require_key(key: ResourceKey, kind: ResourceKind, cluster_id: str) -> None:
+def _require_kind(key: ResourceKey, kind: ResourceKind) -> None:
     if key.kind is not kind:
         raise ValueError(f"expected {kind.value}, got {key.kind.value}")
-    if key.cluster_id != cluster_id:
-        raise ResourceNotFound(key.resource_id)
 
 
 def _stored_cluster(local_cluster_id: str, execution_cluster_id: str | None) -> str:
@@ -1617,74 +1879,3 @@ def _completed_action(
         updated_at=now,
         completed_at=now,
     )
-
-
-def _job_spec(request: controller_pb2.Controller.LaunchJobRequest) -> JobSpec:
-    resources = ResourceSpec(
-        cpu=request.resources.cpu_millicores / 1_000,
-        memory=request.resources.memory_bytes,
-        disk=request.resources.disk_bytes,
-        device=request.resources.device if request.resources.HasField("device") else None,
-    )
-    coscheduling = (
-        CoschedulingConfig(group_by=request.coscheduling.group_by) if request.HasField("coscheduling") else None
-    )
-    return JobSpec(
-        version=1,
-        name=request.name,
-        entrypoint=request.entrypoint,
-        resources=resources,
-        environment=request.environment,
-        bundle_id=request.bundle_id,
-        scheduling_timeout=(
-            duration_from_proto(request.scheduling_timeout) if request.HasField("scheduling_timeout") else None
-        ),
-        ports=tuple(request.ports),
-        max_task_failures=request.max_task_failures,
-        max_retries_failure=request.max_retries_failure,
-        max_retries_preemption=request.max_retries_preemption,
-        constraints=tuple(Constraint.from_proto(candidate) for candidate in request.constraints),
-        coscheduling=coscheduling,
-        replicas=request.replicas,
-        timeout=duration_from_proto(request.timeout) if request.HasField("timeout") else None,
-        fail_if_exists=request.fail_if_exists,
-        preemption_policy=request.preemption_policy,
-        existing_job_policy=request.existing_job_policy,
-        priority_band=request.priority_band,
-        task_image=request.task_image,
-        submit_argv=tuple(request.submit_argv),
-        client_revision_date=request.client_revision_date,
-        container_profile=request.container_profile,
-    )
-
-
-def _launch_request(spec: JobSpec, bundle_blob: bytes) -> controller_pb2.Controller.LaunchJobRequest:
-    request = controller_pb2.Controller.LaunchJobRequest(
-        name=spec.name,
-        entrypoint=spec.entrypoint,
-        resources=spec.resources.to_proto(),
-        environment=spec.environment,
-        bundle_id=spec.bundle_id,
-        bundle_blob=bundle_blob,
-        ports=spec.ports,
-        max_task_failures=spec.max_task_failures,
-        max_retries_failure=spec.max_retries_failure,
-        max_retries_preemption=spec.max_retries_preemption,
-        constraints=[constraint.to_proto() for constraint in spec.constraints],
-        replicas=spec.replicas,
-        fail_if_exists=spec.fail_if_exists,
-        preemption_policy=spec.preemption_policy,
-        existing_job_policy=spec.existing_job_policy,
-        priority_band=spec.priority_band,
-        task_image=spec.task_image,
-        submit_argv=spec.submit_argv,
-        client_revision_date=spec.client_revision_date,
-        container_profile=spec.container_profile,
-    )
-    if spec.scheduling_timeout is not None:
-        request.scheduling_timeout.CopyFrom(duration_to_proto(spec.scheduling_timeout))
-    if spec.coscheduling is not None:
-        request.coscheduling.CopyFrom(spec.coscheduling.to_proto())
-    if spec.timeout is not None:
-        request.timeout.CopyFrom(duration_to_proto(spec.timeout))
-    return request

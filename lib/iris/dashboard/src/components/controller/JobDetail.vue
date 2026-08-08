@@ -4,15 +4,17 @@ import { RouterLink } from 'vue-router'
 import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
 import type {
   ResourceActionResponse,
+  Constraint,
   ResourceDescribeJobResponse,
   ResourceListTasksResponse,
   ResourceTaskSummary,
 } from '@/types/rpc'
-import { formatRelativeTime, timestampMs } from '@/utils/formatting'
+import { formatBytes, formatRelativeTime, timestampMs } from '@/utils/formatting'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ActivityTimeline from '@/components/shared/ActivityTimeline.vue'
+import ConstraintChip from '@/components/shared/ConstraintChip.vue'
 
 const props = defineProps<{ clusterId: string; jobId: string }>()
 const key = computed(() => ({ clusterId: props.clusterId, kind: 'RESOURCE_KIND_JOB', resourceId: props.jobId }))
@@ -25,6 +27,16 @@ const tasks = computed(() => taskData.value?.tasks ?? [])
 const action = ref<ResourceActionResponse | null>(null)
 const actionError = ref<string | null>(null)
 const acting = ref(false)
+
+function attributeValue(value?: { stringValue?: string; intValue?: string; floatValue?: string }): string {
+  return value?.stringValue ?? value?.intValue ?? value?.floatValue ?? ''
+}
+
+function constraintText(constraint: Constraint): string {
+  const values = constraint.values?.map(attributeValue) ?? []
+  const operand = values.length ? values.join(', ') : attributeValue(constraint.value)
+  return [constraint.key, constraint.op.replace('CONSTRAINT_OP_', '').toLowerCase(), operand].filter(Boolean).join(' ')
+}
 
 function taskRoute(task: ResourceTaskSummary) {
   return { name: 'task-detail', params: { clusterId: task.identity.key.clusterId, taskId: task.identity.key.resourceId } }
@@ -57,12 +69,27 @@ onMounted(() => Promise.all([refresh(), refreshTasks()]))
       </div>
       <div v-if="action?.receipt" class="p-3 border rounded text-sm">Action <span class="font-mono">{{ action.receipt.actionId }}</span>: {{ action.receipt.state }}</div>
       <div v-if="actionError" class="text-sm text-status-danger">{{ actionError }}</div>
+      <div v-if="job.summary.pendingReason" class="px-4 py-3 text-sm text-status-warning bg-status-warning-bg rounded border">
+        {{ job.summary.pendingReason }}
+      </div>
       <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
         <div class="p-3 border rounded"><div class="text-xs text-text-muted">Tasks</div>{{ job.summary.numTasks }}</div>
         <div class="p-3 border rounded"><div class="text-xs text-text-muted">Submitted</div>{{ formatRelativeTime(timestampMs(job.summary.submittedAt)) }}</div>
         <div class="p-3 border rounded"><div class="text-xs text-text-muted">Backend</div><span class="font-mono">{{ job.summary.backendId || '—' }}</span></div>
         <div class="p-3 border rounded"><div class="text-xs text-text-muted">Bundle</div><span class="font-mono">{{ job.spec.bundleId || '—' }}</span></div>
       </div>
+      <section class="p-4 border rounded space-y-3">
+        <h3 class="font-semibold">Specification</h3>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <div><div class="text-xs text-text-muted">Name</div>{{ job.spec.name || '—' }}</div>
+          <div><div class="text-xs text-text-muted">Replicas</div>{{ job.spec.replicas ?? job.summary.numTasks }}</div>
+          <div><div class="text-xs text-text-muted">CPU</div>{{ job.spec.resources?.cpuMillicores ?? 0 }}m</div>
+          <div><div class="text-xs text-text-muted">Memory</div>{{ formatBytes(Number(job.spec.resources?.memoryBytes ?? 0)) }}</div>
+        </div>
+        <div v-if="(job.spec.constraints ?? []).length" class="flex flex-wrap gap-2">
+          <ConstraintChip v-for="constraint in job.spec.constraints" :key="constraintText(constraint)" :constraint="constraintText(constraint)" />
+        </div>
+      </section>
       <section>
         <h3 class="font-semibold mb-2">Tasks</h3>
         <EmptyState v-if="tasks.length === 0" message="No tasks" />

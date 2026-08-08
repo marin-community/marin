@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fidelity of the stored-job -> LaunchJobRequest reconstruction.
+"""Fidelity of the persisted Job resource specification.
 
 A queued federated handoff is rebuilt from the parent's stored job state and delivered
 to the peer, so a request field this round trip drops is a field the peer never runs
@@ -10,24 +10,15 @@ with. Two federation outages came from exactly that: a dropped ``client_revision
 (the peer ran a ``from_callable`` task with no ``_callable_runner.py``).
 """
 
+from dataclasses import replace
+
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.codec import reconstruct_launch_job_request
+from iris.cluster.controller.codec import reconstruct_job_spec
+from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request, job_spec_to_legacy_request
 from iris.cluster.types import JobName, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
-# The only LaunchJobRequest fields the job store deliberately does not keep.
-NOT_PERSISTED = {
-    # Uploaded to the bundle store at submit; survives as ``bundle_id``.
-    "bundle_blob",
-    # Describes the client of the hop that submitted the request: the parent gates the
-    # user's CLI build at submit, and a peer exempts a received handoff (whose wire
-    # client is the parent controller, not a CLI).
-    "client_revision_date",
-    # Stamped by the federation manager onto the request it delivers to a peer.
-    "federation",
-}
 
 
 def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.LaunchJobRequest:
@@ -67,33 +58,24 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
 
 
 def test_every_launch_request_field_survives_storage(state):
-    """Every field of a submitted request comes back out of the job store.
-
-    The reconstruction rebuilds the request field by field, so it silently drifts from
-    the proto whenever a field is added. Adding one fails this test until it is either
-    persisted or named (with its reason) in ``NOT_PERSISTED``.
-    """
+    """A typed specification survives persistence and reconstruction."""
     job_id = JobName.root("test-user", "codec-fidelity")
     request = _fully_populated_request(job_id)
 
-    unset = {f.name for f in request.DESCRIPTOR.fields} - {f.name for f, _ in request.ListFields()}
-    assert not unset, f"_fully_populated_request must set every field; missing {sorted(unset)}"
+    spec = job_spec_from_legacy_request(request)
+    assert job_spec_to_legacy_request(spec).resources == request.resources
 
     with state._db.transaction() as cur:
         ops.job.insert_job_and_config(
             cur,
             job_id=job_id,
-            request=request,
+            spec=spec,
             ts=Timestamp.now(),
             priority_band=int(request.priority_band),
         )
 
     with state._db.read_snapshot() as tx:
         job = reads.get_job_detail(tx, job_id)
-        reconstructed = reconstruct_launch_job_request(job, workdir_files=reads.get_workdir_files(tx, job_id))
+        reconstructed = reconstruct_job_spec(job, workdir_files=reads.get_workdir_files(tx, job_id))
 
-    expected = controller_pb2.Controller.LaunchJobRequest()
-    expected.CopyFrom(request)
-    for field in NOT_PERSISTED:
-        expected.ClearField(field)
-    assert reconstructed == expected
+    assert reconstructed == replace(spec, client_revision_date="")

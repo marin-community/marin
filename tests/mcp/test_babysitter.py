@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
-from iris.rpc import job_pb2, time_pb2
+from iris.cluster.resources.attempt import AttemptSummary
+from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.cluster.resources.job import JobDetail, JobSpec, JobSummary
+from iris.cluster.resources.task import TaskDetail, TaskSummary
+from iris.cluster.types import ResourceSpec
+from iris.rpc import job_pb2
 from marin.mcp.babysitter import (
     _token_provider,
     classify_diagnosis,
@@ -11,108 +16,141 @@ from marin.mcp.babysitter import (
     task_status_to_json,
 )
 from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
+from rigging.timing import Timestamp
+
+_NOW = Timestamp(1_000)
 
 
-def _timestamp(epoch_ms: int):
-    return time_pb2.Timestamp(epoch_ms=epoch_ms)
+def _job_identity() -> JobIdentity:
+    return JobIdentity(ResourceKey("prod", ResourceKind.JOB, "/alice/train"), "job-uid")
 
 
-def test_task_status_json_includes_attempts_timestamps_and_usage():
-    task = job_pb2.TaskStatus(
-        task_id="/alice/train/0",
-        state=job_pb2.TASK_STATE_FAILED,
-        worker_id="worker-a",
-        worker_address="worker-a:1234",
-        exit_code=137,
-        error="OOMKilled",
-        started_at=_timestamp(1_000),
-        finished_at=_timestamp(2_500),
-        current_attempt_id=1,
-        pending_reason="",
-        can_be_scheduled=True,
-        resource_usage=job_pb2.ResourceUsage(
-            memory_mb=2048,
-            memory_peak_mb=4096,
-            cpu_millicores=1500,
-            disk_mb=512,
-            process_count=4,
+def _task_identity() -> TaskIdentity:
+    return TaskIdentity(ResourceKey("prod", ResourceKind.TASK, "/alice/train/0"), "task-uid")
+
+
+def _job_detail() -> JobDetail:
+    return JobDetail(
+        summary=JobSummary(
+            identity=_job_identity(),
+            owner_id="alice",
+            parent=None,
+            state=job_pb2.JOB_STATE_RUNNING,
+            execution_cluster_id="prod",
+            backend_id="east",
+            num_tasks=1,
+            submitted_at=_NOW,
+            started_at=_NOW,
+            finished_at=None,
+            error_message="",
+            pending_reason="",
         ),
-        attempts=[
-            job_pb2.TaskAttempt(
-                attempt_id=0,
-                worker_id="worker-old",
-                state=job_pb2.TASK_STATE_PREEMPTED,
-                exit_code=143,
-                error="preempted",
-                started_at=_timestamp(100),
-                finished_at=_timestamp(900),
-                is_worker_failure=True,
-            ),
-            job_pb2.TaskAttempt(
-                attempt_id=1,
-                worker_id="worker-a",
-                state=job_pb2.TASK_STATE_FAILED,
-                exit_code=137,
-                error="OOMKilled",
-                started_at=_timestamp(1_000),
-                finished_at=_timestamp(2_500),
-            ),
-        ],
+        spec=JobSpec(
+            version=1,
+            name="train",
+            entrypoint=job_pb2.RuntimeEntrypoint(),
+            resources=ResourceSpec(cpu=1, memory=1024, disk=2048),
+            environment=job_pb2.EnvironmentConfig(),
+            bundle_id="bundle",
+            scheduling_timeout=None,
+            ports=(),
+            max_task_failures=0,
+            max_retries_failure=0,
+            max_retries_preemption=1,
+            constraints=(),
+            coscheduling=None,
+            replicas=1,
+            timeout=None,
+            fail_if_exists=False,
+            preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+            priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+            task_image="",
+            submit_argv=(),
+            client_revision_date="",
+            container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        ),
+    )
+
+
+def test_task_status_json_preserves_exact_identity_and_attempt_history():
+    task_identity = _task_identity()
+    attempt_identity = AttemptIdentity(task_identity.key, 1, "attempt-uid")
+    attempt = AttemptSummary(
+        identity=attempt_identity,
+        state=job_pb2.TASK_STATE_FAILED,
+        execution_cluster_id="prod",
+        backend_id="east",
+        node=None,
+        created_at=_NOW,
+        started_at=_NOW,
+        finished_at=Timestamp(2_500),
+        exit_code=137,
+        error_message="OOMKilled",
+        terminal_reason="application",
+    )
+    task = TaskDetail(
+        summary=TaskSummary(
+            identity=task_identity,
+            job=_job_identity(),
+            task_index=0,
+            state=job_pb2.TASK_STATE_FAILED,
+            execution_cluster_id="prod",
+            backend_id="east",
+            current_attempt=attempt_identity,
+            current_node=None,
+            failure_count=1,
+            preemption_count=0,
+            submitted_at=_NOW,
+            started_at=_NOW,
+            finished_at=Timestamp(2_500),
+            status_message="",
+            error_message="OOMKilled",
+        ),
+        attempts=(attempt,),
+        source_statuses=(),
+        root_cause_highlights=("container exited 137",),
     )
 
     payload = task_status_to_json(task)
 
     assert payload["task_id"] == "/alice/train/0"
+    assert payload["task_uid"] == "task-uid"
     assert payload["state"] == "failed"
-    assert payload["exit_code"] == 137
     assert payload["started_at_ms"] == 1_000
     assert payload["finished_at_ms"] == 2_500
     assert payload["duration_ms"] == 1_500
-    assert payload["resource_usage"]["memory_peak_mb"] == 4096
-    assert payload["attempts"][0]["state"] == "preempted"
-    assert payload["attempts"][0]["is_worker_failure"] is True
-    assert payload["attempts"][1]["exit_code"] == 137
+    assert payload["attempts"][0]["attempt_uid"] == "attempt-uid"
+    assert payload["attempts"][0]["exit_code"] == 137
+    assert payload["root_cause_highlights"] == ["container exited 137"]
 
 
 def test_job_summary_payload_preserves_summary_task_fields():
-    job = job_pb2.JobStatus(
-        job_id="/alice/train",
-        name="train",
-        state=job_pb2.JOB_STATE_RUNNING,
-        task_count=1,
-    )
-    running_task = job_pb2.TaskStatus(
-        task_id="/alice/train/0",
+    running_task = TaskSummary(
+        identity=_task_identity(),
+        job=_job_identity(),
+        task_index=0,
         state=job_pb2.TASK_STATE_RUNNING,
-        exit_code=0,
+        execution_cluster_id="prod",
+        backend_id="east",
+        current_attempt=None,
+        current_node=None,
+        failure_count=0,
+        preemption_count=0,
+        submitted_at=_NOW,
+        started_at=_NOW,
+        finished_at=None,
+        status_message="running",
+        error_message="",
     )
 
-    payload = babysitter._job_summary_payload(job, [running_task])
+    payload = babysitter._job_summary_payload(_job_detail(), [running_task])
 
     assert payload["tasks"][0]["index"] == "0"
-    assert payload["tasks"][0]["exit_code"] is None
-    assert "resource_usage" not in payload
+    assert payload["job_uid"] == "job-uid"
+    assert payload["tasks"][0]["task_uid"] == "task-uid"
     assert "resource_requests" in payload
     assert "resource_usage" not in payload
-
-
-def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch):
-    job = job_pb2.JobStatus(
-        job_id="/alice/train",
-        name="train",
-        state=job_pb2.JOB_STATE_RUNNING,
-        task_count=1,
-    )
-
-    def fail_full_job_serialization(_job):
-        raise AttributeError("resource_usage")
-
-    monkeypatch.setattr(babysitter, "job_status_to_json", fail_full_job_serialization)
-
-    payload = babysitter._job_summary_payload(job, [])
-
-    assert payload["job_id"] == "/alice/train"
-    assert "resource_requests" in payload
 
 
 def test_token_provider_uses_env_override(monkeypatch):

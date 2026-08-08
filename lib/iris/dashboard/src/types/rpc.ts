@@ -781,6 +781,7 @@ export interface ResourceJobSummary {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   errorMessage?: string
+  pendingReason?: string
 }
 
 export interface ResourceJobDetail {
@@ -790,6 +791,7 @@ export interface ResourceJobDetail {
     resources?: ResourceSpecProto
     entrypoint?: RuntimeEntrypoint
     environment?: EnvironmentConfig
+    constraints?: Constraint[]
     bundleId?: string
     replicas?: number
     priorityBand?: string

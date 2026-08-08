@@ -26,9 +26,17 @@ from rigging.timing import Timestamp
 
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig
+from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
+from iris.cluster.federation.store import (
+    FederationSyncBatch,
+)
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.time_proto import duration_to_proto
 
 # A handoff carries a full request and a peer's cold boot can outrun the default
 # RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
@@ -50,6 +58,16 @@ _PROCESS_STATUS_PROXY_TIMEOUT_MS = 30_000
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class HandoffDelivery:
+    spec: JobSpec
+    bundle_blob: bytes
+    requester_id: str
+    owner_principal: str
+    submitting_user: str
+    handoff_nonce: str
+
+
 class PeerConnection(Protocol):
     """The peer-controller surface federation drives.
 
@@ -61,21 +79,15 @@ class PeerConnection(Protocol):
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse: ...
+    def launch_job(self, delivery: HandoffDelivery) -> None: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse: ...
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch: ...
 
-    def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse: ...
+    def profile_task(self, request: ProfileRequest) -> ProfileResult: ...
 
-    def exec_in_container(
-        self, request: controller_pb2.Controller.ExecInContainerRequest
-    ) -> controller_pb2.Controller.ExecInContainerResponse: ...
+    def exec_in_container(self, request: ExecRequest) -> ExecResult: ...
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse: ...
 
@@ -111,6 +123,46 @@ def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider
     )
 
 
+def legacy_handoff_request(delivery: HandoffDelivery) -> controller_pb2.Controller.LaunchJobRequest:
+    """Encode a typed handoff only where the retired peer RPC crosses the wire."""
+    spec = delivery.spec
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=spec.name,
+        entrypoint=spec.entrypoint,
+        resources=spec.resources.to_exact_proto(),
+        environment=spec.environment,
+        bundle_id=spec.bundle_id,
+        bundle_blob=delivery.bundle_blob,
+        ports=spec.ports,
+        max_task_failures=spec.max_task_failures,
+        max_retries_failure=spec.max_retries_failure,
+        max_retries_preemption=spec.max_retries_preemption,
+        constraints=[constraint.to_proto() for constraint in spec.constraints],
+        replicas=spec.replicas,
+        fail_if_exists=spec.fail_if_exists,
+        preemption_policy=spec.preemption_policy,
+        existing_job_policy=spec.existing_job_policy,
+        priority_band=spec.priority_band,
+        task_image=spec.task_image,
+        submit_argv=spec.submit_argv,
+        client_revision_date=spec.client_revision_date,
+        container_profile=spec.container_profile,
+        federation=controller_pb2.Controller.FederationHandoff(
+            requester_id=delivery.requester_id,
+            owner_principal=delivery.owner_principal,
+            submitting_user=delivery.submitting_user,
+            handoff_nonce=delivery.handoff_nonce,
+        ),
+    )
+    if spec.scheduling_timeout is not None:
+        request.scheduling_timeout.CopyFrom(duration_to_proto(spec.scheduling_timeout))
+    if spec.coscheduling is not None:
+        request.coscheduling.CopyFrom(spec.coscheduling.to_proto())
+    if spec.timeout is not None:
+        request.timeout.CopyFrom(duration_to_proto(spec.timeout))
+    return request
+
+
 class _PeerRpcConnection:
     """A :class:`PeerConnection` over the generated controller stub.
 
@@ -128,35 +180,48 @@ class _PeerRpcConnection:
         response = self._client.list_backends(controller_pb2.Controller.ListBackendsRequest())
         return list(response.backends)
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
-        return self._client.launch_job(request, timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+    def launch_job(self, delivery: HandoffDelivery) -> None:
+        self._client.launch_job(legacy_handoff_request(delivery), timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 
     def terminate_job(self, job_id: JobName) -> None:
         self._client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()))
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
-        return self._client.federation_sync(request)
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
+        response = self._client.federation_sync(
+            controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor)
+        )
+        return federation_batch_from_legacy(response)
 
-    def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
-        timeout_ms = (request.duration_seconds or _DEFAULT_PROFILE_DURATION) * 1000 + _PROFILE_PROXY_TIMEOUT_MARGIN_MS
-        return self._client.profile_task(request, timeout_ms=timeout_ms)
+    def profile_task(self, request: ProfileRequest) -> ProfileResult:
+        if request.attempt is None:
+            raise ValueError("federated task profiling requires an Attempt identity")
+        duration_seconds = int(request.duration.to_seconds()) if request.duration is not None else 0
+        wire_request = job_pb2.ProfileTaskRequest(
+            target=f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}",
+            duration_seconds=duration_seconds,
+            profile_type=profile_configuration_to_proto(request.profile),
+        )
+        timeout_ms = (duration_seconds or _DEFAULT_PROFILE_DURATION) * 1000 + _PROFILE_PROXY_TIMEOUT_MARGIN_MS
+        response = self._client.profile_task(wire_request, timeout_ms=timeout_ms)
+        return ProfileResult(response.profile_data, response.error)
 
-    def exec_in_container(
-        self, request: controller_pb2.Controller.ExecInContainerRequest
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    def exec_in_container(self, request: ExecRequest) -> ExecResult:
+        timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 0
+        wire_request = controller_pb2.Controller.ExecInContainerRequest(
+            task_id=request.attempt.task.resource_id,
+            command=request.command,
+            timeout_seconds=timeout_seconds,
+        )
         # Mirror the worker backend's exec timeout contract (backend.py): a
         # negative timeout is "no caller limit", which the peer caps at
         # EXEC_IN_CONTAINER_MAX_TIMEOUT, so the parent->peer hop must outlast that
         # cap rather than collapse to the margin.
-        if request.timeout_seconds < 0:
+        if timeout_seconds < 0:
             budget_ms = EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
         else:
-            budget_ms = (request.timeout_seconds or _DEFAULT_EXEC_TIMEOUT) * 1000
-        return self._client.exec_in_container(request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
+            budget_ms = (timeout_seconds or _DEFAULT_EXEC_TIMEOUT) * 1000
+        response = self._client.exec_in_container(wire_request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
+        return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
@@ -214,11 +279,9 @@ class FederationPeer:
         with self._lock:
             return self._heartbeat
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
-        return self._connection.launch_job(request)
+    def launch_job(self, delivery: HandoffDelivery) -> None:
+        """Deliver a typed Job through the peer's legacy RPC adapter."""
+        self._connection.launch_job(delivery)
 
     def terminate_job(self, job_id: JobName) -> None:
         """Route a cancel to the peer (reuses its ``TerminateJob``).
@@ -228,19 +291,15 @@ class FederationPeer:
         """
         self._connection.terminate_job(job_id)
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         """Run one delta-sync round against the peer."""
-        return self._connection.federation_sync(request)
+        return self._connection.federation_sync(requester_id, cursor)
 
-    def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
+    def profile_task(self, request: ProfileRequest) -> ProfileResult:
         """Proxy a profile RPC for a handed-off task to the peer (reuses its ``ProfileTask``)."""
         return self._connection.profile_task(request)
 
-    def exec_in_container(
-        self, request: controller_pb2.Controller.ExecInContainerRequest
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    def exec_in_container(self, request: ExecRequest) -> ExecResult:
         """Proxy an exec RPC for a handed-off task to the peer (reuses its ``ExecInContainer``)."""
         return self._connection.exec_in_container(request)
 

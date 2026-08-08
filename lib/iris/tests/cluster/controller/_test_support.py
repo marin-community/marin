@@ -22,6 +22,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
 from iris.cluster.controller.schema import (
     tasks_table,
     workers_table,
@@ -167,7 +168,7 @@ def submit_job_in_tx(
     ops.job.submit(
         cur,
         job_id=job_id,
-        request=request,
+        spec=job_spec_from_legacy_request(request),
         ts=ts if ts is not None else Timestamp.now(),
         priority_band=band,
         submitting_user=submitting_user,

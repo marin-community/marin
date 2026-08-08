@@ -9,7 +9,14 @@ import pytest
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.controller.controller import Controller
-from iris.cluster.federation.peer import FederationPeer
+from iris.cluster.controller.resources.jobs import FederationSubmission
+from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
+from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
+from iris.cluster.federation.store import FederationSyncBatch
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.identity import ResourceKey, ResourceKind
+from iris.cluster.resources.job import JobDetail
+from iris.cluster.resources.task import TaskSummary
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -40,31 +47,44 @@ class InProcessPeerConnection:
         self._require_reachable()
         return [controller_pb2.Controller.BackendSummary(backend_id="default")]
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
+    def launch_job(self, delivery: HandoffDelivery) -> None:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            return self._controller.launch_job(request)
+            self._controller.resources.submit_federated_job(
+                delivery.spec,
+                delivery.bundle_blob,
+                FederationSubmission(
+                    requester_id=delivery.requester_id,
+                    owner_principal=delivery.owner_principal,
+                    submitting_user=delivery.submitting_user,
+                    handoff_nonce=delivery.handoff_nonce,
+                ),
+            )
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            return self._controller.federation_sync(request)
+            response = self._controller.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor)
+            )
+        return federation_batch_from_legacy(response)
 
     def terminate_job(self, job_id: JobName) -> None:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            self._controller.terminate_job(job_id.to_wire())
+            identity = self._controller.resources.describe_job(
+                ResourceKey(PARENT_CLUSTER_ID, ResourceKind.JOB, job_id.to_wire())
+            ).summary.identity
+            self._controller.resources.cancel_job(
+                identity,
+                idempotency_key=f"journey-federated-cancel:{identity.job_uid}",
+                principal_id=job_id.user,
+            )
 
-    def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
+    def profile_task(self, request: ProfileRequest) -> ProfileResult:
         raise NotImplementedError("federation journey does not provide a process runtime")
 
-    def exec_in_container(
-        self, request: controller_pb2.Controller.ExecInContainerRequest
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    def exec_in_container(self, request: ExecRequest) -> ExecResult:
         raise NotImplementedError("federation journey does not provide a container runtime")
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
@@ -127,18 +147,19 @@ class FederationJourney:
 
     def cancel(self, job: JobRef) -> None:
         self.parent.cancel(job)
+        self.parent.step()
 
-    def parent_job(self, job: JobRef) -> job_pb2.JobStatus:
+    def parent_job(self, job: JobRef) -> JobDetail:
         return self.parent.job(job)
 
-    def peer_job(self, job: JobRef) -> job_pb2.JobStatus:
-        return self.peer.controller.get_job_status(job.wire_id).job
+    def peer_job(self, job: JobRef) -> JobDetail:
+        return self.peer.job(job)
 
-    def parent_tasks(self, job: JobRef) -> list[job_pb2.TaskStatus]:
+    def parent_tasks(self, job: JobRef) -> list[TaskSummary]:
         return list(self.parent.tasks(job))
 
-    def peer_tasks(self, job: JobRef) -> list[job_pb2.TaskStatus]:
-        return list(self.peer.controller.list_tasks(job.wire_id).tasks)
+    def peer_tasks(self, job: JobRef) -> list[TaskSummary]:
+        return list(self.peer.tasks(job))
 
     def peer_summary(self) -> controller_pb2.Controller.PeerSummary:
         with identity_scope(_READER_IDENTITY):

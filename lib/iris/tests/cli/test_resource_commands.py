@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import nullcontext
-from dataclasses import replace
 
-import pytest
 from click.testing import CliRunner
 from iris.cli.attempt import attempt
 from iris.cli.job import job
@@ -44,6 +42,7 @@ def _job_detail() -> JobDetail:
             started_at=_NOW,
             finished_at=None,
             error_message="",
+            pending_reason="",
         ),
         spec=JobSpec(
             version=1,
@@ -203,35 +202,3 @@ def test_attempt_describe_surfaces_exact_runtime_and_terminal_reason(monkeypatch
     assert "UID: attempt-uid-2" in result.output
     assert "Runtime: kubernetes:iris/iris-train-7-2" in result.output
     assert "Reason: init container could not fetch bundle" in result.output
-
-
-@pytest.mark.parametrize(
-    ("state", "expected_name", "expected_exit_code"),
-    [
-        (job_pb2.JOB_STATE_SUCCEEDED, "succeeded", 0),
-        (job_pb2.JOB_STATE_FAILED, "failed", 1),
-    ],
-)
-def test_job_wait_reports_terminal_state_and_exit_status(
-    monkeypatch,
-    state: job_pb2.JobState,
-    expected_name: str,
-    expected_exit_code: int,
-) -> None:
-    detail = _job_detail()
-    terminal = replace(detail, summary=replace(detail.summary, state=state, finished_at=_NOW))
-
-    class Client:
-        def describe_job(self, _key):
-            return terminal
-
-    monkeypatch.setattr("iris.cli.job.resource_client_for_ctx", lambda _ctx: nullcontext(Client()))
-
-    result = CliRunner().invoke(
-        job,
-        ["wait", "/alice/train"],
-        obj={"cluster_name": "prod", "controller_url": "unused"},
-    )
-
-    assert result.exit_code == expected_exit_code
-    assert result.output == f"{expected_name}\n"

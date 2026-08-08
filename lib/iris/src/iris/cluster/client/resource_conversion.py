@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conversions between public resource records and their RPC representation."""
+"""ResourceService wire codecs.
+
+The frozen records in :mod:`iris.cluster.resources` are Iris's public Python API.
+Generated protobuf messages stay at the RPC boundary because their mutable,
+presence-sensitive semantics are transport concerns rather than resource behavior.
+"""
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
@@ -242,6 +247,7 @@ def job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
         started_at=timestamp_from_proto(value.started_at) if value.HasField("started_at") else None,
         finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
         error_message=value.error_message,
+        pending_reason=value.pending_reason,
     )
 
 
@@ -250,7 +256,7 @@ def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
         version=value.version,
         name=value.name,
         entrypoint=value.entrypoint,
-        resources=value.resources.to_proto(),
+        resources=value.resources.to_exact_proto(),
         environment=value.environment,
         bundle_id=value.bundle_id,
         ports=value.ports,

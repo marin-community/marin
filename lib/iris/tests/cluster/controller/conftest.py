@@ -41,6 +41,7 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -71,6 +72,8 @@ from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
+from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     task_attempts_table,
@@ -89,6 +92,7 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
+from iris.cluster.resources.endpoint import ProfileRequest, ProfileResult
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -270,9 +274,8 @@ class FakeProvider:
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         raise ProviderUnsupportedError("fake")
 
     def close(self) -> None:
@@ -317,11 +320,15 @@ class MockController:
         # A bare Mock would auto-create a truthy .autoscaler; the per-backend
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
         self.provider.autoscaler = None
+        self.provider.status.return_value = controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail()
+        )
+        self.provider.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         # The backend owns its liveness tracker; the service registers workers into
         # it and the controller's union reads back through it. Tests that inspect a
         # specific ``state._health`` point this at that tracker.
         self.provider.health = WorkerHealthTracker()
-        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+        self.capabilities = self.provider.capabilities
         self.scale_group_to_backend: dict[str, str] = {}
         self.last_unroutable_jobs: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
@@ -347,6 +354,48 @@ def mock_controller() -> MockController:
     return MockController()
 
 
+def make_controller_service(
+    *,
+    controller,
+    bundle_store: BundleStore,
+    log_client,
+    db: ControllerDB,
+    endpoint_service: EndpointServiceImpl,
+    auth: ControllerAuth | None = None,
+    user_budget_defaults: UserBudgetDefaults | None = None,
+    capability_url_config=None,
+) -> ControllerServiceImpl:
+    resolved_auth = auth or ControllerAuth()
+    cluster_id = getattr(capability_url_config, "cluster_name", "") or "test"
+    resource_urls = CapabilityUrlConfig(
+        cluster_name=cluster_id,
+        local_origin=getattr(capability_url_config, "local_origin", ""),
+        parent_origin=getattr(capability_url_config, "parent_origin", ""),
+    )
+    resources = ResourceController(
+        cluster_id=cluster_id,
+        db=db,
+        runtime=controller,
+        bundle_store=bundle_store,
+        endpoint_service=endpoint_service,
+        auth=resolved_auth,
+        user_budget_defaults=user_budget_defaults or UserBudgetDefaults(),
+        capability_url_config=resource_urls,
+        backends=controller.backends,
+        log_client=log_client,
+    )
+    return ControllerServiceImpl(
+        controller=controller,
+        bundle_store=bundle_store,
+        log_client=log_client,
+        db=db,
+        endpoint_service=endpoint_service,
+        resources=resources,
+        auth=resolved_auth,
+        user_budget_defaults=user_budget_defaults,
+    )
+
+
 @pytest.fixture
 def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller.
@@ -356,7 +405,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
     writes and reads land on the same object the test inspects.
     """
     mock_controller.provider.health = state._health
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -564,7 +613,7 @@ def submit_direct_job(
         ops.job.submit(
             cur,
             job_id=jid,
-            request=req,
+            spec=job_spec_from_legacy_request(req),
             ts=Timestamp.now(),
             priority_band=resolve_band_for_test(cur, jid, priority_band),
         )
@@ -817,7 +866,7 @@ def submit_job(
         ops.job.submit(
             cur,
             job_id=jid,
-            request=request,
+            spec=job_spec_from_legacy_request(request),
             ts=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
             priority_band=resolve_band_for_test(cur, jid, int(request.priority_band)),
         )

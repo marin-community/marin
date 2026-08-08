@@ -18,6 +18,8 @@ from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
+from iris.cluster.resources.endpoint import ExecRequest
+from iris.cluster.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -232,11 +234,12 @@ def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
     stub = _RecordingStub()
     monkeypatch.setattr(peer_module, "ControllerServiceClientSync", lambda **kwargs: stub)
     connection = peer_module._PeerRpcConnection("http://peer:10000", [])
+    attempt = AttemptIdentity(ResourceKey("parent", ResourceKind.TASK, "/u/j/0"), 0, "attempt-uid")
 
-    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=-1))
+    connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(-1)))
     assert stub.exec_timeout_ms >= EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
 
-    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=30))
+    connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(30)))
     assert stub.exec_timeout_ms > 30 * 1000
 
 

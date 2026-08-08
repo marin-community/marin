@@ -27,16 +27,26 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.service import (
-    WORKDIR_FILE_OFFLOAD_THRESHOLD,
-    ControllerServiceImpl,
-    _peer_status,
-)
+from iris.cluster.controller.resources.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD
+from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
+from iris.cluster.controller.service import ControllerServiceImpl, _peer_status
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
+from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName, WellKnownAttribute
+from iris.cluster.federation.peer import (
+    FederationPeer,
+    HandoffDelivery,
+    legacy_handoff_request,
+)
+from iris.cluster.federation.store import FederationSyncBatch, HandoffAdmission, HandoffSpec, HandoffState
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    LOCAL_ADMIN_SUBMITTER,
+    LOCAL_CLUSTER,
+    AttemptUid,
+    JobName,
+    WellKnownAttribute,
+)
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -48,6 +58,7 @@ from .conftest import (
     MockController,
     assign_task,
     dispatch_task,
+    make_controller_service,
     make_controller_state,
     make_direct_job_request,
     promote_queued_federation,
@@ -88,18 +99,17 @@ class _InProcessPeerConnection:
     def shutdown(self) -> None:
         pass
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
+    def launch_job(self, delivery: HandoffDelivery) -> None:
         self.launch_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            return self._service.launch_job(request, _WIRE_CTX)
+            self._service.launch_job(legacy_handoff_request(delivery), _WIRE_CTX)
 
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         with identity_scope(_PEER_IDENTITY):
-            return self._service.federation_sync(request, None)
+            response = self._service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+            )
+        return federation_batch_from_legacy(response)
 
     def terminate_job(self, job_id: JobName) -> None:
         with identity_scope(_PEER_IDENTITY):
@@ -179,7 +189,7 @@ def _make_service(
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
@@ -246,10 +256,16 @@ def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
     ).job.peer_status
 
 
+def _stamp_peer_backend(state: ControllerTestState, job_id: JobName) -> None:
+    with state._db.transaction() as tx:
+        writes.stamp_backend(tx, [(job_id, DEFAULT_BACKEND_ID)])
+
+
 def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
     """Register a worker on the peer and drive the handed-off job's task to SUCCEEDED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
+    _stamp_peer_backend(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
@@ -258,6 +274,7 @@ def _run_peer_task_to_failure(peer_state: ControllerTestState, job_id: JobName) 
     """Register a worker on the peer and drive the handed-off job's task to FAILED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
+    _stamp_peer_backend(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
 
@@ -529,6 +546,7 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         # The peer's attempt renders natively, and the worker identity is surfaced
         # from the peer (the task has no local worker row, so it is display-only).
         assert task.cluster == "cw"
+        assert task.backend_id == DEFAULT_BACKEND_ID
         assert task.worker_id == "w1"
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
@@ -540,6 +558,8 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         # act on a federated attempt.
         with peer_state._db.read_snapshot() as tx:
             (peer_attempt,) = reads.all_attempts_for_tasks(tx, [job_id.task(0)])[job_id.task(0)]
+        assert query_job(parent_state, job_id).backend_id == DEFAULT_BACKEND_ID
+        assert mirrored.backend_id == DEFAULT_BACKEND_ID
         with parent_state._db.read_snapshot() as tx:
             (attempt_row,) = reads.all_attempts_for_tasks(tx, [mirrored.task_id])[mirrored.task_id]
             assert attempt_row.attempt_uid == peer_attempt.attempt_uid
@@ -586,6 +606,7 @@ def test_sync_mirrors_status_message_on_a_same_state_building_tick(tmp_path, log
         # Peer drives the task to BUILDING with no message, and the parent mirrors it.
         worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        _stamp_peer_backend(peer_state, job_id)
         assign_task(peer_state, peer_task, worker)
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
         _dispatch_building(peer_state, peer_task.task_id, peer_task.current_attempt_id, None)
@@ -636,6 +657,7 @@ def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_clien
         # One preemption (worker failure with budget to retry), then success, on
         # the peer; the mirrored row carries the peer's real counter, not 0.
         worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+        _stamp_peer_backend(peer_state, job_id)
         dispatch_task(peer_state, peer_task, worker)
         transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_WORKER_FAILED)
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
@@ -1069,7 +1091,13 @@ def test_admit_persists_a_queued_handle_and_is_idempotent(tmp_path, log_client):
             peer_id="cw",
             owner_principal=_USER,
             submitting_user=_USER,
-            request=make_direct_job_request("fed-job", replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE),
+            spec=job_spec_from_legacy_request(
+                make_direct_job_request(
+                    "fed-job",
+                    replicas=1,
+                    priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                )
+            ),
         )
 
         # Admission parks the job in the controller-side queue; the control tick promotes

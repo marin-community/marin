@@ -35,6 +35,16 @@ from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ProfileRequest,
+    ThreadsProfileConfiguration,
+)
+from iris.cluster.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
 from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -703,24 +713,29 @@ def _failure_cp(stderr: str = "", stdout: str = "") -> ExecResult:
     return ExecResult(returncode=1, stdout=stdout, stderr=stderr)
 
 
+def _profile_request(
+    profile: ProfileConfiguration | None,
+    *,
+    attempt_id: int = 0,
+    duration_seconds: int = 5,
+) -> ProfileRequest:
+    return ProfileRequest(
+        AttemptIdentity(ResourceKey("test", ResourceKind.TASK, "/job/0"), attempt_id, "attempt-uid"),
+        profile,
+        Duration.from_seconds(duration_seconds),
+    )
+
+
 def test_profile_threads_via_kubectl_exec(provider, k8s):
     """profile_task with threads type calls py-spy dump via kubectl exec."""
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x7f00 (idle)\n  main.py:42"))
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(
-            threads=job_pb2.ThreadsProfile(locals=False),
-        ),
-    )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    request = _profile_request(ThreadsProfileConfiguration(include_locals=False))
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert not resp.error
+    assert not resp.error_message
     assert b"Thread 0x7f00" in resp.profile_data
 
 
@@ -767,18 +782,10 @@ def test_profile_threads_with_locals(provider, k8s):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x7f00\n  x = 42"))
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(
-            threads=job_pb2.ThreadsProfile(locals=True),
-        ),
-    )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    request = _profile_request(ThreadsProfileConfiguration(include_locals=True))
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert not resp.error
+    assert not resp.error_message
     assert b"Thread 0x7f00" in resp.profile_data
 
 
@@ -789,18 +796,14 @@ def test_profile_cpu_via_kubectl_exec(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_file_content(pod_name, "/tmp/iris-profile.svg", b"<svg>flamegraph</svg>")
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
+    request = _profile_request(
+        CpuProfileConfiguration(CpuProfileFormat.FLAMEGRAPH, rate_hz=0, native=None),
+        attempt_id=1,
         duration_seconds=3,
-        profile_type=job_pb2.ProfileType(
-            cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH),
-        ),
     )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=1, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=1, worker_id=None, address=None), request)
 
-    assert not resp.error
+    assert not resp.error_message
     assert resp.profile_data == b"<svg>flamegraph</svg>"
     assert len(k8s._rm_files_calls) == 1
 
@@ -814,18 +817,12 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_file_content(pod_name, "/tmp/iris-profile.html", b"<html>flamegraph</html>")
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(
-            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH),
-        ),
+    request = _profile_request(
+        MemoryProfileConfiguration(MemoryProfileFormat.FLAMEGRAPH, leaks=False),
     )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert not resp.error
+    assert not resp.error_message
     assert resp.profile_data == b"<html>flamegraph</html>"
     assert len(k8s._rm_files_calls) == 1
 
@@ -837,34 +834,20 @@ def test_profile_memory_table_returns_stdout(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())  # attach
     k8s.set_exec_response(pod_name, _success_cp(stdout="ALLOC  SIZE  FILE\n100  1KB  main.py"))  # table transform
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(
-            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.TABLE),
-        ),
-    )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    request = _profile_request(MemoryProfileConfiguration(MemoryProfileFormat.TABLE, leaks=False))
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert not resp.error
+    assert not resp.error_message
     assert b"ALLOC" in resp.profile_data
     assert len(k8s._rm_files_calls) >= 1
 
 
 def test_profile_unknown_type_returns_error(provider, k8s):
     """An empty ProfileType (no profiler selected) returns an error."""
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(),
-    )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    request = _profile_request(None)
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert resp.error == "Unknown profile type"
+    assert resp.error_message == "Unknown profile type"
     assert not resp.profile_data
 
 
@@ -874,19 +857,11 @@ def test_profile_kubectl_exec_failure_returns_error(provider, k8s):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _failure_cp(stderr="container not running"))
 
-    request = job_pb2.ProfileTaskRequest(
-        target="/job/0",
-        duration_seconds=5,
-        profile_type=job_pb2.ProfileType(
-            threads=job_pb2.ThreadsProfile(),
-        ),
-    )
-    resp = provider.profile_task(
-        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request, timeout_ms=30000
-    )
+    request = _profile_request(ThreadsProfileConfiguration(include_locals=False))
+    resp = provider.profile_task(TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None), request)
 
-    assert resp.error
-    assert "container not running" in resp.error
+    assert resp.error_message
+    assert "container not running" in resp.error_message
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ import pytest
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
+from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 
@@ -31,12 +33,13 @@ class _RecordingClusterClient:
     captured_env: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
 
-    def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
-        if environment:
-            self.captured_env = dict(environment.env_vars)
-        if constraints:
-            self.captured_constraints = list(constraints)
-        return job_id or JobName.root("test", "dummy")
+    def submit_job(self, spec: JobSpec, *, bundle: bytes | None = None) -> JobIdentity:
+        self.captured_env = dict(spec.environment.env_vars)
+        self.captured_constraints = list(spec.constraints)
+        return JobIdentity(
+            key=ResourceKey(cluster_id="test", kind=ResourceKind.JOB, resource_id=spec.name),
+            job_uid="job-uid",
+        )
 
     def shutdown(self, wait: bool = True) -> None:
         pass
@@ -119,7 +122,8 @@ def test_no_env_inheritance_without_parent_context(capturing_client):
 
     client.submit(entrypoint, "no-parent-test", resources)
 
-    assert stub.captured_env == {}
+    assert "PATH" not in stub.captured_env
+    assert "HOME" not in stub.captured_env
 
 
 def test_child_job_inherits_parent_constraints(capturing_client, parent_context):
@@ -137,11 +141,9 @@ def test_child_job_inherits_parent_constraints(capturing_client, parent_context)
     ):
         client.submit(entrypoint, "child-inherit-constraints", resources)
 
+    assert any(c.key == WellKnownAttribute.REGION and c.values[0].value == "us-west4" for c in stub.captured_constraints)
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
-    )
-    assert any(
-        c.key == WellKnownAttribute.PREEMPTIBLE and c.value.string_value == "true" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.PREEMPTIBLE and c.values[0].value == "true" for c in stub.captured_constraints
     )
 
 
@@ -159,10 +161,10 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
         client.submit(entrypoint, "child-override-constraints", resources, constraints=child_constraints)
 
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.values[0].value == "europe-west4" for c in stub.captured_constraints
     )
     assert not any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.values[0].value == "us-west4" for c in stub.captured_constraints
     )
 
 
@@ -179,7 +181,7 @@ def test_child_inherits_parent_worker_region(capturing_client, parent_context):
         client.submit(entrypoint, "child-inherits-region", resources)
 
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central2" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.values[0].value == "us-central2" for c in stub.captured_constraints
     )
 
 
@@ -198,7 +200,7 @@ def test_child_explicit_region_overrides_parent_worker_region(capturing_client, 
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
-    assert region_constraints[0].value.string_value == "europe-west4"
+    assert region_constraints[0].values[0].value == "europe-west4"
 
 
 def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):

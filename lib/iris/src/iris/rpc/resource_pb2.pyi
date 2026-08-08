@@ -331,7 +331,7 @@ class JobQuery(_message.Message):
     def __init__(self, owner_id: _Optional[str] = ..., parent: _Optional[_Union[ResourceKey, _Mapping]] = ..., job_id_prefix: _Optional[str] = ..., states: _Optional[_Iterable[_Union[_job_pb2.JobState, str]]] = ..., backend_id: _Optional[str] = ..., execution_cluster_id: _Optional[str] = ..., page: _Optional[_Union[PageRequest, _Mapping]] = ...) -> None: ...
 
 class JobSummary(_message.Message):
-    __slots__ = ("identity", "owner_id", "parent", "state", "execution_cluster_id", "backend_id", "num_tasks", "submitted_at", "started_at", "finished_at", "error_message")
+    __slots__ = ("identity", "owner_id", "parent", "state", "execution_cluster_id", "backend_id", "num_tasks", "submitted_at", "started_at", "finished_at", "error_message", "pending_reason")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     OWNER_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_FIELD_NUMBER: _ClassVar[int]
@@ -343,6 +343,7 @@ class JobSummary(_message.Message):
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REASON_FIELD_NUMBER: _ClassVar[int]
     identity: JobIdentity
     owner_id: str
     parent: JobIdentity
@@ -354,7 +355,8 @@ class JobSummary(_message.Message):
     started_at: _time_pb2.Timestamp
     finished_at: _time_pb2.Timestamp
     error_message: str
-    def __init__(self, identity: _Optional[_Union[JobIdentity, _Mapping]] = ..., owner_id: _Optional[str] = ..., parent: _Optional[_Union[JobIdentity, _Mapping]] = ..., state: _Optional[_Union[_job_pb2.JobState, str]] = ..., execution_cluster_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error_message: _Optional[str] = ...) -> None: ...
+    pending_reason: str
+    def __init__(self, identity: _Optional[_Union[JobIdentity, _Mapping]] = ..., owner_id: _Optional[str] = ..., parent: _Optional[_Union[JobIdentity, _Mapping]] = ..., state: _Optional[_Union[_job_pb2.JobState, str]] = ..., execution_cluster_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error_message: _Optional[str] = ..., pending_reason: _Optional[str] = ...) -> None: ...
 
 class JobDetail(_message.Message):
     __slots__ = ("summary", "spec")

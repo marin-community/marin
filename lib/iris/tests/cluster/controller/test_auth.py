@@ -38,7 +38,6 @@ from iris.cluster.controller.dashboard import (
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
@@ -57,6 +56,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.conftest import make_controller_service
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -86,9 +86,11 @@ def _make_service(db, log_client, auth=None):
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
-    controller_mock.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    return ControllerServiceImpl(
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    controller_mock.provider = Mock(capabilities=capabilities)
+    controller_mock.capabilities = capabilities
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
@@ -124,7 +126,7 @@ def service(state, tmp_path, log_client):
     controller_mock.provider.name = "worker"
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

@@ -10,13 +10,16 @@ so the manager stays a self-contained module that depends only on this Protocol
 and can be exercised with a fake store.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, IntEnum, auto
 from typing import Protocol
 
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.resources.endpoint import EndpointAccess
+from iris.cluster.resources.job import JobSpec
+from iris.cluster.types import JobName, ResourceSpec
 
 
 class FederationDirection(IntEnum):
@@ -66,9 +69,9 @@ class HandoffSpec:
     peer_id: str
     owner_principal: str  # end-user friendly owner asserted to the peer (attribution)
     submitting_user: str  # authenticated principal the peer's allowlist gates on
-    # Normalized request, for job_config. Its priority_band is already resolved (never
+    # Normalized resource specification. Its priority_band is already resolved (never
     # INHERIT), so the band the peer runs under survives the handoff.
-    request: controller_pb2.Controller.LaunchJobRequest
+    spec: JobSpec
     # This handle's incarnation, letting the peer tell a replay from a new
     # submission reusing the id. "" only at admission time, before the store
     # mints one; every delivered spec carries the persisted handle's nonce.
@@ -81,6 +84,75 @@ class CancelTarget:
 
     local_job_id: JobName  # this cluster's local job id (== the peer's id), to terminalize on NOT_FOUND
     peer_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class SyncedAttempt:
+    attempt_id: int
+    state: int
+    exit_code: int | None
+    error_message: str
+    attempt_uid: str
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+
+
+@dataclass(frozen=True, slots=True)
+class SyncedTask:
+    task_id: JobName
+    state: int
+    error_message: str
+    exit_code: int | None
+    submitted_at: Timestamp | None
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    current_attempt_id: int
+    worker_address: str
+    worker_label: str
+    status_message: str
+    backend_id: str
+    attempts: tuple[SyncedAttempt, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SyncedJob:
+    job_id: JobName
+    state: int
+    error_message: str
+    exit_code: int | None
+    submitted_at: Timestamp | None
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    task_count: int
+    backend_id: str
+    resources: ResourceSpec
+
+
+@dataclass(frozen=True, slots=True)
+class FederationJobDelta:
+    job_id: JobName
+    summary: SyncedJob | None
+    changed_tasks: tuple[SyncedTask, ...]
+    tombstone: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SyncedEndpoint:
+    endpoint_id: str
+    name: str
+    address: str
+    task_id: JobName
+    access: EndpointAccess
+    metadata: Mapping[str, str]
+    lease_remaining: Duration | None
+
+
+@dataclass(frozen=True, slots=True)
+class FederationSyncBatch:
+    deltas: tuple[FederationJobDelta, ...]
+    next_cursor: str
+    cursor_stale: bool
+    endpoints: tuple[SyncedEndpoint, ...]
 
 
 class FederationStore(Protocol):
@@ -131,11 +203,11 @@ class FederationStore(Protocol):
     def apply_sync_batch(
         self,
         peer_id: str,
-        deltas: Sequence[controller_pb2.Controller.FederationJobDelta],
+        deltas: tuple[FederationJobDelta, ...],
         *,
         next_cursor: str,
         cursor_stale: bool,
-        endpoints: Sequence[controller_pb2.Controller.FederationEndpoint] = (),
+        endpoints: tuple[SyncedEndpoint, ...] = (),
     ) -> None:
         """Apply one sync batch in a single transaction: mirror each delta's job
         and task state into the local ``jobs``/``tasks`` rows (stamped ``cluster``),

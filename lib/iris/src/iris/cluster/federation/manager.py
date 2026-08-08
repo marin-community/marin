@@ -19,6 +19,7 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import TypeVar
 
 from connectrpc.code import Code
@@ -36,13 +37,14 @@ from iris.cluster.federation.availability import (
     ReservationLedger,
     assign_queued,
 )
-from iris.cluster.federation.peer import FederationPeer
+from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.cluster.federation.store import (
     CancelTarget,
     FederationStore,
     HandoffSpec,
 )
+from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import controller_pb2
@@ -186,7 +188,7 @@ class FederationManager:
         self,
         *,
         local_job_id: JobName,
-        request: controller_pb2.Controller.LaunchJobRequest,
+        spec: JobSpec,
         pinned_peer_id: str,
         owner_principal: str,
         submitting_user: str,
@@ -214,7 +216,7 @@ class FederationManager:
                 peer_id=pinned_peer_id,
                 owner_principal=owner_principal,
                 submitting_user=submitting_user,
-                request=request,
+                spec=spec,
             )
         )
 
@@ -390,7 +392,7 @@ class FederationManager:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         try:
-            handoff = self._build_handoff_request(spec)
+            handoff = self._build_handoff_delivery(spec)
             peer.launch_job(handoff)
         except ConnectError as exc:
             # The peer answers a rejected handoff the same way every time — a name
@@ -416,44 +418,22 @@ class FederationManager:
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None
         cursor = self._store.read_cursor(peer.peer_id)
-        request = controller_pb2.Controller.FederationSyncRequest(requester_id=self._cluster_id, cursor=cursor)
         try:
-            response = peer.federation_sync(request)
+            response = peer.federation_sync(self._cluster_id, cursor)
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
             return
         self._store.apply_sync_batch(
             peer.peer_id,
-            list(response.deltas),
+            response.deltas,
             next_cursor=response.next_cursor,
             cursor_stale=response.cursor_stale,
-            endpoints=list(response.endpoints),
+            endpoints=response.endpoints,
         )
 
     # -- helpers -------------------------------------------------------------
 
-    def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
-        """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer
-        matches workers, not the parent's ``backend``/``cluster`` pins)."""
-        handoff = controller_pb2.Controller.LaunchJobRequest()
-        handoff.CopyFrom(spec.request)
-        handoff.name = spec.local_job_id.to_wire()
-        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
-        del handoff.constraints[:]
-        handoff.constraints.extend(kept)
-        handoff.federation.CopyFrom(
-            controller_pb2.Controller.FederationHandoff(
-                requester_id=self._cluster_id,
-                owner_principal=spec.owner_principal,
-                submitting_user=spec.submitting_user,
-                handoff_nonce=spec.handoff_nonce,
-            )
-        )
-        self._inline_blobs(handoff)
-        return handoff
-
-    def _inline_blobs(self, handoff: controller_pb2.Controller.LaunchJobRequest) -> None:
+    def _build_handoff_delivery(self, handoff: HandoffSpec) -> HandoffDelivery:
         """Carry the bytes behind every content id, which only this cluster can resolve.
 
         ``launch_job`` replaces the submitted workspace bundle and any large workdir
@@ -462,16 +442,38 @@ class FederationManager:
         handoff carries the bytes; the peer re-externalizes them under the same
         content ids on the way in.
         """
-        refs = dict(handoff.entrypoint.workdir_file_refs)
-        if not handoff.bundle_id and not refs:
-            return
-        assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
-        if handoff.bundle_id:
-            handoff.bundle_blob = self._bundles.get(handoff.bundle_id)
-            handoff.ClearField("bundle_id")
+        spec = handoff.spec
+        entrypoint = type(spec.entrypoint)()
+        entrypoint.CopyFrom(spec.entrypoint)
+        refs = dict(entrypoint.workdir_file_refs)
+        bundle_blob = b""
+        if spec.bundle_id or refs:
+            assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
+        if spec.bundle_id:
+            bundle_blob = self._bundles.get(spec.bundle_id)
         for name, blob_id in refs.items():
-            handoff.entrypoint.workdir_files[name] = self._bundles.get(blob_id)
-        handoff.entrypoint.ClearField("workdir_file_refs")
+            assert self._bundles is not None
+            entrypoint.workdir_files[name] = self._bundles.get(blob_id)
+        entrypoint.ClearField("workdir_file_refs")
+        stripped = replace(
+            spec,
+            name=handoff.local_job_id.to_wire(),
+            entrypoint=entrypoint,
+            bundle_id="" if bundle_blob else spec.bundle_id,
+            constraints=tuple(
+                constraint
+                for constraint in spec.constraints
+                if constraint.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)
+            ),
+        )
+        return HandoffDelivery(
+            spec=stripped,
+            bundle_blob=bundle_blob,
+            requester_id=self._cluster_id,
+            owner_principal=handoff.owner_principal,
+            submitting_user=handoff.submitting_user,
+            handoff_nonce=handoff.handoff_nonce,
+        )
 
     def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
         heartbeat = peer.heartbeat()

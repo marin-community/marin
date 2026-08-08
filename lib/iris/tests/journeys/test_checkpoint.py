@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from connectrpc.errors import ConnectError
+from iris.cluster.resources.errors import ResourceNotFound
 from iris.rpc import job_pb2
 
 
@@ -21,8 +21,8 @@ def test_checkpoint_restore_preserves_snapshot_and_discards_later_writes(journey
     journey.restore(checkpoint)
 
     assert result.job_count == 1
-    assert journey.job(durable).state == job_pb2.JOB_STATE_SUCCEEDED
-    with pytest.raises(ConnectError, match="not found"):
+    assert journey.job(durable).summary.state == job_pb2.JOB_STATE_SUCCEEDED
+    with pytest.raises(ResourceNotFound):
         journey.job(later)
 
 
@@ -41,4 +41,4 @@ def test_active_task_restored_from_checkpoint_retries_after_runtime_loss(journey
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_SUCCEEDED,
     ]
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED

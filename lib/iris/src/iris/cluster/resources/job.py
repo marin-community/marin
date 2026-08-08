@@ -65,6 +65,7 @@ class JobSummary:
     started_at: Timestamp | None
     finished_at: Timestamp | None
     error_message: str
+    pending_reason: str
 
 
 @dataclass(frozen=True, slots=True)

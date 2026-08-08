@@ -37,6 +37,7 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
+from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -280,10 +281,10 @@ class IrisJobHandle:
 
     def logs(self, max_lines: int = 0) -> tuple[str, ...]:
         """Return the most recent Iris log lines across all tasks."""
-        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
+        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True).entries)
 
     def terminate(self) -> None:
-        self._job.terminate()
+        self._job.cancel()
 
 
 def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
@@ -550,7 +551,7 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client.list_endpoints(prefix=prefix)
+        endpoints = client.list_endpoints(EndpointQuery(name_prefix=prefix, page_size=1_000)).items
 
         newly_discovered: list[ActorHandle] = []
         resolver = None

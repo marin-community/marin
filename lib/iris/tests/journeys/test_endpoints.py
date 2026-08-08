@@ -16,19 +16,19 @@ def test_retry_endpoint_survives_then_new_attempt_atomically_replaces_it(journey
     journey.fail(job[0])
     journey.settle()
 
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in journey.endpoints(name="service")] == [
+    assert [(endpoint.summary.key.resource_id, endpoint.address) for endpoint in journey.endpoints(name="service")] == [
         ("old", "old:1")
     ]
 
     journey.register_endpoint(job[0], "service", "new:1", endpoint_id="new")
 
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in journey.endpoints(name="service")] == [
+    assert [(endpoint.summary.key.resource_id, endpoint.address) for endpoint in journey.endpoints(name="service")] == [
         ("new", "new:1")
     ]
     with pytest.raises(ConnectError) as excinfo:
         journey.register_endpoint(job[0], "service", "old:1", endpoint_id="old", attempt_id=0)
     assert excinfo.value.code is Code.FAILED_PRECONDITION
-    assert [endpoint.endpoint_id for endpoint in journey.endpoints(name="service")] == ["new"]
+    assert [endpoint.summary.key.resource_id for endpoint in journey.endpoints(name="service")] == ["new"]
 
 
 def test_cancelling_a_job_tree_removes_its_endpoints(journey):
@@ -52,14 +52,14 @@ def test_coordinator_endpoint_survives_controller_restart_and_moves_to_the_repla
 
     journey.restart()
 
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in journey.endpoints(name="jax-coordinator")] == [
-        ("first", "task-0:1234")
-    ]
+    assert [
+        (endpoint.summary.key.resource_id, endpoint.address) for endpoint in journey.endpoints(name="jax-coordinator")
+    ] == [("first", "task-0:1234")]
 
     journey.fail(job[0])
     journey.settle()
     journey.register_endpoint(job[0], "jax-coordinator", "task-0:5678", endpoint_id="replacement")
 
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in journey.endpoints(name="jax-coordinator")] == [
-        ("replacement", "task-0:5678")
-    ]
+    assert [
+        (endpoint.summary.key.resource_id, endpoint.address) for endpoint in journey.endpoints(name="jax-coordinator")
+    ] == [("replacement", "task-0:5678")]

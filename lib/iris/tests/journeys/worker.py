@@ -11,7 +11,11 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.cluster.resources.identity import NodeLocator, ResourceKey, ResourceKind
+from iris.cluster.resources.job import JobSpec
+from iris.cluster.resources.node import NodeDetail, NodeQuery
+from iris.cluster.resources.task import TaskDetail
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
@@ -208,32 +212,46 @@ class WorkerJourney:
     ) -> WorkerJob:
         entrypoint = job_pb2.RuntimeEntrypoint()
         entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-        response = self.controller.launch_job(
-            controller_pb2.Controller.LaunchJobRequest(
+        identity = self.controller.resources.submit_job(
+            JobSpec(
+                version=1,
                 name=JobName.root("journey", name).to_wire(),
                 entrypoint=entrypoint,
+                resources=ResourceSpec(cpu=cpu_millicores / 1_000, memory=1024**3),
                 environment=job_pb2.EnvironmentConfig(),
-                resources=job_pb2.ResourceSpecProto(
-                    cpu_millicores=cpu_millicores,
-                    memory_bytes=1024**3,
-                ),
-                replicas=1,
+                bundle_id="",
+                scheduling_timeout=None,
+                ports=(),
+                max_task_failures=0,
+                max_retries_failure=0,
                 max_retries_preemption=preemption_retries,
+                constraints=(),
+                coscheduling=None,
+                replicas=1,
+                timeout=None,
+                fail_if_exists=False,
+                preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+                existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
                 priority_band=priority_band,
-            )
+                task_image="",
+                submit_argv=(),
+                client_revision_date="",
+                container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+            ),
+            enforce_client_freshness=False,
         )
-        return WorkerJob(response.job_id)
+        return WorkerJob(identity.key.resource_id)
 
     def preempt(self, job: WorkerJob) -> None:
-        response = self.controller.kick_tasks(
-            controller_pb2.Controller.KickTasksRequest(
-                targets=[job.task_id],
-                desired_state=job_pb2.TASK_STATE_PREEMPTED,
-                reason="journey preemption",
-            )
+        task = self.task(job)
+        current = task.summary.current_attempt
+        if current is None:
+            raise AssertionError(f"{job.task_id} has no current Attempt")
+        self.controller.resources.retry_task(
+            task.summary.identity,
+            expected_attempt_uid=current.attempt_uid,
+            idempotency_key=f"worker-journey-preempt:{current.attempt_uid}",
         )
-        if len(response.results) != 1 or not response.results[0].queued:
-            raise AssertionError(f"preemption was not queued: {response}")
 
     def step(self) -> None:
         self.controller.run_control_tick()
@@ -243,26 +261,35 @@ class WorkerJourney:
 
     def run_until_task_state(self, job: WorkerJob, state: int, *, max_ticks: int = 12) -> None:
         for _ in range(max_ticks):
-            if self.task(job).state == state:
+            if self.task(job).summary.state == state:
                 return
             self.step()
         raise AssertionError(
             f"{job.task_id} did not reach {job_pb2.TaskState.Name(state)}; "
-            f"last={job_pb2.TaskState.Name(self.task(job).state)}"
+            f"last={job_pb2.TaskState.Name(self.task(job).summary.state)}"
         )
 
     def run_until_worker_releases_task(self, worker_id: str, job: WorkerJob, *, max_ticks: int = 6) -> None:
         for _ in range(max_ticks):
-            if self.task(job).state == job_pb2.TASK_STATE_PENDING and worker_id not in self.worker_ids():
+            if self.task(job).summary.state == job_pb2.TASK_STATE_PENDING and worker_id not in self.worker_ids():
                 return
             self.step()
         raise AssertionError(f"{worker_id} still owns {job.task_id} after {max_ticks} control ticks")
 
-    def task(self, job: WorkerJob) -> job_pb2.TaskStatus:
-        return self.controller.get_task_status(job.task_id).task
+    def task(self, job: WorkerJob) -> TaskDetail:
+        return self.controller.resources.describe_task(
+            ResourceKey(self.controller.resources.cluster_id, ResourceKind.TASK, job.task_id)
+        )
 
-    def worker(self, worker_id: str) -> controller_pb2.Controller.WorkerHealthStatus:
-        return self.controller.get_worker_status(worker_id).worker
+    def worker(self, worker_id: str) -> NodeDetail:
+        page = self.controller.resources.list_nodes(NodeQuery(contains=worker_id, page_size=100))
+        summary = next(node for node in page.items if node.identity.key.resource_id == worker_id)
+        return self.controller.resources.describe_node(
+            NodeLocator(summary.identity.key, summary.identity.backend_id, summary.identity.node_uid)
+        )
 
     def worker_ids(self) -> set[str]:
-        return {worker.worker_id for worker in self.controller.list_workers().workers}
+        return {
+            node.identity.key.resource_id
+            for node in self.controller.resources.list_nodes(NodeQuery(page_size=100)).items
+        }

@@ -4,7 +4,7 @@
 """Typed persistence for durable resource-action receipts."""
 
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.persistence.schema.operations import action_receipts_table
+from iris.cluster.controller.schema import action_receipts_table
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from rigging.timing import Timestamp

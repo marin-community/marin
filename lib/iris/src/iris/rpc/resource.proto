@@ -225,6 +225,7 @@ message JobSummary {
   iris.time.Timestamp started_at = 9;
   iris.time.Timestamp finished_at = 10;
   string error_message = 11;
+  string pending_reason = 12;
 }
 
 message JobDetail {

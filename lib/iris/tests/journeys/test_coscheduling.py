@@ -11,9 +11,9 @@ def test_coscheduled_job_when_one_task_exhausts_retries_stops_the_gang(journey):
     journey.fail(job[2])
     journey.settle()
 
-    assert journey.job(job).state == job_pb2.JOB_STATE_FAILED
-    assert journey.task(job[2]).state == job_pb2.TASK_STATE_FAILED
-    assert [journey.task(job[index]).state for index in (0, 1, 3)] == [
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_FAILED
+    assert journey.task(job[2]).summary.state == job_pb2.TASK_STATE_FAILED
+    assert [journey.task(job[index]).summary.state for index in (0, 1, 3)] == [
         job_pb2.TASK_STATE_COSCHED_FAILED,
     ] * 3
 
@@ -31,9 +31,9 @@ def test_coscheduled_job_when_one_task_retries_restarts_the_whole_gang(journey):
     journey.fail(job[2])
     journey.settle()
 
-    assert [journey.task(job[index]).state for index in range(4)] == [job_pb2.TASK_STATE_RUNNING] * 4
+    assert [journey.task(job[index]).summary.state for index in range(4)] == [job_pb2.TASK_STATE_RUNNING] * 4
     assert all(len(journey.task(job[index]).attempts) == 2 for index in range(4))
 
     journey.succeed_all(job)
     journey.settle()
-    assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED

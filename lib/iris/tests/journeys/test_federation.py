@@ -22,20 +22,24 @@ def test_federated_job_runs_on_peer_and_syncs_attempt_to_parent(federation: Fede
     job = federation.submit("train", tasks=2)
 
     federation.promote()
-    assert federation.parent_job(job).pending_reason == f"Awaiting acceptance by peer {PEER_ID}"
+    promoted = federation.parent_job(job).summary
+    assert promoted.state == job_pb2.JOB_STATE_PENDING
+    assert promoted.execution_cluster_id == PEER_ID
 
     federation.sync()
-    assert {task.task_id for task in federation.peer_tasks(job)} == {job[0].wire_id, job[1].wire_id}
+    assert {task.identity.key.resource_id for task in federation.peer_tasks(job)} == {
+        job[0].wire_id,
+        job[1].wire_id,
+    }
 
     federation.run_peer()
     federation.succeed_on_peer(job[0])
     federation.sync()
 
     parent_tasks = federation.parent_tasks(job)
-    assert [task.cluster for task in parent_tasks] == [PEER_ID, PEER_ID]
+    assert [task.execution_cluster_id for task in parent_tasks] == [PEER_ID, PEER_ID]
     assert parent_tasks[0].state == job_pb2.TASK_STATE_SUCCEEDED
-    assert [attempt.state for attempt in parent_tasks[0].attempts] == [job_pb2.TASK_STATE_SUCCEEDED]
-    assert federation.parent_job(job).peer_status == job_pb2.PEER_STATUS_SYNCED
+    assert [attempt.state for attempt in federation.parent.task(job[0]).attempts] == [job_pb2.TASK_STATE_SUCCEEDED]
 
 
 def test_peer_outage_preserves_last_known_state_until_recovery_sync(federation: FederationJourney) -> None:
@@ -52,14 +56,14 @@ def test_peer_outage_preserves_last_known_state_until_recovery_sync(federation: 
 
     assert not federation.peer_summary().reachable
     assert federation.parent_tasks(job)[0].state == job_pb2.TASK_STATE_RUNNING
-    assert federation.parent_job(job).state == job_pb2.JOB_STATE_RUNNING
+    assert federation.parent_job(job).summary.state == job_pb2.JOB_STATE_RUNNING
 
     federation.set_peer_reachable(True)
     federation.sync()
 
     assert federation.peer_summary().reachable
     assert federation.parent_tasks(job)[0].state == job_pb2.TASK_STATE_SUCCEEDED
-    assert federation.parent_job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+    assert federation.parent_job(job).summary.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_unreachable_handoff_reports_awaiting_peer_and_recovers(federation: FederationJourney) -> None:
@@ -70,15 +74,15 @@ def test_unreachable_handoff_reports_awaiting_peer_and_recovers(federation: Fede
     federation.sync()
 
     status = federation.parent_job(job)
-    assert status.state == job_pb2.JOB_STATE_PENDING
-    assert status.pending_reason == f"Awaiting acceptance by peer {PEER_ID}"
+    assert status.summary.state == job_pb2.JOB_STATE_PENDING
+    assert status.summary.execution_cluster_id == PEER_ID
     assert federation.peer_tasks(job) == []
 
     federation.set_peer_reachable(True)
     federation.sync()
 
-    assert [task.task_id for task in federation.peer_tasks(job)] == [job[0].wire_id]
-    assert federation.parent_tasks(job)[0].cluster == PEER_ID
+    assert [task.identity.key.resource_id for task in federation.peer_tasks(job)] == [job[0].wire_id]
+    assert federation.parent_tasks(job)[0].execution_cluster_id == PEER_ID
 
 
 def test_parent_cancel_terminates_job_on_peer(federation: FederationJourney) -> None:
@@ -90,8 +94,8 @@ def test_parent_cancel_terminates_job_on_peer(federation: FederationJourney) -> 
     federation.cancel(job)
     federation.sync()
 
-    assert federation.peer_job(job).state == job_pb2.JOB_STATE_KILLED
-    assert federation.parent_job(job).state == job_pb2.JOB_STATE_KILLED
+    assert federation.peer_job(job).summary.state == job_pb2.JOB_STATE_KILLED
+    assert federation.parent_job(job).summary.state == job_pb2.JOB_STATE_KILLED
 
 
 def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(federation: FederationJourney) -> None:
@@ -101,8 +105,11 @@ def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(
     child = federation.submit_child_on_peer(root, "child", tasks=2)
     federation.sync()
 
-    assert [task.task_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
-    assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}
+    assert [task.identity.key.resource_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
+    assert {task.identity.key.resource_id for task in federation.parent_tasks(child)} == {
+        child[0].wire_id,
+        child[1].wire_id,
+    }
 
 
 def test_federated_endpoint_keeps_authority_and_execution_coordinates_distinct(

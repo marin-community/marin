@@ -25,6 +25,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from tests.cluster.controller.conftest import (
     MockController,
+    make_controller_service,
     make_controller_state,
     make_test_entrypoint,
 )
@@ -43,7 +44,7 @@ def state():
 
 
 def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> ControllerServiceImpl:
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

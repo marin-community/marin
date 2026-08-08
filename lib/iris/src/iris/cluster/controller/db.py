@@ -58,8 +58,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.controller.caches import CacheRegistry
-from iris.cluster.controller.persistence.migrate import MigrationContext, initialize_or_upgrade_database
-from iris.cluster.controller.persistence.schema.operations import action_receipts_table
 from iris.cluster.controller.schema import metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
@@ -128,7 +126,7 @@ CONTROL_READ_POOL_SIZE = 2
 CONTROL_READ_MAX_OVERFLOW = 2
 
 
-def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
+def _make_write_engine(db_path: Path, auth_db_path: Path) -> Engine:
     return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
 
 
@@ -278,7 +276,7 @@ class ControllerDB:
     AUTH_DB_FILENAME = "auth.sqlite3"
     BASELINE_MIGRATION = "0001_baseline.py"
 
-    def __init__(self, db_dir: Path, *, resource_migration_context: MigrationContext | None = None):
+    def __init__(self, db_dir: Path):
         self._db_dir = db_dir
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
@@ -286,7 +284,6 @@ class ControllerDB:
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
         self._task_event_table: Table | None = None
-        self._resource_migration_context = resource_migration_context
         # Per-controller cache registry, mirrored onto every Tx this DB mints as
         # ``tx.caches``. Built before the engines so no cursor is ever minted
         # without it. Populated by higher layers (each per-controller memo
@@ -295,8 +292,7 @@ class ControllerDB:
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
-        attached_auth_path = self._auth_db_path if resource_migration_context is None else None
-        self._sa_write_engine: Engine = _make_write_engine(self._db_path, attached_auth_path)
+        self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
         self._sa_read_engine: Engine = _make_read_engine(self._db_path)
         # Dedicated read engine for the control-loop tick, isolated from the
         # shared RPC pool so scheduling never queues behind a slow dashboard read.
@@ -306,7 +302,7 @@ class ControllerDB:
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
-        self._initialize_database()
+        self.apply_migrations()
         logger.info("Migrations applied in %.2fs", time.monotonic() - t0)
 
         # Populate sqlite_stat1 so the query planner picks good join orders.
@@ -319,13 +315,6 @@ class ControllerDB:
         finally:
             raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
-
-    def _initialize_database(self) -> None:
-        if self._resource_migration_context is None:
-            self.apply_migrations()
-            return
-        initialize_or_upgrade_database(self._db_path, context=self._resource_migration_context)
-        self._auth_db_path.unlink(missing_ok=True)
 
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
@@ -511,11 +500,6 @@ class ControllerDB:
         finally:
             raw_conn.close()
 
-        # Resource actions are the first final-schema noun used by the active
-        # controller. It has no dependency on the legacy metadata and is safe to
-        # materialize before the one-shot v2 cutover moves the remaining nouns.
-        action_receipts_table.create(self._sa_write_engine, checkfirst=True)
-
         # Migrations may have churned the WAL; reclaim and truncate.
         # wal_checkpoint() takes its own raw connection, so do it after
         # releasing ours back to the pool_size=1 write pool.
@@ -667,11 +651,9 @@ class ControllerDB:
         """Replace current DB files from ``source_dir`` and reopen connection.
 
         ``source_dir`` is a directory (local or remote) containing
-        ``controller.sqlite3`` and, for legacy-schema startup, optionally
-        ``auth.sqlite3``. Resource-schema startup restores the single main
-        database. Files are downloaded via fsspec so remote paths (e.g.
-        ``gs://...``) work. Only called at startup before concurrent access
-        begins.
+        ``controller.sqlite3`` and optionally ``auth.sqlite3``. Files are
+        downloaded via fsspec so remote paths (e.g. ``gs://...``) work.
+        Only called at startup before concurrent access begins.
         """
         source_dir_str = str(source_dir).rstrip("/")
 
@@ -689,9 +671,9 @@ class ControllerDB:
             self._remove_sidecars(self._db_path)
             tmp_path.rename(self._db_path)
 
-            # Download auth DB if present in a legacy source.
+            # Download auth DB if present in source.
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
-            if self._resource_migration_context is None and StoragePath(auth_source).exists():
+            if StoragePath(auth_source).exists():
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
                 with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
@@ -699,14 +681,13 @@ class ControllerDB:
                 auth_tmp.rename(self._auth_db_path)
 
             # Rebuild SA engines against the freshly-installed DB.
-            attached_auth_path = self._auth_db_path if self._resource_migration_context is None else None
-            self._sa_write_engine = _make_write_engine(self._db_path, attached_auth_path)
+            self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
             self._sa_read_engine = _make_read_engine(self._db_path)
             self._sa_control_read_engine = _make_read_engine(
                 self._db_path, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
             )
 
-        self._initialize_database()
+        self.apply_migrations()
         # The DB file was swapped: every open snapshot's seq now predates a file
         # that shares no history with the new one. Tick so a lazy guard's floor
         # (set by the reopen ``clear`` hook below) rejects any pre-restore fill.

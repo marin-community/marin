@@ -13,10 +13,12 @@ from collections.abc import Iterable
 from typing import Any, NamedTuple, Protocol
 
 from google.protobuf import json_format
+from rigging.timing import Duration
 
 from iris.cluster.constraints import Constraint, get_device_variant
-from iris.cluster.types import get_gpu_count, get_tpu_count
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.resources.job import JobSpec
+from iris.cluster.types import CoschedulingConfig, ResourceSpec, get_gpu_count, get_tpu_count
+from iris.rpc import job_pb2
 
 
 class WorkerAttributeRow(Protocol):
@@ -143,67 +145,62 @@ def device_variant_from_json(device_json: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
-    return resource_spec_from_scalars(
+def resource_spec_from_job_row(job: Any) -> ResourceSpec:
+    """Reconstruct a typed resource specification from native Job columns."""
+    wire = resource_spec_from_scalars(
         job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+    )
+    return ResourceSpec(
+        cpu=wire.cpu_millicores / 1_000,
+        memory=wire.memory_bytes,
+        disk=wire.disk_bytes,
+        device=wire.device if wire.HasField("device") else None,
     )
 
 
-def reconstruct_launch_job_request(
-    job, *, workdir_files: dict[str, bytes]
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Reconstruct a LaunchJobRequest proto from native job columns.
-
-    ``job.entrypoint_json`` carries no inline workdir files, so the caller names them:
-    ``reads.get_workdir_files(tx, job_id)`` for a request that will be *run* — a
-    federated handoff delivers this request to the peer, and without the files the peer
-    has no ``_callable_runner.py`` to exec — or ``{}`` for a request that only describes
-    the job's shape.
-
-    ``bundle_blob``, ``client_revision_date`` and ``federation`` are not stored (the
-    bundle survives as ``bundle_id``; the other two belong to the submitting hop), so a
-    reconstruction never carries them.
-    """
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name=job.name,
+def reconstruct_job_spec(job, *, workdir_files: dict[str, bytes]) -> JobSpec:
+    """Reconstruct the typed Job specification persisted for ``job``."""
+    resources = resource_spec_from_scalars(
+        job.res_cpu_millicores,
+        job.res_memory_bytes,
+        job.res_disk_bytes,
+        job.res_device_json,
+    )
+    entrypoint = job_pb2.RuntimeEntrypoint()
+    entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
+    entrypoint.workdir_files.update(workdir_files)
+    return JobSpec(
+        version=1,
+        name=job.job_id.to_wire(),
+        entrypoint=entrypoint,
+        resources=ResourceSpec(
+            cpu=resources.cpu_millicores / 1_000,
+            memory=resources.memory_bytes,
+            disk=resources.disk_bytes,
+            device=resources.device if resources.HasField("device") else None,
+        ),
+        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
         bundle_id=job.bundle_id,
+        scheduling_timeout=(
+            Duration.from_ms(job.scheduling_timeout_ms) if job.scheduling_timeout_ms is not None else None
+        ),
+        ports=tuple(job.ports_json),
         max_task_failures=job.max_task_failures,
         max_retries_failure=job.max_retries_failure,
         max_retries_preemption=job.max_retries_preemption,
+        constraints=tuple(constraints_from_json(job.constraints_json)),
+        coscheduling=(CoschedulingConfig(group_by=job.coscheduling_group_by) if job.has_coscheduling else None),
         replicas=job.num_tasks,
+        timeout=Duration.from_ms(job.timeout_ms) if job.timeout_ms is not None else None,
+        fail_if_exists=job.fail_if_exists,
         preemption_policy=job.preemption_policy,
         existing_job_policy=job.existing_job_policy,
         priority_band=job.priority_band,
         task_image=job.task_image,
+        submit_argv=tuple(job.submit_argv_json),
+        client_revision_date="",
         container_profile=job.container_profile,
-        fail_if_exists=job.fail_if_exists,
     )
-    req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
-    for filename, data in workdir_files.items():
-        req.entrypoint.workdir_files[filename] = data
-    req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
-    req.resources.CopyFrom(
-        resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
-    )
-
-    for c in constraints_from_json(job.constraints_json):
-        req.constraints.append(c.to_proto())
-    for port in job.ports_json:
-        req.ports.append(port)
-    for arg in job.submit_argv_json:
-        req.submit_argv.append(arg)
-
-    if job.has_coscheduling:
-        req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
-
-    if job.scheduling_timeout_ms is not None and job.scheduling_timeout_ms > 0:
-        req.scheduling_timeout.milliseconds = job.scheduling_timeout_ms
-
-    if job.timeout_ms is not None and job.timeout_ms > 0:
-        req.timeout.milliseconds = job.timeout_ms
-
-    return req
 
 
 def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata:

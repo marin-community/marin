@@ -28,7 +28,8 @@ def _make_config(
                     "-c",
                     (
                         "import os,sys; print('|'.join(sys.argv[1:])); "
-                        "print(os.getenv('PATH_A', '')); print(os.getenv('PATH_B', ''))"
+                        "print(os.getenv('PATH_A', '')); print(os.getenv('PATH_B', '')); "
+                        "print(os.getenv('IRIS_TASK_ID', ''))"
                     ),
                     *args,
                 ]
@@ -157,4 +158,23 @@ def test_process_runtime_prefers_nested_mount_for_argument_remapping(tmp_path):
     assert parent.parent.parent == tmp_path
     assert parent.name == "other"
     assert nested.parent != parent.parent
+    handle.cleanup()
+
+
+def test_process_runtime_preserves_task_identity_while_remapping_path_environment(tmp_path):
+    runtime = ProcessRuntime(cache_dir=tmp_path)
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    handle, lines = _run(
+        runtime,
+        _make_config(
+            [MountSpec("workdir", "/app", kind=MountKind.WORKDIR)],
+            args=[],
+            env={"PATH_A": "/app/data", "IRIS_TASK_ID": "/app/job/0:3"},
+            workdir_host_path=workdir,
+        ),
+    )
+
+    assert Path(lines[1]) == workdir / "data"
+    assert lines[3] == "/app/job/0:3"
     handle.cleanup()

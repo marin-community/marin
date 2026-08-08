@@ -17,7 +17,6 @@ from iris.cluster.config import PeerConfig
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import LOCAL_CLUSTER, JobName
@@ -26,7 +25,7 @@ from iris.rpc import controller_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from sqlalchemy import select
 
-from .conftest import make_job_request
+from .conftest import make_controller_service, make_job_request
 
 _IDENTITY = VerifiedIdentity(user_id="alice", role="user")
 
@@ -85,7 +84,7 @@ def test_client_set_federation_field_is_rejected_from_a_non_admin(state, log_cli
     as another user, so ``LaunchJob`` denies it before any owner re-pinning.
     """
     mock_controller.provider.health = state._health
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,

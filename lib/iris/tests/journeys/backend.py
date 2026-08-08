@@ -27,8 +27,9 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from rigging.timing import Timestamp
 
 
@@ -200,17 +201,15 @@ class ScriptedTaskBackend:
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         raise ProviderUnsupportedError("journey backend has no profiler")
 
     def exec_in_container(
         self,
         target: TaskTarget,
-        request: worker_pb2.Worker.ExecInContainerRequest,
-        timeout_seconds: int = 60,
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        request: ExecRequest,
+    ) -> ExecResult:
         raise ProviderUnsupportedError("journey backend has no container runtime")
 
     def fetch_live_logs(

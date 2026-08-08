@@ -32,7 +32,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.conftest import make_test_entrypoint
+from tests.cluster.controller.conftest import make_controller_service, make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 # ---------------------------------------------------------------------------
@@ -464,8 +464,9 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     ctrl.provider = k8s_provider
+    ctrl.backends = {DEFAULT_BACKEND_ID: k8s_provider}
 
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=LogClient.connect(log_address),
@@ -494,7 +495,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     # through the same object this harness's ControllerTestState exposes.
     ctrl.provider.health = health
 
-    service = ControllerServiceImpl(
+    service = make_controller_service(
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=LogClient.connect(log_address),

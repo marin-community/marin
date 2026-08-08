@@ -148,7 +148,7 @@ class TestIrisActorHandlePickle:
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
     fake_iris = MagicMock()
     fake_iris.submit.return_value = MagicMock(job_id="/user/job")
-    fake_iris.list_endpoints.return_value = [SimpleNamespace(name="/user/job/dummy-0")]
+    fake_iris.list_endpoints.return_value = SimpleNamespace(items=(SimpleNamespace(name="/user/job/dummy-0"),))
     resolver = MagicMock()
     fake_iris.resolver_for_job.return_value = resolver
     fake_actor = MagicMock()
@@ -174,10 +174,12 @@ def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
 def test_iris_job_handle_returns_a_globally_bounded_tail():
     job = MagicMock()
     job.job_id = "/user/job"
-    job.logs.return_value = [
-        MagicMock(data="task-0 earlier\n"),
-        MagicMock(data="task-1 latest\n"),
-    ]
+    job.logs.return_value = SimpleNamespace(
+        entries=(
+            MagicMock(data="task-0 earlier\n"),
+            MagicMock(data="task-1 latest\n"),
+        )
+    )
 
     lines = IrisJobHandle(job).logs(max_lines=2)
 
