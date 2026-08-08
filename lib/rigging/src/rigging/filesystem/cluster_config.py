@@ -79,6 +79,8 @@ MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
+# Public so a task runtime (Iris) can set it as the single source of truth.
+MARIN_LOCAL_CACHE_ENV = "MARIN_LOCAL_CACHE"
 _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
@@ -364,6 +366,16 @@ def region_from_prefix(prefix: str) -> str | None:
 def marin_region() -> str | None:
     """Return the current GCP region, from instance metadata or ``MARIN_PREFIX``."""
     return region_from_metadata() or region_from_prefix(os.environ.get(_MARIN_PREFIX_ENV, ""))
+
+
+def marin_local_cache() -> str | None:
+    """Return the task's node-local cache directory, or ``None`` off-cluster.
+
+    A task runtime (Iris) sets ``MARIN_LOCAL_CACHE`` to a node-local scratch mount
+    shared by the processes on one node. It is unset off-cluster, where a cache
+    keeps to memory and object storage.
+    """
+    return os.environ.get(MARIN_LOCAL_CACHE_ENV) or None
 
 
 def marin_prefix() -> str:

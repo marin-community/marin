@@ -53,10 +53,8 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-_AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
-_AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
-_AUTOTUNE_CACHE_DIRNAME = "block_sizes_v2"
-_AUTOTUNE_BLOCK_SIZE_PREFIX = f"{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
+# Bump the trailing version when the entry encoding changes so stale entries are ignored.
+_AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
 _AUTOTUNE_ENTRY_SUFFIX = ".json"
 
 

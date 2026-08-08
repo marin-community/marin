@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import rigging.cache as cache_module
-from rigging.cache import PersistentKvCache, marin_kv_cache
+from rigging.cache import PersistentKvCache, flush_background_writes, marin_kv_cache
 
 
 def test_store_then_load_round_trips_bytes(tmp_path):
@@ -57,6 +57,21 @@ def test_a_read_key_is_served_from_memory_after_its_object_is_removed(tmp_path):
     assert reader.load("k") == b"v"
 
 
+def test_a_store_writes_both_tiers_and_a_local_miss_falls_through_to_the_object_store(tmp_path):
+    """The node-local tier is written inline and the object-store tier in the background."""
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    cache = PersistentKvCache(local=lambda: str(local), remote=lambda: str(remote), suffix=".o")
+
+    cache.store("k", b"v")
+    flush_background_writes()
+    assert (local / "k.o").read_bytes() == b"v"
+    assert (remote / "k.o").read_bytes() == b"v"
+
+    # A process that shares only the object store still serves the key.
+    object_store_only = PersistentKvCache(remote=lambda: str(remote), suffix=".o")
+    assert object_store_only.load("k") == b"v"
+
+
 def test_the_directory_resolves_lazily_not_at_construction():
     """Constructing a cache does not call its resolver; the first access does."""
     calls: list[int] = []
@@ -65,11 +80,33 @@ def test_the_directory_resolves_lazily_not_at_construction():
         calls.append(1)
         return "/unused"
 
-    PersistentKvCache(_resolve)
+    PersistentKvCache(local=_resolve)
     assert calls == []
 
 
-def test_marin_kv_cache_maps_a_prefix_onto_the_region_store(monkeypatch):
-    monkeypatch.setattr(cache_module, "marin_prefix", lambda: "gs://my-region-bucket/")
-    cache = marin_kv_cache("levanter_kernel_autotune/fused_cross_entropy_loss", suffix=".json")
-    assert cache.location() == "gs://my-region-bucket/levanter_kernel_autotune/fused_cross_entropy_loss"
+def test_marin_kv_cache_stacks_a_node_local_tier_over_the_object_store(tmp_path, monkeypatch):
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    monkeypatch.setattr(cache_module, "marin_local_cache", lambda: str(local))
+    monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda ttl_days, prefix: str(remote / prefix))
+
+    cache = marin_kv_cache("cutlass-kernels", suffix=".o")
+    cache.store("k", b"v")
+    flush_background_writes()
+
+    assert (local / "cutlass-kernels" / "k.o").read_bytes() == b"v"
+    assert (remote / "cutlass-kernels" / "k.o").read_bytes() == b"v"
+    assert cache.load("k") == b"v"
+
+
+def test_marin_kv_cache_omits_the_node_local_tier_off_cluster(tmp_path, monkeypatch):
+    """With no node-local mount, the cache keeps to memory and the object store."""
+    remote = tmp_path / "remote"
+    monkeypatch.setattr(cache_module, "marin_local_cache", lambda: None)
+    monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda ttl_days, prefix: str(remote / prefix))
+
+    cache = marin_kv_cache("p", suffix=".o")
+    cache.store("k", b"v")
+    flush_background_writes()
+
+    assert (remote / "p" / "k.o").read_bytes() == b"v"
+    assert cache.load("k") == b"v"

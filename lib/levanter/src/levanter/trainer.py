@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -842,21 +842,12 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
-_CUTLASS_KERNEL_CACHE_SUBDIR = "cutlass-kernels"
-
-
 def _install_cutlass_kernel_cache() -> None:
-    """Persist CuTeDSL kernel object code alongside the JAX compilation cache.
+    """Route CuTeDSL kernel compiles through the standard persistent cache.
 
-    The two caches want the same location for the same reason, so this derives one
-    from the other instead of adding a second knob. Skipped when no compilation
-    cache is configured, or when ``cutlass.jax`` will not import.
+    A no-op when ``cutlass.jax`` will not import (a CPU task on the GPU image).
     """
-    cache_dir = jax.config.jax_compilation_cache_dir
-    if not cache_dir:
-        return
-
-    install_cutlass_kernel_cache(cutlass_kernel_cache(prefix_join(cache_dir, _CUTLASS_KERNEL_CACHE_SUBDIR)))
+    install_cutlass_kernel_cache(cutlass_kernel_cache())
 
 
 @dataclass

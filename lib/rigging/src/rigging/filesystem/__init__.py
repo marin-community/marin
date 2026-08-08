@@ -32,6 +32,7 @@ from rigging.filesystem.buckets import (
 )
 from rigging.filesystem.cluster_config import (
     MARIN_CLUSTER_CONFIG_DIRS,
+    MARIN_LOCAL_CACHE_ENV,
     PER_USER_CLUSTER_CONFIG_DIR,
     BucketSpec,
     DataConfig,
@@ -44,6 +45,7 @@ from rigging.filesystem.cluster_config import (
     data_config,
     get_bucket_location,
     load_cluster_config,
+    marin_local_cache,
     marin_prefix,
     marin_region,
     marin_temp_bucket,

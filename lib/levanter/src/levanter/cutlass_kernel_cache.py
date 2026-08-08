@@ -27,12 +27,13 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache
+from rigging.cache import PersistentKvCache, marin_kv_cache
 
 logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
 _VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib")
+_KERNEL_CACHE_PREFIX = "cutlass-kernels"
 _OBJECT_SUFFIX = ".o"
 
 
@@ -97,14 +98,14 @@ def _source_digest(build: Callable[..., Any]) -> str:
         return hashlib.sha256(handle.read()).hexdigest()[:16]
 
 
-def cutlass_kernel_cache(directory: str) -> PersistentKvCache:
-    """A store of compiled CuTeDSL kernel object code at ``directory``, one ``.o`` object per key.
+def cutlass_kernel_cache() -> PersistentKvCache:
+    """The standard cache stack for compiled CuTeDSL kernel object code, one ``.o`` object per key.
 
-    Reads and writes degrade to a compile when the directory is unreachable — a task
-    may land on a worker whose compilation-cache mount has not arrived yet — which
-    :class:`PersistentKvCache` handles by treating an ``OSError`` as a miss.
+    Memory, node-local disk, and object storage, assembled by :func:`marin_kv_cache`.
+    A tier that is unreachable — a task landing on a worker whose cache mount has
+    not arrived yet — degrades to the next one and, in the worst case, to a compile.
     """
-    return PersistentKvCache.at(directory, suffix=_OBJECT_SUFFIX)
+    return marin_kv_cache(_KERNEL_CACHE_PREFIX, suffix=_OBJECT_SUFFIX)
 
 
 def install(cache: PersistentKvCache) -> None:
