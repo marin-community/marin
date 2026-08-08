@@ -1,0 +1,275 @@
+{
+  "boundary": {
+    "excluded": [
+      "main QKV projection",
+      "output projection"
+    ],
+    "included": [
+      "BF16 hidden inputs",
+      "FP32-accumulating index Q/K Contracts",
+      "BF16 projection casts",
+      "official MSA score Contract/block-max Fold/top-k Selection",
+      "q2k-to-k2q relation scheduling",
+      "official sparse QK/normalized-exp/PV/combine payload"
+    ]
+  },
+  "correctness": {
+    "cutoff_margin_distribution": {
+      "all_finite_rows": {
+        "count": 57344,
+        "maximum": 82.16653442382812,
+        "mean": 3.5678505897521973,
+        "median": 2.2861785888671875,
+        "minimum": 0.0,
+        "p01": 0.03462005406618118,
+        "p10": 0.34425660967826843
+      },
+      "mismatch_finite_rows": {
+        "count": 1,
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0,
+        "p01": 0.0,
+        "p10": 0.0
+      },
+      "mismatch_row_count": 7681,
+      "nonfinite_margin_count": 8192
+    },
+    "output_maximum_absolute_error": 0.05364990234375,
+    "output_mean_absolute_error": 6.870197103125975e-05,
+    "output_repeat_bitwise": true,
+    "output_sha256": "073bc61d460964f85084586d2e85361447bcae7239a80e661a7b79fc33e1e19c",
+    "reference_output_sha256": "b509ff74574c0f2d2783d9d1680a162d970ab6dc5c3d224adee5f29689e2a70a",
+    "reference_route_sha256": "18886bcb75eacd42fe00c5fff2bd4de5577b12edfc62b84ae60e62ec7de5a07a",
+    "route_reference_mismatch_count": 61446,
+    "route_reference_mismatch_row_count": 7681,
+    "route_repeat_bitwise": true,
+    "route_sha256": "5d66957024106d1d2eaa9c8d7f752272e87f4b8c8b8e7d62a5e8f550376f4cf2"
+  },
+  "device": {
+    "capability": [
+      10,
+      0
+    ],
+    "cuda": "13.0",
+    "name": "NVIDIA GB200",
+    "torch": "2.10.0+cu130"
+  },
+  "input_hashes": {
+    "key": "afb4da72388fc48f02ba76f8283db3195bd0f4b87ef96e11ccea13b8542e33c9",
+    "key_value_hidden": "566b011b0c0b25a121afd5bf2328f5d6b8e93babc066a2d7180017f08395afa9",
+    "left_weight": "932e4fe2cf733d06a0445b10666bbed67163879053b3702604228ec79bcdb683",
+    "query": "8079faaad84d7793588469ca835eb53682f79b412f646f88a7a105be4e6f8006",
+    "query_hidden": "fca0c6ff57ed0debf9a15c59c5bf5addc115e58bf6d2442a9b91655fd830d7a3",
+    "right_weight": "970cf678d3754796e2888ee16f3e7fc179784701b72d6197c936dd03fee1315b",
+    "value": "827fee6b8d1ef059482f28d097d8387811e4e8688e2d0de6e3deac5fc47ceb1a"
+  },
+  "kind": "isolated_minimax_msa_natural_route_oracle_sm100",
+  "measurement": {
+    "raw_samples_preserved": true,
+    "repeats": 30,
+    "timing": "one CUDA event interval per operation",
+    "warmups": 5
+  },
+  "oracle_manifest": {
+    "excluded_from_payload_call": [
+      "route/index projection",
+      "token score Contract",
+      "block-max Fold",
+      "top-k Selection",
+      "static shape plan",
+      "static page table"
+    ],
+    "implementation": "pinned MiniMax MSA SM100 expert oracle",
+    "included_per_payload_call": [
+      "q2k-to-k2q CSR",
+      "physical sparse schedule construction",
+      "KV-outer sparse QK/normalized-exp/PV",
+      "deterministic two-phase partial combine"
+    ],
+    "interface": "q2k [H_kv,total_q,top_k] -> output [total_q,H_q,128]",
+    "numerics": {
+      "key_dtype": "torch.bfloat16",
+      "partial_dtype": "torch.bfloat16",
+      "query_dtype": "torch.bfloat16",
+      "softmax_scale": 0.08838834764831845,
+      "value_dtype": "torch.bfloat16"
+    },
+    "oracle_only": true,
+    "q2k_contract": {
+      "key_value_heads": 4,
+      "maximum_key_value_blocks": 128,
+      "top_k": 16,
+      "total_queries": 16384
+    },
+    "source": {
+      "commit": "80434d7f67877c6570ca19cac444b84bc9855dac",
+      "cutlass_commit": "eb61c911471867a5fd2466bfd8f29306cea6ebf8",
+      "cutlass_path": "python/fmha_sm100/cutlass",
+      "local_modifications": [],
+      "repository": "https://github.com/MiniMax-AI/MSA",
+      "root": "/tmp/msa-run/msa"
+    }
+  },
+  "process_isolation": {
+    "complete_workload_oracle_only": true,
+    "generated_payload_loaded": false,
+    "generated_selector_loaded": false
+  },
+  "shape": {
+    "block_size": 128,
+    "key_value": [
+      16384,
+      4,
+      128
+    ],
+    "key_value_hidden": [
+      16384,
+      128
+    ],
+    "left_index_weight": [
+      128,
+      512
+    ],
+    "query": [
+      16384,
+      64,
+      128
+    ],
+    "query_hidden": [
+      16384,
+      128
+    ],
+    "query_position_offset": 0,
+    "right_index_weight": [
+      128,
+      128
+    ],
+    "top_k": 16
+  },
+  "source_revision": {
+    "commit": "80434d7f67877c6570ca19cac444b84bc9855dac",
+    "cutlass_commit": "eb61c911471867a5fd2466bfd8f29306cea6ebf8",
+    "cutlass_path": "python/fmha_sm100/cutlass",
+    "local_modifications": [],
+    "repository": "https://github.com/MiniMax-AI/MSA",
+    "root": "/tmp/msa-run/msa"
+  },
+  "timings": {
+    "natural_projection_and_selection": {
+      "maximum_ms": 0.8051519989967346,
+      "mean_ms": 0.7865066647529602,
+      "median_ms": 0.7881599962711334,
+      "minimum_ms": 0.7728000283241272,
+      "samples_ms": [
+        0.7796480059623718,
+        0.7919679880142212,
+        0.8014079928398132,
+        0.8051519989967346,
+        0.780896008014679,
+        0.7728000283241272,
+        0.7936959862709045,
+        0.7852159738540649,
+        0.7936959862709045,
+        0.7902079820632935,
+        0.7815679907798767,
+        0.793503999710083,
+        0.7895680069923401,
+        0.7792959809303284,
+        0.7850880026817322,
+        0.7895359992980957,
+        0.773472011089325,
+        0.776095986366272,
+        0.7891200184822083,
+        0.7894719839096069,
+        0.7798720002174377,
+        0.7883840203285217,
+        0.7928640246391296,
+        0.7825279831886292,
+        0.7937279939651489,
+        0.781440019607544,
+        0.7769280076026917,
+        0.7803840041160583,
+        0.7897279858589172,
+        0.7879359722137451
+      ]
+    },
+    "natural_projection_selection_and_payload": {
+      "maximum_ms": 3.2586240768432617,
+      "mean_ms": 3.1960874875386556,
+      "median_ms": 3.192960023880005,
+      "minimum_ms": 3.1276800632476807,
+      "samples_ms": [
+        3.1907200813293457,
+        3.193887948989868,
+        3.2052159309387207,
+        3.1276800632476807,
+        3.16265606880188,
+        3.2525761127471924,
+        3.178879976272583,
+        3.204416036605835,
+        3.196959972381592,
+        3.2354559898376465,
+        3.1695680618286133,
+        3.2528960704803467,
+        3.229504108428955,
+        3.1848320960998535,
+        3.2069759368896484,
+        3.201888084411621,
+        3.1579198837280273,
+        3.1515519618988037,
+        3.1608641147613525,
+        3.2416958808898926,
+        3.1861441135406494,
+        3.1632959842681885,
+        3.2586240768432617,
+        3.1920320987701416,
+        3.2345919609069824,
+        3.174560070037842,
+        3.2486400604248047,
+        3.1366078853607178,
+        3.1870720386505127,
+        3.1949119567871094
+      ]
+    },
+    "projected_selection_core": {
+      "maximum_ms": 0.6908800005912781,
+      "mean_ms": 0.6748917281627655,
+      "median_ms": 0.6742240190505981,
+      "minimum_ms": 0.6630079746246338,
+      "samples_ms": [
+        0.6847360134124756,
+        0.6735680103302002,
+        0.6780800223350525,
+        0.6871359944343567,
+        0.6630079746246338,
+        0.6800959706306458,
+        0.6781759858131409,
+        0.6741120219230652,
+        0.6687359809875488,
+        0.6743999719619751,
+        0.6664959788322449,
+        0.6743360161781311,
+        0.6754559874534607,
+        0.6785280108451843,
+        0.671999990940094,
+        0.6806719899177551,
+        0.6768959760665894,
+        0.666047990322113,
+        0.6644799709320068,
+        0.6763520240783691,
+        0.6908800005912781,
+        0.666271984577179,
+        0.6858559846878052,
+        0.6898239850997925,
+        0.6662399768829346,
+        0.6738880276679993,
+        0.6712319850921631,
+        0.6728320121765137,
+        0.6665279865264893,
+        0.6698880195617676
+      ]
+    }
+  }
+}

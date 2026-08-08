@@ -815,3 +815,30 @@ excluded timing boundary.
 Raw distributions, semantic fixtures, exact source, telemetry, build logs,
 pins, and checksums are under
 `benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.
+
+## Generic tiled Fold finalization
+
+The MSA finalization bottleneck now lowers through one backend-neutral
+`TiledFoldFinalizeProgram` and one SM100 physical emitter. Dense attention uses
+normalized-exponential state over 16 partials; a non-attention mutation uses
+six indexed, non-prefix-valid weighted contributions. Both instantiate the
+same 128-bit copy, four-stage shared pipeline, warp-distributed scalar-state
+reduction, vector feature loop, and deterministic store machinery.
+
+At `Q=K=16384`, `Hq/Hkv=64/4`, `D=128`, block 128, and top-k 16, two isolated
+captures pool to 3.823488 ms generated versus 3.191376 ms for pinned MSA. The
+1.198069-times ratio meets the 1.20-times gate and the generated latency is
+below the separate 3.88-ms objective. The old generated path was 4.431920 ms.
+
+Selection now marks causally underfilled slots invalid before RelationPlan
+construction. This removes all but six of the previous 61,446 route-reference
+mismatches. The six entries are one exact zero-margin cutoff tie: execution is
+bitwise deterministic, but the physical top-k chooses a different tied block
+than the source reference. The path therefore remains
+`real_algebra_equivalent`; exact source-order tie selection is not claimed.
+
+The indexed non-attention binding matches its source-ordered reference exactly
+and measures 0.018128 ms. The small attention binding is deterministic with
+maximum/mean error 0.00134033/0.000149893. Raw distributions and the complete
+boundary audit are under
+`benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.

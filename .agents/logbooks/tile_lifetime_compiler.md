@@ -1430,3 +1430,41 @@ author: dlwh
   staged, vectorized, compile-time-tiled combine. The estimated official
   0.773904-ms combine remains explicitly inferred; no pinned combine-only
   measurement was obtained.
+
+### 2026-08-08 - TLTC-MSA-006 generic tiled Fold checkpoint
+
+- Added a backend-neutral tiled Fold-finalization program with explicit
+  partial/row/feature axes, dense or indexed addressing, physical feature
+  layout, validity, scalar reduction, vector contribution/update/finalize
+  ASTs, and source-ordered versus deterministic-tree numerical policies.
+- One SM100 emitter now generates the same CTA, 128-bit copy, four-stage
+  shared-memory staging, row-warp reduction, vector accumulation, and BF16
+  store loop for two bindings. Attention uses 16 dense STG.128 partials with
+  normalized-exponential state merge. MoE-style deterministic merge uses six
+  indexed contiguous partials with arbitrary non-prefix validity and explicit
+  FP32 `mul` followed by `add`.
+- Projected Selection now represents score ordering, lower-index tie breaking,
+  and underfilled rows explicitly. The physical SM100 selector replaces
+  causally invalid slots with `-1` before RelationPlan construction.
+- The package suite passes 218 tests; 20 focused Fold/emitter tests and four
+  projected-selection backend tests also pass. Commit `932db2193f` is the
+  pushed CPU checkpoint.
+- Both bindings compiled unchanged on GB200. The indexed non-attention binding
+  matches its source-ordered reference exactly, repeats bitwise, handles
+  arbitrary non-prefix validity, and measures 0.018128 ms median. The small
+  attention binding is finite and deterministic with maximum/mean error
+  0.00134033/0.000149893.
+- At `Q=K=16384,Hq/Hkv=64/4,D=128,top-k=16`, two isolated captures pool to
+  3.823488 ms for generated Shuttle and 3.191376 ms for pinned MSA, a
+  1.198069-times ratio. This improves the prior generated natural path by
+  13.7%, clears the explicit 3.88-ms objective, and lies at the 1.20-times
+  clean-synthesis gate.
+- Underfilled causal slots are now explicitly `-1` and excluded from the
+  RelationPlan. Reference mismatches fall from 61,446 to six, all caused by one
+  exact zero-margin cutoff tie. Routes and outputs repeat bitwise, but the
+  selected-set tie yields maximum/mean output error 0.0536499/6.8702e-5.
+  Exact source-order tie selection therefore remains open; the measured path
+  retains the declared `real_algebra_equivalent` selection policy.
+- Raw samples, reuse fixtures, device pins, failure caveats, and interpretation
+  are frozen under
+  `benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.

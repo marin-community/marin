@@ -1,0 +1,14 @@
+GPU 0: NVIDIA GB200, driver 595.71.05, P0, 1200 W, SM 1687 MHz, memory 3996 MHz
+GPU 1: NVIDIA GB200, driver 595.71.05, P0, 1200 W, SM 1792 MHz, memory 3996 MHz
+GPU 2: NVIDIA GB200, driver 595.71.05, P0, 1200 W, SM 1702 MHz, memory 3996 MHz
+GPU 3: NVIDIA GB200, driver 595.71.05, P0, 1200 W, SM 1740 MHz, memory 3996 MHz
+
+The acceptance measurements used GPU 0. Clocks were observed rather than pinned.
+
+Torch: 2.10.0+cu130
+CUDA runtime: 13.0
+CUDA toolkit/NVCC: 13.0.2 / 13.0.88
+JAX: 0.7.2
+CUTLASS DSL: 4.4.1
+QuACK: 0.2.10
+

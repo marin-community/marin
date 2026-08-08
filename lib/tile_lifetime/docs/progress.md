@@ -405,3 +405,25 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
   device-pending after the attention helper extraction.
 - Evidence is sealed under
   `benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.
+
+## 2026-08-08: Generic tiled Fold finalization
+
+- Added a backend-neutral tiled Fold-finalization program with dense and
+  indexed addressing, validity, explicit physical feature layout, scalar-state
+  reduction, vector update/finalize ASTs, and source-ordered versus
+  deterministic-tree numerical contracts.
+- One SM100 emitter now generates the same 128-bit copy, four-stage shared
+  staging, warp-distributed state reduction, vector feature accumulation, and
+  deterministic store loop for normalized-exponential attention merge and a
+  six-slot indexed non-attention weighted Fold.
+- The indexed mutation agrees exactly with its source-order reference and
+  measures 0.018128 ms on GB200. A small attention binding is deterministic
+  with 0.00134033 maximum error.
+- At the 16K natural MSA boundary, pooled isolated medians are 3.823488 ms for
+  generated Shuttle and 3.191376 ms for pinned MSA, a 1.198069-times ratio.
+  This clears the 3.88-ms objective and lies at the 1.20-times acceptance gate.
+- Underfilled top-k slots are explicit invalid relation edges. Six remaining
+  routing mismatches come from one exact cutoff tie; exact source-order tie
+  selection remains open and is not hidden behind the performance result.
+- Evidence is under
+  `benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.

@@ -1,0 +1,43 @@
+{
+  "dense_fraction": 1.0,
+  "deterministic": true,
+  "effective_selected_tokens": 512,
+  "finite": true,
+  "generated_source_sha256": {
+    "partial_merge": "db359fe22866968f3d237923fe64fb87857fdff13d6590608d3a9cf39d492204",
+    "physical": "425341e8e87277e89624197c0b271d1c4a70874af889a735674342e303cf6027",
+    "relation_builder": "e22cfc1ccaf12eb150e529dae5018b568cc7c693ad276cbe3184f0333510fd1a",
+    "scheduler": "30616bc83c4b92236200db82b613b0fa955eea97d5404b2653f30c62cfac5670",
+    "semantics": "a0443203c325c071b71af496c253d022c5997e2cee08f20914466a438f16f53a"
+  },
+  "lowering": "SM100 routed streaming reduction\n  semantics: Relation -> QK Contract -> score Map -> DomainRestriction -> normalized-exp Fold -> PV Contract\n  orientation: right_major\n  domains: query=128 key=512 kv_heads=2 right_blocks=4\n  relation: sources=128 groups=2 selected_per_group=4 edge_slots=8 edges=1024\n  tile: packed_left=128 right=128 query_tokens_per_task=32\n  pipelines: query=2 score=2 output=2 right=1 metadata=16\n  score: scale=0.08838834764831845 causal=false softcap=None\n  partial state: log_normalizer_normalized_value\n  external semantics: none",
+  "maximum_absolute_error": 0.001340329647064209,
+  "mean_absolute_error": 0.00014989326882641762,
+  "median_ms": 0.5053920149803162,
+  "output_shape": [
+    128,
+    8,
+    128
+  ],
+  "partial_merge_schedule": "tiled_pipelined",
+  "partial_merge_threads": 256,
+  "partial_value_dtype": "bf16",
+  "samples_ms": [
+    0.5266240239143372,
+    0.5264959931373596,
+    0.49696001410484314,
+    0.516543984413147,
+    0.5103679895401001,
+    0.5049920082092285,
+    0.48287999629974365,
+    0.49769601225852966,
+    0.4891520142555237,
+    0.5057920217514038
+  ],
+  "score_scale": 0.08838834764831845,
+  "split_count_max": 4,
+  "split_count_min": 4,
+  "theoretical_score_elements": 524288,
+  "timestamp_seconds": 1786232237.3439448,
+  "work_count": 32
+}
