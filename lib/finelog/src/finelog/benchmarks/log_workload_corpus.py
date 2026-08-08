@@ -71,8 +71,15 @@ LEVEL_WARNING = 30
 LEVEL_ERROR = 40
 
 # One row in this many is an error line, which is what `JOB_FIRST_ERROR` and the
-# body searches look for.
+# body searches look for. One in this many of the target job's own rows is an
+# error too, so the job-scoped shapes do not depend on the two strides colliding.
 ERROR_ROW_STRIDE = 3_001
+TARGET_JOB_ERROR_STRIDE = 4
+
+# How far back `JOB_RECENT_WINDOW` looks from the namespace's newest row. The
+# generator advances `epoch_ms` one millisecond per row, so on a generated corpus
+# this is also the last 3.6M rows.
+RECENT_WINDOW_MS = 3_600_000
 
 # Bodies are templated but carry per-row identifiers and floats, so a segment
 # compresses like real log text (~13x) instead of collapsing to a dictionary.
@@ -190,16 +197,37 @@ def generate_batch(spec: LogDatasetSpec, start: int, stop: int) -> pa.RecordBatc
         # Rows walk that segment's own slice of key slots, so each segment holds
         # a distinct key band and one job's rows cluster physically once
         # compaction sorts by `(key, seq)`.
-        slot = segment * keys_per_segment + (offset % keys_per_segment)
-        if offset % TARGET_JOB_ROW_STRIDE == 0:
-            slot = target_slot + (offset // TARGET_JOB_ROW_STRIDE) % TASKS_PER_JOB
-        is_error = index % ERROR_ROW_STRIDE == 0
-        templates = _ERROR_TEMPLATES if is_error else _BODY_TEMPLATES
+        band_start = segment * keys_per_segment
+        offset_in_band = offset % keys_per_segment
+        slot = band_start + offset_in_band
+        if target_slot <= slot < target_slot + TASKS_PER_JOB:
+            # One segment's ordinary band covers the target job's slots. Walking
+            # past them keeps the target job a stride-injected needle everywhere
+            # instead of a dense block in that one segment.
+            slot = band_start + (offset_in_band + TASKS_PER_JOB) % keys_per_segment
+        target_ordinal = offset // TARGET_JOB_ROW_STRIDE
+        is_target = offset % TARGET_JOB_ROW_STRIDE == 0
+        if is_target:
+            slot = target_slot + target_ordinal % TASKS_PER_JOB
+        # Whether a target row is also an error otherwise depends on the two
+        # strides landing on the same index, which they need not for a given
+        # `--rows`. Giving the target job its own error stride keeps the
+        # job-scoped first-error and body-search workloads matching real rows.
+        is_target_error = is_target and target_ordinal % TARGET_JOB_ERROR_STRIDE == 0
+        is_error = index % ERROR_ROW_STRIDE == 0 or is_target_error
+        # The target job's rows all land on even indices, so `index` alone would
+        # pick the same one of the two error templates every time. Counting error
+        # rows walks both.
+        error_ordinal = target_ordinal // TARGET_JOB_ERROR_STRIDE if is_target_error else index // ERROR_ROW_STRIDE
         keys.append(key_for_slot(slot))
         sources.append(SOURCES[index % len(SOURCES)])
         levels.append(LEVEL_ERROR if is_error else (LEVEL_INFO, LEVEL_DEBUG, LEVEL_WARNING)[index % 3])
         bodies.append(
-            templates[index % len(templates)].format(
+            (
+                _ERROR_TEMPLATES[error_ordinal % len(_ERROR_TEMPLATES)]
+                if is_error
+                else _BODY_TEMPLATES[index % len(_BODY_TEMPLATES)]
+            ).format(
                 step=index,
                 loss=3.5 - (index % 100_000) * 1e-5,
                 lr=1e-3 / (1 + index % 997),
@@ -246,17 +274,21 @@ def generate_batches(spec: LogDatasetSpec, start: int = 0, stop: int | None = No
         yield generate_batch(spec, batch_start, min(batch_start + spec.batch_rows, stop))
 
 
-def build_workloads(spec: LogDatasetSpec) -> tuple[Workload, ...]:
+def build_workloads(latest_ms: int) -> tuple[Workload, ...]:
     """The operator query corpus for the `log` namespace.
 
     Every shape is one operators issue against a live cluster: scoping to a job
     by substring, tailing a task, finding the first error in a run, and searching
     bodies. The `scoped_by_key_substring` shapes are the ones that read the whole
     namespace when no segment index answers the `key` predicate.
+
+    `latest_ms` is the namespace's newest `epoch_ms`, which anchors the recent
+    window. Reading it from the data keeps that shape a real time filter over
+    generated and production segments alike.
     """
     table = f'"{LOG_NAMESPACE}"'
     job = TARGET_JOB
-    recent_from = START_MS + max(spec.rows - 3_600_000, 0)
+    recent_from = latest_ms - RECENT_WINDOW_MS
 
     return (
         Workload(

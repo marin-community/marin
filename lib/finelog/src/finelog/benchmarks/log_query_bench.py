@@ -172,6 +172,18 @@ def _drive_maintenance(address: str, client: StatsServiceClientSync) -> dict[str
     raise TimeoutError(f"index backfill did not converge: {covered}/{total} segments carry {sorted(required)}")
 
 
+def _latest_epoch_ms(client: StatsServiceClientSync) -> int:
+    """The namespace's newest `epoch_ms`, which anchors the recent-window shape.
+
+    `measure` has no corpus dimensions to derive a cutoff from, and production
+    segments carry real timestamps, so both modes read it from the data.
+    """
+    latest = query_table(client, f'SELECT max(epoch_ms) AS latest FROM "{LOG_NAMESPACE}"')
+    if not latest.num_rows or latest.column("latest")[0].as_py() is None:
+        raise SystemExit(f"namespace {LOG_NAMESPACE!r} holds no rows to measure")
+    return int(cast(int, latest.column("latest")[0].as_py()))
+
+
 def _load_corpus(address: str, client: StatsServiceClientSync, spec: LogDatasetSpec) -> dict[str, object]:
     """Write the corpus one key band at a time, compacting each into a segment.
 
@@ -264,7 +276,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         spec = LogDatasetSpec(rows=1)
         log_dir = cast(Path, args.log_dir)
 
-    workloads = build_workloads(spec)
     with local_server(
         args.server_binary,
         log_dir,
@@ -276,6 +287,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if generating:
             preparation["load"] = _load_corpus(address, client, spec)
         preparation["maintenance"] = _drive_maintenance(address, client)
+        latest_ms = _latest_epoch_ms(client)
+        workloads = build_workloads(latest_ms)
 
         payload = {
             "command": args.command,
@@ -283,6 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "log_dir": str(log_dir),
             "query_timeout_ms": args.query_timeout_ms,
             "dataset": dataset_facts(spec) if generating else {"target_job": TARGET_JOB},
+            "latest_epoch_ms": latest_ms,
             "preparation": preparation,
             "storage": _segment_facts(address, LOG_NAMESPACE),
             "server": server_info(address),
