@@ -69,9 +69,18 @@ _FINELOG_FALLBACK_SERVER = "finelog-mirror"
 _RACK_LABEL = "node.coreweave.cloud/rack"
 _RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
 _INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+_NODE_POOL_LABEL = "compute.coreweave.com/node-pool"
+_COMPUTE_CLASS_LABEL = "compute.coreweave.com/compute-class"
+_GPU_MODEL_LABEL = "gpu.nvidia.com/model"
+_RACK_SLOT_LABEL = "node.coreweave.cloud/slot"
+_NODE_STATE_LABEL = "node.coreweave.cloud/state"
+_IB_FABRIC_LABEL = "ib.coreweave.cloud/fabric"
+_IB_SPEED_LABEL = "ib.coreweave.cloud/speed.current"
+_GPU_DRIVER_LABEL = "gpu.coreweave.cloud/driver-version"
 _CORDON_REASON_ANNOTATION = "node.coreweave.cloud/cordonReason"
 _KERNEL_DEADLOCK_CONDITION = "KernelDeadlock"
 _PENDING_PHASE_CONDITION = "PendingPhaseState"
+_NODE_POOLS_PATH = "/apis/compute.coreweave.com/v1alpha1/nodepools"
 
 # gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
 # fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
@@ -686,7 +695,7 @@ class K8sSource:
         return rows[:_EVENT_LIMIT]
 
     def nodes(self) -> list[dict]:
-        """Node readiness, schedulability, and CoreWeave reboot/deadlock state."""
+        """Node inventory, topology, readiness, and CoreWeave lifecycle state."""
         rows = []
         for node in self._list("/api/v1/nodes"):
             metadata = node.get("metadata") or {}
@@ -703,6 +712,17 @@ class K8sSource:
                 {
                     "node": metadata.get("name", ""),
                     "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
+                    "node_pool": labels.get(_NODE_POOL_LABEL, ""),
+                    "compute_class": labels.get(_COMPUTE_CLASS_LABEL, ""),
+                    "gpu_model": labels.get(_GPU_MODEL_LABEL, ""),
+                    "gpu_capacity": _node_gpu_capacity(node),
+                    "rack": labels.get(_RACK_LABEL, ""),
+                    "rack_name": labels.get(_RACK_NAME_LABEL, ""),
+                    "rack_slot": labels.get(_RACK_SLOT_LABEL, ""),
+                    "node_state": labels.get(_NODE_STATE_LABEL, ""),
+                    "ib_fabric": labels.get(_IB_FABRIC_LABEL, ""),
+                    "ib_speed": labels.get(_IB_SPEED_LABEL, ""),
+                    "gpu_driver": labels.get(_GPU_DRIVER_LABEL, ""),
                     "ready": _node_ready(node),
                     "unschedulable": bool((node.get("spec") or {}).get("unschedulable")),
                     "cordon_reason": annotations.get(_CORDON_REASON_ANNOTATION, ""),
@@ -713,6 +733,59 @@ class K8sSource:
                 }
             )
         return sorted(rows, key=lambda row: row["node"])
+
+    def node_pools(self) -> list[dict]:
+        """CoreWeave NodePool capacity, autoscaling policy, and conditions."""
+        rows = []
+        for pool in self._list(_NODE_POOLS_PATH):
+            metadata = pool.get("metadata") or {}
+            spec = pool.get("spec") or {}
+            status = pool.get("status") or {}
+            conditions = {
+                condition.get("type"): condition for condition in status.get("conditions") or [] if condition.get("type")
+            }
+            active_conditions = {name for name, condition in conditions.items() if condition.get("status") == "True"}
+
+            target_nodes = status.get("targetNodes")
+            if target_nodes is None:
+                target_nodes = spec.get("targetNodes") or 0
+            current_nodes = status.get("currentNodes") or 0
+            at_target = "AtTarget" in active_conditions
+            problem_reasons = []
+            for name, expected in (
+                ("Validated", True),
+                ("Capacity", True),
+                ("Quota", True),
+                ("NodeReconfigurationRequired", False),
+            ):
+                condition = conditions.get(name) or {}
+                if (name in active_conditions) != expected:
+                    problem_reasons.append(f"{name}: {condition.get('reason') or 'Unknown'}")
+            rows.append(
+                {
+                    "node_pool": metadata.get("name", ""),
+                    "instance_type": spec.get("instanceType", ""),
+                    "compute_class": spec.get("computeClass", ""),
+                    "autoscaling": bool(spec.get("autoscaling")),
+                    "scale_down_strategy": (spec.get("lifecycle") or {}).get("scaleDownStrategy", ""),
+                    "min_nodes": spec.get("minNodes") or 0,
+                    "max_nodes": spec.get("maxNodes") or 0,
+                    "target_nodes": target_nodes,
+                    "current_nodes": current_nodes,
+                    "in_progress_nodes": status.get("inProgress") or 0,
+                    "queued_nodes": status.get("queuedNodes") or 0,
+                    "prefill_nodes": status.get("prefillNodes") or 0,
+                    "missing_nodes": max(target_nodes - current_nodes, 0),
+                    "off_target": int(not at_target),
+                    "validated": "Validated" in active_conditions,
+                    "at_target": at_target,
+                    "capacity_available": "Capacity" in active_conditions,
+                    "under_quota": "Quota" in active_conditions,
+                    "reconfiguration_required": "NodeReconfigurationRequired" in active_conditions,
+                    "problems": "; ".join(problem_reasons),
+                }
+            )
+        return sorted(rows, key=lambda row: row["node_pool"])
 
     def gpu_racks(self) -> list[dict]:
         """One row per physical rack of GB200 nodes: trays registered vs. Ready.
@@ -928,6 +1001,9 @@ class K8sFleet:
 
     def nodes(self) -> list[dict]:
         return self._fan_out(lambda s: s.nodes(), self._error_row)
+
+    def node_pools(self) -> list[dict]:
+        return self._fan_out(lambda s: s.node_pools(), self._error_row)
 
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)

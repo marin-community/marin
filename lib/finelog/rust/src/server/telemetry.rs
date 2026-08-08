@@ -47,11 +47,27 @@ const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
-const ACCELERATOR_METRIC_NAMES: [&str; 9] = [
+const HOST_METRIC_NAMES: [&str; 7] = [
+    "node_cpu_utilization_percent",
+    "node_disk_total_bytes",
+    "node_disk_used_bytes",
+    "node_memory_total_bytes",
+    "node_memory_used_bytes",
+    "node_network_receive_bytes",
+    "node_network_transmit_bytes",
+];
+const ACCELERATOR_METRIC_NAMES: [&str; 16] = [
+    "gpu_memory_temperature_celsius",
+    "gpu_memory_total_bytes",
     "gpu_memory_used_bytes",
+    "gpu_nvlink_receive_bytes_per_second",
+    "gpu_nvlink_transmit_bytes_per_second",
     "gpu_pcie_replay_errors",
+    "gpu_pcie_receive_bytes_per_second",
+    "gpu_pcie_transmit_bytes_per_second",
     "gpu_power_watts",
     "gpu_row_remap_failures",
+    "gpu_sm_active_ratio",
     "gpu_temperature_celsius",
     "gpu_tensor_active_ratio",
     "gpu_utilization_percent",
@@ -692,6 +708,7 @@ fn telemetry_schema() -> Schema {
                     TRAINING_STATUS_NAMES
                         .into_iter()
                         .chain(TRAINING_RUN_NAMES)
+                        .chain(HOST_METRIC_NAMES)
                         .chain(ACCELERATOR_METRIC_NAMES),
                 )
                 .with_value_counts(),
@@ -750,7 +767,7 @@ fn telemetry_schema() -> Schema {
     .with_covering_projection(CoveringProjection::new(
         "accelerator-memory",
         "name",
-        ["gpu_memory_used_bytes"],
+        ["gpu_memory_total_bytes", "gpu_memory_used_bytes"],
         [
             "timestamp_ms",
             "service",
@@ -778,6 +795,24 @@ fn telemetry_schema() -> Schema {
         ],
     ))
     .with_covering_projection(CoveringProjection::new(
+        "accelerator-interconnect",
+        "name",
+        [
+            "gpu_nvlink_receive_bytes_per_second",
+            "gpu_nvlink_transmit_bytes_per_second",
+            "gpu_pcie_receive_bytes_per_second",
+            "gpu_pcie_transmit_bytes_per_second",
+        ],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
         "accelerator-inventory",
         "name",
         ["hardware_inventory"],
@@ -790,22 +825,88 @@ fn telemetry_schema() -> Schema {
         ],
     ))
     .with_covering_projection(CoveringProjection::new(
+        "accelerator-sm-activity",
+        "name",
+        ["gpu_sm_active_ratio"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
         "accelerator-temperature",
         "name",
-        ["gpu_temperature_celsius"],
-        ["timestamp_ms", "service", "name", "value", "cluster"],
+        ["gpu_memory_temperature_celsius", "gpu_temperature_celsius"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-tensor-activity",
         "name",
         ["gpu_tensor_active_ratio"],
-        ["timestamp_ms", "service", "name", "value", "cluster"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-utilization",
         "name",
         ["gpu_utilization_percent"],
-        ["timestamp_ms", "service", "name", "value", "cluster"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "node-host-network",
+        "name",
+        ["node_network_receive_bytes", "node_network_transmit_bytes"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "node-host-utilization",
+        "name",
+        [
+            "node_cpu_utilization_percent",
+            "node_disk_total_bytes",
+            "node_disk_used_bytes",
+            "node_memory_total_bytes",
+            "node_memory_used_bytes",
+        ],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
     ))
     .with_grouped_extrema(GroupExtremaConfig::new(
         "service",
