@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from google.protobuf import json_format
-from rigging.filesystem import MARIN_LOCAL_CACHE_ENV
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
@@ -219,9 +218,6 @@ def build_common_iris_env(
     # installed elsewhere still resolves, since PATH finds the binary.
     env["CARGO_HOME"] = CARGO_HOME_PATH
     env["CARGO_TARGET_DIR"] = f"{CARGO_HOME_PATH}/target"
-    # Node-local scratch that rigging.cache uses as the disk tier of a persistent
-    # cache. Points at the raw scratch mount; each cache picks its own subdir.
-    env[MARIN_LOCAL_CACHE_ENV] = SCRATCH_CACHE_PATH
 
     # Propagate the resolved setup scripts so child jobs reproduce the parent's
     # environment. Always set (even when empty) so a child can tell a no-setup

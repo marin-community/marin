@@ -566,32 +566,28 @@ def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
 
 
 def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
-    """A launched GPU task syncs the node-local autotune dir to a per-build temp prefix."""
+    """A launched GPU task hands the node-local autotune dir to sync_kv_cache for mirroring."""
     calls: list[tuple[str, str]] = []
-
-    def _record(*, remote, local) -> None:
-        calls.append((remote(), local))
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
         with (
-            patch.object(jax_init_module, "sync_kv_cache", _record),
-            patch.object(jax_init_module, "launch_provenance", lambda: MagicMock(tree_hash="tree123")),
-            patch.object(jax_init_module, "marin_temp_bucket", lambda ttl_days, prefix: f"gs://bkt/tmp/{prefix}"),
+            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: calls.append((prefix, local))),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()
 
-    assert calls == [("gs://bkt/tmp/xla-per-fusion-autotune/tree123", f"{scratch_cache_dir}/xla/per-fusion-autotune")]
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    assert calls == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
 
 
 def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:
     """Off a real launch (no MARIN_PROVENANCE), the autotune cache never reaches object storage."""
-    calls: list[dict] = []
+    calls: list = []
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
         with (
-            patch.object(jax_init_module, "sync_kv_cache", lambda **kwargs: calls.append(kwargs)),
+            patch.object(jax_init_module, "sync_kv_cache", lambda *args: calls.append(args)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()

@@ -27,14 +27,13 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache, marin_kv_cache
+from rigging.cache import PersistentKvCache
 
 logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
 _VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib")
 _KERNEL_CACHE_PREFIX = "cutlass-kernels"
-_OBJECT_SUFFIX = ".o"
 
 
 def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
@@ -99,13 +98,12 @@ def _source_digest(build: Callable[..., Any]) -> str:
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
-    """The standard cache stack for compiled CuTeDSL kernel object code, one ``.o`` object per key.
+    """The standard cache for compiled CuTeDSL kernel object code, one object per key.
 
-    Memory, node-local disk, and object storage, assembled by :func:`marin_kv_cache`.
-    A tier that is unreachable — a task landing on a worker whose cache mount has
-    not arrived yet — degrades to the next one and, in the worst case, to a compile.
+    Memory over region-local temp object storage, assembled by
+    :meth:`PersistentKvCache.for_prefix`. An unreachable store degrades to a compile.
     """
-    return marin_kv_cache(_KERNEL_CACHE_PREFIX, suffix=_OBJECT_SUFFIX)
+    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX)
 
 
 def install(cache: PersistentKvCache) -> None:

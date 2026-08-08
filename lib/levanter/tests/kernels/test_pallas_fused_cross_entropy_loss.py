@@ -1464,7 +1464,7 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
 
 
 def _block_size_cache_at(tmp_path) -> "fused_api.AutotuneBlockSizeCache":
-    store = fused_api.PersistentKvCache.at(str(tmp_path), suffix=fused_api._AUTOTUNE_ENTRY_SUFFIX)
+    store = fused_api.PersistentKvCache.at(str(tmp_path))
     return fused_api.AutotuneBlockSizeCache(store)
 
 

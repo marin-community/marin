@@ -26,7 +26,7 @@ from levanter.cutlass_kernel_cache import cute_launcher_factory, install
 
 def _kernel_store(directory) -> PersistentKvCache:
     """A single-directory store standing in for the cutlass cache's disk tier."""
-    return PersistentKvCache.at(str(directory), suffix=".o")
+    return PersistentKvCache.at(str(directory))
 
 
 @dataclasses.dataclass(frozen=True)

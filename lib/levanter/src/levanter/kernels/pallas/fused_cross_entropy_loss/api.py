@@ -13,7 +13,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
-from rigging.cache import PersistentKvCache, marin_kv_cache
+from rigging.cache import PersistentKvCache
 
 from levanter.kernels.pallas import autotune_utils
 
@@ -55,7 +55,6 @@ _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 # Bump the trailing version when the entry encoding changes so stale entries are ignored.
 _AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
-_AUTOTUNE_ENTRY_SUFFIX = ".json"
 
 
 class _NoViableCandidate:
@@ -206,7 +205,7 @@ def _autotune_enabled() -> bool:
     return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-_AUTOTUNE_CACHE = AutotuneBlockSizeCache(marin_kv_cache(_AUTOTUNE_BLOCK_SIZE_PREFIX, suffix=_AUTOTUNE_ENTRY_SUFFIX))
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache(PersistentKvCache.for_prefix(_AUTOTUNE_BLOCK_SIZE_PREFIX))
 
 
 def _autotune_jaxpr_hash(
