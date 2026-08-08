@@ -3,29 +3,27 @@
 
 """Command-line entry point for the eval launcher.
 
-``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
-``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
-rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` sources.
+``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``.
+``launch`` submits runs and optionally waits for their object-store records. Fleet-wide archive
+sweeps are administrative and live in :mod:`experiments.evaluation.migrations.cli`.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import click
-from finestore.eval import export_lm_eval_samples
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from rigging.config_discovery import find_project_root
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.evaluation.evals import EVALS, SUITES, EvalchemyDefinition, HarborDefinition
+from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
@@ -34,15 +32,14 @@ from experiments.evaluation.launch import (
 )
 from experiments.evaluation.models import models
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
-    keys: tuple[str, ...] = SUITES.get(evals_arg) or tuple(part.strip() for part in evals_arg.split(",") if part.strip())
-    if not keys:
-        raise click.BadParameter("no evals selected")
-    unknown = [key for key in keys if key not in EVALS]
-    if unknown:
-        raise click.BadParameter(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
-    return keys
+    try:
+        return resolve_eval_keys(evals_arg)
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
 
 
 def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
@@ -195,6 +192,7 @@ def launch(
         accelerator=accelerator,
         limit=limit,
         records_prefix=records_prefix,
+        submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         version=version,
@@ -219,24 +217,6 @@ def launch(
         if no_wait:
             return
         wait_and_report([group])
-
-
-@cli.command("backfill-samples")
-@click.option(
-    "--prefix",
-    "prefixes",
-    multiple=True,
-    default=DEFAULT_SCAN_PREFIXES,
-    show_default=True,
-    help="Object-store prefix(es) to scan for records; repeatable.",
-)
-def backfill_samples(prefixes: tuple[str, ...]) -> None:
-    """Rebuild every run's finestore sample archive from its kept ``samples_*.jsonl`` sources."""
-    configure_coreweave_s3()
-    for prefix in prefixes:
-        for record in list_records(prefix):
-            written = export_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 
 def main() -> None:

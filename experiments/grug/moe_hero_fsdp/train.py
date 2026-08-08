@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -33,6 +34,9 @@ from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.recovery.detection import DetectionConfig, recovery_xla_env, touch_heartbeat
+from levanter.recovery.supervisor import ENV_HEARTBEAT_PATH, GPUHangSupervisor
+from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
@@ -54,16 +58,33 @@ logger = logging.getLogger(__name__)
 HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    # NVLink SHARP. Below the sweep's resolution alone; carried by the combined configuration.
+    "NCCL_ALGO": "NVLS,Ring",
+    "NCCL_NVLS_ENABLE": "1",
 }
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+# Hang detection: maximum execution time before XLA aborts.
+HERO_EXECUTION_TERMINATE_TIMEOUT = 600.0
+# Hang detection: maximum time between completed training steps.
+HERO_HEARTBEAT_DEADMAN = 30 * 60.0
+# Hang detection: maximum startup time before the first completed step.
+HERO_STARTUP_TIMEOUT = 60 * 60.0
+# Pending-thunk reporting exhausts host memory for this model.
+HERO_PROGRESS_TRACKING = 0
+HERO_DETECTION_CONFIG = DetectionConfig(
+    execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
+    progress_tracking=HERO_PROGRESS_TRACKING,
+    enable_recoverability=False,
+)
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
-    # setdefault (not update) so the launch env can override a default -- e.g. -e JAX_ENABLE_PGLE 0.
-    for key, value in HERO_FSDP_RUNTIME_ENV.items():
-        os.environ.setdefault(key, value)
+    # setdefault, so a value the launcher forwarded (`iris job run -e JAX_ENABLE_PGLE 0`)
+    # survives. PGLE and an external CUPTI client such as nsys cannot coexist.
+    for name, value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
@@ -110,6 +131,13 @@ class GrugEvalConfig:
     compute_bpb: bool = True
 
 
+class GrugRunMode(StrEnum):
+    DEFAULT = "default"
+    SUPERVISED = "supervised"
+    FAILSAFE_CONTROL = "failsafe-control"
+    STOCK_CONTROL = "stock-control"
+
+
 @dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
@@ -123,6 +151,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    run_mode: GrugRunMode = GrugRunMode.DEFAULT
 
 
 def build_train_dataset(
@@ -149,7 +178,7 @@ def build_train_dataset(
     )
 
 
-_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def build_train_loader(
@@ -165,7 +194,7 @@ def build_train_loader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": _BATCH_AXES},
+        axis_resources={"__BATCH__": BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -192,9 +221,9 @@ def build_tagged_evaluator(
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
-    eval_axis_mapping = {"batch": _BATCH_AXES}
+    eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    eval_array_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         # Cast params to compute dtype (bf16): the FA4/CuTe attention path requires bf16 inputs, and eval
@@ -275,6 +304,19 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
         last_mixture_stage = stage
 
     return log_mixture_stage
+
+
+def log_device_memory(step_info) -> None:
+    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB."""
+    stats = jax.local_devices()[0].memory_stats()
+    levanter.tracker.log(
+        {
+            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
+            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
+            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
+        },
+        step=step_info.step,
+    )
 
 
 @register_dataclass
@@ -450,6 +492,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     run_id = trainer.id
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
+    heartbeat_path = os.environ.get(ENV_HEARTBEAT_PATH)
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
@@ -568,6 +611,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        state_callbacks.add_hook(log_device_memory, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
@@ -602,6 +646,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+                if heartbeat_path is not None:
+                    touch_heartbeat(heartbeat_path, int(state.step))
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
@@ -668,28 +714,114 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
+def _run_grug_supervised_local(config: GrugRunConfig) -> None:
+    """Run one local trainer under the XLA hang-deadman subprocess supervisor."""
+    run_id = config.trainer.trainer.id
+    if run_id is None:
+        raise ValueError("trainer.id must be set before supervised training")
+
+    with GPUHangSupervisor(
+        detection=HERO_DETECTION_CONFIG,
+        deadman_timeout=HERO_HEARTBEAT_DEADMAN,
+        startup_timeout=HERO_STARTUP_TIMEOUT,
+        max_restarts_per_run=0,
+    ) as supervisor:
+        result = supervisor.run(_run_grug_local, config, label=run_id)
+
+    if result.outcome is not RunOutcome.COMPLETED:
+        faults = ", ".join(
+            f"attempt={fault.attempt} class={fault.fault_class} returncode={fault.returncode}" for fault in result.faults
+        )
+        raise RuntimeError(f"supervised trainer {run_id!r} ended with outcome={result.outcome}; faults=[{faults}]")
+
+
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     _apply_hero_fsdp_runtime_defaults()
+    if config.run_mode is GrugRunMode.FAILSAFE_CONTROL:
+        os.environ.update(recovery_xla_env(HERO_DETECTION_CONFIG, os.environ))
+
+    local_entrypoint = _run_grug_supervised_local if config.run_mode is GrugRunMode.SUPERVISED else _run_grug_local
+    max_retries_failure = 3 if config.run_mode is GrugRunMode.DEFAULT else 0
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
-        local_entrypoint=_run_grug_local,
+        local_entrypoint=local_entrypoint,
         resources=config.resources,
+        max_retries_failure=max_retries_failure,
         processes_per_task=config.processes_per_task,
     )
 
 
+@dataclass(frozen=True)
+class GrugAblationSweepConfig:
+    """Configuration for a sequence of environment arms.
+
+    ``arms`` and ``runs`` are parallel: arm *i* supplies the process-start environment
+    for run *i*.
+    """
+
+    run_id: str
+    arms: tuple[AblationSpec, ...]
+    runs: tuple[GrugRunConfig, ...]
+    resources: ResourceConfig
+    processes_per_task: int
+    priority: int
+
+    def __post_init__(self):
+        if not self.arms:
+            raise ValueError("an ablation sweep needs at least one arm")
+        if len(self.arms) != len(self.runs):
+            raise ValueError(f"got {len(self.arms)} arms but {len(self.runs)} runs")
+
+
+def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
+    """Run every arm under one supervisor, and never let one arm's fault end the sweep."""
+    with GPUHangSupervisor(
+        detection=HERO_DETECTION_CONFIG,
+        deadman_timeout=HERO_HEARTBEAT_DEADMAN,
+        startup_timeout=HERO_STARTUP_TIMEOUT,
+        max_restarts_per_run=0,
+    ) as supervisor:
+        for arm, run in zip(config.arms, config.runs, strict=True):
+            logger.warning("=== hero ablation %s: %s (env=%s) ===", arm.name, arm.notes, dict(arm.env))
+            result = supervisor.run(_run_grug_local, run, label=run.trainer.trainer.id, env=arm.env)
+            logger.warning(
+                "hero ablation %s -> outcome=%s attempts=%d faults=[%s]",
+                arm.name,
+                result.outcome.value,
+                result.attempts,
+                ", ".join(f"class={f.fault_class.value} rc={f.returncode} detail={f.detail!r}" for f in result.faults),
+            )
+
+
+def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
+    """Dispatch the sweep; each task runs the arms in order under its own supervisor."""
+    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
+    _apply_hero_fsdp_runtime_defaults()
+    dispatch_grug_training_run(
+        run_id=config.run_id,
+        config=config,
+        local_entrypoint=_run_grug_sweep_local,
+        resources=config.resources,
+        max_retries_failure=0,
+        processes_per_task=config.processes_per_task,
+        priority=config.priority,
+    )
+
+
 __all__ = [
+    "GrugAblationSweepConfig",
     "GrugEvalConfig",
     "GrugRunConfig",
+    "GrugRunMode",
     "GrugTrainState",
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_ablation_sweep",
 ]

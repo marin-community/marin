@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
 use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
@@ -36,6 +37,12 @@ use crate::store::segment_index::{
 use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
+
+#[derive(Clone)]
+struct IntrospectionState {
+    store: Arc<Store>,
+    health: Arc<IngestHealth>,
+}
 
 /// When this process started, stamped at router-build time so uptime counts
 /// from the server coming up rather than from the first request.
@@ -146,6 +153,9 @@ struct ServerInfoResponse {
     build: BuildInfo,
     process: ProcessInfo,
     store: StoreInfo,
+    /// Registration state of the namespaces this process ingests into itself.
+    /// A namespace stuck here rejects every write to it, across restarts.
+    ingest: Vec<NamespaceRegistration>,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,
     format: FormatInfo,
@@ -252,7 +262,8 @@ fn unix_seconds(t: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
+async fn get_server(State(state): State<IntrospectionState>) -> impl IntoResponse {
+    let store = &state.store;
     let started = process_started();
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
@@ -278,6 +289,7 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
             ram_buffer_bytes: memory.ram_bytes,
             ram_chunks: memory.chunks,
         },
+        ingest: state.health.snapshot(),
         metadata_cache: MetadataCacheInfo {
             limit_bytes: cache.limit_bytes as i64,
             size_bytes: cache.size_bytes as i64,
@@ -419,9 +431,10 @@ fn to_segment_info(
 }
 
 async fn get_segments(
-    State(store): State<Arc<Store>>,
+    State(state): State<IntrospectionState>,
     Query(q): Query<SegmentsQuery>,
 ) -> impl IntoResponse {
+    let store = Arc::clone(&state.store);
     let namespace = q.namespace.clone();
     let index_cache = Arc::clone(store.index_cache());
     // Footer reads are blocking file I/O, and a large namespace has hundreds of
@@ -450,10 +463,10 @@ async fn get_segments(
 }
 
 /// The `/api/*` introspection routes, for merging into the app router.
-pub fn introspection_router(store: Arc<Store>) -> Router {
+pub fn introspection_router(store: Arc<Store>, health: Arc<IngestHealth>) -> Router {
     process_started();
     Router::new()
         .route("/api/server", get(get_server))
         .route("/api/segments", get(get_segments))
-        .with_state(store)
+        .with_state(IntrospectionState { store, health })
 }

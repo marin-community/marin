@@ -29,7 +29,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _zero_dropped_assignments
+from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT, _zero_dropped_assignments
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -58,6 +58,11 @@ _ROUTING_RENORM_SUM = 2.5
 # v=4096 is the dominant MFU lever for the 128k vocab; the SMEM-tiled batched_xla kernel caps the
 # h*v weight tile at ~99KB and cannot take v=4096.
 _CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
+# Keeping every tagged MoE tensor needs 386.7 GiB at the hero shape, against a 138 GiB device limit
+# and about 212 GiB of host memory per rank, so "offload_moe" parks only the expert output. That is
+# the tag worth its C2C traffic: keeping it stops the backward from re-running the expert GEMMs and
+# the expert-weight all-gather that feeds them.
+_MOE_OFFLOAD_NAMES = (_CHECKPOINT_DISPATCH_OUTPUT,)
 # The embedding is fully replicated for a local lookup. The language-model head
 # is replicated across racks and FSDP-sharded within each rack.
 _EMBED_PARTITION_SPEC = P(None, None)
@@ -81,7 +86,15 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["recompute_all", "save_moe", "offload_moe"]
+SmallParamSharding = Literal["replicated", "fsdp"]
+
+
+def _small_param_spec(sharding: SmallParamSharding, *, shard_dim: int) -> P:
+    """Partition spec for a 2-D small parameter, FSDP-sharding ``shard_dim`` over ``data``."""
+    if sharding == "replicated":
+        return P(None, None)
+    return P(*("data" if dim == shard_dim else None for dim in range(2)))
 
 
 def _batch_spec() -> P:
@@ -162,7 +175,18 @@ class GrugModelConfig:
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    backward skips re-running expert dispatch and its EP collectives; "offload_moe"
+    parks the expert output in pinned host memory instead, trading NVLink-C2C bandwidth
+    for HBM that "save_moe" does not have at the hero shape."""
+    ce_block_sizes: BlockSizes = _CE_BLOCK_SIZES
+    """Tiling for the fused large-vocab cross-entropy. The token axis is cut into
+    ``b_block_size`` chunks and the vocab into ``v_block_size`` chunks, and the XLA path
+    launches one GEMM per (token, vocab) tile."""
+    small_param_sharding: SmallParamSharding = "replicated"
+    """Layout of the router, ``attn_gate``, and the ``GatedNorm`` factors. "replicated" keeps a
+    full copy per device, so each one's gradient is a standalone replicated all-reduce.
+    "fsdp" shards one dim of each over ``data`` so the gradient reduce-scatters and coalesces
+    with the other FSDP gradients; the forward gathers the weight back to replicated."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -423,7 +447,7 @@ class CausalSelfAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            attn_gate=reshard(jnp.zeros((d, n)), _small_param_spec(cfg.small_param_sharding, shard_dim=0)),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
@@ -529,7 +553,8 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        attn_gate = reshard(self.attn_gate, P(None, None))
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn_gate))[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
@@ -566,20 +591,34 @@ class GatedNorm(eqx.Module):
     w_up: jax.Array
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(
+        hidden_dim: int,
+        initializer_std: float,
+        small_param_sharding: SmallParamSharding,
+        *,
+        key: PRNGKeyArray,
+    ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            w_down=reshard(
+                _init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std),
+                _small_param_spec(small_param_sharding, shard_dim=0),
+            ),
+            w_up=reshard(
+                _init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std),
+                _small_param_spec(small_param_sharding, shard_dim=1),
+            ),
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        w_down = reshard(self.w_down, P(None, None))
+        w_up = reshard(self.w_up, P(None, None))
+        gate_hidden = jnp.einsum("...d,dr->...r", x, w_down)
         # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
         # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
         return x * gate.astype(x.dtype)
 
 
@@ -724,7 +763,10 @@ class MoEMLP(eqx.Module):
 
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=reshard(
+                _init_weight(k_router, (d, e), cfg.initializer_std),
+                _small_param_spec(cfg.small_param_sharding, shard_dim=0),
+            ),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -836,10 +878,12 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=gn_attn_key
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
@@ -924,11 +968,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=embed_gn_key
+            ),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=final_gn_key
+            ),
             config=cfg,
         )
 
@@ -964,6 +1012,13 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        elif cfg.remat_mode == "offload_moe":
+            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                names_which_can_be_saved=(),
+                names_which_can_be_offloaded=_MOE_OFFLOAD_NAMES,
+                offload_src="device",
+                offload_dst="pinned_host",
+            )
         else:
             remat_policy = None
 
@@ -1052,7 +1107,7 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
             implementation="xla",
-            block_sizes=_CE_BLOCK_SIZES,
+            block_sizes=self.config.ce_block_sizes,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss

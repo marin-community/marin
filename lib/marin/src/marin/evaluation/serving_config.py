@@ -100,7 +100,7 @@ def _vllm_engine_config(
     extra_args: tuple[str, ...],
 ) -> VllmEngineConfig:
     """Build the evaluation engine settings shared by GPU and TPU workers."""
-    launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.WORKSPACE
+    launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.TPU
     source = VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM
     return VllmEngineConfig(
         launcher=launcher,
@@ -177,7 +177,7 @@ def inference_config_for_model(
         )
         if serve.backend is ServeBackend.VLLM:
             engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
-            environment = create_environment(extras=["tpu", "vllm"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
         else:
             engine = LevanterEngineConfig()
             environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))

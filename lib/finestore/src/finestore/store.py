@@ -13,6 +13,7 @@ under their own key prefix, so they never coordinate; the reader composes and de
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -31,6 +32,7 @@ from finestore.layout import (
     WRITER_COLUMN,
     ArchiveMetadata,
     FineStoreLayout,
+    OnConflict,
     SealMarker,
     TableMetadata,
     build_uri,
@@ -54,6 +56,22 @@ DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
 def _default_writer_id() -> str:
     """A writer identity unique enough that two writers never share a key prefix."""
     return uuid.uuid4().hex
+
+
+class PrimaryKeyConflict(ValueError):
+    """Two rows in one writer session share a primary key but carry different payloads."""
+
+
+def _row_digest(row: Mapping[str, object]) -> bytes:
+    """A stable digest of a row's payload, ignoring finestore's ``_seq``/``_writer`` stamps.
+
+    Two appends of the same logical row must digest equal, so the stamp columns — which differ by
+    construction on every append — are excluded. ``default=repr`` keeps values Parquet accepts but
+    JSON does not (bytes payloads, enums) from breaking the digest.
+    """
+    payload = {name: value for name, value in row.items() if name not in (SEQ_COLUMN, WRITER_COLUMN)}
+    encoded = json.dumps(payload, sort_keys=True, default=repr).encode()
+    return hashlib.blake2b(encoded, digest_size=16).digest()
 
 
 def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
@@ -153,6 +171,14 @@ class DataStore:
         # Stamp the archive-wide metadata at open. Concurrent writers write identical content, so a
         # last-writer-wins overwrite is harmless.
         StoragePath(self._layout.archive_path).write_text(ArchiveMetadata().model_dump_json(indent=2))
+        # An archive being written is not complete. Clearing a prior session's marker here is what
+        # makes "sealed" mean "these are the finished contents" rather than "some session once
+        # finished": without it an export that dies partway leaves the old marker vouching for a
+        # table it no longer describes.
+        sealed = StoragePath(self._layout.sealed_path)
+        if sealed.exists():
+            sealed.rm()
+            logger.info("finestore reopened sealed archive %s for writing", self.root)
         self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
         self._thread.start()
 
@@ -167,26 +193,30 @@ class DataStore:
         self,
         name: str,
         *,
+        primary_key: Sequence[str],
         schema: pa.Schema | None = None,
-        merge_key: Sequence[str] | None = None,
         schema_version: int = 1,
+        on_conflict: OnConflict = OnConflict.ERROR,
     ) -> DataTable:
         """Register (or fetch) a table and return a handle for appending to it.
 
-        ``merge_key`` names the columns a reader collapses duplicates on (keeping the latest); it is
-        persisted to the table's ``_schema.json`` so readers that did not open the writer can recover
-        it. Calling ``table`` again with the same ``name`` returns the same handle, so every appender
-        shares one buffer and one sequence counter.
+        ``primary_key`` names the columns that identify a row, and is persisted to ``_schema.json``
+        so a reader that did not open the writer can recover it. A table whose rows have no natural
+        identity declares a nonce column rather than no key.
 
-        On registration the table's sequence counter resumes above the highest ``_seq`` any shard has
-        already persisted, so a row this writer appends now always outranks a row a prior session left
-        behind — a re-run of an existing key wins, and nothing can shadow it.
+        ``on_conflict`` decides what two rows sharing a key mean: :attr:`OnConflict.ERROR` raises
+        :class:`PrimaryKeyConflict` unless the payloads are identical, :attr:`OnConflict.SUPERSEDE`
+        accepts the newer row.
+
+        Calling ``table`` again with the same ``name`` returns the same handle, so every appender
+        shares one buffer and one sequence counter. The counter resumes above the highest ``_seq``
+        any shard has persisted, so a row appended now outranks one a prior session left behind.
         """
         with self._register_lock:
             existing = self._tables.get(name)
             if existing is not None:
                 return existing
-            key = tuple(merge_key) if merge_key is not None else None
+            key = tuple(primary_key)
             start_seq = CompositeReader(self.root).max_seq(name) + 1
             table = DataTable(
                 name,
@@ -194,9 +224,10 @@ class DataStore:
                 layout=self._layout,
                 max_buffer_bytes=self._max_buffer_bytes,
                 scheduler=self,
-                merge_key=key,
+                primary_key=key,
                 schema=schema,
                 schema_version=schema_version,
+                on_conflict=on_conflict,
                 start_seq=start_seq,
             )
             self._tables[name] = table
@@ -204,8 +235,12 @@ class DataStore:
             return table
 
     def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's merge key and logical schema version to its ``_schema.json``."""
-        meta = TableMetadata(merge_key=table.merge_key, schema_version=table.schema_version)
+        """Persist the table's primary key, logical schema version, and conflict policy to ``_schema.json``."""
+        meta = TableMetadata(
+            primary_key=table.primary_key,
+            schema_version=table.schema_version,
+            on_conflict=table.on_conflict,
+        )
         StoragePath(self._layout.schema_path(table.name)).write_text(meta.model_dump_json(indent=2))
 
     def write(self, name: str, metadata: Mapping[str, object] | None, data: bytes) -> str:
@@ -214,10 +249,12 @@ class DataStore:
         The blob is buffered and flushed with every other table, so many small writes never block on a
         per-object round trip -- the point of routing them through the archive rather than one object
         each. The payload rides inline as a Parquet binary column and ``metadata`` as a JSON string the
-        reader can project without touching the payload. The table's merge key is the blob name, so a
+        reader can project without touching the payload. The table's primary key is the blob name, so a
         re-write supersedes the prior one and a compacted shard is sorted by name for a pruned lookup.
         """
-        blobs = self._tables.get(BLOBS_TABLE) or self.table(BLOBS_TABLE, merge_key=(BLOB_NAME_COLUMN,))
+        blobs = self._tables.get(BLOBS_TABLE) or self.table(
+            BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
+        )
         blobs.append(
             {
                 BLOB_NAME_COLUMN: name,
@@ -243,11 +280,19 @@ class DataStore:
         shard and every blob is its own object, so a plain Parquet reader over the archive sees each
         row once without having to apply finestore's generation/``_seq`` dedup rule. Compaction is
         still only an optimization for the finestore reader, which deduplicates either way.
+
+        Rows compaction drops because a later write replaced them are counted per table and recorded
+        in the seal marker, so cross-session supersession leaves a number behind instead of vanishing.
         """
         self.flush()
+        superseded = {}
         for name in list(self._tables):
-            compact(self.root, name)
-        StoragePath(self._layout.sealed_path).write_text(SealMarker(writer=self.writer_id).model_dump_json())
+            result = compact(self.root, name)
+            if result.superseded:
+                superseded[name] = result.superseded
+                logger.info("finestore sealed %s: %d row(s) superseded by a later write", name, result.superseded)
+        marker = SealMarker(writer=self.writer_id, superseded=superseded)
+        StoragePath(self._layout.sealed_path).write_text(marker.model_dump_json())
 
     def close(self) -> None:
         """Stop the background thread and flush any remaining rows."""
@@ -306,14 +351,16 @@ class DataTable:
         layout: FineStoreLayout,
         max_buffer_bytes: int,
         scheduler: FlushScheduler,
-        merge_key: tuple[str, ...] | None,
+        primary_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
         schema_version: int,
+        on_conflict: OnConflict = OnConflict.ERROR,
         start_seq: int = 0,
     ) -> None:
         self.name = name
-        self.merge_key = merge_key
+        self.primary_key = primary_key
         self.schema_version = schema_version
+        self.on_conflict = on_conflict
         self._writer_id = writer_id
         self._layout = layout
         self._max_buffer_bytes = max_buffer_bytes
@@ -323,6 +370,12 @@ class DataTable:
         self._pending_bytes = 0
         self._next_seq = start_seq
         self._lock = threading.Lock()
+        # Merge key -> payload digest for every row this session appended, so a conflicting repeat is
+        # caught even when the earlier row was already flushed to a shard. Only an ERROR table pays
+        # for this; a SUPERSEDE table means to replace rows and keeps no history.
+        self._digests: dict[tuple, bytes] | None = (
+            {} if primary_key is not None and on_conflict is OnConflict.ERROR else None
+        )
 
     def append(self, row: dict) -> None:
         """Buffer one row. Non-blocking: the row is durable after the next flush tick or an explicit
@@ -330,11 +383,37 @@ class DataTable:
         highest ``_seq`` per primary key."""
         self.extend([row])
 
+    def _check_conflict(self, row: dict) -> None:
+        """Raise if ``row`` repeats a primary key this session already wrote with a different payload."""
+        if self._digests is None:
+            return
+        assert self.primary_key is not None
+        key = tuple(row.get(name) for name in self.primary_key)
+        digest = _row_digest(row)
+        previous = self._digests.get(key)
+        if previous is None:
+            self._digests[key] = digest
+            return
+        if previous == digest:
+            return
+        pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.primary_key)
+        raise PrimaryKeyConflict(
+            f"table {self.name!r} already holds a different row for primary key ({pairs}). "
+            f"The reader keeps one row per primary key, so writing both would discard one silently. "
+            f"Widen {self.primary_key} to identify the row, or declare on_conflict=SUPERSEDE to replace it."
+        )
+
     def extend(self, rows: Iterable[dict]) -> None:
-        """Buffer many rows for the next flush (see :meth:`append`)."""
+        """Buffer many rows for the next flush (see :meth:`append`).
+
+        Raises :class:`PrimaryKeyConflict` on an ``ERROR`` table when a row repeats a primary key with a
+        different payload. The conflicting row is rejected before it enters the buffer, so the
+        exception leaves the table holding exactly the rows that were accepted.
+        """
         self._scheduler.raise_if_failed()
         with self._lock:
             for row in rows:
+                self._check_conflict(row)
                 stamped = dict(row)
                 stamped[SEQ_COLUMN] = self._next_seq
                 stamped[WRITER_COLUMN] = self._writer_id

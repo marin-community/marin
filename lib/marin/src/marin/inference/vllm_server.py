@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import json
 import logging
 import os
 import shutil
@@ -15,6 +16,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -27,9 +29,14 @@ from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
+from marin.inference.vllm_release import (
+    current_vllm_gpu_wheel,
+    vllm_gpu_wheel_provenance,
+    vllm_gpu_wheel_requirement,
+)
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -43,8 +50,43 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
-_CUDA_TORCH_BACKEND = "cu130"
-_FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
+# CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
+# attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
+_CUDA_TOOLCHAIN_REQUIREMENTS = (
+    "nvidia-cuda-nvcc==13.0.88",
+    "nvidia-cuda-crt==13.0.88",
+    "nvidia-nvvm==13.0.88",
+)
+_CUDA_NVCC_BOOTSTRAP = """\
+import importlib.metadata
+import os
+from pathlib import Path
+import sys
+
+distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
+nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
+nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
+cuda_home = nvcc.parent.parent
+cuda_lib = cuda_home / "lib"
+cuda_lib64 = cuda_home / "lib64"
+if cuda_lib.is_dir() and not cuda_lib64.exists():
+    cuda_lib64.symlink_to(cuda_lib, target_is_directory=True)
+cudart = cuda_lib / "libcudart.so.13"
+cudart_link = cuda_lib / "libcudart.so"
+if cudart.is_file() and not cudart_link.exists():
+    cudart_link.symlink_to(cudart.name)
+os.environ["CUDA_HOME"] = str(cuda_home)
+os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
+os.execvp(sys.argv[1], sys.argv[1:])
+"""
+_PYTHON_FILE_BOOTSTRAP = """\
+import runpy
+import sys
+
+entrypoint = sys.argv.pop(1)
+runpy.run_path(entrypoint, run_name="__main__")
+"""
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
@@ -100,8 +142,12 @@ class VllmLauncherWithEnvironment:
 
 
 @dataclass(frozen=True)
-class WorkspaceVllm:
-    """Run the ``vllm`` installed in the active workspace venv (the TPU-vLLM stack)."""
+class PreinstalledVllm:
+    """Run the ``vllm`` already installed on the active venv PATH (GPU task-image serving).
+
+    Marin provisions nothing here: the vLLM binary is expected to be preinstalled, e.g. baked
+    into a ``--task-image``. It is not a workspace dependency.
+    """
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
@@ -110,7 +156,7 @@ class WorkspaceVllm:
         return {}
 
     def cache_identity(self) -> str:
-        return f"workspace:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
+        return f"preinstalled:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -118,6 +164,14 @@ class VllmType(StrEnum):
 
     UPSTREAM = "upstream"  # stock PyPI vLLM — any architecture upstream vLLM knows
     MARIN_FORK = "marin_fork"  # marin-community/vllm — for Marin-custom archs (e.g. grug_moe)
+
+
+@dataclass(frozen=True)
+class _CudaVllmInstall:
+    requirement: str
+    torch_backend: str
+    executable: str
+    executable_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,8 +184,7 @@ class IsolatedCudaVllm:
 
     source: VllmType = VllmType.UPSTREAM
     version: str | None = None
-    """Exact PyPI pin; required for ``UPSTREAM``, ignored for ``MARIN_FORK`` (the fork pin comes
-    from ``tool.uv.sources.vllm``)."""
+    """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
 
@@ -139,42 +192,67 @@ class IsolatedCudaVllm:
         if self.source is VllmType.UPSTREAM and not self.version:
             raise ValueError("IsolatedCudaVllm(UPSTREAM) requires an explicit vLLM version.")
 
-    def command(self) -> list[str]:
+    def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
-            from_spec = VLLM_FORK_REQUIREMENT
-        else:
-            from_spec = f"vllm[runai]=={self.version}"
-        return [
+            wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
+            provenance = json.dumps(
+                dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)), sort_keys=True
+            )
+            return _CudaVllmInstall(
+                requirement=vllm_gpu_wheel_requirement(wheel),
+                torch_backend=VLLM_GPU_RELEASE.torch_backend,
+                executable="python",
+                executable_args=(
+                    "-c",
+                    _PYTHON_FILE_BOOTSTRAP,
+                    str(Path(__file__).with_name("vllm_wheel_entrypoint.py")),
+                    provenance,
+                ),
+            )
+        return _CudaVllmInstall(
+            requirement=f"vllm[runai]=={self.version}",
+            torch_backend=_UPSTREAM_CUDA_TORCH_BACKEND,
+            executable="vllm",
+        )
+
+    def command(self) -> list[str]:
+        install = self._install()
+        command = [
             "uvx",
             "--from",
-            from_spec,
+            install.requirement,
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
-            "--python",
-            self.python_version,
-            "--torch-backend",
-            _CUDA_TORCH_BACKEND,
-            "vllm",
         ]
+        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+            command.extend(("--with", requirement))
+        command.extend(
+            (
+                "--python",
+                self.python_version,
+                "--torch-backend",
+                install.torch_backend,
+                "python",
+                "-c",
+                _CUDA_NVCC_BOOTSTRAP,
+                install.executable,
+                *install.executable_args,
+            )
+        )
+        return command
 
     def env(self) -> dict[str, str]:
-        # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
-        # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
-        # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
-        # callers pass `--gdn-prefill-backend triton` in vLLM extra arguments.
         # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
         environment = {
-            _FLASHINFER_SAMPLER_ENV_VAR: "0",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
-        if self.source is VllmType.MARIN_FORK:
-            environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment
 
     def cache_identity(self) -> str:
-        source = VLLM_FORK_REQUIREMENT if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
-        return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
+        install = self._install()
+        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
+        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
 
 
 def _write_virtual_hosted_s3_config() -> str:
@@ -635,8 +713,9 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
-        self.launcher: VllmLauncher = launcher or WorkspaceVllm()
+        # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
+        # GPU-fork serving pass an isolated uvx launcher.
+        self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
         self._ready_on_enter = wait_for_ready
 

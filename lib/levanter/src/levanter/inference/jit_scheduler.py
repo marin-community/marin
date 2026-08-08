@@ -762,13 +762,6 @@ class DecodeState(eqx.Module):
         """Maximum number of tokens that can be generated for each sequence, including any prefix tokens."""
         return self.tokens.axis_size("position")
 
-    @property
-    def max_stop_seq_len(self) -> int:
-        """Maximum number of stop sequences for each sequence."""
-        if self.stop_tokens is None:
-            return 0
-        return self.stop_tokens.axis_size("position")
-
     @eqx.filter_jit
     def assign_seq(
         self,

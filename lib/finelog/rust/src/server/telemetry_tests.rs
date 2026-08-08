@@ -18,6 +18,7 @@ use tokio::sync::{oneshot, Semaphore};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
+use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
 use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
@@ -64,6 +65,21 @@ async fn cancelled_waiter_does_not_release_owned_work_or_skip_completion() {
 
 fn http_client() -> TestHttpClient {
     HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new())
+}
+
+/// GET a route, asserting 200 and returning the body.
+async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> String {
+    let response = client
+        .request(
+            Request::get(format!("http://{addr}{path}"))
+                .body(full_body(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
@@ -175,23 +191,27 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 #[tokio::test]
 async fn router_registers_index_policy_before_first_telemetry_request() {
     let store = disk_store("telemetry-startup-registration");
+    let health = Arc::new(IngestHealth::new());
     let _router = super::telemetry::router(
         Arc::clone(&store),
         Arc::new(AuthPolicy::allow_localhost()),
         1,
         1,
+        Arc::clone(&health),
+    );
+    assert!(
+        health.health_body().contains("registration pending"),
+        "the telemetry namespace is reported unavailable until it registers",
     );
 
-    let schema = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Ok(schema) = store.get_table_schema("telemetry_v1") {
-                break schema;
-            }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while health.health_body() != HEALTH_OK {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("startup registration did not complete");
+    let schema = store.get_table_schema("telemetry_v1").unwrap();
 
     for name in ["service", "kind", "name"] {
         let column = schema
@@ -261,6 +281,60 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
 }
 
 #[tokio::test]
+async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info() {
+    let store = disk_store("telemetry-wedged-registration");
+    // A `name` column of the wrong type: no additive merge reconciles it.
+    store
+        .register_table(
+            "telemetry_v1",
+            Schema::new(
+                vec![
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("name", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+
+    let addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
+    let client = http_client();
+    // `get_text` asserts 200: /health stays 200 while degraded so the Kubernetes
+    // probes do not crashloop or de-endpoint the pod.
+    let health = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let body = get_text(&client, addr, "/health").await;
+            if body.contains("registration failed") {
+                break body;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the wedged registration never reached /health");
+    assert!(health.contains("telemetry_v1"), "{health}");
+
+    let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
+    let namespace = &info["ingest"][0];
+    assert_eq!(namespace["namespace"], "telemetry_v1");
+    assert_eq!(namespace["state"], "failed");
+    assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
+    assert!(namespace["error"].as_str().unwrap().contains("name"));
+
+    let posted = post(
+        &client,
+        addr,
+        batch("11111111-1111-4111-8111-111111111111"),
+        Some("11111111-1111-4111-8111-111111111111"),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let remote_dir = unique_dir("telemetry-query-remote");
     let store = Arc::new(
@@ -268,6 +342,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
         )
         .unwrap(),
     );

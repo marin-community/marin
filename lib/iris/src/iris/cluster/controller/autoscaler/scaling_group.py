@@ -19,7 +19,14 @@ from enum import Enum, StrEnum
 from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.chaos import chaos_raise
-from iris.cluster.config import ScaleGroupConfig, ScaleGroupResources, SliceConfig, WorkerConfig, slice_template_region
+from iris.cluster.config import (
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    WorkerConfig,
+    slice_template_region,
+    slice_template_zone,
+)
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
     AttributeValue,
@@ -176,24 +183,6 @@ def prepare_slice_config(
     return config
 
 
-def _region_from_template(template: SliceConfig) -> str | None:
-    """Region derived from a scale group's slice template."""
-    if template.gcp is not None and template.gcp.zone:
-        return template.gcp.zone.rsplit("-", 1)[0]
-    if template.coreweave is not None and template.coreweave.region:
-        return template.coreweave.region
-    return None
-
-
-def _zone_from_template(template: SliceConfig) -> str | None:
-    """Zone derived from a scale group's slice template."""
-    if template.gcp is not None and template.gcp.zone:
-        return template.gcp.zone
-    if template.coreweave is not None and template.coreweave.region:
-        return template.coreweave.region
-    return None
-
-
 def build_worker_config_for_group(
     base_worker_config: WorkerConfig | None,
     group_config: ScaleGroupConfig,
@@ -226,11 +215,11 @@ def build_worker_config_for_group(
             wc.cache_dir = group_config.worker.cache_dir
 
     template = group_config.slice_template
-    region = _region_from_template(template) if template is not None else None
+    region = slice_template_region(template) if template is not None else None
     if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
         wc.worker_attributes[WellKnownAttribute.REGION] = region
 
-    zone = _zone_from_template(template) if template is not None else None
+    zone = slice_template_zone(template) if template is not None else None
     if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
         wc.worker_attributes[WellKnownAttribute.ZONE] = zone
 
@@ -443,11 +432,7 @@ class ScalingGroup:
         template = self._config.slice_template
         if template is None:
             return None
-        if template.gcp is not None and template.gcp.zone:
-            return template.gcp.zone
-        if template.coreweave is not None and template.coreweave.region:
-            return template.coreweave.region
-        return None
+        return slice_template_zone(template)
 
     @property
     def device_type(self) -> DeviceType:

@@ -7,7 +7,7 @@ import { formatDelta, formatScore, formatStderr } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { cellsByModel, fleetBest } from '@/utils/matrix'
 import { MAX_COMPARE } from '@/constants'
-import type { LeaderboardEntry, Matrix, MatrixCell, MatrixRow, Meta } from '@/types/api'
+import { RUN_STATUS, type LeaderboardEntry, type Matrix, type MatrixCell, type MatrixRow, type Meta } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
@@ -62,6 +62,12 @@ const topScore = computed<number | null>(() => topEntry.value?.score ?? null)
 function deltaBest(entry: LeaderboardEntry): number | null {
   if (entry.score === null || topScore.value === null || entry.score === topScore.value) return null
   return entry.score - topScore.value
+}
+
+function failureLabel(status: string): string {
+  if (status === RUN_STATUS.INFRA_FAILED) return 'infra'
+  if (status === RUN_STATUS.ARTIFACT_FAILED) return 'artifact'
+  return 'failed'
 }
 
 // --- Archived models sort last ---
@@ -441,11 +447,11 @@ function goToModel(model: string) {
                     <button
                       v-else
                       class="w-full rounded px-2 py-1.5 text-[11px] font-mono font-semibold leading-tight cursor-pointer"
-                      :class="cellFor(row, task)!.status === 'infra_failed' ? 'text-status-warning bg-status-warning-bg' : 'text-status-danger bg-status-danger-bg'"
+                      :class="cellFor(row, task)!.status === RUN_STATUS.FAILED ? 'text-status-danger bg-status-danger-bg' : 'text-status-warning bg-status-warning-bg'"
                       :title="`${cellFor(row, task)!.status} — open run ${cellFor(row, task)!.run_id}`"
                       @click="goToRun(cellFor(row, task)!.run_id)"
                     >
-                      {{ cellFor(row, task)!.status === 'infra_failed' ? 'infra' : 'failed' }}
+                      {{ failureLabel(cellFor(row, task)!.status) }}
                     </button>
                   </template>
                   <span v-else class="text-text-muted">—</span>

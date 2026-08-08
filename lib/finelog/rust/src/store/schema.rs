@@ -566,6 +566,12 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     }
 }
 
+/// Add the implicit columns registration gives every namespace: the `cluster`
+/// origin column appended, then the `seq` counter prepended.
+pub fn stored_form(schema: Schema) -> Schema {
+    with_implicit_seq(with_implicit_cluster(schema))
+}
+
 /// Resolve the ordering key column name, raising if invalid.
 ///
 /// If `key_column` is set it must name an existing column; otherwise the schema
@@ -718,15 +724,31 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 }
 
 // ---------------------------------------------------------------------------
-// Schema merge (additive-only).
+// Schema merge: additive for the column layout, replaceable for derived state.
 // ---------------------------------------------------------------------------
+
+/// Whether `registered` accelerates every query `requested` would: same
+/// predicate column, superset predicate values, superset columns.
+fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjection) -> bool {
+    registered.predicate_column == requested.predicate_column
+        && requested
+            .predicate_values
+            .iter()
+            .all(|value| registered.predicate_values.contains(value))
+        && requested
+            .columns
+            .iter()
+            .all(|column| registered.columns.contains(column))
+}
 
 /// Return the effective schema for a re-register against `registered`.
 ///
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
-/// - a conflicting column *type* -> `SchemaConflict`.
-/// - a new non-nullable column -> `SchemaConflict`.
+/// - a conflicting column *type* -> `SchemaConflict`. The registered layout
+///   cannot hold the requested rows, so every write would be rejected anyway.
+/// - a new non-nullable column is adopted as nullable, with a warn. Every
+///   already-stored row is missing it.
 /// - a nullability difference on an existing column is *not* a conflict: warn
 ///   and keep the registered nullability (adopt-from-disk widens compacted
 ///   columns to nullable, and re-registration with the original schema must be
@@ -739,8 +761,15 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
 ///   never clear one, mirroring the storage-policy rule.
-/// - a new named covering projection is added monotonically; reusing a
-///   registered name with a different definition is a conflict.
+/// - a named covering projection is added when its name is new, and superseded
+///   when a registered name comes back with a different definition. The
+///   registered definition only decides what future segments build: each
+///   segment's `.fidx` `CoveringProjection` section describes its own coverage,
+///   so segments written under the old definition stay queryable until the
+///   index backfill reclaims them. A definition the registered one already
+///   covers is ignored, so an older binary registering a narrower definition
+///   against a newer catalog does not churn a fleet's derived state
+///   mid-rollout.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(
@@ -754,39 +783,55 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut enable_trigram: Vec<&str> = Vec::new();
     let mut enable_value_counts: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
-    let mut projections = Vec::new();
     let grouped_extrema = requested
         .grouped_extrema
         .iter()
         .filter(|config| !registered.grouped_extrema.contains(config))
         .cloned()
         .collect::<Vec<_>>();
+    let mut projections = registered.projections.clone();
+    let mut projections_changed = false;
     for requested_projection in &requested.projections {
-        match registered
-            .projections
-            .iter()
+        match projections
+            .iter_mut()
             .find(|projection| projection.name == requested_projection.name)
         {
-            Some(existing) if existing != requested_projection => {
-                return Err(StatsError::SchemaConflict(format!(
-                    "projection {:?}: definition differs from registered schema",
-                    requested_projection.name
-                )));
+            None => {
+                projections.push(requested_projection.clone());
+                projections_changed = true;
             }
-            Some(_) => {}
-            None => projections.push(requested_projection.clone()),
+            Some(existing) if existing == requested_projection => {}
+            Some(existing) if covers_projection(existing, requested_projection) => {
+                tracing::debug!(
+                    projection = %requested_projection.name,
+                    "register: keeping the registered projection, which covers the requested one",
+                );
+            }
+            Some(existing) => {
+                tracing::warn!(
+                    projection = %requested_projection.name,
+                    superseded_values = ?existing.predicate_values,
+                    superseded_columns = ?existing.columns,
+                    "register: superseding a registered covering projection",
+                );
+                *existing = requested_projection.clone();
+                projections_changed = true;
+            }
         }
     }
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
                 if !rc.nullable {
-                    return Err(StatsError::SchemaConflict(format!(
-                        "non-additive change: new column {:?} must be nullable for evolve-merge",
-                        rc.name
-                    )));
+                    tracing::warn!(
+                        column = %rc.name,
+                        "register: adopting a new non-nullable column as nullable",
+                    );
                 }
-                extras.push(rc.clone());
+                extras.push(Column {
+                    nullable: true,
+                    ..rc.clone()
+                });
             }
             Some(existing) => {
                 if existing.r#type != rc.r#type {
@@ -839,7 +884,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         && enable_trigram.is_empty()
         && enable_value_counts.is_empty()
         && exact_values.is_empty()
-        && projections.is_empty()
+        && !projections_changed
         && grouped_extrema.is_empty()
     {
         return Ok(registered.clone());
@@ -876,8 +921,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     }
     merged.extend(extras);
     let mut merged_schema = Schema::new(merged, registered.key_column.clone());
-    merged_schema.projections = registered.projections.clone();
-    merged_schema.projections.extend(projections);
+    merged_schema.projections = projections;
     merged_schema.grouped_extrema = registered.grouped_extrema.clone();
     merged_schema.grouped_extrema.extend(grouped_extrema);
     validate_index_policies(&merged_schema)?;
@@ -1404,18 +1448,50 @@ mod tests {
         let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
         assert_eq!(merged.projections, vec![projection]);
 
-        let conflicting = with_implicit_seq(worker_schema().with_covering_projection(
-            CoveringProjection::new(
-                "training-status",
-                "worker_id",
-                ["other"],
-                ["seq", "worker_id"],
-            ),
+        let redefined = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["other"],
+            ["seq", "worker_id"],
+        );
+        let superseded = merge_schemas(
+            &merged,
+            &with_implicit_seq(worker_schema().with_covering_projection(redefined.clone())),
+        )
+        .unwrap();
+        assert_eq!(superseded.projections, vec![redefined]);
+    }
+
+    #[test]
+    fn covering_projection_redefinition_keeps_the_wider_definition() {
+        // A rolled-back binary registering a narrower definition must leave the
+        // registered one alone; flipping back and forth would re-index every
+        // segment in the namespace on each registration.
+        let wide = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let registered = with_implicit_seq(worker_schema().with_covering_projection(wide.clone()));
+        let narrow = with_implicit_seq(worker_schema().with_covering_projection(
+            CoveringProjection::new("training-status", "worker_id", ["phase"], ["worker_id"]),
         ));
-        assert!(matches!(
-            merge_schemas(&merged, &conflicting),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        assert_eq!(merge_schemas(&registered, &narrow).unwrap(), registered);
+
+        // An added predicate value is not covered, so it supersedes.
+        let wider = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "progress", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let merged = merge_schemas(
+            &registered,
+            &with_implicit_seq(worker_schema().with_covering_projection(wider.clone())),
+        )
+        .unwrap();
+        assert_eq!(merged.projections, vec![wider]);
     }
 
     #[test]
@@ -1512,15 +1588,12 @@ mod tests {
     }
 
     #[test]
-    fn merge_new_non_nullable_rejects() {
+    fn merge_new_non_nullable_column_is_adopted_as_nullable() {
         let reg = with_implicit_seq(worker_schema());
         let mut req_cols = reg.columns.clone();
         req_cols.push(col("cpu_pct", ColumnType::COLUMN_TYPE_FLOAT64, false));
-        let req = Schema::new(req_cols, "");
-        assert!(matches!(
-            merge_schemas(&reg, &req),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+        assert!(merged.column("cpu_pct").unwrap().nullable);
     }
 
     #[test]
