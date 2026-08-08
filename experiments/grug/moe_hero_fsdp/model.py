@@ -141,6 +141,9 @@ class QbEstimator(StrEnum):
     AFTER_SIGMOID = "after_sigmoid"  # sigmoid domain, per-device top-k, pmean
     LOGIT_HIST = "logit_hist"  # logit domain, global bincount histogram of margins over fixed [-R, R]
     HIST_DYNAMIC = "hist_dynamic"  # logit domain, global bincount histogram over 2x the current [min, max] of margins
+    HIST_DYNAMIC_LAGGED = (
+        "hist_dynamic_lagged"  # like hist_dynamic, but bins over last step's carried range (no pre-bin sync)
+    )
     K3_HIST = "k3_hist"  # Kimi-K3: sigmoid domain, global bincount histogram of required bias, adaptive range
 
 
@@ -692,6 +695,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
+        "qb_hist_lohi_per_layer": router_metrics.get("qb_hist_lohi_per_layer"),
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
@@ -846,6 +850,34 @@ def _qb_beta_dynamic_hist(
     return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
 
 
+def _qb_beta_dynamic_hist_lagged(
+    s_ma: jax.Array,
+    lohi: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Lagged variant of ``hist_dynamic``: bin over the carried range ``lohi = [lo, hi]`` from the previous
+    step, so no ``pmin``/``pmax`` gates the binning. Returns ``(beta, next_lohi)`` where ``next_lohi`` is
+    ``2x`` this step's global ``[min, max]`` for the next step. The two collectives (histogram ``psum`` and
+    the min/max reduction) are independent here, so neither blocks the binning critical path.
+    """
+    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts
+
+    def _fn(s_local: jax.Array, lohi_local: jax.Array) -> tuple[jax.Array, jax.Array]:
+        beta = _bincount_upper_quantile(
+            s_local, num_experts=num_experts, n_bins=n_bins, lo=lohi_local[0], hi=lohi_local[1], target_rank=target_rank
+        )
+        next_lo = 2.0 * jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
+        next_hi = 2.0 * jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
+        next_hi = jnp.maximum(next_hi, next_lo + 1e-6)
+        return beta, jnp.stack([next_lo, next_hi])
+
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P()), out_specs=(P(), P()))(s_ma, lohi)
+
+
 def _qb_beta_k3_hist(
     required_bias: jax.Array,
     router_bias: jax.Array,
@@ -891,6 +923,7 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
+    router_hist_lohi: jax.Array  # carried [lo, hi] histogram range for hist_dynamic_lagged; unused by other estimators
     expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -907,6 +940,7 @@ class MoEMLP(eqx.Module):
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
+            router_hist_lohi=jnp.array([-cfg.qb_hist_range, cfg.qb_hist_range], dtype=jnp.float32),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -957,6 +991,8 @@ class MoEMLP(eqx.Module):
         # Sharded QB: per-expert threshold beta. Histogram estimators pool one global bincount (psum);
         # the top-k estimators take a per-device order statistic and pmean it.
         mesh = get_abstract_mesh()
+        # Carried histogram range for hist_dynamic_lagged; passed through unchanged by every other estimator.
+        next_hist_lohi = self.router_hist_lohi
         if self.cfg.qb_estimator == QbEstimator.K3_HIST:
             required_bias = reshard(qb_alpha - router_score, P(_BATCH_AXES, None))
             router_stats["qb_beta"] = _qb_beta_k3_hist(
@@ -986,6 +1022,16 @@ class MoEMLP(eqx.Module):
                 num_experts=self.cfg.num_experts,
                 n_bins=self.cfg.qb_hist_bins,
             )
+        elif self.cfg.qb_estimator == QbEstimator.HIST_DYNAMIC_LAGGED:
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            router_stats["qb_beta"], next_hist_lohi = _qb_beta_dynamic_hist_lagged(
+                s_minus_alpha,
+                self.router_hist_lohi,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
+            )
         else:
             s_minus_alpha = reshard(router_score - qb_alpha, P(_BATCH_AXES, None))
             router_stats["qb_beta"] = _qb_beta_topk(
@@ -996,6 +1042,7 @@ class MoEMLP(eqx.Module):
                 num_experts=self.cfg.num_experts,
                 seq_len=s,
             )
+        router_stats["qb_hist_lohi"] = next_hist_lohi
 
         moe_out = self.expert_mlp(
             x_flat,
@@ -1217,6 +1264,7 @@ class Transformer(eqx.Module):
             "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
             "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+            "qb_hist_lohi_per_layer": stacked_router_stats["qb_hist_lohi"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))

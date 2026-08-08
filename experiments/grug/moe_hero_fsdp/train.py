@@ -285,13 +285,18 @@ class GrugTrainState:
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
+    pending_hist_lohi: jax.Array
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
+def _apply_qb_state(model: Transformer, qb_betas: jax.Array, hist_lohi: jax.Array) -> Transformer:
+    """Set router biases from QB betas and the histogram range from the carried lohi (previous step)."""
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+    return eqx.tree_at(
+        lambda t: (t.stacked_blocks.stacked.mlp.router_bias, t.stacked_blocks.stacked.mlp.router_hist_lohi),
+        model,
+        (new_bias, hist_lohi),
+    )
 
 
 def _bias_stats(bias: jax.Array) -> dict[str, jax.Array]:
@@ -346,6 +351,10 @@ def initial_state(
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_hist_lohi=jnp.tile(
+            jnp.array([-model_config.qb_hist_range, model_config.qb_hist_range], dtype=jnp.float32),
+            (num_moe_layers, 1),
+        ),
     )
 
 
@@ -389,9 +398,9 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_params = _apply_qb_state(state.params, state.pending_qb_betas, state.pending_hist_lohi)
         if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            qb_ema_params = _apply_qb_state(state.ema_params, state.pending_qb_betas, state.pending_hist_lohi)
         else:
             qb_ema_params = None
 
@@ -409,6 +418,11 @@ def _make_train_step(
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         metrics.update(_bias_stats(qb_params.stacked_blocks.stacked.mlp.router_bias))
+        # Applied histogram range (mean over layers); moves only under hist_dynamic_lagged, so it doubles
+        # as a check that the carried range updates step to step rather than sticking at its init.
+        _hist_lohi = qb_params.stacked_blocks.stacked.mlp.router_hist_lohi
+        metrics["moe_bias/hist_lo"] = jnp.mean(_hist_lohi[..., 0])
+        metrics["moe_bias/hist_hi"] = jnp.mean(_hist_lohi[..., 1])
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         )
@@ -451,6 +465,7 @@ def _make_train_step(
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_hist_lohi=metrics["qb_hist_lohi_per_layer"],
         )
 
         return next_state, metrics, watch_stats
