@@ -770,3 +770,12 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Operations: job submission succeeded at 2026-08-08 05:31 PDT. Capacity waiting is expected while the active June 10T run occupies the ready central2 v4-2048. A dedicated babysitter owns the controller through terminal state. Recovery may stop and resubmit only this controller after a diagnosed topology-preserving failure; no cluster mutation, region change, Snowball read, teacher-checkpoint read, or 3,000-step milestone launch is authorized.
 - Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226116533
 - Next action: verify both W&B arms and central2 artifacts through terminal state, apply the preregistered smoke gate, and launch the 3,000-update milestone only on a full pass.
+
+### 2026-08-08 06:53 - GRUG-XEM-009 capacity and central1 locality audit
+
+- Status: the central2 controller is healthy. Its serialized baseline child is pending on the 256-worker `v4-2048` coscheduling group; no W&B run or checkpoint exists before allocation. The tied child has not been submitted because maximum concurrency is one.
+- Capacity estimate: the active June 10T run was at zero-indexed step 118,052 of 150,000. Over its latest 200 steps it averaged 26.593 seconds/step, implying about 236 hours to finish if no additional central2 slice becomes available.
+- Central1 data audit: bucket metadata confirms `marin-us-central1` is `US-CENTRAL1`, but `gs://marin-us-central1/datakit/store_8ac06c74/` has no objects. All 200 configured phase-0 prefixes `cluster={0..39}/quality={0..4}` are therefore missing, and the launcher has `auto_build_caches=False`. All 23 configured Paloma and Uncheatable eval artifacts exist in central1, but they do not repair the training-cache absence. No source checkpoint is configured; the smoke starts from seed-0 initialization.
+- Central1 capacity audit: no central1 zone exposes the registered `v4-2048` accelerator type, and Iris has no central1 `v4-2048` scaling group or worker. Central1 `v5p-2048` would be a different hardware experiment.
+- Decision: leave the controller queued in central2. Do not copy caches across regions, regenerate an unvalidated substitute cache, or change hardware. Continue monitoring for an additional central2 slice or release of the active one.
+- Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226403715
