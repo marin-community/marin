@@ -1655,3 +1655,17 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Result: Width 8,960 is a deterministic E128 failure bound. Wait for width 8,704. If it passes,
   test their width-8,832 midpoint. If it fails, test width 8,448 or 8,576 from the capacity-1.5
   pass bound.
+
+### 2026-08-08 14:40 UTC - MHEP-187 and MHEP-188 narrow the E192 bound
+
+- MHEP-187 used width 6,400. The compiler estimated a 196.28 GiB rematerialized program against
+  a 172.54 GiB target. The first NCCL all-to-all failed from CUDA out of memory before step 1.
+- MHEP-188 used width 6,656. The compiler estimated a 201.00 GiB rematerialized program against
+  a 173.87 GiB target. The first NCCL all-to-all also failed from CUDA out of memory before step 1.
+- Both coordinators remained active after their worker failures and were stopped immediately.
+- Result: Width 6,400 is the useful E192 failure bound. The capacity-1.5 width-6,144 pass remains
+  valid at lower capacity. Width 6,272 is the only 128-wide midpoint.
+- MHEP-191 tests 192 experts and width 6,272 at capacity factor 1.3. It has 546.292 B total and
+  24.680 B active parameters. It keeps the other size-gate settings and uses zero retries.
+- Run ID: `mhep-191-w30-ep-e192-i6272-cf1p30-fullwatch-p32789-20260808`.
+- A pass closes the E192 search at width 6,272. A failure closes it at width 6,144.
