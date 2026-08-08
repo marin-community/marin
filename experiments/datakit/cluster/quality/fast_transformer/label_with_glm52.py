@@ -56,8 +56,13 @@ from experiments.datakit.cluster.quality.glm52_vllm import (
 logger = logging.getLogger(__name__)
 
 QUALITY_LEVELS = (1, 2, 3, 4, 5)
-# Documents are capped at 12k chars upstream; leave room for the rubric and answer.
-DEFAULT_MAX_MODEL_LEN = 16_384
+# Documents are capped at 12k *characters* upstream, which is not a token budget:
+# CJK and code tokenize far denser than English, so a 12k-character document can
+# exceed 12k tokens. With MAX_OUTPUT_TOKENS reserved on top, a 16384 context
+# rejected those documents outright with a 400 — silently dropping long documents
+# and reintroducing the very length bias the excerpting fix removed. Sized so the
+# cap plus the reserved answer always fits.
+DEFAULT_MAX_MODEL_LEN = 32_768
 DEFAULT_MAX_NUM_SEQS = 64
 DEFAULT_CONCURRENCY = 48
 # Documents per checkpoint. Small enough that a preemption loses minutes of GPU
@@ -74,6 +79,9 @@ THINK_CLOSE_TAG = "</think>"
 # How many unusable replies to show before falling back to counting them: enough to
 # tell a truncation from a format drift, few enough not to flood a 20k-row run.
 MAX_LOGGED_REJECTS = 3
+# Minimum share of a chunk that must label successfully. Below this the run aborts
+# rather than treating a dead server as a very unlucky batch of documents.
+MIN_CHUNK_SUCCESS = 0.5
 # GB200 is the shape upstream serves GLM-5.2 on: the weights fit in 8 GPUs rather
 # than 16, and the gang binds hard to one NVLink domain.
 FLEETS = {"gb200": GB200_FLEET, "h100": H100_FLEET}
@@ -231,6 +239,16 @@ def label_with_checkpoints(
     for start in range(0, len(pending), chunk_size):
         batch = pending[start : start + chunk_size]
         labeled = label_rows(client, batch, concurrency, rejects)
+        # A dropped row normally means one unusable reply. A chunk that mostly fails
+        # means the server is gone, and continuing would quietly discard the rest of
+        # the set and still report success: a 512-concurrency run collapsed this way
+        # and wrote 11k of 88k labels with an exit code of zero.
+        if len(labeled) < len(batch) * MIN_CHUNK_SUCCESS:
+            raise RuntimeError(
+                f"label_with_glm52: only {len(labeled)}/{len(batch)} of a chunk succeeded — "
+                "treating this as an unhealthy server rather than dropping the remaining rows. "
+                f"Completed chunks are checkpointed under {chunk_dir}; rerun to resume."
+            )
         if labeled:
             path = f"{chunk_dir}/part-{start // chunk_size:05d}-{uuid.uuid4().hex[:8]}.parquet"
             with StoragePath(path).open("wb") as handle:
