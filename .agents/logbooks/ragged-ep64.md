@@ -17,22 +17,22 @@ author: rjpower
 
 ## Current TL;DR
 
-The selected latent-E192 EP hero cannot reach its first ragged step with either JAX 0.11 transport at default settings. The one-shot path fails with an illegal address beginning at device 32. Disabling one-shot avoids that signature, completes the 64-rank clique, and then fails in `ncclGroupEnd()` because every rank runs out of HBM while NCCL allocates its send/recv buffers. `RA2A-003` will reduce the per-peer NCCL FIFO from 4 MiB to 1 MiB while retaining the same executable and scheduler settings.
+The selected latent-E192 EP hero cannot reach its first ragged step with either JAX 0.11 transport at default settings. The one-shot path fails with an illegal address beginning at device 32. Disabling one-shot avoids that signature but exhausts HBM while allocating 4 MiB peer FIFOs. Reducing them to 1 MiB removes the explicit OOM and creates the 64-rank communicator, then every sampled GPU spins at 100% utilization and about 203-232 W without completing step 0. `RA2A-004` will test NVIDIA's documented `NCCL_LAUNCH_MODE=GROUP` workaround for multi-device, single-process hangs.
 
 ## Current Baseline
 
 - Date: 2026-08-08.
 - Code refs: historical baseline `120ccfbe2`; launch source `67c78093d7a3fb464a339ba168e68d1178d157ac`, which integrates PR #8013's EP lineage while retaining main's FSDP launcher.
 - Historical numbers: MHEP-001, E128 x i3072, d6144, top-4, capacity factor 1.0, EP64, 25 steps, 14.9614% median MFU, 2.4099% final drops. This is not shape-matched to the selected E192 latent hero.
-- Current baseline: no step metrics. `RA2A-001` fails at the device-32 boundary in one-shot; `RA2A-002` avoids the illegal address but fails on every rank with `ncclCuMemAlloc` out of memory in the send/recv fallback.
+- Current baseline: no step metrics. `RA2A-001` fails at the device-32 boundary in one-shot; `RA2A-002` avoids the illegal address but fails on every rank with `ncclCuMemAlloc` out of memory; `RA2A-003` removes that allocator failure but spins in the first executable call without optimizer progress.
 
 ## Hypothesis Queue
 
 ### Active
 
-- `RA2A-004`: Default 4 MiB per-peer NCCL FIFOs exhaust the small amount of HBM left after loading the selected model. Next test: reduce `NCCL_BUFFSIZE` to 1 MiB with one-shot still disabled.
+- `RA2A-006`: One process manages four GPUs per worker, and the reachable send/recv path now hangs after its 64-rank communicator appears. Next test: retain the 1 MiB FIFO and set `NCCL_LAUNCH_MODE=GROUP`, NVIDIA's documented workaround for this topology and symptom.
 - `RA2A-002`: XLA latency hiding and four-way collective overlap add scheduling cost or excessive concurrency to dynamic EP collectives. Next test: disable latency hiding, then reduce overlap independently if the baseline completes.
-- `RA2A-003`: NCCL NVLS/SHARP settings help only if the ragged lowering uses NCCL. Next test: if reducing the peer FIFO is insufficient, disable NVLS resource allocation because send/recv cannot use NVLink SHARP.
+- `RA2A-003`: NCCL NVLS/SHARP settings help only if the ragged lowering uses NCCL. Next test: if launch grouping does not restore progress, disable unused NVLS resource allocation because send/recv cannot use NVLink SHARP.
 
 ### Blocked
 
@@ -42,11 +42,13 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 
 - `RA2A-001`: The default JAX 0.11 ragged flavor does not establish a performance baseline. It fails before step 0 with an illegal GPU address.
 - `RA2A-002`: Disabling one-shot alone does not establish a performance baseline. It replaces the illegal address with an explicit NCCL allocation OOM before step 0.
+- `RA2A-004`: A 1 MiB peer FIFO does not establish a performance baseline. It removes the allocation OOM but leaves all ranks in a low-power GPU spin before step 0.
 
 ### Promoted
 
 - `RA2A-005`: The first failure begins on host 8, whose local devices are global devices 32 through 35, immediately after the EP64 clique initializes. This matches the prior rank-32 symmetric-memory failure signature. JAX 0.11 also removed the eight-output one-shot limit that made older EP64 runs fall back to NCCL send/recv.
 - `RA2A-004`: One-shot-off reaches `ncclGroupEnd()` and all ranks report `ncclCuMemAlloc` out of memory. NVIDIA documents a dedicated `NCCL_BUFFSIZE` FIFO for each send/recv source-destination pair and recommends reducing the 4 MiB default under memory pressure.
+- `RA2A-006`: With 1 MiB FIFOs, two distant hosts show identical 100%-utilization, 203-232 W GPU spin while all Python main threads wait inside the first `pjit`. NVIDIA specifically recommends `NCCL_LAUNCH_MODE=GROUP` for hangs when one process manages multiple Blackwell GPUs.
 
 ## Decision Log
 
@@ -55,6 +57,7 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - 2026-08-08: Test NCCL/SHARP controls only after lowering or logs show that the ragged path reaches NCCL. JAX's GPU implementation may use a peer-pointer kernel instead.
 - 2026-08-08: Stop the default one-shot baseline after its first synchronized illegal-address failure rather than consume ten automatic retries. Treat reachability as the baseline result and test NCCL send/recv next.
 - 2026-08-08: Reduce the send/recv peer FIFO before changing the XLA memory fraction. The failing executable already exceeds XLA's rematerialization target, while `NCCL_BUFFSIZE` directly controls the late allocation that failed.
+- 2026-08-08: Do not reduce the FIFO below 1 MiB after `RA2A-003`: allocation already succeeded, and a smaller FIFO cannot explain or repair the new low-power collective spin. Test grouped NCCL launch next.
 
 ## Negative Results Index
 
@@ -223,3 +226,50 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Success rule: a single 20-step window above 20% median MFU is a candidate win; effects below the ±1.57% reading resolution from #8054 remain unresolved without replication.
 - Source ledger: NVIDIA JAX Toolbox GPU guide (official docs, current 2026-08-08); NVIDIA NCCL 2.30.7 environment guide (official docs); Marin issues #7012, #7279, #8054; current RA2A-001/002 logs and W&B records.
 - Next action: finish the FIFO reachability bracket, publish the ranked queue to #8077, then serialize the highest-signal arms against the first stable baseline.
+
+### 2026-08-08 23:36 UTC - RA2A-003 removes the OOM and exposes a collective spin
+
+- Hypothesis: A 1 MiB NCCL peer FIFO leaves enough HBM for the private EP64 send/recv fallback to complete 25 steps.
+- Commit Hash: `58ce5d056b`; process-start configuration retained one-shot-off and added only `NCCL_BUFFSIZE=1048576`.
+- Jobs: coordinator `/power/ra2a-003-nccl-buf1m-20260808-coord`; child `/power/ra2a-003-nccl-buf1m-20260808-coord/grug-train-ra2a-003-nccl-buf1m-20260808`; 16 of 16 workers remained running with no retry, preemption, or logged exception.
+- Result: Failed before step 0 by loss of progress. Unlike `RA2A-002`, no rank logged `ncclCuMemAlloc`, another NCCL warning, a CUDA error, or a traceback. Rank 0 and rank 15 Python main threads both waited in the first `pjit` call. At 23:33-23:36 UTC, all four GPUs on each sampled host reported 100% utilization, 185,173-185,195 MiB allocated, and only 203-232 W. The 1,200 W GB200 power limit makes this the established low-power collective-spin signature rather than useful compute or CPU compilation.
+- RAS: periodic snapshots at 23:22 and 23:32 UTC succeeded in about 0.21 s. The later snapshot found five valid communicators, including a 64-rank communicator, with zero invalid or omitted records and no collection timeout. Sparse periodic RAS reported no rank-count mismatch, so it did not classify the hang; it proves the RAS service and communicator metadata remained responsive.
+- Metrics: Levanter phase stayed `initializing=0` on every rank. W&B contained topology and parameter metadata but no global step, duration, MFU, throughput, or drop metric after more than 20 minutes in the first executable call.
+- Terminal state: the coordinator was stopped at 23:36:21 UTC under the launch contract's no-progress condition, before Iris retried the same configuration.
+- Interpretation: 1 MiB is enough to cross the explicit allocation failure, so a smaller 256 KiB FIFO attacks the wrong failure and is likely slower. The topology is exactly NVIDIA's documented Blackwell hang case: one process owns four devices while distributed communication is active. Group launch is now a reachability control, not a speculative performance tweak.
+- Next action: Retain the 1 MiB FIFO and test only `NCCL_LAUNCH_MODE=GROUP`.
+
+### 2026-08-08 23:38 UTC - RA2A-004 launch contract
+
+- Hypothesis: `NCCL_LAUNCH_MODE=GROUP` prevents the multi-device process synchronization hang and produces the first measurable NCCL send/recv baseline.
+- Commit Hash: `04a50faef8`; this launch changes process-start configuration only.
+- Command:
+
+  ```bash
+  UV_CACHE_DIR=/tmp/marin-ragged-uv-cache uv run iris \
+    --config lib/iris/config/marin.yaml job run --no-wait \
+    --enable-extra-resources --target-cluster cw-us-east-08a \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB \
+    --timeout 21600 --max-retries 10 \
+    --job-name ra2a-004-nccl-group-20260808-coord \
+    -e WANDB_API_KEY '<redacted>' \
+    -e WANDB_PROJECT marin_moe \
+    -e MARIN_PREFIX s3://marin-us-east-02a/marin \
+    -e XLA_FLAGS '--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false' \
+    -e NCCL_BUFFSIZE 1048576 \
+    -e NCCL_LAUNCH_MODE GROUP \
+    -- python -m experiments.grug.moe_hero_ep.launch \
+    --run-id ra2a-004-nccl-group-20260808 \
+    --dp-racks 1 --num-steps 25 --flavor ep-ragged \
+    --watch-interval 0 --eval-every 0 --profile-steps 0 \
+    --no-save-checkpoints --version 2026.08.08 --run
+  ```
+
+- Output root: `s3://marin-us-east-02a/marin/grug/ra2a-004-nccl-group-20260808/2026.08.08`.
+- Tracking identity: W&B entity `marin-community`, project `marin_moe`, group `moe-hero-ep`, run name and ID `ra2a-004-nccl-group-20260808`, resume policy `allow`.
+- Initialization and stop boundary: initialize from scratch and stop after step 25. Checkpoints, eval, watch metrics, and profiling remain disabled.
+- Hardware and topology: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; one process per worker; EP64; one data-parallel rack; interactive priority.
+- Controlled change: relative to `RA2A-003`, add only `NCCL_LAUNCH_MODE=GROUP`. One-shot remains disabled and the 1 MiB FIFO remains fixed. PGLE, `cuda_async`, latency hiding, overlap limit 4, disabled command buffers, model, batch, routing, and metric schedule remain unchanged.
+- DRI and monitoring: DRI `rjpower`; Codex owns monitoring. Stop on allocator or CUDA failure, another low-power no-progress interval after communicator initialization, exhausted retries, or failure to complete step 25. If it completes, score exactly steps 5 through 24.
+- Source bundle and Iris job: pending submission.
+- Next action: Commit and push this milestone, publish `RA2A-003` to #8077, then submit this one-variable treatment once.
