@@ -4,8 +4,8 @@ This self-contained variant is the selected one-rack EP64 configuration for GB20
 
 ## Configuration
 
-- Model: d6144, 48 layers, 192 routed experts of width 6272, top-4 routing, latent width 3072, and
-  two shared experts of width 3072. This is 546.292 B total parameters and 24.680 B active per token.
+- Model: d6144, 48 layers, 192 routed experts of width 6144, top-4 routing, latent width 3072, and
+  two shared experts of width 3072. This is 535.420 B total parameters and 24.454 B active per token.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
   sliding window 2048, and every fourth layer full-causal. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Three whole experts
@@ -59,8 +59,9 @@ Width appears in the first two and not the third, thus width is the cheap way to
 and top-k is the expensive way. Six buffers scale with top-k, and one of them is float32: top-6
 costs 30.75 GiB against 20.50 GiB for top-4 at this shape.
 
-The selected E192 model fits at expert width 6272 and capacity factor 1.33. Width 6400 fails at
-capacity factor 1.30. The full experiment record contains the size and capacity searches.
+The selected E192 model runs at expert width 6144 (hidden-wide) and capacity factor 1.33; the size
+search confirmed width 6272 fits and width 6400 fails at capacity factor 1.30, so the hero sits a
+step below the confirmed ceiling. The full experiment record contains the size and capacity searches.
 
 ## Launch
 

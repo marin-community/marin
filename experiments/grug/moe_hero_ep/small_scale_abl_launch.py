@@ -48,7 +48,7 @@ from experiments.grug.moe_hero_ep.launch import (
     HERO_PROCESSES_PER_TASK,
     HeroThroughputResult,
 )
-from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -59,7 +59,7 @@ SMALL_BATCH_SIZE = 128
 # Sequence-length sweeps hold tokens per step constant, so the token budget and the per-shard
 # routing capacity stay fixed and only the context length moves.
 TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
-SLIDING_WINDOW = 512
+SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
@@ -129,9 +129,10 @@ class Flavor:
     """How the MoE layer shards, and what that implies for routing capacity.
 
     ``ep`` spans the fleet with expert parallelism and drops assignments above each fixed
-    (sender shard, expert) cell. ``fsdp-nodrop`` keeps one expert axis, so every device holds the
-    whole bank and `_moe_mlp_local` computes every assignment: `expert_chunks` above one is the only
-    local path that drops, and it needs the Blackwell-only `sonic_cute` kernel anyway.
+    (sender shard, expert) cell. The FSDP arms keep one expert axis, so every device holds the whole
+    bank and the local `sonic_cute` kernel runs the experts: ``fsdp-nodrop`` at one chunk computes
+    every assignment (dropless), and ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's
+    minor-dropping reference. Both use the same kernel; only the chunk count (drop rate) differs.
     """
 
     expert_axis_size: int | None  # None spans the fleet
@@ -141,7 +142,11 @@ class Flavor:
 
 FLAVORS: dict[str, Flavor] = {
     "ep": Flavor(None, "fixed_all_to_all", 1),
-    "fsdp-nodrop": Flavor(1, "scatter", 1),
+    # The dropless FSDP arm is `sonic_cute` at one chunk -- "1 computes every assignment" per the FSDP
+    # hero -- so it matches `fsdp-chunk4`'s kernel and only the chunk count (drop rate) differs. The
+    # `scatter` grouped-GMM path mis-routes this QB/sigmoid-combine model (loss ~1.1 above chunk4).
+    "fsdp-nodrop": Flavor(1, "sonic_cute", 1),
+    "fsdp-chunk4": Flavor(1, "sonic_cute", 4),
 }
 
 
@@ -184,6 +189,9 @@ def _small_model(
     num_experts_per_token: int,
     intermediate_dim: int | None,
     latent_dim: int | None,
+    latent_reinit_gate_up: bool = True,
+    qb_use_histogram: bool = False,
+    qb_hist_bins: int = 1000,
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
@@ -216,6 +224,9 @@ def _small_model(
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
         latent_dim=latent_dim,
+        latent_reinit_gate_up=latent_reinit_gate_up,
+        qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
+        qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -242,8 +253,13 @@ def build_small_run(
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
+    latent_reinit_gate_up: bool = True,
+    qb_use_histogram: bool = False,
+    qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 60,
     watch_interval: int = 0,
+    dp_racks: int = 1,
+    steps_per_eval: int = 1000,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size``.
@@ -255,9 +271,18 @@ def build_small_run(
     ``tokens_per_shard * top-k / experts``, which depends on ``num_experts`` and
     ``num_experts_per_token`` but not on the model width, so a narrow rung can carry the hero's
     exact drop dynamics at a fraction of the step time.
+
+    ``dp_racks`` replicates the run across that many racks (data-parallel over the ``replica`` axis,
+    expert-parallel within each rack), which the widest ladder rung needs to hold its batch.
+    ``steps_per_eval`` sets both the eval cadence and the permanent-checkpoint cadence, so a
+    checkpoint-reload eval job finds a saved state at every eval step.
     """
     if tokens_per_active_param <= 0:
         raise ValueError(f"tokens_per_active_param must be positive, got {tokens_per_active_param}")
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    if steps_per_eval <= 0:
+        raise ValueError(f"steps_per_eval must be positive, got {steps_per_eval}")
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in SMALL_SHAPES:
@@ -290,6 +315,9 @@ def build_small_run(
         num_experts_per_token,
         intermediate_dim,
         latent_dim,
+        latent_reinit_gate_up,
+        qb_use_histogram,
+        qb_hist_bins,
     )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
@@ -308,8 +336,9 @@ def build_small_run(
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
         save_checkpoints=True,
         expert_axis_size=expert_axis_size,
-        replica_axis_size=1,
+        replica_axis_size=dp_racks,
         sharding_dump_path=None,
+        enable_pgle=False,  # PGLE's profiler collides with the watch instrumentation on these runs
     )
     if model.num_experts % expert_axis_size != 0:
         raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
@@ -319,7 +348,7 @@ def build_small_run(
         cpu=fleet.cpu,
         ram=fleet.ram,
         disk=fleet.disk,
-        replicas=fleet.nodes,
+        replicas=fleet.nodes * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -362,7 +391,7 @@ def build_small_run(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
                 save_interval=CHECKPOINT_INTERVAL,
-                keep=None,
+                keep=[{"every": steps_per_eval}],
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
@@ -393,7 +422,7 @@ def build_small_run(
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
                 eval_batch_size=EVAL_BATCH_SIZE,
-                steps_per_eval=1000,
+                steps_per_eval=steps_per_eval,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
@@ -482,6 +511,20 @@ def build_small_run(
     show_default=True,
     help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
 )
+@click.option(
+    "--dp-racks",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Replicate the run across this many racks. The batch scales with the fleet, not the rack.",
+)
+@click.option(
+    "--steps-per-eval",
+    type=click.IntRange(min=1),
+    default=1000,
+    show_default=True,
+    help="Eval and permanent-checkpoint cadence in steps.",
+)
 @build_options
 def main(
     run_id: str,
@@ -497,6 +540,8 @@ def main(
     latent_dim: int | None,
     tokens_per_active_param: int,
     watch_interval: int,
+    dp_racks: int,
+    steps_per_eval: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_small_run(
         run_id=run_id,
@@ -512,6 +557,8 @@ def main(
         latent_dim=latent_dim,
         tokens_per_active_param=tokens_per_active_param,
         watch_interval=watch_interval,
+        dp_racks=dp_racks,
+        steps_per_eval=steps_per_eval,
     )
 
 

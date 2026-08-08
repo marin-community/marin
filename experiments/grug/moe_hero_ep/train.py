@@ -71,7 +71,10 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, enable_pgle: bool = True) -> None:
+    if not enable_pgle:
+        # Force it off before the setdefault below so PGLE cannot open its (conflicting) profiler.
+        os.environ["JAX_ENABLE_PGLE"] = "false"
     for name, value in HERO_EP_RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
@@ -117,6 +120,10 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+    # PGLE runs a profiling pass whose profiler session collides with the watch/eval instrumentation
+    # ("ALREADY_EXISTS: Another profiling session active"). On for the hero throughput run; turn it
+    # off for watched comparison runs where the +MFU is not worth the crash.
+    enable_pgle: bool = True
 
 
 @dataclass(frozen=True)
@@ -753,7 +760,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
+    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled, enable_pgle=config.trainer.enable_pgle)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

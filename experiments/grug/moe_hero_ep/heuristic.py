@@ -8,10 +8,11 @@ Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
 
-The hero model is d6144 with 48 layers, 192 routed latent experts of width 6,272 at top-4, and two
-shared experts. The routed experts use a latent width of 3,072 and capacity factor 1.33. This gives
-546.292 B total parameters and 24.680 B active per token. The launcher can override the expert
-count, expert width, routed top-k, latent width, and capacity factor from this spec.
+The hero model is d6144 with 48 layers, 192 routed latent experts of width 6,144 (hidden-wide) at
+top-4, and two shared experts. The routed experts use a latent width of 3,072 (half the hidden dim)
+and capacity factor 1.33. This gives 535.420 B total parameters and 24.454 B active per token. The
+launcher can override the expert count, expert width, routed top-k, latent width, and capacity
+factor from this spec.
 """
 
 import math
@@ -83,11 +84,14 @@ class MoeHeuristic:
         )
 
 
+_HERO_HIDDEN = 6144
 HERO_MODEL = GrugModelConfig(
     vocab_size=128_256,
-    hidden_dim=6144,
-    intermediate_dim=6272,
-    shared_expert_intermediate_dim=6144 // 2,
+    hidden_dim=_HERO_HIDDEN,
+    # Routed experts are hidden-wide; the LatentMoE latent is half that. Deriving both from the
+    # hidden dim keeps the relationship fixed as the launcher resizes the shape.
+    intermediate_dim=_HERO_HIDDEN,
+    shared_expert_intermediate_dim=_HERO_HIDDEN // 2,
     num_shared_experts=2,
     num_experts=192,
     num_experts_per_token=4,
@@ -101,7 +105,7 @@ HERO_MODEL = GrugModelConfig(
     sliding_window=2048,
     global_every=4,
     capacity_factor=1.33,
-    initializer_std=0.5 / math.sqrt(6144),
+    initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.3,
     sconv=True,
     attention_implementation="gpu_fa4_cute",
@@ -109,7 +113,7 @@ HERO_MODEL = GrugModelConfig(
     expert_chunks=1,
     report_capacity_overflow=True,
     rope_fused=True,
-    latent_dim=3072,
+    latent_dim=_HERO_HIDDEN // 2,
 )
 
 
