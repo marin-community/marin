@@ -920,3 +920,16 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Stop criteria: Keep each first failure and its complete logs. Stop on a terminal state, a
   non-finite loss, or completion of step 5. Do not resubmit an allocator or compilation OOM.
 - Next action: Commit this launch contract, submit the three arms, and monitor after 120 seconds.
+
+### 2026-08-08 09:37 UTC - MHEP-146 to MHEP-148 stopped after allocator failures
+
+- All three jobs were stopped at the user's request. Iris reports each coordinator and training
+  child as `killed`, with `Terminated by user` as the reason.
+- MHEP-147, with memory fraction 0.95, reached the first training execution and failed in
+  `ncclAlltoAll` with CUDA out of memory. It did not complete a step or log norms.
+- MHEP-146, with memory fraction 0.80, reported that rematerialization could reduce the program
+  only from 210.26 GiB to 203.99 GiB against a 176.64 GiB target. It did not complete a step.
+- MHEP-148, with memory fraction 0.65, was stopped during start or compilation. Its retained logs
+  do not contain a complete root-cause message.
+- Decision: Do not run more memory-fraction arms for the full EP64 watch. Raising the fraction
+  still leaves too little room for NCCL, while lowering it cannot make the compiled program fit.
