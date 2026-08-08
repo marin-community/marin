@@ -37,7 +37,7 @@ STEPS = 20
 WARMUP = 5  # first scored step
 # A screening wave scores 15 steps, enough to separate the multi-percent effects it is looking for.
 # The wrap-up wave is measuring the result that gets reported, so it takes 40.
-WAVE_STEPS = {"final": 45, "final2": 45}
+WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
@@ -492,6 +492,30 @@ WAVES = {
             args=COMBINED_ARGS,
             note="rerun at 0.93; 0.88 left only 6 GiB of slack under the merged topology",
             batch_size=1152,
+        ),
+    ],
+    # Batch 1152 does not fit. At 0.93 it clears four steps at a healthy 19 s and then dies inside
+    # `jit_train_step` asking for a single 131.94 GiB block, having already touched 171.4 GiB -- the
+    # whole 0.93 ceiling. The allocator pool is 167.4 GiB reserved against 25.7 GiB live at that
+    # point, so the request fails on fragmentation rather than on a slow climb in working set. Only
+    # one rank raises; the other fifteen sit in the shutdown barrier for its full five minutes and
+    # then report `INTERNAL`, which is what hides the real error.
+    #
+    # 1088 is the remaining step. It adds 6.25% tokens, and 6.25% clears the 0.78% placement
+    # variance by enough that a single paired reading settles it.
+    "final3": [
+        Arm(
+            "control",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
+            args=COMBINED_ARGS,
+            note="the adopted config at batch 1024; isolates batch from everything else adopted changes",
+        ),
+        Arm(
+            "adoptedbatch",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
+            args=COMBINED_ARGS,
+            note="1088 is the largest batch left untried after 1152 exhausted HBM",
+            batch_size=1088,
         ),
     ],
 }
