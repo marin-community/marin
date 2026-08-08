@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 _UNRESOLVED_MACRO = re.compile(r"\$\{|\{\{")
+_SQLSTRING_MACRO = re.compile(r"\$\{(\w+):sqlstring\}")
 
 
 @dataclass(frozen=True)
@@ -39,34 +41,50 @@ def render_sql(
     start_ms: int,
     end_ms: int,
     interval_ms: int,
-    clusters: tuple[str, ...],
+    variables: Mapping[str, Sequence[str]],
 ) -> str:
-    """Resolve the Grafana macros used by Finelog dashboards to fixed values."""
+    """Resolve the Grafana macros used by Finelog dashboards to fixed values.
+
+    ``variables`` supplies the value list for each ``${name:sqlstring}`` template
+    variable a dashboard reads — ``cluster`` on every dashboard, plus the
+    dashboard's own (``run``, ``job``, ``execution``). A variable a query uses
+    but ``variables`` omits leaves the macro unresolved and raises, so a caller
+    never gets a corpus that silently covers fewer panels than the dashboard has.
+    """
     if start_ms >= end_ms:
         raise ValueError("start_ms must be less than end_ms")
     if interval_ms <= 0:
         raise ValueError("interval_ms must be positive")
-    if not clusters:
-        raise ValueError("at least one cluster is required")
-    replacements = {
-        "${cluster:sqlstring}": ",".join(_sql_string(cluster) for cluster in clusters),
-        "${__interval_ms}": str(interval_ms),
-        "{{from}}": f"to_timestamp_millis({start_ms})",
-        "{{to}}": f"to_timestamp_millis({end_ms})",
-        "now()": f"to_timestamp_millis({end_ms})",
-    }
     rendered = sql
-    for macro, value in replacements.items():
+    for name, values in variables.items():
+        if not values:
+            raise ValueError(f"variable {name!r} needs at least one value")
+        rendered = rendered.replace(f"${{{name}:sqlstring}}", ",".join(_sql_string(value) for value in values))
+    for macro, value in (
+        ("${__interval_ms}", str(interval_ms)),
+        ("{{from}}", f"to_timestamp_millis({start_ms})"),
+        ("{{to}}", f"to_timestamp_millis({end_ms})"),
+        ("now()", f"to_timestamp_millis({end_ms})"),
+    ):
         rendered = rendered.replace(macro, value)
     if _UNRESOLVED_MACRO.search(rendered):
         raise ValueError(f"dashboard query retains an unresolved macro: {rendered}")
     return rendered
 
 
-def _query_name(title: str, target: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-    if not slug:
-        raise ValueError(f"panel title has no usable query name: {title!r}")
+def sqlstring_variables(path: Path) -> tuple[str, ...]:
+    """Every ``${name:sqlstring}`` template variable a dashboard's SQL reads."""
+    return tuple(sorted(set(_SQLSTRING_MACRO.findall(path.read_text()))))
+
+
+def _query_name(title: str, target: str, panel_index: int) -> str:
+    """A stable name for a panel's query.
+
+    Titled panels name themselves; a panel with no title (a custom panel type
+    that draws its own header) falls back to its position, so an untitled panel
+    is still benchmarked rather than failing the whole dashboard.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or f"panel_{panel_index}"
     return slug if target == "A" else f"{slug}_{target.lower()}"
 
 
@@ -88,13 +106,13 @@ def load_dashboard_corpus(
     start_ms: int,
     end_ms: int,
     interval_ms: int,
-    clusters: tuple[str, ...],
+    variables: Mapping[str, Sequence[str]],
 ) -> DashboardCorpus:
     """Extract and render every Finelog SQL target from a dashboard."""
     document = json.loads(path.read_text())
     queries: list[DashboardQuery] = []
     seen_names: set[str] = set()
-    for panel in _panels(document.get("panels", [])):
+    for panel_index, panel in enumerate(_panels(document.get("panels", []))):
         title = panel.get("title")
         targets = panel.get("targets", [])
         if not isinstance(title, str) or not isinstance(targets, list):
@@ -112,7 +130,7 @@ def load_dashboard_corpus(
                 continue
             if len(sql_values) != 1 or not isinstance(sql_values[0], str) or not isinstance(target_name, str):
                 raise ValueError(f"panel {title!r} target has an invalid SQL parameter")
-            name = _query_name(title, target_name)
+            name = _query_name(title, target_name, panel_index)
             if name in seen_names:
                 raise ValueError(f"duplicate dashboard query name: {name}")
             seen_names.add(name)
@@ -126,7 +144,7 @@ def load_dashboard_corpus(
                         start_ms=start_ms,
                         end_ms=end_ms,
                         interval_ms=interval_ms,
-                        clusters=clusters,
+                        variables=variables,
                     ),
                 )
             )

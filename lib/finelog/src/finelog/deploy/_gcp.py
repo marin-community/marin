@@ -9,16 +9,21 @@ poll, status, and logs.
 """
 
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
+from pathlib import Path
 
 import click
 
 from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK, health_probe_command, render_bootstrap
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
+from finelog.deploy.snapshot import STORE_DIR, extract_tar, tar_command
 
 LABEL_KEY = "finelog-name"
 LABEL_MARKER = "finelog"
@@ -247,6 +252,47 @@ def apply_bootstrap(cfg: FinelogConfig, bootstrap: str) -> bool:
         return False
     _set_startup_script(cfg, bootstrap)
     return True
+
+
+def gcp_fetch_store_files(cfg: FinelogConfig, patterns: Sequence[str], destination: Path) -> None:
+    """Extract the named store files from the VM into ``destination``.
+
+    Tars them into a VM-local temp file and pulls that with ``scp`` rather than
+    streaming through ``gcloud compute ssh``, whose stdout is not a clean binary
+    channel. The store is owned by the in-container ``finelog`` user, so reading
+    it needs ``sudo``. The archive stages under ``/var/tmp``, which is
+    disk-backed on every image finelog runs on; a snapshot bound larger than the
+    boot disk's headroom fills it.
+    """
+    remote_tar = f"/var/tmp/finelog-snapshot-{os.getpid()}.tar"
+    stream = tar_command(STORE_DIR, patterns) + f" > {remote_tar}"
+    build = f"sudo sh -c {shlex.quote(stream)} && sudo chmod a+r {remote_tar}"
+    result = subprocess.run(_ssh_args(cfg, build))
+    if result.returncode != 0:
+        raise click.ClickException(f"could not build a store snapshot on {cfg.name}; see SSH output above")
+    try:
+        with tempfile.TemporaryDirectory() as staging:
+            local_tar = Path(staging) / "snapshot.tar"
+            _gcloud(*_scp_args(cfg, remote_tar, local_tar))
+            extract_tar(local_tar, destination)
+    finally:
+        subprocess.run(_ssh_args(cfg, f"sudo rm -f {remote_tar}"), check=False)
+
+
+def _scp_args(cfg: FinelogConfig, remote_path: str, local_path: Path) -> list[str]:
+    assert cfg.deployment.gcp is not None
+    gcp = cfg.deployment.gcp
+    args = [
+        "compute",
+        "scp",
+        f"{cfg.name}:{remote_path}",
+        str(local_path),
+        f"--project={gcp.project}",
+        f"--zone={gcp.zone}",
+    ]
+    if gcp.service_account:
+        args.append(f"--impersonate-service-account={gcp.service_account}")
+    return args
 
 
 def gcp_restart(cfg: FinelogConfig) -> None:

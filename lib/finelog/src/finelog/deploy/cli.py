@@ -16,8 +16,10 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 
 import click
 import duckdb
@@ -31,8 +33,21 @@ from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.connection import DEFAULT_REQUEST_TIMEOUT, open_log_client
+from finelog.deploy.shadow import CATALOG_FILENAME, check_snapshot
+from finelog.deploy.snapshot import (
+    CATALOG_PATTERNS,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_SEGMENTS_PER_NAMESPACE,
+    STORE_DIR,
+    plan_snapshot,
+    read_catalog_segments,
+)
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
+
+# The checked-in Grafana dashboards, relative to this file in a repo checkout:
+# `lib/finelog/src/finelog/deploy/cli.py` -> `infra/grafana/dashboards`.
+_DASHBOARD_DIR = Path(__file__).resolve().parents[5] / "infra" / "grafana" / "dashboards"
 
 
 def _dispatch_up(cfg: FinelogConfig) -> None:
@@ -68,6 +83,13 @@ def _dispatch_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
         _gcp.gcp_logs(cfg, tail=tail, follow=follow)
     else:
         _k8s.k8s_logs(cfg, tail=tail, follow=follow)
+
+
+def _dispatch_fetch(cfg: FinelogConfig, patterns: Sequence[str], destination: Path) -> None:
+    if cfg.deployment.gcp is not None:
+        _gcp.gcp_fetch_store_files(cfg, patterns, destination)
+    else:
+        _k8s.k8s_fetch_store_files(cfg, patterns, destination)
 
 
 @click.group()
@@ -514,6 +536,81 @@ def gcs_query_cmd(
             f"query returned {table.num_rows} rows, exceeds --max-rows={max_rows} " f"(add a LIMIT or raise the cap)"
         )
     _PRINTERS[OutputFormat(output_format)](table)
+
+
+@deploy.command("snapshot")
+@click.argument("name")
+@click.argument("destination", type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--segments-per-namespace",
+    type=int,
+    default=DEFAULT_SEGMENTS_PER_NAMESPACE,
+    show_default=True,
+    help="Newest segments to copy per namespace.",
+)
+@click.option(
+    "--max-bytes",
+    type=int,
+    default=DEFAULT_MAX_BYTES,
+    show_default=True,
+    help="Total segment bytes to copy, spread round-robin across namespaces.",
+)
+def snapshot_cmd(name: str, destination: Path, segments_per_namespace: int, max_bytes: int) -> None:
+    """Copy a bounded slice of `<name>`'s local store into DESTINATION.
+
+    The catalog plus the newest few segments per namespace and their `.fidx`
+    sidecars — never the `gs://`/`s3://` archive, which would be a cross-region
+    read. Feed the result to `finelog deploy shadow-check`.
+    """
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    if destination.exists() and any(destination.iterdir()):
+        raise click.UsageError(f"{destination} is not empty; a snapshot must land in a fresh directory")
+
+    click.echo(f"reading the catalog from {cfg.name}...")
+    _dispatch_fetch(cfg, CATALOG_PATTERNS, destination)
+    catalog = destination / CATALOG_FILENAME
+    if not catalog.is_file():
+        raise click.ClickException(f"{cfg.name} has no catalog at {STORE_DIR}/{CATALOG_FILENAME}")
+
+    plan = plan_snapshot(
+        read_catalog_segments(catalog),
+        segments_per_namespace=segments_per_namespace,
+        max_bytes=max_bytes,
+    )
+    click.echo(plan.describe())
+    click.echo(f"copying {len(plan.patterns)} paths from {cfg.name}...")
+    _dispatch_fetch(cfg, plan.patterns, destination)
+    click.echo(f"snapshot written to {destination}")
+
+
+@deploy.command("shadow-check")
+@click.argument("snapshot", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--image", required=True, help="Image to rehearse, ideally a pinned @sha256 digest.")
+@click.option(
+    "--dashboard",
+    "dashboards",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Dashboard JSON to run. Default: every dashboard under infra/grafana/dashboards.",
+)
+def shadow_check_cmd(snapshot: Path, image: str, dashboards: tuple[Path, ...]) -> None:
+    """Boot IMAGE against SNAPSHOT in shadow mode and run the dashboard corpus.
+
+    Asserts the store opens, every namespace in the catalog rehydrates, the
+    server-owned namespaces register, and every dashboard query the corpus can
+    render runs green. The server cannot reach the archive the snapshot came
+    from: shadow mode refuses a `gs://`/`s3://` remote and never starts
+    maintenance.
+    """
+    configure_logging(level=logging.INFO)
+    selected = list(dashboards) or sorted(_DASHBOARD_DIR.glob("*.json"))
+    if not selected:
+        raise click.UsageError(f"no dashboards found under {_DASHBOARD_DIR}")
+    report = check_snapshot(image, snapshot, selected)
+    click.echo(report.describe())
+    if not report.passed():
+        raise click.ClickException(f"{image} did not serve this snapshot correctly.")
 
 
 @deploy.command("logs")

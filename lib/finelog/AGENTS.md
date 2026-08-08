@@ -174,6 +174,27 @@ The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
 `k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
+## Changing a server-owned schema
+
+`log` and `telemetry_v1` are registered by the server itself, and every boot
+re-merges this binary's definition against the schema that deployment's catalog
+persisted. A merge that fails wedges the namespace for as long as the image is
+deployed. `rust/src/preflight.rs` decides that merge ahead of a deploy — same
+`merge_schemas`, no store, no port — and its tests re-decide the checked-in
+schemas under `deploy/registered_schemas/` on every pull request that touches
+the server or a golden. When you change either schema, expect that test to be
+the thing that tells you it is not additive. Register through
+`schema::stored_form` so the pre-flight merges the schema `register_table`
+would.
+
+`--mode shadow` is how a candidate image is booted against a copy of a real
+store: it serves reads from `--log-dir`, refuses a `gs://`/`s3://` remote or a
+forwarding target at startup, and never starts maintenance, whose boot reconcile
+deletes archived objects. `finelog deploy snapshot` and `finelog deploy
+shadow-check` drive it; see [OPS.md](OPS.md). Use it for any local benchmark
+over a copied store, and resolve the mode at the startup boundary rather than
+re-deriving it downstream.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is

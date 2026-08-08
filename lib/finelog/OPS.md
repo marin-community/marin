@@ -316,6 +316,72 @@ System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
 `safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
 back.
 
+## Deciding a deploy before it touches a host
+
+A wedged registration is only visible after the image is running, and a restart
+does not clear it. Both checks below run against a candidate image on your own
+machine, decide the deploy, and never write to a deployment.
+
+### Schema pre-flight
+
+Whether an image's `log` and `telemetry_v1` schemas merge against a
+deployment's catalog is a pure function of two schemas, and both are cheap to
+reach. `safe_deploy preflight` reads the registered side over `ListNamespaces`
+and runs it through `finelog-server check-schema` inside the image being
+deployed, so the merge rules under test are the rules that ship:
+
+```bash
+uv run lib/finelog/scripts/safe_deploy.py preflight --all
+uv run lib/finelog/scripts/safe_deploy.py preflight marin --image <ref-or-digest>
+```
+
+Each deployment keeps its own catalog and they can disagree, so decide them
+together. `rollout` runs the same check before it writes a bootstrap and
+refuses on a failure. A deployment the tunnel cannot reach falls back to its
+checked-in golden under `lib/finelog/deploy/registered_schemas/`, and reports
+`UNKNOWN` if there is none.
+
+`preflight::tests` re-decides every golden on each pull request that touches
+the server or a golden, so a merge that would wedge production fails at PR
+time. A rollout refreshes the golden it just deployed; a stale golden can only
+fail a change production would have accepted.
+
+Namespaces a client registers — `iris.worker`, zephyr's tables — are reported
+as unchecked. They are not the server image's to decide.
+
+### Shadow boot against a snapshot
+
+The pre-flight cannot see catalog adoption, `.fidx` section format revisions,
+Parquet layout revisions, or planner regressions in projection substitution.
+Booting the candidate image against a copy of a real store can:
+
+```bash
+uv run finelog deploy snapshot marin /tmp/marin-store
+uv run finelog deploy shadow-check /tmp/marin-store --image <digest>
+```
+
+`snapshot` copies the catalog plus the newest few segments per namespace and
+their `.fidx` sidecars, round-robin so a byte budget is not spent entirely on
+`telemetry_v1`; bound it with `--segments-per-namespace` and `--max-bytes`. It
+reads the **local store dir** over SSH or `kubectl exec`, never the
+`gs://`/`s3://` archive — that would be a cross-region read, and the archive is
+not on the startup path being rehearsed anyway, since the remote reconcile is
+backgrounded and never blocks the bind. A segment left behind is not a problem:
+a `LOCAL` catalog row whose file is gone is dropped at boot and a `BOTH` row
+collapses to `REMOTE`. The GCE path stages the archive under `/var/tmp` on the
+VM, so keep `--max-bytes` inside the boot disk's headroom.
+
+`shadow-check` asserts the store opens, every namespace in the catalog
+rehydrates, the server-owned namespaces register, and every checked-in Grafana
+dashboard query runs green. A query over a namespace this deployment does not
+have is reported as not run rather than counted either way.
+
+The rehearsal cannot touch what it was snapshotted from: `--mode shadow`
+refuses a `gs://`/`s3://` remote or a forwarding target at startup, and never
+starts maintenance, whose boot reconcile redundancy-drops covered segments and
+deletes the archived objects. Use the same mode for any local benchmark over a
+copied store.
+
 ## Diagnosing Kubernetes mirror readiness
 
 Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
