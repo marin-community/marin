@@ -1055,3 +1055,17 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Run ID: `mhep-156-w9-ep-e192-i5120-cf2p00-fullwatch-p32754-20260808`.
 - Decision rule: A pass makes width 5,120 the largest confirmed 128-wide model. A failure keeps
   width 4,992 as the largest confirmed model.
+
+### 2026-08-08 10:45 UTC - The full-watch size boundary is 448.45 B to 459.32 B
+
+- MHEP-156 completed all five steps. Iris reports success for the child and coordinator. W&B
+  finished at step 4 with a finite loss of 10.5326.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics.
+- Result: Width 5,120, with 448.45 B total and 22.64 B active parameters, is the largest confirmed
+  128-wide point. Width 5,248, with 459.32 B total, is the failed NCCL upper bound.
+- The discrete size search is complete. The remaining gap is one 128-wide increment, or 10.87 B
+  total parameters.
+- Teardown note: MHEP-154 finished all five steps and its W&B run finished. Fourteen Iris tasks
+  reported success, while two task records stayed pending after a pod disappeared during teardown.
+  The coordinator was stopped after the complete W&B result arrived. MHEP-155 tried to restart
+  after its deterministic NCCL failure, so its coordinator was stopped to release the rack.
