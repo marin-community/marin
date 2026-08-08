@@ -1523,3 +1523,24 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   It has 535.421 B total parameters and 24.454 B active parameters. Width 6,272 is the adjacent
   failed point.
 - W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-184-w26-ep-e192-i6144-cf1p50-fullwatch-p32782-20260808
+
+### 2026-08-08 14:16 UTC - MHEP-185 tests dynamic inline norm sampling
+
+- The current inline path computes all norm statistics on every training step. It logs them only
+  at the configured interval. This keeps one executable resident, but it pays the reduction cost
+  on the other nine steps.
+- The candidate passes a dynamic scalar to the compiled training step. `jax.lax.cond` computes
+  the 76 statistics only when the scalar is true. Its false branch returns zero placeholders with
+  the same shapes and dtypes. The logging loop discards the placeholders. The scalar is not a
+  static argument, so both branches use one compiled training executable.
+- A local behavior test ran the true and false branches. The true branch returned the expected
+  gradient norm, the false branch returned the placeholder, and the JIT cache contained one
+  executable. All five focused watch tests and the changed-file checks passed.
+- MHEP-185 will use the MHEP-131 model with 192 experts, width 5,504, top-k 4, capacity factor 1.4,
+  and 200 steps. It will log full norms every 10 steps. This matches MHEP-178, except that MHEP-178
+  computes norms on every step.
+- Run ID: `mhep-185-w27-ep-e192-i5504-cf1p40-dynamic-watch10-p32783-20260808`.
+- Acceptance requires all 20 expected norm rows, all 76 finite norm fields in each row, no OOM or
+  retry, and no second training compilation after the first step. Compare the last-50 throughput
+  with MHEP-178 and the no-watch MHEP-139 reference. Revert the candidate if it fails correctness,
+  memory, or the single-executable requirement.
