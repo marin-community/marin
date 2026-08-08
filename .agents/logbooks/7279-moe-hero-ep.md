@@ -1381,3 +1381,24 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
   gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
   NCCL memory failure without a retry. Continue upward after a pass and downward after a failure.
+
+### 2026-08-08 13:30 UTC - MHEP-177 and MHEP-178 lower-capacity gates ready
+
+- Issue #8062 names capacity factor 1.3 for the target EP option. The first capacity search omitted
+  that point and used a drop threshold against FSDP that is not a decision rule in the issue.
+- Existing 200-step evidence: Capacity 1.4 reported 271,437 tokens/s and 2.8230% drops over its last
+  50 steps. Its heuristic drop-adjusted rate was 263,774 tokens/s. Capacity 2.0 reported 231,626
+  tokens/s and 0.6268% drops, or a 230,174 tokens/s drop-adjusted rate. Their last-50 mean losses
+  were 3.2430 and 3.2388. Thus, capacity 1.4 delivered a 14.6% higher drop-adjusted rate with only
+  0.13% higher loss in this short gate. The adjusted rate discounts every dropped assignment as if
+  it removed the same fraction of token work. It is a comparison heuristic, not a token count.
+- Common config: Exact MHEP-131 model; 192 experts; width 5,504; top-4; d6144; 48 layers; latent
+  dimension 3072; batch 1024; sequence length 4096; 200 steps on the 2000-step schedule; full norms
+  logged every 10 steps through the committed single executable; production priority; and zero
+  retries.
+- MHEP-177 uses capacity factor 1.3. MHEP-178 uses capacity factor 1.4.
+- Run IDs: `mhep-177-w21-ep-e192-i5504-cf1p30-singleexec-watch10-p32775-20260808` and
+  `mhep-178-w21-ep-e192-i5504-cf1p40-singleexec-watch10-p32776-20260808`.
+- Decision rule: Compare the last 50 steps of throughput, drop-adjusted token rate, loss, and drops.
+  Require finite loss and all 76 norm metrics. Prefer the lowest capacity whose loss stays within
+  0.5% of the best EP arm unless the issue's later scaling runs show a larger quality cost.
