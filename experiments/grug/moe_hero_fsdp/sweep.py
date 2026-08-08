@@ -37,7 +37,7 @@ STEPS = 20
 WARMUP = 5  # first scored step
 # A screening wave scores 15 steps, enough to separate the multi-percent effects it is looking for.
 # The wrap-up wave is measuring the result that gets reported, so it takes 40.
-WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45}
+WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45, "final4": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
@@ -528,6 +528,28 @@ WAVES = {
             env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
             args=COMBINED_ARGS,
             note="1088 is the largest batch left untried after 1152 exhausted HBM",
+            batch_size=1088,
+        ),
+    ],
+    # Wave 3's control crashed at step 4 at batch 1024, which is the shape that had just run 40 clean
+    # steps -- so the failure belongs to the 0.93 ceiling, not to the batch. XLA sizes the
+    # `jit_train_step` temp buffer to whatever allocator limit it is handed; at 0.93 it plans a single
+    # 122 GiB slab that cannot coexist with resident parameters and optimizer state.
+    #
+    # 0.88 plans a buffer that fits -- batch 1152 ran there, at 40 s/step -- so both arms hold the
+    # ceiling there and vary only the batch.
+    "final4": [
+        Arm(
+            "control",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="batch 1024 at the same ceiling as its arm",
+        ),
+        Arm(
+            "adoptedbatch",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="+6.25% tokens, against 1152's rematerialization thrash at this ceiling",
             batch_size=1088,
         ),
     ],
