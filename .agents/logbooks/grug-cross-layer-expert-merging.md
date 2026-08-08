@@ -827,3 +827,12 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Preflight: pushed head `293fc3d94a`; offline fingerprint `bd1de543`; screen fingerprint `77d28282`. Both central1 versioned roots matched no objects immediately before submission. The lowered graph contains no matching, Snowball, central2, or cross-region dependency.
 - Controller: `/dlwh/grug-xem-010-joint-refactor-screen-20260808`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-010-joint-refactor-screen-20260808. It runs the offline gate first and launches the exact 25,034,752-token screen only on a pass. No 100M continuation is present.
 - Issue launch record: https://github.com/marin-community/marin/issues/8032#issuecomment-5227687564
+
+### 2026-08-08 12:34 - GRUG-XEM-010 failed the offline gate
+
+- Terminal state: the controller and offline child failed on the intended scientific gate after 18m55s controller wall time. The worker early-stopped at update 800 after five stale evaluations; automatic Iris retries re-read the deterministic failed state and terminated. No manual restart, resubmission, or mutation occurred.
+- Selected result: best update 300, held-out mean normalized MSE `0.3762871325` versus required `<=0.349847`. This is only a 3.20% reduction from the frozen fixed-route native aggregate comparator `0.3887194693`, versus the required 10%.
+- Per-layer diagnostics: held-out NRMSE `0.2266446352/0.8373807073`; entropy `5.3723006/5.3716583` passed; overflow `0/0` passed; active experts `251/253` failed the required `256/256`. Training loss reached `0.012866` at update 800 while held-out selection stayed at update 300, showing cached-trace overfit.
+- Proof: `gs://marin-us-central1/grug/expert_merge/d512/joint-refactor-layers-2-3/2026.08.08/refactor_checkpoints/step-800/joint_refactor_training_manifest.json`. There is no converted `checkpoints/step-0`; the Iris graph contains no online child; the screen root still matches no objects; no W&B run or quality evaluation exists.
+- Decision: stop correspondence-free cached hard-top-4 refactorization and the current post-hoc surgery line. Do not retry, run the online screen, implement the 100M continuation, or advance to two-pair, d768, or post-hoc 67B surgery. This does not change the positive tied-from-scratch d512/d768 architecture result.
+- Issue result: https://github.com/marin-community/marin/issues/8032#issuecomment-5227768427
