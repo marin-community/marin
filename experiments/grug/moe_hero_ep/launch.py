@@ -41,29 +41,7 @@ HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
-# Grad/param norm reductions run outside the scanned step and cost a visible slice of a short run's
-# wall clock. Off by default; --watch-interval buys the diagnostic back every N steps.
-HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
-
-
-def _hero_watch_config(interval: int) -> WatchConfig:
-    """Global gradient norm only, which is what a stability check needs.
-
-    `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
-    `split_scan_layers`, which un-stacks the 48 scanned layers. At the hero shape that combination
-    needs a ~117 GiB temporary against a 173 GiB device and reliably OOMs a run that fits without
-    it -- measured twice, on shapes that had already completed 25 steps with the watch off.
-    """
-    if interval <= 0:
-        return WatchConfig(watch_targets=[])
-    return WatchConfig(
-        watch_targets=["grads"],
-        include_per_parameter_norms=False,
-        split_scan_layers=False,
-        interval=interval,
-    )
-
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -142,8 +120,6 @@ def build_hero_run(
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
-    save_xla_dumps: bool = False,
-    watch_interval: int = HERO_WATCH_INTERVAL,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -278,9 +254,8 @@ def build_hero_run(
                 group="moe-hero-ep",
                 name=run_id,
                 replicate_path=ctx.output_path,
-                save_xla_dumps=save_xla_dumps,
             ),
-            watch=_hero_watch_config(watch_interval),
+            watch=WatchConfig(interval=0),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -397,22 +372,6 @@ def build_hero_run(
     ),
 )
 @click.option(
-    "--watch-interval",
-    type=click.IntRange(min=0),
-    default=HERO_WATCH_INTERVAL,
-    show_default=True,
-    help="Steps between grad/param norm dumps. 0 disables them.",
-)
-@click.option(
-    "--save-xla-dumps/--no-save-xla-dumps",
-    default=False,
-    help=(
-        "Upload the XLA dumps produced by XLA_FLAGS to the tracker. Pair with "
-        "-e XLA_FLAGS '--xla_dump_to=/tmp/xla --xla_dump_hlo_pass_re=rematerialization' to see "
-        "which buffers rematerialization keeps live."
-    ),
-)
-@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -453,8 +412,6 @@ def main(
     latent_dim: int | None,
     flavor: str,
     save_checkpoints: bool,
-    save_xla_dumps: bool,
-    watch_interval: int,
     eval_every: int,
     profile_steps: int,
     profile_start_step: int,
@@ -472,8 +429,6 @@ def main(
         latent_dim=latent_dim,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
-        save_xla_dumps=save_xla_dumps,
-        watch_interval=watch_interval,
         eval_every=eval_every,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
