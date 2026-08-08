@@ -2,10 +2,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Safe finelog deploy with pre-flight, rollout, and rollback.
+"""Safe finelog deploy with rollout / rollback.
 
 Wraps the GCE bootstrap path used by ``finelog deploy restart`` with:
-  - a schema pre-flight that decides the deploy before it touches the host,
   - capture of the currently-running container's pinned image digest *before*
     the restart,
   - persistence of that digest under ``~/.cache/finelog/deploy-state/<name>.json``,
@@ -32,9 +31,6 @@ from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.image import resolve_image_digest
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
-
-# Long enough for an SSH or kubectl port-forward to a cold VM/pod to come up.
-TUNNEL_TIMEOUT = 60.0
 
 
 def _state_path(cfg: FinelogConfig) -> Path:
@@ -88,7 +84,7 @@ def _running_repo_digest(cfg: FinelogConfig) -> str | None:
 
 def _require_gcp(cfg: FinelogConfig) -> None:
     if cfg.deployment.gcp is None:
-        raise click.ClickException("safe_deploy rollout/rollback only supports GCP deployments.")
+        raise click.ClickException("safe_deploy only supports GCP deployments.")
 
 
 def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> bool:
@@ -107,7 +103,7 @@ def _verify_health(cfg: FinelogConfig) -> bool:
 
 @click.group()
 def cli() -> None:
-    """Safe finelog deploy: rollout with auto-rollback, explicit rollback."""
+    """Safe finelog deploy: rollout with auto-rollback, plus explicit rollback."""
 
 
 @cli.command("rollout")
@@ -135,13 +131,7 @@ def cli() -> None:
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a much "
     "quicker build. For dev/test clusters; the production `release` profile is the default.",
 )
-def rollout_cmd(
-    name: str,
-    auto_rollback: bool,
-    force: bool,
-    build: bool,
-    fast: bool,
-) -> None:
+def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: bool) -> None:
     """Roll forward to the digest pinned from cfg.image; capture the previous digest."""
     cfg = load_finelog_config(name)
     _require_gcp(cfg)
