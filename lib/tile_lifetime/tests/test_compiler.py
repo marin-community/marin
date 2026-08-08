@@ -66,6 +66,215 @@ def _rms_region(
     return graph
 
 
+def _layer_norm_region(*, output_features: int = 24, epsilon: float = 1e-5) -> TensorGraph:
+    tokens = 8
+    hidden = 16
+    graph = TensorGraph()
+    x = graph.input("x", shape=(tokens, hidden), dtype=DType.BF16)
+    residual = graph.input("residual", shape=(tokens, hidden), dtype=DType.BF16)
+    weight_0 = graph.parameter("weight_0", shape=(hidden, hidden), dtype=DType.BF16)
+    gamma = graph.parameter("gamma", shape=(hidden,), dtype=DType.BF16)
+    beta = graph.parameter("beta", shape=(hidden,), dtype=DType.BF16)
+    weight_1 = graph.parameter("weight_1", shape=(hidden, output_features), dtype=DType.BF16)
+
+    projected = graph.linear(x, weight_0, name="projected", accumulation_dtype=DType.FP32)
+    residual_sum = graph.residual_add(projected, residual, name="residual_sum")
+    normalized = graph.layer_norm(
+        residual_sum,
+        gamma,
+        beta,
+        name="normalized",
+        axis=-1,
+        epsilon=epsilon,
+        reduction_dtype=DType.FP32,
+    )
+    graph.linear(normalized, weight_1, name="output", accumulation_dtype=DType.FP32)
+    return graph
+
+
+def test_centered_affine_normalization_uses_consumer_preparation_under_reassociation_policy() -> None:
+    plan = compile_region(
+        _layer_norm_region(),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+
+    assert [type(skeleton) for skeleton in plan.skeletons] == [
+        GemmSkeleton,
+        ReductionSkeleton,
+        ReductionSkeleton,
+        GemmSkeleton,
+    ]
+    producer, mean_reduction, inverse_reduction, consumer = plan.skeletons
+    assert isinstance(producer, GemmSkeleton)
+    assert [attachment.operation for attachment in producer.epilogue] == [
+        "add",
+        "partial_sum",
+        "partial_sum_square",
+        "store_tile",
+    ]
+    assert isinstance(mean_reduction, ReductionSkeleton)
+    assert isinstance(inverse_reduction, ReductionSkeleton)
+    assert inverse_reduction.auxiliary_inputs == (mean_reduction.output,)
+    assert isinstance(consumer, GemmSkeleton)
+    assert [attachment.operation for attachment in consumer.prologue] == [
+        "subtract",
+        "scale_row",
+        "multiply",
+        "add",
+    ]
+    assert plan.materialization("normalized").disposition is MaterializationDisposition.PROLOGUE_ONLY
+    assert plan.rewrites[0].name == "place_centered_affine_in_consumer_contract_preparation"
+    assert "not source-order LayerNorm statistics" in plan.rewrites[0].numerical_effect
+    assert "LayerNormOp" in plan.semantic_erasure_report.source_semantics
+    assert all("layer" not in key.lower() for key in plan.semantic_erasure_report.scheduling_keys)
+    producer_program = compile_gemm_program(producer)
+    assert producer_program.tile_program.primitives_at(TileProgramStage.FINALIZATION) == (
+        TilePrimitive.ADD,
+        TilePrimitive.PARTIAL_SUM,
+        TilePrimitive.PARTIAL_SUM_SQUARE,
+        TilePrimitive.STORE,
+        TilePrimitive.STORE,
+        TilePrimitive.STORE,
+    )
+    consumer_program = compile_gemm_program(consumer)
+    assert consumer_program.tile_program.primitives_at(TileProgramStage.PREPARATION) == (
+        TilePrimitive.SUBTRACT,
+        TilePrimitive.SCALE_ROW,
+        TilePrimitive.MULTIPLY,
+        TilePrimitive.ADD,
+        TilePrimitive.CONVERT,
+    )
+    validate_plan_semantic_erasure(plan)
+
+
+def test_centered_affine_normalization_delayed_output_has_column_corrections() -> None:
+    plan = compile_region(
+        _layer_norm_region(),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        rms_scale_placement=RMSScalePlacement.CONSUMER_EPILOGUE,
+    )
+
+    assert [type(skeleton) for skeleton in plan.skeletons] == [
+        GemmSkeleton,
+        ReductionSkeleton,
+        ReductionSkeleton,
+        GemmSkeleton,
+        GemmSkeleton,
+        GemmSkeleton,
+    ]
+    gamma_projection, beta_projection, consumer = plan.skeletons[-3:]
+    assert isinstance(gamma_projection, GemmSkeleton)
+    assert gamma_projection.shape == (1, 24, 16)
+    assert isinstance(beta_projection, GemmSkeleton)
+    assert beta_projection.shape == (1, 24, 16)
+    assert isinstance(consumer, GemmSkeleton)
+    assert [attachment.operation for attachment in consumer.epilogue] == [
+        "scale_row",
+        "multiply",
+        "multiply",
+        "subtract",
+        "add",
+    ]
+    assert plan.rewrites[0].name == "move_centered_affine_through_right_contract"
+    assert "gamma W" in plan.rewrites[0].numerical_effect
+    for skeleton in (gamma_projection, beta_projection, consumer):
+        assert isinstance(skeleton, GemmSkeleton)
+        compile_gemm_program(skeleton)
+    validate_plan_semantic_erasure(plan)
+
+
+def test_changed_centered_variance_map_uses_same_generic_placement() -> None:
+    first = compile_region(
+        _layer_norm_region(epsilon=1e-5),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+    changed = compile_region(
+        _layer_norm_region(epsilon=3e-5),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+
+    assert [type(skeleton) for skeleton in first.skeletons] == [type(skeleton) for skeleton in changed.skeletons]
+    first_inverse = first.skeletons[2]
+    changed_inverse = changed.skeletons[2]
+    assert isinstance(first_inverse, ReductionSkeleton)
+    assert isinstance(changed_inverse, ReductionSkeleton)
+    assert first_inverse.operator != changed_inverse.operator
+    assert changed_inverse.operator.endswith("+ 3e-05)")
+
+
+def test_erased_centered_affine_program_matches_materialized_reference() -> None:
+    erased = erase_dense_semantics(_layer_norm_region())
+    rng = np.random.default_rng(23)
+    inputs = {value.name: rng.normal(size=value.shape).astype(np.float32) for value in erased.program.inputs}
+
+    actual = execute_tensor_program(erased.program, inputs)["output"]
+    residual_sum = inputs["x"] @ inputs["weight_0"] + inputs["residual"]
+    mean = np.mean(residual_sum, axis=-1, keepdims=True)
+    variance = np.mean(np.square(residual_sum), axis=-1, keepdims=True) - np.square(mean)
+    normalized = (residual_sum - mean) / np.sqrt(variance + 1e-5)
+    expected = (normalized * inputs["gamma"] + inputs["beta"]) @ inputs["weight_1"]
+
+    difference = np.abs(actual - expected)
+    assert float(np.max(difference)) < 3e-5
+    assert float(np.mean(difference)) < 3e-6
+
+
+def test_delayed_centered_affine_identity_is_real_exact_but_changes_bf16_order() -> None:
+    rng = np.random.default_rng(29)
+    source = rng.normal(size=(8, 16)).astype(np.float64)
+    gamma = rng.normal(size=(16,)).astype(np.float64)
+    beta = rng.normal(size=(16,)).astype(np.float64)
+    weight = rng.normal(size=(16, 24)).astype(np.float64)
+    mean = np.mean(source, axis=-1, keepdims=True)
+    inverse_scale = np.reciprocal(np.sqrt(np.mean(np.square(source), axis=-1, keepdims=True) - np.square(mean) + 1e-5))
+
+    materialized = (((source - mean) * inverse_scale) * gamma + beta) @ weight
+    delayed = inverse_scale * ((source * gamma) @ weight) - (mean * inverse_scale) * (gamma @ weight) + beta @ weight
+    np.testing.assert_allclose(materialized, delayed, rtol=2e-13, atol=2e-13)
+
+    source_bf16 = jnp.asarray(source, dtype=jnp.bfloat16)
+    gamma_bf16 = jnp.asarray(gamma, dtype=jnp.bfloat16)
+    beta_bf16 = jnp.asarray(beta, dtype=jnp.bfloat16)
+    weight_bf16 = jnp.asarray(weight, dtype=jnp.bfloat16)
+    mean_fp32 = jnp.asarray(mean, dtype=jnp.float32)
+    inverse_fp32 = jnp.asarray(inverse_scale, dtype=jnp.float32)
+    source_ordered = (
+        jnp.asarray(
+            (source_bf16.astype(jnp.float32) - mean_fp32) * inverse_fp32 * gamma_bf16 + beta_bf16,
+            dtype=jnp.bfloat16,
+        )
+        @ weight_bf16
+    )
+    delayed_bf16 = (
+        inverse_fp32 * (jnp.asarray(source_bf16 * gamma_bf16, dtype=jnp.bfloat16) @ weight_bf16)
+        - (mean_fp32 * inverse_fp32) * (gamma_bf16 @ weight_bf16)
+        + beta_bf16 @ weight_bf16
+    )
+    assert float(jnp.max(jnp.abs(source_ordered.astype(jnp.float32) - delayed_bf16))) > 0.0
+
+
+def test_centered_affine_bitwise_policy_materializes() -> None:
+    plan = compile_region(_layer_norm_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
+
+    assert not plan.rewrites[0].applied
+    assert plan.materialization("normalized").disposition is MaterializationDisposition.MATERIALIZE
+
+
+def test_sum_and_sum_squares_variance_is_not_source_order_two_pass_variance() -> None:
+    centered_offsets = np.asarray([-0.5, -0.25, 0.0, 0.25, 0.5] * 4, dtype=np.float32)
+    values = np.float32(10_000.0) + centered_offsets
+    mean = np.mean(values, dtype=np.float32)
+
+    moment_variance = np.mean(values * values, dtype=np.float32) - mean * mean
+    source_order_two_pass_variance = np.mean((values - mean) * (values - mean), dtype=np.float32)
+
+    assert moment_variance == 0.0
+    assert source_order_two_pass_variance == 0.125
+
+
 def test_compile_region_legal_rms_region_delays_scale() -> None:
     plan = compile_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
 

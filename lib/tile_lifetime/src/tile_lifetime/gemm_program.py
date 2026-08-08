@@ -50,6 +50,7 @@ _ATTACHMENT_PRIMITIVES = {
     "residual_add": TilePrimitive.RESIDUAL_ADD,
     "multiply_gamma": TilePrimitive.MULTIPLY_GAMMA,
     "partial_sum_square": TilePrimitive.PARTIAL_SUM_SQUARE,
+    "partial_sum": TilePrimitive.PARTIAL_SUM,
     "pairwise_map": TilePrimitive.PAIRWISE_MAP,
     "pairwise_linear_map": TilePrimitive.PAIRWISE_LINEAR_MAP,
     "pairwise_swiglu": TilePrimitive.PAIRWISE_SWIGLU,
@@ -60,6 +61,7 @@ _ATTACHMENT_PRIMITIVES = {
     "partition": TilePrimitive.PARTITION,
     "view": TilePrimitive.VIEW,
     "add": TilePrimitive.ADD,
+    "subtract": TilePrimitive.SUBTRACT,
     "multiply": TilePrimitive.MULTIPLY,
     "convert": TilePrimitive.CONVERT,
     "load_tile": TilePrimitive.LOAD_TILE,
@@ -184,8 +186,10 @@ def _validate_composition(
     if any(operation.primitive is TilePrimitive.SCALE_ROW for operation in preparation):
         if skeleton.input_layout != "row_major_mk":
             raise TileProgramError("preparation row scaling requires row_major_mk input")
-    if any(operation.primitive is TilePrimitive.PARTIAL_SUM_SQUARE for operation in preparation):
-        raise TileProgramError("RMS partial reduction is only supported in GEMM finalization")
+    if any(
+        operation.primitive in {TilePrimitive.PARTIAL_SUM, TilePrimitive.PARTIAL_SUM_SQUARE} for operation in preparation
+    ):
+        raise TileProgramError("partial reductions are only supported in GEMM finalization")
 
 
 def _terminal_values(operations: tuple[TileOp, ...], *, fallback: tuple[str, ...]) -> tuple[str, ...]:
@@ -210,7 +214,7 @@ def _infer_value_layouts(skeleton: GemmSkeleton, operations: tuple[TileOp, ...])
         skeleton.output: skeleton.output_layout,
     }
     for operation in operations:
-        if operation.primitive is TilePrimitive.PARTIAL_SUM_SQUARE:
+        if operation.primitive in {TilePrimitive.PARTIAL_SUM, TilePrimitive.PARTIAL_SUM_SQUARE}:
             output_layout = "row_partial_fp32"
         elif operation.stage is TileProgramStage.PREPARATION:
             output_layout = skeleton.input_layout
@@ -228,7 +232,7 @@ def _storage_operations(
     fp32_values = {
         output
         for operation in finalization
-        if operation.primitive is TilePrimitive.PARTIAL_SUM_SQUARE
+        if operation.primitive in {TilePrimitive.PARTIAL_SUM, TilePrimitive.PARTIAL_SUM_SQUARE}
         for output in operation.outputs
     }
     operations: list[TileOp] = []

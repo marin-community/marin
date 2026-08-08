@@ -109,6 +109,7 @@ class ReductionSkeleton:
     output: str
     operator: str
     reduction_dtype: DType
+    auxiliary_inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

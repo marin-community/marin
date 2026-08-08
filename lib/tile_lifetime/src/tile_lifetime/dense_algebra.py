@@ -3,7 +3,7 @@
 
 """Erase dense frontend names into generic Contract/Map/Fold algebra."""
 
-from tile_lifetime.ir import LinearOp, ResidualAddOp, RMSNormOp, TensorGraph, TensorValue
+from tile_lifetime.ir import LayerNormOp, LinearOp, ResidualAddOp, RMSNormOp, TensorGraph, TensorValue
 from tile_lifetime.plan import SemanticLoweringStep
 from tile_lifetime.semantic_erasure import ErasedTensorProgram, build_tensor_erasure_report
 from tile_lifetime.tensor_program import (
@@ -176,6 +176,129 @@ def erase_dense_semantics(graph: TensorGraph) -> ErasedTensorProgram:
                             ScalarExpressionKind.MULTIPLY,
                             scalar_input(feature_scaled.name),
                             scalar_input(inverse_scale.name),
+                        ),
+                    ),
+                )
+            )
+            lowering_steps.append(SemanticLoweringStep(type(operation).__name__, ("Map", "Fold", "Map")))
+            continue
+
+        if isinstance(operation, LayerNormOp):
+            source = external(operation.input)
+            reduction_axis = source.axes[operation.axis]
+            gamma = external(operation.gamma, (reduction_axis,))
+            beta = external(operation.beta, (reduction_axis,))
+            row_axes = tuple(axis for axis in source.axes if axis != reduction_axis)
+            square = ProgramValue(f"value.{operation.id}.square", source.axes, operation.reduction_dtype)
+            summed = ProgramValue(f"value.{operation.id}.sum", row_axes, operation.reduction_dtype)
+            sum_squares = ProgramValue(f"value.{operation.id}.sum_squares", row_axes, operation.reduction_dtype)
+            mean = ProgramValue(f"value.{operation.id}.mean", row_axes, operation.reduction_dtype)
+            inverse_scale = ProgramValue(f"value.{operation.id}.row_scalar", row_axes, operation.reduction_dtype)
+            centered = ProgramValue(f"value.{operation.id}.centered", source.axes, operation.reduction_dtype)
+            row_scaled = ProgramValue(f"value.{operation.id}.row_scaled", source.axes, operation.reduction_dtype)
+            feature_scaled = ProgramValue(f"value.{operation.id}.feature_scaled", source.axes, source.dtype)
+            output = produced(operation.output, source.axes)
+            operations.extend(
+                (
+                    MapPrimitive(
+                        name=f"map.{len(operations)}",
+                        inputs=(source,),
+                        output=square,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.MULTIPLY,
+                            scalar_input(source.name),
+                            scalar_input(source.name),
+                        ),
+                    ),
+                    FoldPrimitive(
+                        name=f"fold.{len(operations) + 1}",
+                        input=source,
+                        output=summed,
+                        reduction_axes=(reduction_axis,),
+                        reducer=FoldReducer.SUM,
+                        accumulation_dtype=operation.reduction_dtype,
+                    ),
+                    FoldPrimitive(
+                        name=f"fold.{len(operations) + 2}",
+                        input=square,
+                        output=sum_squares,
+                        reduction_axes=(reduction_axis,),
+                        reducer=FoldReducer.SUM,
+                        accumulation_dtype=operation.reduction_dtype,
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 3}",
+                        inputs=(summed,),
+                        output=mean,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.DIVIDE,
+                            scalar_input(summed.name),
+                            scalar_constant(reduction_axis.extent),
+                        ),
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 4}",
+                        inputs=(sum_squares, mean),
+                        output=inverse_scale,
+                        expression=scalar_unary(
+                            ScalarExpressionKind.RSQRT,
+                            scalar_binary(
+                                ScalarExpressionKind.ADD,
+                                scalar_binary(
+                                    ScalarExpressionKind.SUBTRACT,
+                                    scalar_binary(
+                                        ScalarExpressionKind.DIVIDE,
+                                        scalar_input(sum_squares.name),
+                                        scalar_constant(reduction_axis.extent),
+                                    ),
+                                    scalar_binary(
+                                        ScalarExpressionKind.MULTIPLY,
+                                        scalar_input(mean.name),
+                                        scalar_input(mean.name),
+                                    ),
+                                ),
+                                scalar_constant(operation.epsilon),
+                            ),
+                        ),
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 5}",
+                        inputs=(source, mean),
+                        output=centered,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.SUBTRACT,
+                            scalar_input(source.name),
+                            scalar_input(mean.name),
+                        ),
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 6}",
+                        inputs=(centered, inverse_scale),
+                        output=row_scaled,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.MULTIPLY,
+                            scalar_input(centered.name),
+                            scalar_input(inverse_scale.name),
+                        ),
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 7}",
+                        inputs=(row_scaled, gamma),
+                        output=feature_scaled,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.MULTIPLY,
+                            scalar_input(row_scaled.name),
+                            scalar_input(gamma.name),
+                        ),
+                    ),
+                    MapPrimitive(
+                        name=f"map.{len(operations) + 8}",
+                        inputs=(feature_scaled, beta),
+                        output=output,
+                        expression=scalar_binary(
+                            ScalarExpressionKind.ADD,
+                            scalar_input(feature_scaled.name),
+                            scalar_input(beta.name),
                         ),
                     ),
                 )

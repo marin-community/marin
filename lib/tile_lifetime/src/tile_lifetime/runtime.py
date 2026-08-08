@@ -692,7 +692,7 @@ def _dispatch_dependencies(
     if isinstance(skeleton, StreamingAttentionSkeleton):
         return {skeleton.query, skeleton.key, skeleton.value}, {skeleton.output}
     if isinstance(skeleton, ReductionSkeleton):
-        return {skeleton.input}, {skeleton.output}
+        return {skeleton.input, *skeleton.auxiliary_inputs}, {skeleton.output}
 
     required = {skeleton.input, skeleton.weight}
     local = {skeleton.output}

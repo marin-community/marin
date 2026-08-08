@@ -67,6 +67,21 @@ class RMSNormOp:
 
 
 @dataclass(frozen=True)
+class LayerNormOp:
+    """Mean-centered normalization over one tensor dimension."""
+
+    id: int
+    input: TensorValue
+    gamma: TensorValue
+    beta: TensorValue
+    output: TensorValue
+    axis: int
+    epsilon: float
+    reduction_dtype: DType
+    source_location: str | None
+
+
+@dataclass(frozen=True)
 class ScaledDotProductAttentionOp:
     """Exact scaled dot-product attention over rank-four Q, K, and V tensors."""
 
@@ -218,6 +233,7 @@ SemanticOp = (
     LinearOp
     | ResidualAddOp
     | RMSNormOp
+    | LayerNormOp
     | ScaledDotProductAttentionOp
     | SwiGLUOp
     | PairwiseSwiGLUOp
@@ -351,6 +367,45 @@ class TensorGraph:
                 id=len(self._operations),
                 input=value,
                 gamma=gamma,
+                output=output,
+                axis=normalized_axis,
+                epsilon=epsilon,
+                reduction_dtype=reduction_dtype,
+                source_location=source_location,
+            )
+        )
+        return output
+
+    def layer_norm(
+        self,
+        value: TensorValue,
+        gamma: TensorValue,
+        beta: TensorValue,
+        *,
+        name: str,
+        axis: int,
+        epsilon: float,
+        reduction_dtype: DType,
+        source_location: str | None = None,
+    ) -> TensorValue:
+        """Add mean-centered normalization with explicit reduction precision."""
+        normalized_axis = axis % len(value.shape)
+        expected_shape = (value.shape[normalized_axis],)
+        if gamma.shape != expected_shape or beta.shape != expected_shape:
+            raise ValueError(
+                f"gamma and beta shapes {gamma.shape}, {beta.shape} do not match normalization dimension "
+                f"{value.shape[normalized_axis]}"
+            )
+        if epsilon < 0:
+            raise ValueError("LayerNorm epsilon must be non-negative")
+
+        output = self._new_value(name, shape=value.shape, dtype=value.dtype)
+        self._operations.append(
+            LayerNormOp(
+                id=len(self._operations),
+                input=value,
+                gamma=gamma,
+                beta=beta,
                 output=output,
                 axis=normalized_axis,
                 epsilon=epsilon,
@@ -759,6 +814,8 @@ def _operation_inputs(operation: SemanticOp) -> tuple[TensorValue, ...]:
         return operation.left, operation.right
     if isinstance(operation, RMSNormOp):
         return operation.input, operation.gamma
+    if isinstance(operation, LayerNormOp):
+        return operation.input, operation.gamma, operation.beta
     if isinstance(operation, ScaledDotProductAttentionOp):
         return operation.query, operation.key, operation.value
     if isinstance(operation, SwiGLUOp):

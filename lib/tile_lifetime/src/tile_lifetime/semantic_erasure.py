@@ -44,6 +44,7 @@ _GENERIC_SEMANTIC_PRIMITIVES = frozenset(
 )
 _FORBIDDEN_SCHEDULING_TOKENS = (
     "rmsnorm",
+    "layernorm",
     "flashattention",
     "scaled_dot_product_attention",
     "causal_attention",
@@ -59,8 +60,10 @@ _FORBIDDEN_SCHEDULING_TOKENS = (
 _GENERIC_ATTACHMENT_OPERATIONS = frozenset(
     {
         "add",
+        "subtract",
         "multiply",
         "scale_row",
+        "partial_sum",
         "partial_sum_square",
         "pairwise_map",
         "pairwise_linear_map",
