@@ -114,12 +114,19 @@ def _thd_base_mask(
             raise NotImplementedError("gpu_fa4_thd requires packed segment ids in the batch mask.")
         # The derivation vmaps a per-row scan, and the batch sharding cannot survive that inner
         # concatenate: under vmap the abstract mesh is empty, so a batch-sharded row spec fails to
-        # resolve its resource axes. Replicate first; the kernel replicates this metadata anyway to
-        # take a global prefix sum over it.
+        # resolve its resource axes. Derive from replicated ids, then put the batch sharding back:
+        # the kernel takes the metadata sharding from the tokens, so leaving it replicated makes its
+        # own segment-length select mismatch.
         ids = segment_ids[0]
-        if _partition_spec_of(ids) is not None:
-            ids = reshard(ids, P(None, None))
-        thd_segment_metadata = thd_segment_metadata_from_segment_ids(ids, max_segments=max_segments)
+        batch_spec = _partition_spec_of(ids)
+        if batch_spec is None:
+            thd_segment_metadata = thd_segment_metadata_from_segment_ids(ids, max_segments=max_segments)
+        else:
+            derived = thd_segment_metadata_from_segment_ids(reshard(ids, P(None, None)), max_segments=max_segments)
+            thd_segment_metadata = ThdSegmentMetadata(
+                segment_lengths=reshard(derived.segment_lengths, P(batch_spec[0], None)),
+                num_segments=reshard(derived.num_segments, P(batch_spec[0])),
+            )
     return AttentionMask(is_causal=True, segment_ids=segment_ids, thd_segment_metadata=thd_segment_metadata)
 
 

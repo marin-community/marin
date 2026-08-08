@@ -123,14 +123,20 @@ def test_thd_base_mask_derives_metadata_under_batch_sharding():
         starts = (jnp.roll(tokens, 1, axis=1).at[:, 0].set(0) == eos_id).astype(jnp.int32)
         segment_ids = jnp.cumsum(starts, axis=1)
 
+        batch = ("replica_dcn", "data", "expert")
         with jax.set_mesh(mesh):
-            sharded = reshard(segment_ids, P(("replica_dcn", "data", "expert"), None))
+            sharded = reshard(segment_ids, P(batch, None))
             build = jax.jit(lambda ids: model._thd_base_mask((ids, ids), None, max_segments=16))
             metadata = build(sharded).thd_segment_metadata
 
         # EOS at position p opens a segment at p+1, so six EOS give seven documents.
         assert metadata.segment_lengths.shape == (8, 16)
         np.testing.assert_array_equal(np.asarray(metadata.num_segments), np.full(8, 7))
+
+        # gpu_fa4_thd takes the metadata sharding from the tokens, so replicated metadata makes its
+        # own segment-length select mismatch. The batch sharding has to survive the derivation.
+        assert metadata.segment_lengths.sharding.spec == P(batch, None), metadata.segment_lengths.sharding
+        assert metadata.num_segments.sharding.spec == P(batch), metadata.num_segments.sharding
     """
 
     result = subprocess.run(
