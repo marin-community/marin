@@ -708,6 +708,14 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     })
 }
 
+/// The telemetry namespace schema.
+///
+/// Covering projections are append-only against an already-registered namespace:
+/// the catalog accepts a new projection name but rejects a changed definition for
+/// an existing one, and that rejection fails the namespace registration every
+/// telemetry write depends on. Widening a projection's predicate values or its
+/// column list therefore means registering it under a new name, leaving the
+/// superseded definition registered on servers that already hold it.
 fn telemetry_schema() -> Schema {
     Schema::new(
         vec![
@@ -782,7 +790,7 @@ fn telemetry_schema() -> Schema {
         ],
     ))
     .with_covering_projection(CoveringProjection::new(
-        "accelerator-memory",
+        "accelerator-memory-v2",
         "name",
         ["gpu_memory_total_bytes", "gpu_memory_used_bytes"],
         DEVICE_METRIC_PROJECTION_COLUMNS,
@@ -827,19 +835,19 @@ fn telemetry_schema() -> Schema {
         DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
-        "accelerator-temperature",
+        "accelerator-temperature-v2",
         "name",
         ["gpu_memory_temperature_celsius", "gpu_temperature_celsius"],
         DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
-        "accelerator-tensor-activity",
+        "accelerator-tensor-activity-v2",
         "name",
         ["gpu_tensor_active_ratio"],
         DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
-        "accelerator-utilization",
+        "accelerator-utilization-v2",
         "name",
         ["gpu_utilization_percent"],
         DEVICE_METRIC_PROJECTION_COLUMNS,
