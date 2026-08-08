@@ -28,14 +28,14 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(run_id="full-bank", num_steps=1, num_experts_per_token=128, version="dev")
+        launch.build_hero_run(run_id="full-bank", dp_racks=1, num_steps=1, num_experts_per_token=128, version="dev")
 
 
 def test_expert_bank_override_must_divide_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match="must divide the expert axis"):
-        launch.build_hero_run(run_id="bad-bank", num_steps=1, num_experts=200, version="dev")
+        launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
@@ -223,13 +223,15 @@ def test_capacity_factor_is_rejected_for_a_flavor_that_never_drops():
     # `scatter` computes every assignment, so a capacity factor would be silently inert and a sweep
     # over it would produce identical runs under different names.
     with pytest.raises(ValueError, match="never drops"):
-        launch.build_hero_run(run_id="nodrop-cf", num_steps=1, flavor="fsdp-nodrop", capacity_factor=1.5, version="dev")
+        launch.build_hero_run(
+            run_id="nodrop-cf", dp_racks=1, num_steps=1, flavor="fsdp-nodrop", capacity_factor=1.5, version="dev"
+        )
 
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
-    off = launch.build_hero_run(run_id="eval-off", num_steps=1, version="dev")
-    on = launch.build_hero_run(run_id="eval-on", num_steps=1, eval_every=50, version="dev")
+    off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_hero_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
 
     assert len(off.deps) == 1
     assert len(on.deps) > len(off.deps)

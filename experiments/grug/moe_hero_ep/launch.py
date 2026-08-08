@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-rack GB200 launcher for the EP64 MoE hero configuration."""
+"""GB200 launcher for the EP64 MoE hero configuration."""
 
 import dataclasses
 import os
@@ -109,6 +109,7 @@ class HeroThroughputResult(Artifact):
 def build_hero_run(
     *,
     run_id: str,
+    dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
     seed: int = 0,
@@ -127,7 +128,7 @@ def build_hero_run(
     profile_start_step: int = 5,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the one-rack EP64 hero throughput run.
+    """Build the EP64 hero throughput run.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
@@ -139,6 +140,8 @@ def build_hero_run(
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if flavor not in FLAVORS:
@@ -208,7 +211,7 @@ def build_hero_run(
         # between evictions never finishes.
         save_checkpoints=save_checkpoints,
         expert_axis_size=sharding.expert_axis_size,
-        replica_axis_size=1,
+        replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -217,7 +220,7 @@ def build_hero_run(
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_EP_NODES,
+        replicas=HERO_EP_NODES * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -304,6 +307,7 @@ def build_hero_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
 @click.option(
     "--num-steps",
     type=click.IntRange(min=1),
@@ -419,6 +423,7 @@ def build_hero_run(
 @build_options
 def main(
     run_id: str,
+    dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
     seed: int,
@@ -438,6 +443,7 @@ def main(
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
+        dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
         seed=seed,
