@@ -1194,3 +1194,29 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   all-to-all CUDA out of memory in `jit_train_step`.
 - Decision: The SOL estimator control is a dead end for this shape. Its coordinator was stopped
   after the deterministic failure.
+
+### 2026-08-08 12:47 UTC - The first larger-model gates fail or restart
+
+- MHEP-162 used 192 experts and width 6016. The compiler reported a 198.73 GiB rematerialization
+  floor against a 170.54 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 524.549 B total and 24.227 B active parameters is a failed E192 upper bound. The
+  coordinator was stopped after the deterministic failure.
+- MHEP-163 used 128 experts and width 8960. One worker failed before step 1, and Iris restarted the
+  gang. The retained logs do not contain a model OOM or another root cause.
+- Result: The 520.906 B E128 gate is inconclusive. Its coordinator was stopped because the launch
+  contract and user instruction do not permit retries.
+- MHEP-157 and MHEP-158 each accumulated three worker failures and restarted tasks. Their
+  coordinators were also stopped. These infrastructure failures do not validate the memory-fitting
+  O3 or disabled latency-hiding controls.
+
+### 2026-08-08 12:47 UTC - MHEP-164 and MHEP-165 size midpoints ready
+
+- Common config and success criteria match MHEP-162 and MHEP-163.
+- MHEP-164 uses 192 experts and expert width 5760. It has 502.806 B total parameters and 23.774 B
+  active parameters.
+- MHEP-165 uses 128 experts and expert width 8448. It has 491.915 B total parameters and 28.512 B
+  active parameters.
+- Run IDs: `mhep-164-w13-ep-e192-i5760-cf2p00-fullwatch-overlap1-p32762-20260808` and
+  `mhep-165-w13-ep-e128-i8448-cf2p00-fullwatch-overlap1-p32763-20260808`.
+- Both arms set `--xla_gpu_experimental_parallel_collective_overlap_limit=1`, use full watch on
+  every step, use production priority, and permit zero retries.
