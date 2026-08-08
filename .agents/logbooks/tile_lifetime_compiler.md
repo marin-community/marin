@@ -1294,3 +1294,29 @@ author: dlwh
   correctness, and performance replay remain required before restoring dense,
   MoE, or sparse-attention acceptance.
 - Working branch: `research/shuttle-clean-helper-boundaries`.
+
+### 2026-08-08 06:46 PDT - TLTC-064 GB200 clean Map/Fold replay
+
+- Pushed the source-boundary snapshot as `31f600f228` on
+  `research/shuttle-clean-helper-boundaries`.
+- Rebuilt the generated Map/Fold extension on four GB200s with pinned MoK,
+  ThunderKittens, DeepEP, CUDA, driver, and Torch revisions. The recovered
+  program, generated include, and loaded binary agree on digest
+  `3048c6b922de317e556ff4e1a6fe9c81a22bfc9ba4d6582d0245fbf275f81fba`.
+- Correctness passes on all ranks: exact relation and payload mappings, zero
+  overflow, bitwise deterministic repeats, and Shuttle/MoK maximum absolute
+  error `0.0001220703125`.
+- Counterbalanced captures measure 4.147536/3.630992 ms with Shuttle first and
+  4.144560/3.711088 ms with MoK first. The pooled 60-sample rank-maximum
+  medians are 4.147536 ms Shuttle and 3.647136 ms MoK, or `1.137204×`.
+- The accepted generated call graph contains no external semantic kernel.
+  DeepEP is forward payload transport, reverse transport is
+  `all_to_all_single`, and complete MoK forward is oracle-only.
+- One batch-priority GB200 pod was preempted before smoke execution. The full
+  environment was rebuilt on its replacement, both captures completed, raw
+  evidence was copied, and the reservation was released.
+- A separate low-priority H100 request never left `SchedulingGated` during its
+  bounded wait. It consumed no GPU time and was removed, so Dense and Sparse
+  remain device-pending.
+- Sealed evidence:
+  `lib/tile_lifetime/benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.

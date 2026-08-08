@@ -27,23 +27,30 @@ with compiler-produced relation metadata:
   per-group counts, and ordered edge weights from runtime relation edges. One
   CTA owns each equal-capacity group and scans edges in source/slot order; no
   semantic value is atomically accumulated;
-- `swiglu_bf16_out` applies BF16-output SwiGLU to gate and up matrices;
-- `fixed_route_merge_out` accumulates received routes in ascending route-slot
-  order with explicit FP32 round-to-nearest multiplication and addition;
-- `fixed_route_merge_fma_out` is the deterministic FMA comparison; and
-- `fixed_route_merge_shared_out` is an owner-local diagnostic that merges one
-  source-rank slice and adds precomputed shared output; and
-- `fixed_rank_merge_shared_out` executes a generic ordered fold over returned
-  rank partials plus a source-local base value. It consumes a compiler-built
-  `[partition, source_item]` row map, uses FP32 additions in ascending partition
-  order, and does not use atomics.
+- `adjacent_pair_map_bf16_out` and `row_halves_pair_map_bf16_out` apply the
+  compiler-generated adjacent-pair `Map` to either separate or concatenated
+  inputs;
+- `indexed_weighted_ordered_fold_bf16_out` applies the compiler-generated
+  contribution and ordered-update expressions over an indexed edge list;
+- `indirect_weighted_fold_base_map_out` is an owner-local diagnostic that
+  performs the same generated `Fold` and post-fold base `Map`; and
+- `partitioned_ordered_fold_base_map_bf16_out` executes that generated ordered
+  fold over returned partition partials plus a source-local base value. It
+  consumes a compiler-built `[partition, source_item]` row map and does not use
+  atomics.
+
+The scalar expressions are emitted from `MapFoldSemantics` into
+`generated_map_fold.inc`. The extension exports the selected program's SHA-256
+digest, and the natural StableHLO benchmark rejects an extension whose digest
+does not match the recovered plan. Changing the activation or merge expression
+therefore regenerates CUDA without changing these indexing and loop skeletons.
 
 None of these entrypoints implements communication, CLC work redistribution,
-or a full MoE forward pass. `fixed_route_merge_shared_out` cannot replace a
-cross-rank DeepEP combine.
+or a full MoE forward pass. `indirect_weighted_fold_base_map_out` cannot replace
+a cross-rank semantic combine by itself.
 
-`fixed_rank_merge_shared_out` can replace the reduction portion of that
-combine only when a separate payload-only reverse transport has already
+`partitioned_ordered_fold_base_map_bf16_out` can replace the reduction portion
+of that combine only when a separate payload-only reverse transport has already
 returned every rank partial. The distributed benchmark uses
 `all_to_all_single` for that clean boundary; DeepEP remains the forward payload
 transport.

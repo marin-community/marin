@@ -342,3 +342,30 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
 - The reproducible report and passing status are under
   `benchmarks/artifacts/stateful_scan_affine_pipeline_h100_v0`. This closes the
   current matched StatefulScan core proof.
+
+## 2026-08-08: Clean attention and MoE semantic-body boundaries
+
+- Replaced the fixed-position dense-region recovery with producer/consumer
+  dataflow discovery over erased `Contract`, `Map`, `Fold`, and
+  `DomainRestriction` operations.
+- Removed direct FlashAttention `Softmax`, `AttentionMask`, and score-mod helper
+  dependencies from the generated SM90 path. Shuttle now owns the
+  normalized-exponential Fold state, score Map, domain restriction, and output
+  finalization while retaining the extracted CuTe physical pipeline.
+- Replaced handwritten MoE SwiGLU and semantic merge arithmetic with scalar
+  CUDA emitted from the recovered plan. Generic pair-Map and ordered-Fold loop
+  skeletons call the generated functions, and build/runtime digest guards
+  reject plan/source drift.
+- On four GB200s, two counterbalanced 30-sample captures give pooled medians of
+  4.147536 ms for Shuttle and 3.647136 ms for MoK, a `1.137204×` ratio. The
+  generated path is bitwise deterministic and differs from MoK by at most
+  `0.0001220703125`.
+- The MoE row therefore passes the clean Map/Fold boundary and the 1.20-times
+  performance gate. The natural router is still executed by a small generic
+  Torch Contract/top-k/Fold adapter rather than a generated router kernel; this
+  limitation is recorded explicitly.
+- A low-priority H100 validation request remained `SchedulingGated` and was
+  removed without consuming a GPU. Dense and routed sparse attention remain
+  device-pending after the attention helper extraction.
+- Evidence is sealed under
+  `benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.

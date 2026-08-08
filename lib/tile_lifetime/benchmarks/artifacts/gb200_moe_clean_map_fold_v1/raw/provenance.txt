@@ -1,0 +1,122 @@
+shuttle=31f600f22837ec4a3c4c3eaf07c2e4a9a5ddc268
+mok=3e1cf43ab93ad040afed52a45ab03cb490ffe4be
+thunderkittens=1c3920d993404dd49a6d4c7267ea11d583bd5c68
+deepep=7febc6e25660af0f54d95dd781ecdcd62265ecca
+ M deep_ep/__init__.py
+ M setup.py
+?? deep_ep.egg-info/
+deepep_diff_sha256=cf2aa561adb1171c141e651c4753236a8b56f85d9bb6d986c74b5e758a857745
+probe=1e08e83fbc51ab681e589af6bf173f02823eae9add710779c30a59b1c3d699f4  /tmp/mok-gmm-probe-map-fold-31f600f228/_mok_gmm_probe.cpython-312-aarch64-linux-gnu.so
+sha256sum: /app/marin/lib/tile_lifetime/benchmarks/kernels/generated_moe_map_fold.cuh: No such file or directory
+generated_include=
+deepep_patch=cf2aa561adb1171c141e651c4753236a8b56f85d9bb6d986c74b5e758a857745  /app/marin/lib/tile_lifetime/benchmarks/artifacts/gb200_moe_natural_boundary_v0/raw/deepep-torch-intranode.patch
+
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Aug_20_01:57:39_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+
+Python 3.12.13
+/tmp/mok-route-env/bin/python: No module named pip
+
+index, name, driver_version, pstate, clocks.current.sm [MHz], clocks.current.memory [MHz], power.draw [W], power.limit [W], temperature.gpu
+0, NVIDIA GB200, 595.71.05, P0, 120 MHz, 3996 MHz, 165.91 W, 1200.00 W, 35
+1, NVIDIA GB200, 595.71.05, P0, 120 MHz, 3996 MHz, 149.57 W, 1200.00 W, 35
+2, NVIDIA GB200, 595.71.05, P0, 120 MHz, 3996 MHz, 153.89 W, 1200.00 W, 34
+3, NVIDIA GB200, 595.71.05, P0, 120 MHz, 3996 MHz, 176.28 W, 1200.00 W, 35
+
+	[4mGPU0	GPU1	GPU2	GPU3	NIC0	NIC1	NIC2	NIC3	NIC4	NIC5	NIC6	NIC7	NIC8	NIC9	NIC10	NIC11	NIC12	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NV18	NV18	NV18	NODE	NODE	SYS	SYS	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	0-71	0		N/A
+GPU1	NV18	 X 	NV18	NV18	NODE	NODE	SYS	SYS	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	0-71	0		N/A
+GPU2	NV18	NV18	 X 	NV18	SYS	SYS	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	72-143	1		N/A
+GPU3	NV18	NV18	NV18	 X 	SYS	SYS	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	72-143	1		N/A
+NIC0	NODE	NODE	SYS	SYS	 X 	NODE	SYS	SYS	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE				
+NIC1	NODE	NODE	SYS	SYS	NODE	 X 	SYS	SYS	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE	NODE				
+NIC2	SYS	SYS	NODE	NODE	SYS	SYS	 X 	NODE	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC3	SYS	SYS	NODE	NODE	SYS	SYS	NODE	 X 	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC4	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	 X 	PIX	PIX	PIX	PIX	PIX	PIX	PIX	PIX				
+NIC5	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	 X 	PIX	PIX	PIX	PIX	PIX	PIX	PIX				
+NIC6	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	 X 	PIX	PIX	PIX	PIX	PIX	PIX				
+NIC7	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	 X 	PIX	PIX	PIX	PIX	PIX				
+NIC8	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	PIX	 X 	PIX	PIX	PIX	PIX				
+NIC9	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	PIX	PIX	 X 	PIX	PIX	PIX				
+NIC10	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	PIX	PIX	PIX	 X 	PIX	PIX				
+NIC11	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	PIX	PIX	PIX	PIX	 X 	PIX				
+NIC12	NODE	NODE	SYS	SYS	NODE	NODE	SYS	SYS	PIX	PIX	PIX	PIX	PIX	PIX	PIX	PIX	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: ibp0
+  NIC1: ibp1
+  NIC2: ibp2
+  NIC3: ibp3
+  NIC4: mlx5_0
+  NIC5: mlx5_1
+  NIC6: mlx5_2
+  NIC7: mlx5_3
+  NIC8: mlx5_4
+  NIC9: mlx5_5
+  NIC10: mlx5_6
+  NIC11: mlx5_7
+  NIC12: mlx5_8
+
+generated_include=c151c8775e928a1167b543a54abf63dc0c357ce5794cc40ebcc00551e6d4d435  /app/marin/lib/tile_lifetime/backends/sm100/mok_gmm_probe/generated_map_fold.inc
+Using Python 3.12.13 environment at: /tmp/mok-route-env
+cuda-bindings==13.0.3
+cuda-pathfinder==1.2.2
+cuda-toolkit==13.0.2
+filelock==3.29.0
+fsspec==2026.4.0
+iniconfig==2.3.0
+jax==0.10.1
+jaxlib==0.10.1
+jinja2==3.1.6
+markupsafe==3.0.3
+ml-dtypes==0.5.4
+mpmath==1.3.0
+networkx==3.6.1
+ninja==1.13.0
+numpy==2.5.1
+nvidia-cublas==13.1.0.3
+nvidia-cuda-cccl==13.0.85
+nvidia-cuda-crt==13.0.88
+nvidia-cuda-culibos==13.0.85
+nvidia-cuda-cupti==13.0.85
+nvidia-cuda-nvcc==13.0.88
+nvidia-cuda-nvrtc==13.0.88
+nvidia-cuda-runtime==13.0.96
+nvidia-cudnn-cu13==9.15.1.9
+nvidia-cufft==12.0.0.61
+nvidia-cufile==1.15.1.6
+nvidia-curand==10.4.0.35
+nvidia-cusolver==12.0.4.66
+nvidia-cusparse==12.6.3.3
+nvidia-cusparselt-cu13==0.8.0
+nvidia-ml-py==13.610.43
+nvidia-nccl-cu13==2.28.9
+nvidia-nvjitlink==13.0.88
+nvidia-nvshmem-cu13==3.4.5
+nvidia-nvtx==13.0.85
+nvidia-nvvm==13.0.88
+opt-einsum==3.4.0
+packaging==26.3
+pluggy==1.6.0
+pygments==2.20.0
+pytest==9.1.1
+scipy==1.18.0
+setuptools==78.1.0
+sympy==1.14.0
+torch==2.10.0+cu130
+triton==3.6.0
+typing-extensions==4.15.0

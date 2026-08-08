@@ -713,3 +713,34 @@ for scalar/per-key diagonals, rank 1/3, tail chunks, and multiple chunk sizes.
 Raw generated-kernel distributions, deterministic hashes, source hashes,
 environment, and checksums are under
 `benchmarks/artifacts/stateful_scan_generated_h100`.
+
+## Clean generated MoE Map/Fold replay
+
+The accepted four-GB200 MoE path now generates its pair activation and
+deterministic semantic merges from recovered `Map` and `Fold` scalar ASTs. The
+generic CUDA loop/indexing skeletons contain no fixed SwiGLU or weighted-sum
+expression. DeepEP performs forward payload permutation only, the return is a
+payload-only `all_to_all_single`, and the complete MoK forward remains the
+oracle.
+
+| Capture order | Shuttle | MoK | Ratio |
+| --- | ---: | ---: | ---: |
+| Shuttle first | 4.147536 ms | 3.630992 ms | 1.142260× |
+| MoK first | 4.144560 ms | 3.711088 ms | 1.116805× |
+| Pooled 60 samples | 4.147536 ms | 3.647136 ms | 1.137204× |
+
+Every result is a rank-maximum natural-program end-to-end latency. All ranks
+produce bitwise-identical repeated Shuttle outputs; relation mapping is exact,
+overflow is zero, and maximum Shuttle/MoK absolute error is
+`0.0001220703125`. The recovered program, generated include, and loaded binary
+share digest `3048c6b9…f81fba`. The generated-code audit records no external
+semantic kernel on the accepted path.
+
+The natural router remains a generic Torch Contract/top-k/normalized-weight
+adapter parameterized by the recovered StableHLO plan rather than generated
+router code. This is a remaining frontend/runtime-lineage cleanup, not an
+excluded timing boundary.
+
+Raw distributions, semantic fixtures, exact source, telemetry, build logs,
+pins, and checksums are under
+`benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.

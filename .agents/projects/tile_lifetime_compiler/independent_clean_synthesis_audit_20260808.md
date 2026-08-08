@@ -28,13 +28,26 @@ expert, and scalar-body semantics, while a small runtime adapter still launches
 generic `torch.mm`, `torch.topk`, and `torch.softmax` primitives. This is not an
 opaque workload kernel, but it should not be described as generated router code.
 
-Until the H100 and four-GB200 replays pass, the accepted status remains:
+The four-GB200 replay at Shuttle revision `31f600f228` now passes. Two
+counterbalanced 30-sample captures produce a pooled Shuttle/MoK ratio of
+`1.137204×`; outputs are bitwise deterministic, maximum absolute error is
+`0.0001220703125`, the compiled scalar-program digest matches the recovered
+plan, and the accepted call graph contains no external semantic kernel. The
+sealed evidence is under
+`lib/tile_lifetime/benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.
+
+The low-priority H100 replay did not acquire capacity within its bounded
+15-minute request. The pod remained `SchedulingGated`, consumed no GPU time,
+and was deleted. No H100 device claim follows from the source-only tests.
+
+The accepted status after these replays is:
 
 - StatefulScan: accepted from the prior checkpoint.
-- Dense: source-lineage fixes implemented; device verification pending.
-- MoE: source-lineage fixes implemented; device verification pending.
+- Dense: source-lineage fixes implemented; H100 device verification pending.
+- MoE: clean Map/Fold boundary accepted on four GB200s, with the narrower
+  generic-Torch router-executor caveat stated below.
 - Sparse attention: source-lineage fix shared with dense; matched Hopper
-  performance acceptance remains provisional.
+  device verification remains pending.
 
 This audit applies the boundary in
 [`clean_synthesis_acceptance.md`](clean_synthesis_acceptance.md) to the current
