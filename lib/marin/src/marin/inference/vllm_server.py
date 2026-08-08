@@ -87,6 +87,48 @@ import sys
 entrypoint = sys.argv.pop(1)
 runpy.run_path(entrypoint, run_name="__main__")
 """
+_TPU_WHEEL_VERIFY_BOOTSTRAP = """\
+import os
+import subprocess
+import sys
+import tempfile
+
+vllm_requirement, tpu_requirement, python_version, torch_backend, exclude_newer, *vllm_args = sys.argv[1:]
+with tempfile.TemporaryDirectory(prefix="marin-tpu-wheel-verify-") as target:
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--target",
+            target,
+            "--no-deps",
+            "--python-version",
+            python_version,
+            vllm_requirement,
+            tpu_requirement,
+        ],
+        check=True,
+    )
+os.execvp(
+    "uvx",
+    [
+        "uvx",
+        "--from",
+        vllm_requirement,
+        "--with",
+        tpu_requirement,
+        "--python",
+        python_version,
+        "--torch-backend",
+        torch_backend,
+        "--exclude-newer",
+        exclude_newer,
+        "vllm",
+        *vllm_args,
+    ],
+)
+"""
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
@@ -264,37 +306,31 @@ def _write_virtual_hosted_s3_config() -> str:
 
 @dataclass(frozen=True)
 class IsolatedTpuVllm:
-    """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
+    """Run Marin's paired TPU wheels in a throwaway uv-managed environment.
 
-    The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
-    runtime are two git forks pinned by SHA in ``marin.external_dependencies``; this
-    provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve iris --tpu`` runs from outside a checkout.
+    The TPU counterpart to :class:`IsolatedCudaVllm`. ``uv pip`` verifies both
+    release-wheel hashes before ``uvx`` resolves their shared dependencies at the
+    frozen cutoff. Marin's root environment is unchanged.
     """
 
-    vllm_ref: str
-    """``uvx --from`` spec for the vLLM fork, e.g.
-    ``vllm @ git+https://github.com/marin-community/vllm.git@<sha>``."""
-    tpu_inference_ref: str
-    """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
-    # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
-    python_version: str = WORKER_PYTHON_VERSION
+    vllm_requirement: str
+    tpu_inference_requirement: str
+    python_version: str
+    exclude_newer: str
     # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
     # CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
 
     def command(self) -> list[str]:
         return [
-            "uvx",
-            "--from",
-            self.vllm_ref,
-            "--with",
-            self.tpu_inference_ref,
-            "--python",
+            "python",
+            "-c",
+            _TPU_WHEEL_VERIFY_BOOTSTRAP,
+            self.vllm_requirement,
+            self.tpu_inference_requirement,
             self.python_version,
-            "--torch-backend",
             self.torch_backend,
-            "vllm",
+            self.exclude_newer,
         ]
 
     def env(self) -> dict[str, str]:
@@ -303,7 +339,10 @@ class IsolatedTpuVllm:
         return {"VLLM_TARGET_DEVICE": "tpu"}
 
     def cache_identity(self) -> str:
-        return f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:{self.python_version}:{self.torch_backend}"
+        return (
+            f"tpu:{self.vllm_requirement}:{self.tpu_inference_requirement}:"
+            f"{self.python_version}:{self.torch_backend}:{self.exclude_newer}"
+        )
 
 
 def _starts_nccl_ras_probe(launcher: VllmLauncher) -> bool:

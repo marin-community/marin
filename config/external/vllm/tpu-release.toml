@@ -1,0 +1,16 @@
+release_tag = "marin-vllm-tpu-candidate-50602953946b-ef095a45a835-07915f59ab35"
+workflow_commit = "07915f59ab359f3c89d8e5023a4ffa881cc48832"
+python_version = "3.12"
+exclude_newer = "2026-08-08T00:00:00Z"
+
+[vllm]
+source_commit = "50602953946bdc13da50d0a16db374bd4949eec0"
+version = "0.20.1rc1.dev0+g506029539.tpu"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-50602953946b-ef095a45a835-07915f59ab35/vllm-0.20.1rc1.dev0+g506029539.tpu-cp312-cp312-linux_x86_64.whl"
+sha256 = "0cddbdab7c8067c7fa4666e08df2e71c6c97ee2edf435fcbab4837e44a6c0b75"
+
+[tpu_inference]
+source_commit = "ef095a45a8354ef4b7629ad116ecaf18f02dd540"
+version = "0.23.0"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-50602953946b-ef095a45a835-07915f59ab35/tpu_inference-0.23.0-py3-none-any.whl"
+sha256 = "dee62c88517b453512294a646b15a76a2067a69bb20bfbd72e7779cdfa7e5d65"

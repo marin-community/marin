@@ -5,6 +5,7 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import contextlib
+import enum
 import functools
 import logging
 import os
@@ -29,12 +30,19 @@ from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
-from rigging.filesystem import StoragePath, prefix_join, record_transfer
+from rigging.filesystem import StoragePath, is_cross_region_url, prefix_join, record_transfer
 
 from levanter._debug_logging import flush_debug_output
 from levanter.utils import jax_utils
 
 logger = logging.getLogger(__name__)
+
+
+class DtypeSource(enum.Enum):
+    """Select whether restored arrays keep checkpoint or exemplar dtypes."""
+
+    CHECKPOINT = "checkpoint"
+    EXEMPLAR = "exemplar"
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -313,6 +321,7 @@ def _restore_ocdbt(
     paths: list[str],
     real_indices: list[int],
     shardings_leaves: list,
+    dtypes_leaves: list[np.dtype] | None,
     leaf_key_paths,
     manager: array_ser.GlobalAsyncCheckpointManager,
     allow_missing: bool,
@@ -359,7 +368,11 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = manager.deserialize(shardings=shardings_to_load, tensorstore_specs=tspecs_to_load)
+    deser_leaves = manager.deserialize(
+        shardings=shardings_to_load,
+        tensorstore_specs=tspecs_to_load,
+        dtypes=None if dtypes_leaves is None else [dtypes_leaves[i] for i in indices_to_load],
+    )
     return deser_leaves, indices_to_load
 
 
@@ -368,6 +381,7 @@ def _restore_old_ts(
     paths: list[str],
     real_indices: list[int],
     shardings_leaves: list,
+    dtypes_leaves: list[np.dtype] | None,
     leaf_key_paths,
     manager: array_ser.GlobalAsyncCheckpointManager,
     allow_missing: bool,
@@ -380,6 +394,7 @@ def _restore_old_ts(
         paths: Full paths for all arrays
         real_indices: Indices of non-None shardings
         shardings_leaves: Flattened list of shardings
+        dtypes_leaves: Optional flattened list of requested output dtypes
         leaf_key_paths: Key paths for logging
         manager: Checkpoint manager
         allow_missing: Whether to allow missing arrays
@@ -419,7 +434,12 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load, concurrent_gb=300)
+    deser_leaves = manager.deserialize_with_paths(
+        shardings=shardings_to_load,
+        paths=paths_to_load,
+        dtypes=None if dtypes_leaves is None else [dtypes_leaves[i] for i in indices_to_load],
+        concurrent_gb=300,
+    )
     return deser_leaves, indices_to_load
 
 
@@ -431,6 +451,7 @@ def tree_deserialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     allow_missing: bool = False,
+    dtype_source: DtypeSource = DtypeSource.CHECKPOINT,
 ):
     """
     Deserializes a PyTree of Arrays and NamedArrays from a Tensorstore checkpoint, returning a pytree with the same shape
@@ -445,10 +466,19 @@ def tree_deserialize_leaves_tensorstore(
         mesh: optional, the mesh for the NamedArrays (if they are not yet arrays)
         manager: optional, the checkpoint manager to use. If not provided, a new one will be created
         allow_missing: if True, missing leaves will be allowed and kept as-is
+        dtype_source: whether to preserve each checkpoint array's stored dtype or cast directly to the exemplar dtype.
+            Exemplar-dtype restore requires a local or same-region checkpoint because the exemplar no longer describes
+            the stored byte size used by the cross-region transfer guard.
 
     Returns:
         A pytree with the same shape as the exemplar pytree, but with the arrays deserialized from the checkpoint
     """
+    if dtype_source is DtypeSource.EXEMPLAR and is_cross_region_url(str(checkpoint_dir)):
+        raise ValueError(
+            "direct-dtype restore cannot account for the checkpoint's stored byte size across regions; "
+            "stage the checkpoint in-region or restore it at its stored dtype"
+        )
+
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
 
@@ -476,8 +506,21 @@ def tree_deserialize_leaves_tensorstore(
     paths = jtu.tree_leaves(paths, is_leaf=lambda x: x is None)
 
     shardings_leaves, shardings_structure = jtu.tree_flatten(shardings, is_leaf=_is_named_or_none)
+    dtypes_leaves = None
+    if dtype_source is DtypeSource.EXEMPLAR:
+        exemplar_leaves = jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)
+
+        def _dtype(leaf: Any) -> np.dtype:
+            if is_named_array(leaf):
+                leaf = leaf.array
+            if not hasattr(leaf, "dtype"):
+                leaf = np.asarray(leaf)
+            return np.dtype(leaf.dtype)
+
+        dtypes_leaves = [_dtype(leaf) for leaf in exemplar_leaves]
 
     assert len(shardings_leaves) == len(paths)
+    assert dtypes_leaves is None or len(shardings_leaves) == len(dtypes_leaves)
     # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
     real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
 
@@ -503,11 +546,25 @@ def tree_deserialize_leaves_tensorstore(
             logger.info("Adjusting paths for OCDBT checkpoint with subpath: %s", subpath)
             paths = [os.path.join(subpath, p) for p in paths]
         deser_leaves, indices_to_load = _restore_ocdbt(
-            checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+            checkpoint_root,
+            paths,
+            real_indices,
+            shardings_leaves,
+            dtypes_leaves,
+            leaf_key_paths,
+            manager,
+            allow_missing,
         )
     else:
         deser_leaves, indices_to_load = _restore_old_ts(
-            checkpoint_dir, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+            checkpoint_dir,
+            paths,
+            real_indices,
+            shardings_leaves,
+            dtypes_leaves,
+            leaf_key_paths,
+            manager,
+            allow_missing,
         )
 
     # now we need to recreate the original structure

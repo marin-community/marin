@@ -65,7 +65,9 @@ def main() -> None:
     archive_sha256 = direct_url.get("archive_info", {}).get("hashes", {}).get("sha256")
     if archive_sha256 is not None:
         installed_sha256.add(archive_sha256)
-    if installed_sha256 != {expected.wheel_sha256}:
+    # uv enforces the requirement's SHA-256 fragment while installing, but does not
+    # retain that fragment in direct_url.json. Reject contradictory metadata when present.
+    if installed_sha256 and installed_sha256 != {expected.wheel_sha256}:
         raise RuntimeError(
             f"Installed vLLM SHA-256 values {sorted(installed_sha256)} do not match {expected.wheel_sha256}"
         )

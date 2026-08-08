@@ -6,7 +6,7 @@
 import platform
 from dataclasses import dataclass
 
-from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
+from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel, VllmTpuWheel
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,11 @@ def current_vllm_gpu_wheel(release: VllmGpuRelease) -> VllmGpuWheel:
 def vllm_gpu_wheel_requirement(wheel: VllmGpuWheel) -> str:
     """Return the hash-verified direct wheel requirement."""
     return f"vllm @ {wheel.url}#sha256={wheel.sha256}"
+
+
+def vllm_tpu_wheel_requirement(wheel: VllmTpuWheel) -> str:
+    """Return one hash-verified requirement from the paired TPU candidate."""
+    return f"{wheel.distribution} @ {wheel.url}#sha256={wheel.sha256}"
 
 
 def vllm_gpu_wheel_provenance(release: VllmGpuRelease, wheel: VllmGpuWheel) -> VllmGpuWheelProvenance:
