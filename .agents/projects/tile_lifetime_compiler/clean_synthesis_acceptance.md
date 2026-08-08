@@ -1297,6 +1297,29 @@ special case.
 
 #### Oracle
 
+Oracle refresh, 2026-08-08: the first strong routed acceptance workload is now
+MiniMax Sparse Attention (MSA), pinned at
+`80434d7f67877c6570ca19cac444b84bc9855dac` with CUTLASS
+`eb61c911471867a5fd2466bfd8f29306cea6ebf8`, on B200/GB200. Its natural
+program contains index projections, causal token scoring, block-max reduction,
+top-k per GQA group, and exact selected attention. Its public SM100 CuTe
+implementation exposes runtime indices and a deterministic KV-outer schedule
+with real KV staging.
+
+The matched MSA acceptance boundary must include the same natural Index Branch,
+top-k policy, relation construction/orientation, and selected attention on both
+paths. Payload-only timing from synthetic indices is diagnostic only. The MSA
+kernel is oracle-only: Shuttle must generate the index, `RelationPlan`,
+QK/normalized-exponential-Fold/PV body, and combine through generic primitives.
+The initial target is BF16, Hq/Hkv=64/4, D=128, block 128, top-k 16, causal, at
+16K debug and 64K primary sequence length. Acceptance is at most 1.20 times a
+locally measured counterbalanced MSA full-route oracle.
+
+The prior FlashMoBA experiment below remains a completed block-shared semantic
+and generalization result. Its payload uses an SM80-style physical body for a
+more general token/head relation, so it is not the strong performance
+denominator for the refreshed row.
+
 The existing pinned MIT Block-Sparse-Attention result is a structural and
 correctness checkpoint, not the acceptance denominator. Its physical body is
 SM80-oriented even when compiled for SM90, so it cannot establish the
@@ -1360,8 +1383,9 @@ boundary manifest, source pins, correctness records, and deterministic hashes
 are frozen under
 `benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`.
 
-This exactly matched expert comparison closes the 1.20-times completion gate.
-It is a loose physical denominator: FlashMoBA preserves per-token/per-head
+This exactly matched comparison closes the old block-shared semantic boundary,
+but not the refreshed strong-oracle performance gate. It is a loose physical
+denominator: FlashMoBA preserves per-token/per-head
 row-list generality and its active kernel remains SM80 MMA plus `cp.async`,
 whereas the generated path is specialized to a block-shared relation and uses
 a Hopper-native skeleton. Therefore the 0.117237-times result is not a claim
@@ -1388,8 +1412,8 @@ right-resource staging and deterministic online-state merge, so Proof C's
 structural gate is closed. Its first CUDA-core implementation is approximately
 188 times slower than query-major and is retained as a negative physical
 result; no sequence-squared or per-edge partial state is materialized. The
-performance gate is closed by the exact FlashMoBA comparison above, subject to
-the explicit oracle-tightness caveat.
+refreshed performance gate remains open until the natural MSA program is
+synthesized and compared locally on SM100.
 
 #### Acceptance
 
@@ -1404,8 +1428,8 @@ the explicit oracle-tightness caveat.
 * matched 1.1× stretch result reported without making it an acceptance gate;
 * query-major and KV-major both execute physically through the generic
   RelationPlan/Fold machinery;
-* completion is checked against the matched FlashMoBA boundary, while oracle
-  tightness and the current MIT secondary control are reported separately;
+* completion is checked against a locally measured matched MSA full-route
+  boundary on SM100; FlashMoBA and MIT remain secondary controls;
 * unmatched Seer timing is reported only as a historical diagnostic.
 
 ---
