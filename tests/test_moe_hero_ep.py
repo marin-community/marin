@@ -97,8 +97,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
-    for name, value in train.HERO_EP_RUNTIME_ENV.items():
-        assert os.environ[name] == value
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
 
 
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):

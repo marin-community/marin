@@ -52,7 +52,7 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
-    "JAX_ENABLE_PGLE": "false",
+    "JAX_ENABLE_PGLE": "true",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
