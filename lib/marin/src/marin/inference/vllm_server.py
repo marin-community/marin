@@ -142,8 +142,12 @@ class VllmLauncherWithEnvironment:
 
 
 @dataclass(frozen=True)
-class WorkspaceVllm:
-    """Run the ``vllm`` installed in the active workspace venv (the TPU-vLLM stack)."""
+class PreinstalledVllm:
+    """Run the ``vllm`` already installed on the active venv PATH (GPU task-image serving).
+
+    Marin provisions nothing here: the vLLM binary is expected to be preinstalled, e.g. baked
+    into a ``--task-image``. It is not a workspace dependency.
+    """
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
@@ -152,7 +156,7 @@ class WorkspaceVllm:
         return {}
 
     def cache_identity(self) -> str:
-        return f"workspace:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
+        return f"preinstalled:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -709,8 +713,9 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
-        self.launcher: VllmLauncher = launcher or WorkspaceVllm()
+        # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
+        # GPU-fork serving pass an isolated uvx launcher.
+        self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
         self._ready_on_enter = wait_for_ready
 

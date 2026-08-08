@@ -21,10 +21,10 @@ from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
+    PreinstalledVllm,
     VllmEnvironment,
     VllmLauncherWithEnvironment,
     VllmServerHandle,
-    WorkspaceVllm,
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
@@ -42,12 +42,12 @@ def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
 
 def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     cuda = IsolatedCudaVllm(version="test")
-    workspace = WorkspaceVllm()
+    preinstalled = PreinstalledVllm()
 
     assert _starts_nccl_ras_probe(cuda)
     assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
-    assert not _starts_nccl_ras_probe(workspace)
-    assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(workspace, {"VLLM_HOST_IP": "10.0.0.2"}))
+    assert not _starts_nccl_ras_probe(preinstalled)
+    assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(preinstalled, {"VLLM_HOST_IP": "10.0.0.2"}))
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

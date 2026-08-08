@@ -14,9 +14,14 @@ architecture-specific wheel URLs and SHA-256 digests. It is updated from the
 release manifest only after the H100 and GB200 publication gates pass. It is
 not a uv project and the nightly update does not advance it.
 
+`vllm/tpu-forks.toml` records the `vllm` and `tpu-inference` fork SHAs for the
+TPU serving stack, which runs from an isolated uvx env rather than the workspace.
+It is not a uv project either; refresh it through
+`.agents/skills/refresh-tpu-vllm-forks/SKILL.md`.
+
 The packaged pin table at
-`lib/marin/src/marin/external_dependencies.py` is generated from the locks,
-the vLLM GPU release config, and the root TPU serving lock. Runtime code imports
+`lib/marin/src/marin/external_dependencies.py` is generated from the locks, the
+vLLM GPU release config, and the TPU serving fork descriptor. Runtime code imports
 that module instead of reading repository-relative configuration.
 
 Advance one project with:
@@ -33,9 +38,9 @@ only the promoted vLLM release after editing `vllm/gpu-release.toml` with:
 uv run config/update-external.py vllm
 ```
 
-The generated module also carries the isolated TPU-vLLM requirements from the
-root `uv.lock`; those forks are not part of the nightly upgrade set. Verify
-that all generated state is current without contacting the repositories:
+The generated module also carries the isolated TPU-vLLM requirements from
+`vllm/tpu-forks.toml`; those forks are not part of the nightly upgrade set.
+Verify that all generated state is current without contacting the repositories:
 
 ```bash
 uv run config/update-external.py --check
@@ -60,8 +65,8 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
-- `vllm` records only promoted GPU wheels. Workspace and TPU source requirements
-  continue to come from the root `uv.lock`.
+- `vllm` records the promoted GPU wheels (`gpu-release.toml`) and the TPU source
+  fork pins (`tpu-forks.toml`). Neither is a workspace dependency.
 
 To add another external tool, create an isolated project and register its
 directory, distribution, and generated constant in `config/update-external.py`.
