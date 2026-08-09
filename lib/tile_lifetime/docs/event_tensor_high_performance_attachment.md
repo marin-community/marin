@@ -1,8 +1,10 @@
 # Event Tensor attachment to high-throughput GPU skeletons
 
-Status: the SM90 streaming Contract/Fold path has a structural attachment. It
-has not yet been replayed on H100. The grouped-GEMM path remains blocked at an
-opaque primitive synchronization contract.
+Status: the SM90 streaming Contract/Fold path has a structural attachment. An
+H100 replay is blocked by the same pre-existing normalized-exponential CuTe
+verification failure in both the canonical and Event Tensor sources. The
+grouped-GEMM path remains blocked at an opaque primitive synchronization
+contract.
 
 ## Boundary
 
