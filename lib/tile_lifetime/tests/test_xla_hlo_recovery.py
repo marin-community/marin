@@ -13,6 +13,7 @@ from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
     inline_elementwise_fusions,
     parse_hlo_module_text,
+    recover_multi_output_contract_map_regions,
     recover_pair_map_regions,
 )
 
@@ -51,6 +52,28 @@ ENTRY %main (arg: f32[8,32], lhs_weight: f32[32,64], rhs_weight: f32[32,64], dow
   %mapped = bf16[8,64]{1,0} fusion(%lhs, %rhs), kind=kLoop, calls=%scalar_body
   %mapped_wide = f32[8,64]{1,0} convert(%mapped)
   ROOT %down = f32[8,32]{1,0} dot(%mapped_wide, %down_weight), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+"""
+
+_SYNTHETIC_REVERSE_CONTRACT_MAP = """\
+HloModule synthetic_reverse
+
+ENTRY %main (cotangent: f32[8,32], \
+weight: f32[32,64], saved_left: f32[8,64], \
+saved_right: f32[8,64], left_weight: f32[64,16], \
+right_weight: f32[64,16]) -> (f32[8,16], f32[8,16]) {
+  %cotangent = f32[8,32]{1,0} parameter(0)
+  %weight = f32[32,64]{1,0} parameter(1)
+  %saved_left = f32[8,64]{1,0} parameter(2)
+  %saved_right = f32[8,64]{1,0} parameter(3)
+  %left_weight = f32[64,16]{1,0} parameter(4)
+  %right_weight = f32[64,16]{1,0} parameter(5)
+  %projected = f32[8,64]{1,0} dot(%cotangent, %weight), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %left_map = f32[8,64]{1,0} multiply(%projected, %saved_left)
+  %right_map = f32[8,64]{1,0} multiply(%projected, %saved_right)
+  %left_result = f32[8,16]{1,0} dot(%left_map, %left_weight), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %right_result = f32[8,16]{1,0} dot(%right_map, %right_weight), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  ROOT %result = (f32[8,16]{1,0}, f32[8,16]{1,0}) tuple(%left_result, %right_result)
 }
 """
 
@@ -169,3 +192,33 @@ def test_pair_map_recovery_diagnostic_records_candidates_before_selection() -> N
     assert candidate["index"] == 0
     assert candidate["output_shapes"] == ("f32[8,64]{1,0}",)
     assert candidate["external_user_counts"] == (1,)
+
+
+def test_reverse_contract_map_recovery_exposes_two_generated_map_results() -> None:
+    report = recover_multi_output_contract_map_regions(_SYNTHETIC_REVERSE_CONTRACT_MAP)
+
+    assert report.contract_count == 3
+    assert len(report.regions) == 1
+    region = report.regions[0]
+    assert region.contract.output_shape == "f32[8,64]{1,0}"
+    assert region.map_opcodes == ("multiply", "multiply")
+    assert tuple(value.shape for value in region.boundary.outputs) == ("f32[8,64]{1,0}",) * 2
+    assert len(region.consumer_contracts) == 2
+
+
+def test_gpu_grug_hlo_recovers_generic_reverse_contract_map_boundary() -> None:
+    artifact = (
+        Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_backward_multi_output_gpu_sm100_diagnostic_v0/"
+        "original-gpu-pre-scheduler-hlo.txt.gz"
+    )
+    hlo_text = gzip.decompress(artifact.read_bytes()).decode()
+    report = recover_multi_output_contract_map_regions(hlo_text)
+
+    assert report.contract_count == 68
+    assert len(report.regions) == 1
+    region = report.regions[0]
+    assert region.contract.output_shape == "bf16[8,32]{1,0}"
+    assert region.map_opcodes == ("multiply",) * 5 + ("add",)
+    assert tuple(value.shape for value in region.boundary.outputs) == ("bf16[8,32]{1,0}",) * 2
+    assert len(region.boundary.inputs) == 7
+    assert len(region.consumer_contracts) == 2

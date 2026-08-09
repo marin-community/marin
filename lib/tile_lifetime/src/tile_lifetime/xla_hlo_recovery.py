@@ -254,6 +254,26 @@ class PairMapRecoveryReport:
 
 
 @dataclass(frozen=True)
+class RecoveredMultiOutputContractMapRegion:
+    """One Contract whose pointwise users expose several boundary values."""
+
+    contract: ContractRecord
+    map_opcodes: tuple[str, ...]
+    boundary: RecoveredEntryRegionBoundary
+    consumer_contracts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MultiOutputContractMapRecoveryReport:
+    """Generic post-SPMD Contract-to-multi-output-Map candidates."""
+
+    computation_count: int
+    inlined_node_count: int
+    contract_count: int
+    regions: tuple[RecoveredMultiOutputContractMapRegion, ...]
+
+
+@dataclass(frozen=True)
 class EntryRegionValue:
     """One physical entry-computation value on a recovered region boundary."""
 
@@ -288,11 +308,6 @@ def form_pair_map_entry_region(
     graph = inline_elementwise_fusions(module)
     entry = module.computation(module.entry)
     instructions = {instruction.name: instruction for instruction in entry.instructions}
-    source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
-    users: dict[str, list[str]] = {instruction.name: [] for instruction in entry.instructions}
-    for instruction in entry.instructions:
-        for operand in instruction.operands:
-            users.setdefault(operand, []).append(instruction.name)
 
     def entry_instruction_for(node_id: str) -> str:
         prefix = f"{module.entry}/"
@@ -307,6 +322,81 @@ def form_pair_map_entry_region(
         entry_instruction_for(region.left_contract.node),
         entry_instruction_for(region.right_contract.node),
     }
+    return _form_entry_region(module, graph, entry, seeds)
+
+
+def recover_multi_output_contract_map_regions(hlo_text: str) -> MultiOutputContractMapRecoveryReport:
+    """Recover Contracts whose scalar descendants produce several live values.
+
+    The recovery does not assume a particular activation or reverse rule. Side
+    inputs to the Map remain explicit boundary values. A candidate must expose
+    at least two same-shaped results, each consumed by a downstream Contract.
+    """
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    candidates: list[RecoveredMultiOutputContractMapRegion] = []
+    contract_count = sum(node.opcode == "dot" for node in graph.nodes)
+    for instruction in entry.instructions:
+        root = graph.node(graph.entry_value(instruction.name))
+        stripped = graph.strip_wrappers(root.id)
+        contract_node = graph.node(stripped.base)
+        if contract_node.opcode != "dot" or len(contract_node.operands) != 2:
+            continue
+        boundary = _form_entry_region(module, graph, entry, {instruction.name})
+        if len(boundary.internal_instructions) == 1 or len(boundary.outputs) < 2:
+            continue
+        output_shapes = {output.shape for output in boundary.outputs}
+        if len(output_shapes) != 1:
+            continue
+        consumer_contracts: set[str] = set()
+        every_output_reaches_contract = True
+        for output in boundary.outputs:
+            reached = _first_entry_contract_users(output.instruction, instructions)
+            every_output_reaches_contract &= bool(reached)
+            consumer_contracts.update(reached)
+        if not every_output_reaches_contract:
+            continue
+        map_opcodes = tuple(
+            graph.node(graph.entry_value(name)).opcode
+            for name in boundary.internal_instructions
+            if name != instruction.name
+        )
+        candidates.append(
+            RecoveredMultiOutputContractMapRegion(
+                contract=ContractRecord(
+                    node=contract_node.id,
+                    lhs=graph.strip_wrappers(contract_node.operands[0]),
+                    rhs=graph.strip_wrappers(contract_node.operands[1]),
+                    output_shape=contract_node.shape,
+                ),
+                map_opcodes=map_opcodes,
+                boundary=boundary,
+                consumer_contracts=tuple(sorted(consumer_contracts)),
+            )
+        )
+    return MultiOutputContractMapRecoveryReport(
+        computation_count=len(module.computations),
+        inlined_node_count=len(graph.nodes),
+        contract_count=contract_count,
+        regions=tuple(candidates),
+    )
+
+
+def _form_entry_region(
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    entry: HloComputation,
+    seeds: set[str],
+) -> RecoveredEntryRegionBoundary:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    users: dict[str, list[str]] = {instruction.name: [] for instruction in entry.instructions}
+    for instruction in entry.instructions:
+        for operand in instruction.operands:
+            users.setdefault(operand, []).append(instruction.name)
+
     internal = set(seeds)
     pending = list(seeds)
     while pending:
@@ -334,6 +424,31 @@ def form_pair_map_entry_region(
         has_explicit_sharding=any("sharding=" in instructions[name].attributes for name in internal),
         has_side_effect=any("custom_call_has_side_effect=true" in instructions[name].attributes for name in internal),
     )
+
+
+def _first_entry_contract_users(
+    instruction_name: str,
+    instructions: dict[str, HloInstruction],
+) -> tuple[str, ...]:
+    users: dict[str, list[str]] = {name: [] for name in instructions}
+    for instruction in instructions.values():
+        for operand in instruction.operands:
+            users.setdefault(operand, []).append(instruction.name)
+    pending = list(users.get(instruction_name, ()))
+    visited: set[str] = set()
+    contracts: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        instruction = instructions[name]
+        if instruction.opcode == "dot":
+            contracts.add(name)
+            continue
+        if instruction.opcode in _WRAPPER_OPCODES | {"transpose"}:
+            pending.extend(users.get(name, ()))
+    return tuple(sorted(contracts))
 
 
 def parse_hlo_module_text(hlo_text: str) -> HloModuleGraph:
@@ -658,6 +773,6 @@ def _first_contract_users(
 def _deduplicate_regions(regions: list[RecoveredPairMapRegion]) -> list[RecoveredPairMapRegion]:
     unique: dict[tuple[str, str, str], RecoveredPairMapRegion] = {}
     for region in regions:
-        contracts = tuple(sorted((region.left_contract.node, region.right_contract.node)))
-        unique[(*contracts, region.map_root)] = region
+        left_contract, right_contract = sorted((region.left_contract.node, region.right_contract.node))
+        unique[(left_contract, right_contract, region.map_root)] = region
     return list(unique.values())
