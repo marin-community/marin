@@ -2403,5 +2403,5 @@ author: dlwh
 - Scope: this remains a structural schedule candidate. XLA still owns the
   executable collective transport, and no NCCL or device-side transport choice
   appears in the generic plan.
-- Verification: 33 focused collective/Event Tensor tests pass and scoped
-  pre-commit checks pass.
+- Verification: 33 focused collective/Event Tensor tests and all 387
+  tile-lifetime tests pass; scoped pre-commit checks pass.
