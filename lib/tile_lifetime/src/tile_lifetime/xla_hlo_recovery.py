@@ -14,10 +14,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_COMPUTATION_HEADER = re.compile(r"^(?P<entry>ENTRY )?%(?P<name>[^ ]+) .*\{$")
-_INSTRUCTION_NAME = re.compile(r"^\s*(?P<root>ROOT )?%(?P<name>[^ ]+) = (?P<body>.*)$")
+_COMPUTATION_HEADER = re.compile(r"^(?P<entry>ENTRY )?%?(?P<name>[^ ]+) .*\{$")
+_INSTRUCTION_NAME = re.compile(r"^\s*(?P<root>ROOT )?%?(?P<name>[^ ]+) = (?P<body>.*)$")
 _VALUE_REFERENCE = re.compile(r"%([A-Za-z0-9_.-]+)")
-_CALL_REFERENCE = re.compile(r"(?:calls|to_apply)=%([A-Za-z0-9_.-]+)")
+_CALL_REFERENCE = re.compile(r"(?:calls|to_apply)=%?([A-Za-z0-9_.-]+)")
 _PARAMETER_NUMBER = re.compile(r"parameter\((\d+)\)")
 
 _POINTWISE_OPCODES = frozenset(
@@ -691,6 +691,15 @@ def _parse_instruction(name: str, body: str, is_root: bool) -> HloInstruction:
     operands_text = body[open_parenthesis + 1 : close_parenthesis]
     attributes = body[close_parenthesis + 1 :]
     operands = tuple(_VALUE_REFERENCE.findall(operands_text))
+    if not operands and opcode not in {"constant", "iota", "parameter"}:
+        # JAX <=0.10 renders otherwise equivalent HLO without the modern `%`
+        # sigil.  Accept that public dump form so frozen and live compiler IR
+        # exercise the same recovery path.
+        operands = tuple(
+            value
+            for value in (candidate.strip() for candidate in operands_text.split(","))
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", value)
+        )
     return HloInstruction(
         name=name,
         opcode=opcode,
