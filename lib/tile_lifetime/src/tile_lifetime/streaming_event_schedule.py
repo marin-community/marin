@@ -5,7 +5,7 @@
 
 This module is below tensor semantics and above CUDA synchronization.  It
 derives the logical producer/consumer and buffer-reuse edges implemented by a
-Q-resident streaming contraction skeleton.  Backend-specific barrier IDs and
+resident-left streaming contraction skeleton. Backend-specific barrier IDs and
 pipeline classes remain physical allocation choices.
 """
 
@@ -44,11 +44,11 @@ class StreamingContractFoldDescriptor:
     """Target-independent facts for one resident-left streaming skeleton.
 
     This descriptor is produced after tensor semantics have been decomposed
-    into two Contracts around an ordered Fold.  It deliberately carries no
-    attention operation, mask, normalized-exponential, or model identity.
-    Those semantics determine the task graph before this schedule boundary;
-    Event Tensor construction only needs task names, extents, payload widths,
-    and the selected bounded pipeline shape.
+    into two Contracts around an ordered Fold. It deliberately carries no
+    tensor-operation or model identity. Those semantics determine the task
+    graph before this schedule boundary; Event Tensor construction only needs
+    task names, extents, payload widths, and the selected bounded pipeline
+    shape.
     """
 
     first_contract_name: str
@@ -117,18 +117,18 @@ class StreamingPipelineDataflow:
     """Kernel-local task graph and bounded buffers for two tile generations."""
 
     program: EventDataflowProgram
-    query_stage: TaskFamily
-    key_stage: TaskFamily
-    value_stage: TaskFamily
+    resident_input_stage: TaskFamily
+    first_streamed_input_stage: TaskFamily
+    second_streamed_input_stage: TaskFamily
     first_contract: TaskFamily
     fold_update: TaskFamily
     second_contract: TaskFamily
     finalize: TaskFamily
     partition_count: int
     generation_count: int
-    query_buffer: BoundedBufferPlan
-    key_buffer: BoundedBufferPlan
-    value_buffer: BoundedBufferPlan
+    resident_input_buffer: BoundedBufferPlan
+    first_streamed_input_buffer: BoundedBufferPlan
+    second_streamed_input_buffer: BoundedBufferPlan
 
 
 @dataclass(frozen=True)
@@ -138,37 +138,37 @@ class StreamingPhysicalEventSchedule:
     dataflow: StreamingPipelineDataflow
     audit: EventRealizationAudit
     workers: StreamingWorkerAssignment
-    query_stages: int
-    key_stages: int
-    value_stages: int
+    resident_input_stages: int
+    first_streamed_input_stages: int
+    second_streamed_input_stages: int
     barriers_per_stage: int
-    query_transaction_bytes: int
-    key_transaction_bytes: int
-    value_transaction_bytes: int
+    resident_input_transaction_bytes: int
+    first_streamed_input_transaction_bytes: int
+    second_streamed_input_transaction_bytes: int
     fingerprint: str
 
     @property
-    def query_barrier_slots(self) -> int:
-        """Return full/empty barrier storage required for Q."""
-        return self.query_stages * self.barriers_per_stage
+    def resident_input_barrier_slots(self) -> int:
+        """Return full/empty barrier storage for the resident input."""
+        return self.resident_input_stages * self.barriers_per_stage
 
     @property
-    def key_barrier_slots(self) -> int:
-        """Return full/empty barrier storage required for K."""
-        return self.key_stages * self.barriers_per_stage
+    def first_streamed_input_barrier_slots(self) -> int:
+        """Return full/empty barrier storage for the first streamed input."""
+        return self.first_streamed_input_stages * self.barriers_per_stage
 
     @property
-    def value_barrier_slots(self) -> int:
-        """Return full/empty barrier storage required for V."""
-        return self.value_stages * self.barriers_per_stage
+    def second_streamed_input_barrier_slots(self) -> int:
+        """Return full/empty barrier storage for the second streamed input."""
+        return self.second_streamed_input_stages * self.barriers_per_stage
 
 
 def verify_streaming_event_backend_parameters(
     schedule: StreamingPhysicalEventSchedule,
     *,
-    query_stages: int,
-    key_stages: int,
-    value_stages: int,
+    resident_input_stages: int,
+    first_streamed_input_stages: int,
+    second_streamed_input_stages: int,
     barriers_per_stage: int,
     transfer_warps: int,
     matrix_warpgroups: int,
@@ -181,18 +181,18 @@ def verify_streaming_event_backend_parameters(
     truth. Concrete barrier identifiers are intentionally outside this check.
     """
     actual = {
-        "query_stages": query_stages,
-        "key_stages": key_stages,
-        "value_stages": value_stages,
+        "resident_input_stages": resident_input_stages,
+        "first_streamed_input_stages": first_streamed_input_stages,
+        "second_streamed_input_stages": second_streamed_input_stages,
         "barriers_per_stage": barriers_per_stage,
         "transfer_warps": transfer_warps,
         "matrix_warpgroups": matrix_warpgroups,
         "scheduler_arrival_threads": scheduler_arrival_threads,
     }
     expected = {
-        "query_stages": schedule.query_stages,
-        "key_stages": schedule.key_stages,
-        "value_stages": schedule.value_stages,
+        "resident_input_stages": schedule.resident_input_stages,
+        "first_streamed_input_stages": schedule.first_streamed_input_stages,
+        "second_streamed_input_stages": schedule.second_streamed_input_stages,
         "barriers_per_stage": schedule.barriers_per_stage,
         "transfer_warps": schedule.workers.transfer_warps,
         "matrix_warpgroups": schedule.workers.matrix_warpgroups,
@@ -208,15 +208,15 @@ def verify_streaming_event_backend_parameters(
 def derive_streaming_physical_event_schedule(
     descriptor: StreamingContractFoldDescriptor,
 ) -> StreamingPhysicalEventSchedule:
-    """Derive the synchronization contract for a Q-resident streaming skeleton.
+    """Derive synchronization for a resident-left streaming skeleton.
 
-    The task graph is a kernel-local template.  Two query-tile generations are
-    sufficient to expose Q reuse, while every K/V partition is represented so
-    pipeline-slot generations and the final producer tail are exact.
+    The task graph is a kernel-local template. Two resident-tile generations
+    expose reuse, while every streamed partition is represented so pipeline
+    generations and the final producer tail are exact.
     """
-    query_tile = descriptor.resident_tile_size
-    key_tile = descriptor.streamed_tile_size
-    partition_count = ceil(descriptor.fold_extent / key_tile)
+    resident_tile = descriptor.resident_tile_size
+    streamed_tile = descriptor.streamed_tile_size
+    partition_count = ceil(descriptor.fold_extent / streamed_tile)
     pipeline_depth = descriptor.pipeline_depth
 
     dataflow = _derive_pipeline_dataflow(
@@ -225,9 +225,9 @@ def derive_streaming_physical_event_schedule(
         pipeline_depth=pipeline_depth,
         generation_count=2,
     )
-    matrix_warpgroups = query_tile // 64
-    if matrix_warpgroups <= 0 or query_tile % 64:
-        raise ValueError("the physical worker decomposition requires query tiles divisible by 64")
+    matrix_warpgroups = resident_tile // 64
+    if matrix_warpgroups <= 0 or resident_tile % 64:
+        raise ValueError("the physical worker decomposition requires resident tiles divisible by 64")
     workers = StreamingWorkerAssignment(
         transfer_warps=1,
         transfer_warpgroup_threads=128,
@@ -238,8 +238,8 @@ def derive_streaming_physical_event_schedule(
     payload = {
         "partition_count": partition_count,
         "pipeline_depth": pipeline_depth,
-        "query_tile": query_tile,
-        "key_tile": key_tile,
+        "resident_tile": resident_tile,
+        "streamed_tile": streamed_tile,
         "workers": {
             "transfer_warps": workers.transfer_warps,
             "matrix_warpgroups": workers.matrix_warpgroups,
@@ -247,9 +247,18 @@ def derive_streaming_physical_event_schedule(
         },
         "events": tuple((entry.plan_name, entry.kind.value, entry.mechanism) for entry in audit.entries),
         "buffers": {
-            "query": (dataflow.query_buffer.capacity, dataflow.query_buffer.generations),
-            "key": (dataflow.key_buffer.capacity, dataflow.key_buffer.generations),
-            "value": (dataflow.value_buffer.capacity, dataflow.value_buffer.generations),
+            "resident_input": (
+                dataflow.resident_input_buffer.capacity,
+                dataflow.resident_input_buffer.generations,
+            ),
+            "first_streamed_input": (
+                dataflow.first_streamed_input_buffer.capacity,
+                dataflow.first_streamed_input_buffer.generations,
+            ),
+            "second_streamed_input": (
+                dataflow.second_streamed_input_buffer.capacity,
+                dataflow.second_streamed_input_buffer.generations,
+            ),
         },
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -257,13 +266,17 @@ def derive_streaming_physical_event_schedule(
         dataflow=dataflow,
         audit=audit,
         workers=workers,
-        query_stages=1,
-        key_stages=pipeline_depth,
-        value_stages=pipeline_depth,
+        resident_input_stages=1,
+        first_streamed_input_stages=pipeline_depth,
+        second_streamed_input_stages=pipeline_depth,
         barriers_per_stage=2,
-        query_transaction_bytes=query_tile * descriptor.resident_reduction_dimension * descriptor.element_bytes,
-        key_transaction_bytes=key_tile * descriptor.streamed_reduction_dimension * descriptor.element_bytes,
-        value_transaction_bytes=key_tile * descriptor.output_dimension * descriptor.element_bytes,
+        resident_input_transaction_bytes=(
+            resident_tile * descriptor.resident_reduction_dimension * descriptor.element_bytes
+        ),
+        first_streamed_input_transaction_bytes=(
+            streamed_tile * descriptor.streamed_reduction_dimension * descriptor.element_bytes
+        ),
+        second_streamed_input_transaction_bytes=(streamed_tile * descriptor.output_dimension * descriptor.element_bytes),
         fingerprint=fingerprint,
     )
 
@@ -279,9 +292,11 @@ def _derive_pipeline_dataflow(
     partition_axis = TaskAxis("fold_partition", partition_count)
     generation_domain = (generation_axis,)
     partition_domain = (generation_axis, partition_axis)
-    query_stage = TaskFamily("query_stage", generation_domain, placement="transfer_workers")
-    key_stage = TaskFamily("key_stage", partition_domain, placement="transfer_workers")
-    value_stage = TaskFamily("value_stage", partition_domain, placement="transfer_workers")
+    resident_input_stage = TaskFamily("resident_input_stage", generation_domain, placement="transfer_workers")
+    first_streamed_input_stage = TaskFamily("first_streamed_input_stage", partition_domain, placement="transfer_workers")
+    second_streamed_input_stage = TaskFamily(
+        "second_streamed_input_stage", partition_domain, placement="transfer_workers"
+    )
     first_contract = TaskFamily(descriptor.first_contract_name, partition_domain, placement="matrix_workers")
     fold_update = TaskFamily(descriptor.fold_update_name, partition_domain, placement="matrix_workers")
     second_contract = TaskFamily(descriptor.second_contract_name, partition_domain, placement="matrix_workers")
@@ -293,9 +308,9 @@ def _derive_pipeline_dataflow(
         for generation in range(generation_count)
         for partition in range(partition_count)
     )
-    query_to_first_contract = TaskDependence(
+    resident_input_to_first_contract = TaskDependence(
         TaskRelation.from_pairs(
-            query_stage,
+            resident_input_stage,
             first_contract,
             tuple(
                 ((generation,), (generation, partition))
@@ -305,13 +320,15 @@ def _derive_pipeline_dataflow(
         ),
         visibility,
     )
-    key_to_first_contract = TaskDependence(TaskRelation.from_pairs(key_stage, first_contract, pointwise), visibility)
+    first_streamed_input_to_first_contract = TaskDependence(
+        TaskRelation.from_pairs(first_streamed_input_stage, first_contract, pointwise), visibility
+    )
     first_contract_to_fold = TaskDependence(TaskRelation.from_pairs(first_contract, fold_update, pointwise), visibility)
     fold_to_second_contract = TaskDependence(
         TaskRelation.from_pairs(fold_update, second_contract, pointwise), visibility
     )
-    value_to_second_contract = TaskDependence(
-        TaskRelation.from_pairs(value_stage, second_contract, pointwise), visibility
+    second_streamed_input_to_second_contract = TaskDependence(
+        TaskRelation.from_pairs(second_streamed_input_stage, second_contract, pointwise), visibility
     )
     second_contract_to_next_first_contract = TaskDependence(
         TaskRelation.from_pairs(
@@ -334,22 +351,30 @@ def _derive_pipeline_dataflow(
         visibility,
     )
     initial_dependences = (
-        query_to_first_contract,
-        key_to_first_contract,
+        resident_input_to_first_contract,
+        first_streamed_input_to_first_contract,
         first_contract_to_fold,
         fold_to_second_contract,
-        value_to_second_contract,
+        second_streamed_input_to_second_contract,
         second_contract_to_next_first_contract,
         second_contract_to_finalize,
     )
-    families = (query_stage, key_stage, value_stage, first_contract, fold_update, second_contract, finalize)
+    families = (
+        resident_input_stage,
+        first_streamed_input_stage,
+        second_streamed_input_stage,
+        first_contract,
+        fold_update,
+        second_contract,
+        finalize,
+    )
     initial_program = _event_program(families, initial_dependences)
 
-    query_buffer = derive_bounded_buffer_plan(
-        name="query_pipeline",
+    resident_input_buffer = derive_bounded_buffer_plan(
+        name="resident_input_pipeline",
         program=initial_program,
-        producer=query_stage,
-        uses=(query_to_first_contract.relation,),
+        producer=resident_input_stage,
+        uses=(resident_input_to_first_contract.relation,),
         capacity=1,
         slot_for={(generation,): 0 for generation in range(generation_count)},
         generation_for={(generation,): generation for generation in range(generation_count)},
@@ -360,24 +385,24 @@ def _derive_pipeline_dataflow(
         generation, partition = coordinate
         return generation * partition_count + partition
 
-    pipeline_coordinates = key_stage.coordinates
+    pipeline_coordinates = first_streamed_input_stage.coordinates
     slots = {coordinate: linear_index(coordinate) % pipeline_depth for coordinate in pipeline_coordinates}
     generations = {coordinate: linear_index(coordinate) // pipeline_depth for coordinate in pipeline_coordinates}
-    key_buffer = derive_bounded_buffer_plan(
-        name="key_pipeline",
+    first_streamed_input_buffer = derive_bounded_buffer_plan(
+        name="first_streamed_input_pipeline",
         program=initial_program,
-        producer=key_stage,
-        uses=(key_to_first_contract.relation,),
+        producer=first_streamed_input_stage,
+        uses=(first_streamed_input_to_first_contract.relation,),
         capacity=pipeline_depth,
         slot_for=slots,
         generation_for=generations,
         visibility=visibility,
     )
-    value_buffer = derive_bounded_buffer_plan(
-        name="value_pipeline",
+    second_streamed_input_buffer = derive_bounded_buffer_plan(
+        name="second_streamed_input_pipeline",
         program=initial_program,
-        producer=value_stage,
-        uses=(value_to_second_contract.relation,),
+        producer=second_streamed_input_stage,
+        uses=(second_streamed_input_to_second_contract.relation,),
         capacity=pipeline_depth,
         slot_for=slots,
         generation_for=generations,
@@ -385,26 +410,26 @@ def _derive_pipeline_dataflow(
     )
     dependences = (
         *initial_dependences,
-        *query_buffer.reuse_dependences,
-        *key_buffer.reuse_dependences,
-        *value_buffer.reuse_dependences,
+        *resident_input_buffer.reuse_dependences,
+        *first_streamed_input_buffer.reuse_dependences,
+        *second_streamed_input_buffer.reuse_dependences,
     )
     complete_program = _event_program(families, dependences)
     verify_event_dataflow_program(complete_program)
     return StreamingPipelineDataflow(
         program=complete_program,
-        query_stage=query_stage,
-        key_stage=key_stage,
-        value_stage=value_stage,
+        resident_input_stage=resident_input_stage,
+        first_streamed_input_stage=first_streamed_input_stage,
+        second_streamed_input_stage=second_streamed_input_stage,
         first_contract=first_contract,
         fold_update=fold_update,
         second_contract=second_contract,
         finalize=finalize,
         partition_count=partition_count,
         generation_count=generation_count,
-        query_buffer=query_buffer,
-        key_buffer=key_buffer,
-        value_buffer=value_buffer,
+        resident_input_buffer=resident_input_buffer,
+        first_streamed_input_buffer=first_streamed_input_buffer,
+        second_streamed_input_buffer=second_streamed_input_buffer,
     )
 
 
@@ -433,7 +458,11 @@ def _realization_audit(
 ) -> EventRealizationAudit:
     reuse_relations = {
         dependence.relation
-        for buffer in (dataflow.query_buffer, dataflow.key_buffer, dataflow.value_buffer)
+        for buffer in (
+            dataflow.resident_input_buffer,
+            dataflow.first_streamed_input_buffer,
+            dataflow.second_streamed_input_buffer,
+        )
         for dependence in buffer.reuse_dependences
     }
     realizations = []
@@ -442,9 +471,9 @@ def _realization_audit(
         endpoints = (relation.source, relation.target)
         if relation in reuse_relations:
             buffer_name = {
-                dataflow.query_stage.name: "Q",
-                dataflow.key_stage.name: "K",
-                dataflow.value_stage.name: "V",
+                dataflow.resident_input_stage.name: "resident input",
+                dataflow.first_streamed_input_stage.name: "first streamed input",
+                dataflow.second_streamed_input_stage.name: "second streamed input",
             }[relation.target.name]
             realizations.append(
                 physical_event_realization(
@@ -453,11 +482,15 @@ def _realization_audit(
                     reason="the derived last consumer must release a bounded slot before reuse",
                 )
             )
-        elif relation.source in (dataflow.query_stage, dataflow.key_stage, dataflow.value_stage):
+        elif relation.source in (
+            dataflow.resident_input_stage,
+            dataflow.first_streamed_input_stage,
+            dataflow.second_streamed_input_stage,
+        ):
             payload = {
-                dataflow.query_stage.name: "Q",
-                dataflow.key_stage.name: "K",
-                dataflow.value_stage.name: "V",
+                dataflow.resident_input_stage.name: "resident input",
+                dataflow.first_streamed_input_stage.name: "first streamed input",
+                dataflow.second_streamed_input_stage.name: "second streamed input",
             }[relation.source.name]
             realizations.append(
                 physical_event_realization(

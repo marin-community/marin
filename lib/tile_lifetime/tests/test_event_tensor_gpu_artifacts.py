@@ -53,7 +53,7 @@ def test_sm90_streaming_attachment_artifact_matches_the_derived_schedule_boundar
     schedule = derive_streaming_physical_event_schedule(streaming_contract_fold_event_descriptor(program))
 
     assert result["environment"]["hardware"] == "NVIDIA H100 80GB HBM3"
-    assert schedule.key_stages == schedule.value_stages == result["schedule"]["stages"]
+    assert schedule.first_streamed_input_stages == schedule.second_streamed_input_stages == result["schedule"]["stages"]
     assert schedule.workers.cta_threads == result["schedule"]["threads"]
     assert result["event_to_canonical_ratio"] < 1.01
     assert {capture["maximum_absolute_error"] for capture in result["event_tensor"]["captures"]} == {0.015625}

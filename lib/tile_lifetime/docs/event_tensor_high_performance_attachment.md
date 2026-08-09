@@ -42,29 +42,30 @@ The high-throughput implementation is
 | Q pipeline depth | Literal one stage | Q remains resident for one scheduled work tile; next tile is a new generation | Derived and checked |
 | Barrier storage per stage | Literal two entries | One full and one empty event realization per bounded-buffer slot | Derived and used by shared-storage construction |
 | TMA producer participants | Literal one cooperative warp | Selected transfer-worker assignment | Derived and checked |
-| Matrix consumer participants | Tiled-MMA size | `query_tile / 64` matrix warpgroups, four warps each | Derived independently and checked against the tiled MMA |
+| Matrix consumer participants | Tiled-MMA size | `resident_tile / 64` matrix warpgroups, four warps each | Derived independently and checked against the tiled MMA |
 | CTA threads | Recomputed in the skeleton | One transfer warpgroup plus derived matrix warpgroups | Derived and checked |
-| TMA transaction counts | CuTe layout byte size | Tile extent, head/value dimension, BF16 width | Derived independently and checked against CuTe |
-| K full event | Pipeline construction | `key_stage -> QK Contract` | Physical Event Tensor realization |
-| V full event | Pipeline construction | `value_stage -> PV Contract` | Physical Event Tensor realization |
-| Q full event | Pipeline construction | `query_stage -> every QK partition` | Physical Event Tensor realization |
-| K empty/reuse event | `consumer_release` after QK | Last consumer of each K item is QK | Derived `QK -> next key_stage` phased dependence |
-| V empty/reuse event | `consumer_release` after PV | Last consumer of each V item is PV | Derived `PV -> next value_stage` phased dependence |
-| Q empty/reuse event | Q release in the matrix body | Last Q consumer is the final QK partition | Derived `final QK -> next query_stage` phased dependence |
-| Ordered Fold handoff | Named scheduler barrier | `PV(partition) -> QK(partition + 1)` under the selected overlapping worker schedule | Physical with multiple matrix warpgroups; erased with one |
+| TMA transaction counts | CuTe layout byte size | Tile extents, input dimensions, BF16 width | Derived independently and checked against CuTe |
+| First streamed-input full event | Pipeline construction | `first_streamed_input_stage -> first Contract` | Physical Event Tensor realization |
+| Second streamed-input full event | Pipeline construction | `second_streamed_input_stage -> second Contract` | Physical Event Tensor realization |
+| Resident-input full event | Pipeline construction | `resident_input_stage -> every first-Contract partition` | Physical Event Tensor realization |
+| First streamed-input reuse event | First Contract's consumer release | Last consumer is the first Contract | Derived `first Contract -> next first_streamed_input_stage` phased dependence |
+| Second streamed-input reuse event | Second Contract's consumer release | Last consumer is the second Contract | Derived `second Contract -> next second_streamed_input_stage` phased dependence |
+| Resident-input reuse event | Resident-input release in the matrix body | Last consumer is the final first-Contract partition | Derived `final first Contract -> next resident_input_stage` phased dependence |
+| Ordered Fold handoff | Named scheduler barrier | `second Contract(partition) -> first Contract(partition + 1)` under the selected overlapping worker schedule | Physical with multiple matrix warpgroups; erased with one |
 | Scheduler arrival participants | Literal `2 * 128` threads | Pairwise handoff between adjacent 128-thread matrix warpgroups | Derived and checked |
-| Finalization readiness | Loop/control order | Last PV partition reaches finalization through the ordered recurrence | Event erased by proven program order |
-| Q/K/V phase seeds | Literal pipeline-state conventions | Need for distinct generations follows from buffer reuse; zero/one phase encoding belongs to CuTe | Backend-owned encoding |
-| Named barrier identifiers | FlashAttention-derived enum | Allocation among backend-reserved barrier IDs | Backend-owned allocation |
+| Finalization readiness | Loop/control order | Last second-Contract partition reaches finalization through the ordered recurrence | Event erased by proven program order |
+| Input phase seeds | Literal pipeline-state conventions | Need for distinct generations follows from buffer reuse; zero/one phase encoding belongs to CuTe | Backend-owned encoding |
+| Named barrier identifiers | Expert-derived enum | Allocation among backend-reserved barrier IDs | Backend-owned allocation |
 | Cluster initialization | Literal `(1, 1)` cluster shape | Current skeleton does not distribute one tile across a cluster | Physical schedule choice, not yet searched |
-| V-only producer tail | Handwritten load order | V is the last asynchronous producer in the chosen K-then-V transport order | Audited schedule fact; not yet emitted from Event Tensor IR |
+| Second-streamed-input producer tail | Handwritten load order | The second input is the last asynchronous producer in the chosen transport order | Audited schedule fact; not yet emitted from Event Tensor IR |
 
-Q, K, and V are intentionally separate. Combining K and V into one buffer
-would delay K reuse until PV finishes and would not describe the physical
-pipeline accurately.
+The current attention adapter binds the resident, first-streamed, and
+second-streamed roles to Q, K, and V. The generic schedule keeps all three
+buffers separate. Combining the streamed inputs would delay reuse of the first
+input until the second Contract finishes.
 
-The derivation uses two logical query-tile generations to expose Q-buffer
-reuse. It represents every K/V partition for each generation. Pipeline-depth
+The derivation uses two logical resident-tile generations to expose buffer
+reuse. It represents every streamed partition for each generation. Pipeline-depth
 and worker-decomposition mutations regenerate buffer assignments, generations,
 event realizations, barrier counts, and the audit fingerprint without a
 workload dispatch key.

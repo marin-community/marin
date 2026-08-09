@@ -103,13 +103,16 @@ def compile_h100_streaming_program(
     score_map = lowering.score_map
     schedule = lowering.schedule
     event_schedule = derive_streaming_physical_event_schedule(streaming_contract_fold_event_descriptor(program))
-    if event_schedule.key_stages != schedule.stages or event_schedule.value_stages != schedule.stages:
+    if (
+        event_schedule.first_streamed_input_stages != schedule.stages
+        or event_schedule.second_streamed_input_stages != schedule.stages
+    ):
         raise ValueError("Event Tensor buffer depth disagrees with the legalized streaming schedule")
     verify_streaming_event_backend_parameters(
         event_schedule,
-        query_stages=event_schedule.query_stages,
-        key_stages=event_schedule.key_stages,
-        value_stages=event_schedule.value_stages,
+        resident_input_stages=event_schedule.resident_input_stages,
+        first_streamed_input_stages=event_schedule.first_streamed_input_stages,
+        second_streamed_input_stages=event_schedule.second_streamed_input_stages,
         barriers_per_stage=event_schedule.barriers_per_stage,
         transfer_warps=event_schedule.workers.transfer_warps,
         matrix_warpgroups=event_schedule.workers.matrix_warpgroups,
@@ -127,7 +130,7 @@ def compile_h100_streaming_program(
         pack_gqa=schedule.pack_gqa,
         tile_m=schedule.tile_m,
         tile_n=schedule.tile_n,
-        num_stages=event_schedule.key_stages,
+        num_stages=event_schedule.first_streamed_input_stages,
         num_threads=schedule.threads,
         Q_in_regs=schedule.q_in_registers,
         score_mod=score_mod,
@@ -136,16 +139,16 @@ def compile_h100_streaming_program(
         output_scale=lowering.output_scale,
         intra_wg_overlap=schedule.intra_warpgroup_overlap,
         mma_pv_is_rs=schedule.pv_register_source,
-        query_pipeline_stages=event_schedule.query_stages,
-        key_pipeline_stages=event_schedule.key_stages,
-        value_pipeline_stages=event_schedule.value_stages,
+        query_pipeline_stages=event_schedule.resident_input_stages,
+        key_pipeline_stages=event_schedule.first_streamed_input_stages,
+        value_pipeline_stages=event_schedule.second_streamed_input_stages,
         pipeline_barriers_per_stage=event_schedule.barriers_per_stage,
         transfer_warps=event_schedule.workers.transfer_warps,
         matrix_warpgroups=event_schedule.workers.matrix_warpgroups,
         scheduler_arrival_threads=event_schedule.workers.scheduler_arrival_threads,
-        query_transaction_bytes=event_schedule.query_transaction_bytes,
-        key_transaction_bytes=event_schedule.key_transaction_bytes,
-        value_transaction_bytes=event_schedule.value_transaction_bytes,
+        query_transaction_bytes=event_schedule.resident_input_transaction_bytes,
+        key_transaction_bytes=event_schedule.first_streamed_input_transaction_bytes,
+        value_transaction_bytes=event_schedule.second_streamed_input_transaction_bytes,
     )
     fake_stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     cute_arguments = [to_cute_tensor(tensor) for tensor in (query, key, value, output)]
