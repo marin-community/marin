@@ -1,0 +1,31 @@
+{
+  "outputs_match": true,
+  "result_leaf_count": 53,
+  "bitwise_equal_leaf_count": 38,
+  "maximum_absolute_error": 9.760260581970215e-07,
+  "mean_absolute_error": 7.977750305934675e-11,
+  "custom_call_occurrences": {
+    "forward": 1,
+    "input_contracts": [1, 1],
+    "shared_contract_multi_map": 1,
+    "source_fold": 1,
+    "weight_gradients": [1, 1],
+    "weighted_relation_contract_fold": 1,
+    "normalized_exp_contract_forward": 1,
+    "normalized_exp_contract_reverse": 1,
+    "attention_backward": 1,
+    "axis_folds": [1, 1]
+  },
+  "handler_executions": {
+    "forward": 3,
+    "input_contracts": [3, 3],
+    "shared_contract_multi_map": 3,
+    "source_fold": 3,
+    "weight_gradients": [3, 3],
+    "weighted_relation_contract_fold": 3,
+    "normalized_exp_contract_forward": 3,
+    "normalized_exp_contract_reverse": 3,
+    "attention_backward": 3,
+    "axis_folds": [3, 3]
+  }
+}

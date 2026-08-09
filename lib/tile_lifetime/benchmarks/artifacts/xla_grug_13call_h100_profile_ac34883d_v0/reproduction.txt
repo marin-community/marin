@@ -1,0 +1,54 @@
+Source revision:
+ac34883d030f428b6c3230abca1226ce5e79c23c
+
+Local JAX rewrite preflight before allocation:
+
+PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD" \
+  uv run --with jax==0.11.0 --with jaxlib==0.11.0 python - <<'PY'
+from tile_lifetime.jax_hlo_rewrite_runtime import audit_hlo_rewrite_runtime, require_hlo_rewrite_runtime
+print(audit_hlo_rewrite_runtime())
+require_hlo_rewrite_runtime()
+PY
+
+The successful holder used Iris revision
+eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb:
+
+uv run --package marin-iris --extra controller scripts/iris/dev_gpu.py \
+  --config lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-grug-13call-profile allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 1 --memory 32GB --disk 50GB --timeout 1800 --pod-timeout 300
+
+The exact tracked Shuttle tree was transferred with `git archive` and verified
+by benchmark SHA-256
+`007bcf03074ef4bcf38e5f48d944e196798f4952e9c7f0f903f6fd9e616d4be3`.
+The pod then installed JAX, JAXLIB, the CUDA 13 plugin, and PJRT at 0.11.0 and
+passed the same rewrite preflight on the H100.
+
+Single profiling command:
+
+cd /app
+export PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD"
+export XLA_FLAGS="--xla_dump_to=/tmp/shuttle-grug-13call-profile/xla --xla_dump_hlo_as_text"
+nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none \
+  --force-overwrite=true \
+  --output /tmp/shuttle-grug-13call-profile/grug-13call \
+  /app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/xla_grug_routed_combined_gpu_custom_call.py \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a --repository "$PWD" \
+  --artifact-directory /tmp/shuttle-grug-13call-profile/artifact \
+  --output /tmp/shuttle-grug-13call-profile/artifact/summary.json \
+  --composition-mode shared_map_fused_reverses --warmup 0 --repeats 2
+
+Derived reports:
+
+nsys stats --force-export=true \
+  --report cuda_gpu_kern_sum,cuda_gpu_mem_time_sum,cuda_api_sum \
+  --format csv --output nsys-summary grug-13call.nsys-rep
+nsys export --type sqlite --force-overwrite=true \
+  --output grug-13call.sqlite grug-13call.nsys-rep
+
+The holder was released by interrupting the blocking allocator. A subsequent
+status check found no local session, and Kubernetes reported no pod for task ID
+`dlwh.dev-gpu-dlwh-shuttle-grug-13call-profile.0`.

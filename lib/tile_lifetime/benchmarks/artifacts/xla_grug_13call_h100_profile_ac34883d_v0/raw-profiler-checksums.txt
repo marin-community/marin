@@ -1,0 +1,8 @@
+Raw profiler files are retained only in the local mode-0700 directory:
+/private/tmp/shuttle-grug-13call-profile-secure-ac34883d03
+
+e639153d7a66d0926b2d8c1488400be73a08dc382916aa04a3a3cc5e7ecb27d2  grug-13call.nsys-rep
+8dab63eaeac4dec2aea2e80a536c064cb8a4cfa95d84f6f5fb9de37856bf310e  grug-13call.sqlite
+
+Neither raw file is committed because Nsight reports may contain process and
+environment metadata.

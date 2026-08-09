@@ -3132,3 +3132,39 @@ author: dlwh
   `.agents/projects/tile_lifetime_compiler/grug_low_rank_gated_product_training.md`.
 - Verification: four focused tests pass; Pyrefly reports zero errors; scoped
   pre-commit and `git diff --check` pass.
+
+### 2026-08-09 - TLTC-XLA-054 thirteen-call H100 attribution trace
+
+- Profiled the exact canonical `ac34883d03` thirteen-call
+  `shared_map_fused_reverses` path and stock XLA once in the same process on
+  one batch-priority H100. JAX/JAXLIB 0.11.0 and the public HLO rewrite runtime
+  passed preflight locally and in the allocation. This was attribution only:
+  no tuning, candidate sweep, or implementation change was made.
+- The profiler perturbs this sub-millisecond program, so the sealed 30-sample
+  result remains performance truth: Shuttle `0.731302 ms`, stock XLA
+  `0.591416 ms`, and a `0.139885 ms` gap. The traced process retained all 13
+  exact targets, 53 matching leaves, maximum absolute error
+  `9.760260582e-7`, and 38 bitwise-equal leaves.
+- In the final warmed trace, stock XLA occupies one `261.151 us` CUDA graph.
+  Shuttle spans `440.606 us`: nine graph segments (`228.863 us`), 28 direct
+  kernels (`166.335 us`), two 1-KiB D2D copies (`2.112 us`), and `44.224 us`
+  of inter-segment/unattributed gap. Generated direct work comprises seven GEMM
+  primitive launches (`97.280 us`) and 14 named generated kernels
+  (`60.479 us`); residual XLA direct kernels add `8.576 us`.
+- Final optimized HLO contains the same nine `copy` instructions in both paths.
+  Stock XLA has 62 dots, 252 fusions, six cuBLAS calls, and no Shuttle calls;
+  Shuttle has 49 dots, 239 fusions, three cuBLAS calls, and 13 Shuttle calls.
+  The gap is therefore primarily generated direct physical work plus command
+  graph fragmentation, not copy/layout conversion.
+- The smallest next experiment is to make one adjacent generic
+  Contract/Map/Fold cluster command-buffer-compatible as a single region. If
+  that does not close the gap, attach the generated GEMM-heavy reverse Maps and
+  Folds to generic Contract preparation/finalization. Do not target the D2D
+  copies first.
+- Raw Nsight reports remain in a mode-0700 local directory and are represented
+  in the repository only by SHA-256 checksums. Sanitized timelines, attribution
+  totals, exact commands, final optimized HLO, correctness evidence, and
+  allocation-release evidence are in
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_13call_h100_profile_ac34883d_v0/`.
+- The one-H100 allocation was released; both the local session and Kubernetes
+  pod lookup verify it absent.
