@@ -13,7 +13,13 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarKind,
     evaluate_cast_scalar_program,
 )
-from tile_lifetime.xla_relation_program_recovery import ContractChainRole, recover_relation_programs
+from tile_lifetime.xla_relation_program_recovery import (
+    ContractChainRole,
+    RoutedForwardCodegenDisposition,
+    SegmentedLayoutRelation,
+    plan_routed_forward_typed_ffi,
+    recover_relation_programs,
+)
 
 _ARTIFACT = (
     Path(__file__).parents[1]
@@ -231,6 +237,81 @@ def test_grug_hlo_fold_contribution_mutation_regenerates_only_contribution_body(
         _count_kind(baseline.contribution_scalar_program.expression, CastScalarKind.ADD) + 1
     )
     assert _count_kind(mutated.contribution_scalar_program.expression, CastScalarKind.MULTIPLY) == 0
+
+
+def test_grug_hlo_forms_convex_routed_forward_region_and_rejects_missing_layout_map() -> None:
+    plan = plan_routed_forward_typed_ffi(_frozen_hlo())
+    region = plan.region
+
+    assert region.convex
+    assert region.topologically_insertable
+    assert not region.requires_auxiliary_output_split
+    assert len(region.boundary.internal_instructions) == 6
+    assert len(region.boundary.inputs) == 7
+    assert tuple(value.shape for value in region.boundary.outputs) == ("f32[8,32]{1,0}",)
+    assert tuple(contract.backend for contract in plan.contracts) == ("cublas", "cublas")
+    assert all(contract.dimensions.lhs_contracting == (1,) for contract in plan.contracts)
+    assert all(contract.dimensions.rhs_contracting == (0,) for contract in plan.contracts)
+    assert all(contract.dimensions.lhs_output == (0,) for contract in plan.contracts)
+    assert all(contract.dimensions.rhs_output == (1,) for contract in plan.contracts)
+    assert plan.api_version == 1
+    assert plan.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    assert plan.map_stage.logical_row_extent == 16
+    assert plan.map_stage.logical_feature_extent == 32
+    assert plan.map_stage.physical_output_shape == "f32[512,128]{1,0}"
+    assert not plan.map_stage.has_segmented_layout
+    assert plan.missing_segmented_layout is not None
+    assert plan.missing_segmented_layout.logical_shape == (16, 32)
+    assert plan.missing_segmented_layout.physical_shape == "f32[512,128]{1,0}"
+    assert plan.missing_segmented_layout.required_relations == (
+        SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
+        SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,
+        SegmentedLayoutRelation.VALIDITY_AND_FILL,
+        SegmentedLayoutRelation.SOURCE_FOLD_INVERSE,
+    )
+
+
+def test_grug_hlo_routed_forward_map_mutation_changes_generic_codegen_plan() -> None:
+    baseline = plan_routed_forward_typed_ffi(_frozen_hlo())
+    mutated = plan_routed_forward_typed_ffi(
+        _frozen_hlo().replace(
+            "multiply(%convert.3758, %convert.3756)",
+            "add(%convert.3758, %convert.3756)",
+            1,
+        )
+    )
+
+    assert mutated.region.boundary == baseline.region.boundary
+    assert mutated.contracts == baseline.contracts
+    assert mutated.map_stage.scalar_outputs[0].scalar_program.digest != (
+        baseline.map_stage.scalar_outputs[0].scalar_program.digest
+    )
+    assert mutated.fold_stage.contribution_program.digest == baseline.fold_stage.contribution_program.digest
+    assert mutated.fold_stage.reducer_program.digest == baseline.fold_stage.reducer_program.digest
+    assert mutated.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+
+
+def test_grug_hlo_routed_forward_fold_mutation_changes_generic_codegen_plan() -> None:
+    baseline = plan_routed_forward_typed_ffi(_frozen_hlo())
+    mutated = plan_routed_forward_typed_ffi(
+        _frozen_hlo().replace(
+            "multiply(%convert.3742, %broadcast.964)",
+            "add(%convert.3742, %broadcast.964)",
+            1,
+        )
+    )
+
+    assert mutated.region.boundary == baseline.region.boundary
+    assert mutated.contracts == baseline.contracts
+    assert mutated.map_stage.scalar_outputs[0].scalar_program.digest == (
+        baseline.map_stage.scalar_outputs[0].scalar_program.digest
+    )
+    assert mutated.fold_stage.contribution_program.digest != baseline.fold_stage.contribution_program.digest
+    assert mutated.fold_stage.generated_contribution_cuda.source_digest != (
+        baseline.fold_stage.generated_contribution_cuda.source_digest
+    )
+    assert mutated.fold_stage.reducer_program.digest == baseline.fold_stage.reducer_program.digest
+    assert mutated.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
 
 
 def _count_kind(expression: CastScalarExpression, kind: CastScalarKind) -> int:

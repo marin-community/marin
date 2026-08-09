@@ -26,11 +26,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tile_lifetime.cast_scalar_program import CastScalarProgram, GeneratedCudaScalarBody, generate_cuda_scalar_body
+from tile_lifetime.cast_scalar_program import (
+    CastScalarNumericalPolicy,
+    CastScalarProgram,
+    GeneratedCudaScalarBody,
+    generate_cuda_scalar_body,
+)
 from tile_lifetime.xla_hlo_recovery import (
+    EntryRegionValue,
+    HloComputation,
     HloModuleGraph,
     InlinedHloGraph,
     InlinedHloNode,
+    RecoveredEntryRegionBoundary,
     inline_elementwise_fusions,
     parse_hlo_module_text,
 )
@@ -38,6 +46,9 @@ from tile_lifetime.xla_scalar_map_import import import_hlo_scalar_computation, i
 
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
 _CALLED_COMPUTATION = re.compile(r"to_apply=%([A-Za-z0-9_.-]+)")
+_DOT_DIMENSIONS = re.compile(
+    r"(?P<name>lhs_contracting_dims|rhs_contracting_dims|lhs_batch_dims|rhs_batch_dims)=\{(?P<dims>[0-9,]*)\}"
+)
 _DATAFLOW_OPCODES = frozenset(
     {
         "add",
@@ -148,6 +159,115 @@ class RoutedWeightGradientRecord:
 
     contract: SegmentedContractRecord
     external_collectives: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ContractDimensionMap:
+    """Dimension roles needed by a generic contraction implementation."""
+
+    lhs_contracting: tuple[int, ...]
+    rhs_contracting: tuple[int, ...]
+    lhs_batch: tuple[int, ...]
+    rhs_batch: tuple[int, ...]
+    lhs_output: tuple[int, ...]
+    rhs_output: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class RoutedForwardContractStage:
+    """One generic cuBLAS-compatible Contract in a routed forward region."""
+
+    node: str
+    lhs: str
+    rhs: str
+    output_shape: str
+    dimensions: ContractDimensionMap
+    backend: str = "cublas"
+
+
+@dataclass(frozen=True)
+class RoutedForwardMapStage:
+    """Recovered scalar Map plus the physical value required by its consumer."""
+
+    source_contract: str
+    consumer_contract: str
+    logical_row_extent: int
+    logical_feature_extent: int
+    physical_output: str
+    physical_output_shape: str
+    layout_path: tuple[str, ...]
+    layout_opcodes: tuple[str, ...]
+    scalar_outputs: tuple[ScalarMapOutputRecord, ...]
+    has_segmented_layout: bool
+
+
+@dataclass(frozen=True)
+class RoutedForwardFoldStage:
+    """Generated contribution and reducer programs for a source-keyed Fold."""
+
+    contribution_inputs: tuple[str, ...]
+    contribution_program: CastScalarProgram
+    generated_contribution_cuda: GeneratedCudaScalarBody
+    fold: str
+    output_shape: str
+    reducer_program: CastScalarProgram
+    generated_reducer_cuda: GeneratedCudaScalarBody
+
+
+@dataclass(frozen=True)
+class RoutedForwardRegionRecord:
+    """Convex physical region recovered from one Contract/Map/Contract/Fold chain."""
+
+    chain: SegmentedContractChainRecord
+    fold: FoldRecord
+    boundary: RecoveredEntryRegionBoundary
+    contracts: tuple[RoutedForwardContractStage, ...]
+    map_stage: RoutedForwardMapStage
+    fold_stage: RoutedForwardFoldStage
+    numerical_policy: CastScalarNumericalPolicy
+    convex: bool
+    topologically_insertable: bool
+    insertion_instruction: str
+    requires_auxiliary_output_split: bool
+
+
+class RoutedForwardCodegenDisposition(StrEnum):
+    """Whether the recovered region has enough information for typed FFI."""
+
+    READY = "ready"
+    MISSING_SEGMENTED_LAYOUT = "missing_segmented_layout"
+
+
+class SegmentedLayoutRelation(StrEnum):
+    """Index relations required to lower a logical routed Map physically."""
+
+    EDGE_ROW_TO_PADDED_ROW = "edge_row_to_padded_row"
+    SEGMENT_TO_FEATURE_PANEL = "segment_to_feature_panel"
+    VALIDITY_AND_FILL = "validity_and_fill"
+    SOURCE_FOLD_INVERSE = "source_fold_inverse"
+
+
+@dataclass(frozen=True)
+class SegmentedLayoutRequirement:
+    """Missing physical index semantics blocking the routed typed-FFI plan."""
+
+    logical_shape: tuple[int, int]
+    physical_shape: str
+    observed_path_opcodes: tuple[str, ...]
+    required_relations: tuple[SegmentedLayoutRelation, ...]
+
+
+@dataclass(frozen=True)
+class RoutedForwardTypedFfiCodegenPlan:
+    """A generic typed-FFI plan or a structured missing-information result."""
+
+    region: RoutedForwardRegionRecord
+    api_version: int
+    contracts: tuple[RoutedForwardContractStage, ...]
+    map_stage: RoutedForwardMapStage
+    fold_stage: RoutedForwardFoldStage
+    disposition: RoutedForwardCodegenDisposition
+    missing_segmented_layout: SegmentedLayoutRequirement | None
 
 
 @dataclass(frozen=True)
@@ -276,6 +396,310 @@ def recover_relation_programs(hlo_text: str) -> RelationProgramRecoveryReport:
             "feature-axis concatenation; broader affine index maps remain unsupported.",
         ),
     )
+
+
+def form_routed_forward_region(hlo_text: str) -> RoutedForwardRegionRecord:
+    """Form one maximal routed Contract/Map/Contract/Fold entry region.
+
+    Region membership follows physical entry-computation dataflow. Instruction
+    spelling and frontend metadata do not participate. The region begins at the
+    first Contract in the uniquely recovered forward chain and ends at its
+    source-keyed Fold.
+    """
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    report = recover_relation_programs(hlo_text)
+    candidates = tuple(chain for chain in report.contract_chains if chain.role is ContractChainRole.FORWARD)
+    if len(candidates) != 1:
+        raise ValueError(f"expected one structurally recovered forward Contract chain, found {len(candidates)}")
+    chain = candidates[0]
+    folds = tuple(fold for fold in report.folds if fold.source_contract == chain.second.node)
+    if len(folds) != 1:
+        raise ValueError(f"forward Contract chain has {len(folds)} source-keyed Folds")
+    fold = folds[0]
+    entry = module.computation(module.entry)
+    first_instruction = _entry_instruction_for_node(module, chain.first.node)
+    second_instruction = _entry_instruction_for_node(module, chain.second.node)
+    fold_instruction = _entry_instruction_for_node(module, fold.fold)
+    internal = _entry_dataflow_interval(entry, first_instruction, fold_instruction)
+    if second_instruction not in internal:
+        raise ValueError("forward dataflow interval does not contain the second Contract")
+    boundary = _entry_region_boundary(entry, internal)
+    convex = _entry_region_is_convex(entry, internal)
+    source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    insertion_instruction = min(internal, key=source_order.__getitem__)
+    topologically_insertable = all(
+        source_order[value.instruction] < source_order[insertion_instruction] for value in boundary.inputs
+    )
+    internal_set = set(internal)
+    requires_auxiliary_output_split = any(
+        output.instruction != fold_instruction
+        and any(user not in internal_set for user in dict(boundary.external_users)[output.instruction])
+        for output in boundary.outputs
+    )
+
+    contracts = tuple(_contract_codegen_stage(graph, contract) for contract in (chain.first, chain.second))
+    relation_plans = tuple(plan for plan in report.relation_plans if plan.destination_sort in chain.first.relation_plans)
+    if len(relation_plans) != 1:
+        raise ValueError(f"forward Contract chain has {len(relation_plans)} physical relation plans")
+    relation_plan = relation_plans[0]
+    first_node = graph.node(chain.first.node)
+    second_node = graph.node(chain.second.node)
+    second_data_operands = tuple(
+        operand for operand in second_node.operands if _is_node_descendant(graph, first_node.id, operand)
+    )
+    if len(second_data_operands) != 1:
+        raise ValueError(f"second Contract has {len(second_data_operands)} operands derived from the first Contract")
+    physical_map_output = second_data_operands[0]
+    layout_path = _inlined_path(graph, first_node.id, physical_map_output)
+    logical_feature_extent = sum(output.feature_extent for output in chain.map.scalar_outputs)
+    physical_shape = graph.node(physical_map_output).shape
+    parsed_physical_shape = _parse_array_shape(physical_shape)
+    has_segmented_layout = parsed_physical_shape is not None and parsed_physical_shape[1] == (
+        relation_plan.edge_count,
+        logical_feature_extent,
+    )
+    map_stage = RoutedForwardMapStage(
+        source_contract=chain.first.node,
+        consumer_contract=chain.second.node,
+        logical_row_extent=relation_plan.edge_count,
+        logical_feature_extent=logical_feature_extent,
+        physical_output=physical_map_output,
+        physical_output_shape=physical_shape,
+        layout_path=layout_path,
+        layout_opcodes=tuple(graph.node(node_id).opcode for node_id in layout_path[1:]),
+        scalar_outputs=chain.map.scalar_outputs,
+        has_segmented_layout=has_segmented_layout,
+    )
+    fold_stage = RoutedForwardFoldStage(
+        contribution_inputs=fold.contribution_inputs,
+        contribution_program=fold.contribution_scalar_program,
+        generated_contribution_cuda=fold.generated_contribution_cuda,
+        fold=fold.fold,
+        output_shape=fold.output_shape,
+        reducer_program=fold.reducer_scalar_program,
+        generated_reducer_cuda=fold.generated_reducer_cuda,
+    )
+    numerical_policies = {
+        *(output.scalar_program.numerical_policy for output in chain.map.scalar_outputs),
+        fold.contribution_scalar_program.numerical_policy,
+        fold.reducer_scalar_program.numerical_policy,
+    }
+    if len(numerical_policies) != 1:
+        raise ValueError(f"forward region contains {len(numerical_policies)} numerical policies")
+    return RoutedForwardRegionRecord(
+        chain=chain,
+        fold=fold,
+        boundary=boundary,
+        contracts=contracts,
+        map_stage=map_stage,
+        fold_stage=fold_stage,
+        numerical_policy=next(iter(numerical_policies)),
+        convex=convex,
+        topologically_insertable=topologically_insertable,
+        insertion_instruction=insertion_instruction,
+        requires_auxiliary_output_split=requires_auxiliary_output_split,
+    )
+
+
+def plan_routed_forward_typed_ffi(hlo_text: str) -> RoutedForwardTypedFfiCodegenPlan:
+    """Plan a generic typed-FFI implementation without inventing layout semantics."""
+    region = form_routed_forward_region(hlo_text)
+    if not region.convex or not region.topologically_insertable:
+        raise ValueError("routed forward region is not convex and topologically insertable")
+    if region.requires_auxiliary_output_split:
+        raise ValueError("routed forward region requires a generic auxiliary-output split")
+    missing_segmented_layout = None
+    disposition = RoutedForwardCodegenDisposition.READY
+    if not region.map_stage.has_segmented_layout:
+        missing_segmented_layout = SegmentedLayoutRequirement(
+            logical_shape=(region.map_stage.logical_row_extent, region.map_stage.logical_feature_extent),
+            physical_shape=region.map_stage.physical_output_shape,
+            observed_path_opcodes=region.map_stage.layout_opcodes,
+            required_relations=(
+                SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
+                SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,
+                SegmentedLayoutRelation.VALIDITY_AND_FILL,
+                SegmentedLayoutRelation.SOURCE_FOLD_INVERSE,
+            ),
+        )
+        disposition = RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    return RoutedForwardTypedFfiCodegenPlan(
+        region=region,
+        api_version=1,
+        contracts=region.contracts,
+        map_stage=region.map_stage,
+        fold_stage=region.fold_stage,
+        disposition=disposition,
+        missing_segmented_layout=missing_segmented_layout,
+    )
+
+
+def _entry_instruction_for_node(module: HloModuleGraph, node_id: str) -> str:
+    prefix = f"{module.entry}/"
+    if not node_id.startswith(prefix):
+        raise ValueError(f"node {node_id!r} is outside the entry computation")
+    instruction = node_id.removeprefix(prefix).split("/", 1)[0]
+    entry_names = {value.name for value in module.computation(module.entry).instructions}
+    if instruction not in entry_names:
+        raise ValueError(f"node {node_id!r} has no physical entry instruction")
+    return instruction
+
+
+def _entry_users(entry: HloComputation) -> dict[str, tuple[str, ...]]:
+    mutable: dict[str, list[str]] = {instruction.name: [] for instruction in entry.instructions}
+    for instruction in entry.instructions:
+        for operand in instruction.operands:
+            mutable.setdefault(operand, []).append(instruction.name)
+    return {name: tuple(values) for name, values in mutable.items()}
+
+
+def _entry_dataflow_interval(entry: HloComputation, start: str, finish: str) -> tuple[str, ...]:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    users = _entry_users(entry)
+    descendants = {start}
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        for user in users.get(current, ()):
+            if user not in descendants:
+                descendants.add(user)
+                pending.append(user)
+    ancestors = {finish}
+    pending = [finish]
+    while pending:
+        current = pending.pop()
+        for operand in instructions[current].operands:
+            if operand not in ancestors:
+                ancestors.add(operand)
+                pending.append(operand)
+    interval = descendants & ancestors
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    return tuple(sorted(interval, key=order.__getitem__))
+
+
+def _entry_region_boundary(
+    entry: HloComputation,
+    internal: tuple[str, ...],
+) -> RecoveredEntryRegionBoundary:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    users = _entry_users(entry)
+    internal_set = set(internal)
+    input_names = {
+        operand for name in internal for operand in instructions[name].operands if operand not in internal_set
+    }
+    output_names = {name for name in internal if any(user not in internal_set for user in users.get(name, ()))}
+    ordered_inputs = tuple(sorted(input_names, key=order.__getitem__))
+    ordered_outputs = tuple(sorted(output_names, key=order.__getitem__))
+    return RecoveredEntryRegionBoundary(
+        internal_instructions=internal,
+        inputs=tuple(EntryRegionValue(name, instructions[name].shape) for name in ordered_inputs),
+        outputs=tuple(EntryRegionValue(name, instructions[name].shape) for name in ordered_outputs),
+        external_users=tuple(
+            (name, tuple(user for user in users.get(name, ()) if user not in internal_set)) for name in ordered_outputs
+        ),
+        has_explicit_sharding=any("sharding=" in instructions[name].attributes for name in internal),
+        has_side_effect=any("custom_call_has_side_effect=true" in instructions[name].attributes for name in internal),
+    )
+
+
+def _entry_region_is_convex(entry: HloComputation, internal: tuple[str, ...]) -> bool:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    users = _entry_users(entry)
+    internal_set = set(internal)
+    descendants: set[str] = set(internal)
+    pending = list(internal)
+    while pending:
+        current = pending.pop()
+        for user in users.get(current, ()):
+            if user not in descendants:
+                descendants.add(user)
+                pending.append(user)
+    ancestors: set[str] = set(internal)
+    pending = list(internal)
+    while pending:
+        current = pending.pop()
+        for operand in instructions[current].operands:
+            if operand not in ancestors:
+                ancestors.add(operand)
+                pending.append(operand)
+    return not ((descendants & ancestors) - internal_set)
+
+
+def _contract_codegen_stage(
+    graph: InlinedHloGraph,
+    contract: SegmentedContractRecord,
+) -> RoutedForwardContractStage:
+    node = graph.node(contract.node)
+    if node.opcode != "dot" or len(node.operands) != 2:
+        raise ValueError(f"Contract {contract.node!r} is not a binary dot")
+    parsed_dimensions = {
+        match.group("name"): tuple(int(value) for value in match.group("dims").split(",") if value)
+        for match in _DOT_DIMENSIONS.finditer(node.attributes)
+    }
+    lhs_shape = _parse_array_shape(graph.node(node.operands[0]).shape)
+    rhs_shape = _parse_array_shape(graph.node(node.operands[1]).shape)
+    if lhs_shape is None or rhs_shape is None:
+        raise ValueError(f"Contract {contract.node!r} has a non-array operand")
+    lhs_contracting = parsed_dimensions.get("lhs_contracting_dims", ())
+    rhs_contracting = parsed_dimensions.get("rhs_contracting_dims", ())
+    lhs_batch = parsed_dimensions.get("lhs_batch_dims", ())
+    rhs_batch = parsed_dimensions.get("rhs_batch_dims", ())
+    lhs_output = tuple(axis for axis in range(len(lhs_shape[1])) if axis not in lhs_contracting + lhs_batch)
+    rhs_output = tuple(axis for axis in range(len(rhs_shape[1])) if axis not in rhs_contracting + rhs_batch)
+    return RoutedForwardContractStage(
+        node=node.id,
+        lhs=node.operands[0],
+        rhs=node.operands[1],
+        output_shape=node.shape,
+        dimensions=ContractDimensionMap(
+            lhs_contracting=lhs_contracting,
+            rhs_contracting=rhs_contracting,
+            lhs_batch=lhs_batch,
+            rhs_batch=rhs_batch,
+            lhs_output=lhs_output,
+            rhs_output=rhs_output,
+        ),
+    )
+
+
+def _inlined_users(graph: InlinedHloGraph) -> dict[str, tuple[str, ...]]:
+    mutable: dict[str, list[str]] = {node.id: [] for node in graph.nodes}
+    for node in graph.nodes:
+        for operand in node.operands:
+            mutable.setdefault(operand, []).append(node.id)
+    return {name: tuple(values) for name, values in mutable.items()}
+
+
+def _is_node_descendant(graph: InlinedHloGraph, ancestor: str, candidate: str) -> bool:
+    pending = [candidate]
+    seen = {candidate}
+    nodes = {node.id: node for node in graph.nodes}
+    while pending:
+        current = pending.pop()
+        if current == ancestor:
+            return True
+        for operand in nodes[current].operands:
+            if operand not in seen:
+                seen.add(operand)
+                pending.append(operand)
+    return False
+
+
+def _inlined_path(graph: InlinedHloGraph, start: str, finish: str) -> tuple[str, ...]:
+    users = _inlined_users(graph)
+    pending = deque(((start, (start,)),))
+    seen = {start}
+    while pending:
+        current, path = pending.popleft()
+        if current == finish:
+            return path
+        for user in users.get(current, ()):
+            if user not in seen:
+                seen.add(user)
+                pending.append((user, (*path, user)))
+    raise ValueError(f"no inlined dataflow path from {start!r} to {finish!r}")
 
 
 class _GraphAnalysis:
