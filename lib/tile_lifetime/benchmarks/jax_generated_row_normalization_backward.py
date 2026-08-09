@@ -190,49 +190,75 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     projected = cotangent.astype(jnp.float32)
 
     @jax.jit
-    def generated_reverse() -> tuple[jax.Array, ...]:
+    def generated_reverse(
+        projected_argument: jax.Array,
+        feature_scale_argument: jax.Array,
+        standardized_argument: jax.Array,
+        inverse_scale_argument: jax.Array,
+    ) -> tuple[jax.Array, ...]:
         return call_cuda_axis_fold_ffi(
             generated,
             {
-                "projected": projected,
-                "feature_scale": feature_scale,
-                "standardized": standardized,
-                "inverse_scale": inverse_scale,
+                "projected": projected_argument,
+                "feature_scale": feature_scale_argument,
+                "standardized": standardized_argument,
+                "inverse_scale": inverse_scale_argument,
             },
         )
 
     @jax.jit
-    def matched_xla_algebra() -> tuple[jax.Array, jax.Array]:
-        scaled = projected * feature_scale.astype(jnp.float32)
-        correlation = jnp.sum(scaled * standardized.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
-        input_cotangent = inverse_scale[:, None] * (scaled - standardized.astype(jnp.float32) * correlation)
-        feature_cotangent = jnp.sum(projected * standardized.astype(jnp.float32), axis=0)
+    def matched_xla_algebra(
+        projected_argument: jax.Array,
+        feature_scale_argument: jax.Array,
+        standardized_argument: jax.Array,
+        inverse_scale_argument: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
+        scaled = projected_argument * feature_scale_argument.astype(jnp.float32)
+        correlation = jnp.sum(scaled * standardized_argument.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
+        input_cotangent = inverse_scale_argument[:, None] * (
+            scaled - standardized_argument.astype(jnp.float32) * correlation
+        )
+        feature_cotangent = jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
         return input_cotangent, feature_cotangent
 
     @jax.jit
-    def matched_xla_input_cotangent() -> jax.Array:
-        scaled = projected * feature_scale.astype(jnp.float32)
-        correlation = jnp.sum(scaled * standardized.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
-        return inverse_scale[:, None] * (scaled - standardized.astype(jnp.float32) * correlation)
+    def matched_xla_input_cotangent(
+        projected_argument: jax.Array,
+        feature_scale_argument: jax.Array,
+        standardized_argument: jax.Array,
+        inverse_scale_argument: jax.Array,
+    ) -> jax.Array:
+        scaled = projected_argument * feature_scale_argument.astype(jnp.float32)
+        correlation = jnp.sum(scaled * standardized_argument.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
+        return inverse_scale_argument[:, None] * (scaled - standardized_argument.astype(jnp.float32) * correlation)
 
     @jax.jit
-    def matched_xla_feature_scale_cotangent() -> jax.Array:
-        return jnp.sum(projected * standardized.astype(jnp.float32), axis=0)
+    def matched_xla_feature_scale_cotangent(
+        projected_argument: jax.Array,
+        standardized_argument: jax.Array,
+    ) -> jax.Array:
+        return jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
+
+    def execute_generated_reverse() -> tuple[jax.Array, ...]:
+        return generated_reverse(projected, feature_scale, standardized, inverse_scale)
+
+    def execute_matched_xla_algebra() -> tuple[jax.Array, jax.Array]:
+        return matched_xla_algebra(projected, feature_scale, standardized, inverse_scale)
 
     if args.xla_dump_directory is not None:
         args.xla_dump_directory.mkdir(parents=True, exist_ok=True)
         (args.xla_dump_directory / "matched_full_optimized_hlo.txt").write_text(
-            matched_xla_algebra.lower().compile().as_text()
+            matched_xla_algebra.lower(projected, feature_scale, standardized, inverse_scale).compile().as_text()
         )
         (args.xla_dump_directory / "matched_input_cotangent_optimized_hlo.txt").write_text(
-            matched_xla_input_cotangent.lower().compile().as_text()
+            matched_xla_input_cotangent.lower(projected, feature_scale, standardized, inverse_scale).compile().as_text()
         )
         (args.xla_dump_directory / "matched_feature_scale_cotangent_optimized_hlo.txt").write_text(
-            matched_xla_feature_scale_cotangent.lower().compile().as_text()
+            matched_xla_feature_scale_cotangent.lower(projected, standardized).compile().as_text()
         )
 
-    generated_outputs = generated_reverse()
-    xla_outputs = matched_xla_algebra()
+    generated_outputs = execute_generated_reverse()
+    xla_outputs = execute_matched_xla_algebra()
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
     jax.block_until_ready((generated_outputs, xla_outputs, natural_outputs))
     correctness = {
@@ -246,13 +272,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     first_hashes = tuple(_hash(value) for value in generated_outputs)
-    second_outputs = generated_reverse()
+    second_outputs = execute_generated_reverse()
     jax.block_until_ready(second_outputs)
     second_hashes = tuple(_hash(value) for value in second_outputs)
     if first_hashes != second_hashes:
         raise AssertionError("generated axis-Fold FFI is not deterministic")
     measurements, execution_order = _measure(
-        (("generated_ffi", generated_reverse), ("matched_xla", matched_xla_algebra)),
+        (("generated_ffi", execute_generated_reverse), ("matched_xla", execute_matched_xla_algebra)),
         warmups=args.warmups,
         repeats=args.repeats,
         iterations=args.iterations,
@@ -261,33 +287,53 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if input_generated is not None and feature_generated is not None:
 
         @jax.jit
-        def generated_input_cotangent() -> jax.Array:
+        def generated_input_cotangent(
+            projected_argument: jax.Array,
+            feature_scale_argument: jax.Array,
+            standardized_argument: jax.Array,
+            inverse_scale_argument: jax.Array,
+        ) -> jax.Array:
             return call_cuda_axis_fold_ffi(
                 input_generated,
                 {
-                    "projected": projected,
-                    "feature_scale": feature_scale,
-                    "standardized": standardized,
-                    "inverse_scale": inverse_scale,
+                    "projected": projected_argument,
+                    "feature_scale": feature_scale_argument,
+                    "standardized": standardized_argument,
+                    "inverse_scale": inverse_scale_argument,
                 },
             )[0]
 
         @jax.jit
-        def generated_feature_scale_cotangent() -> jax.Array:
+        def generated_feature_scale_cotangent(
+            projected_argument: jax.Array,
+            standardized_argument: jax.Array,
+        ) -> jax.Array:
             return call_cuda_axis_fold_ffi(
                 feature_generated,
-                {"projected": projected, "standardized": standardized},
+                {"projected": projected_argument, "standardized": standardized_argument},
             )[0]
 
+        def execute_generated_input_cotangent() -> jax.Array:
+            return generated_input_cotangent(projected, feature_scale, standardized, inverse_scale)
+
+        def execute_generated_feature_scale_cotangent() -> jax.Array:
+            return generated_feature_scale_cotangent(projected, standardized)
+
+        def execute_matched_xla_input_cotangent() -> jax.Array:
+            return matched_xla_input_cotangent(projected, feature_scale, standardized, inverse_scale)
+
+        def execute_matched_xla_feature_scale_cotangent() -> jax.Array:
+            return matched_xla_feature_scale_cotangent(projected, standardized)
+
         component_outputs = (
-            generated_input_cotangent(),
-            generated_feature_scale_cotangent(),
+            execute_generated_input_cotangent(),
+            execute_generated_feature_scale_cotangent(),
         )
         jax.block_until_ready(component_outputs)
         component_hashes = tuple(_hash(value) for value in component_outputs)
         repeated_component_outputs = (
-            generated_input_cotangent(),
-            generated_feature_scale_cotangent(),
+            execute_generated_input_cotangent(),
+            execute_generated_feature_scale_cotangent(),
         )
         jax.block_until_ready(repeated_component_outputs)
         repeated_component_hashes = tuple(_hash(value) for value in repeated_component_outputs)
@@ -296,8 +342,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         input_measurements, input_execution_order = _measure(
             (
-                ("generated_ffi", generated_input_cotangent),
-                ("matched_xla", matched_xla_input_cotangent),
+                ("generated_ffi", execute_generated_input_cotangent),
+                ("matched_xla", execute_matched_xla_input_cotangent),
             ),
             warmups=args.warmups,
             repeats=args.repeats,
@@ -305,8 +351,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         feature_measurements, feature_execution_order = _measure(
             (
-                ("generated_ffi", generated_feature_scale_cotangent),
-                ("matched_xla", matched_xla_feature_scale_cotangent),
+                ("generated_ffi", execute_generated_feature_scale_cotangent),
+                ("matched_xla", execute_matched_xla_feature_scale_cotangent),
             ),
             warmups=args.warmups,
             repeats=args.repeats,
