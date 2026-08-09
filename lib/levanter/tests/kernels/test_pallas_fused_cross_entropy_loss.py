@@ -1593,6 +1593,24 @@ def test_fused_ce_autotune_cache_key_changes_with_source_revision(monkeypatch: p
     assert cache_key() != original
 
 
+def test_fused_ce_autotune_revision_includes_shared_autotune_helpers(monkeypatch: pytest.MonkeyPatch):
+    captured_paths = []
+
+    def capture_source_paths(source_paths, *, environment):
+        captured_paths.extend(source_paths)
+        assert "fused-cross-entropy-autotune-v3" in environment
+        return "source-v1"
+
+    monkeypatch.setattr(fused_api, "compile_cache_key", capture_source_paths)
+    fused_api._autotune_revision.cache_clear()
+    try:
+        assert fused_api._autotune_revision("batched_xla") == "source-v1"
+    finally:
+        fused_api._autotune_revision.cache_clear()
+
+    assert [path.name for path in captured_paths] == ["fused_cross_entropy_loss", "autotune_utils.py"]
+
+
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")

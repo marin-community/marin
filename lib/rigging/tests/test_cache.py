@@ -88,11 +88,40 @@ def test_installed_distribution_fingerprint_hashes_actual_installed_bytes(tmp_pa
         version="1.0",
         files=[pathlib.PurePosixPath("kernel.py")],
         locate_file=lambda relative: installed / relative,
+        read_text=lambda filename: None,
     )
     monkeypatch.setattr(cache_module.importlib_metadata, "distribution", lambda _name: distribution)
     original = installed_distribution_fingerprint(["demo"])
 
     module.write_text("locally patched")
+
+    assert installed_distribution_fingerprint(["demo"]) != original
+
+
+def test_installed_distribution_fingerprint_hashes_editable_sources(tmp_path, monkeypatch):
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    (installed / "demo.pth").write_text("editable import hook")
+    source = tmp_path / "source" / "demo_package"
+    source.mkdir(parents=True)
+    module = source / "kernel.py"
+    module.write_text("first")
+    distribution = types.SimpleNamespace(
+        metadata={"Name": "demo"},
+        version="1.0",
+        files=[pathlib.PurePosixPath("demo.pth")],
+        locate_file=lambda relative: installed / relative,
+        read_text=lambda filename: (
+            '{"url":"file:///source","dir_info":{"editable":true}}' if filename == "direct_url.json" else None
+        ),
+    )
+    specification = types.SimpleNamespace(submodule_search_locations=[str(source)], origin=None)
+    monkeypatch.setattr(cache_module.importlib_metadata, "distribution", lambda _name: distribution)
+    monkeypatch.setattr(cache_module.importlib_metadata, "packages_distributions", lambda: {"demo_package": ["demo"]})
+    monkeypatch.setattr(cache_module.importlib.util, "find_spec", lambda _name: specification)
+    original = installed_distribution_fingerprint(["demo"])
+
+    module.write_text("edited source")
 
     assert installed_distribution_fingerprint(["demo"]) != original
 

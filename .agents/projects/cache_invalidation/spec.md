@@ -25,8 +25,10 @@ symlinks raise `ValueError`.
 
 `installed_distribution_fingerprint` consumes names in caller order and includes
 installed distribution name, version, metadata-listed logical paths, and actual
-file bytes. Missing distributions, absent file inventories, missing files,
-non-regular files, and symlinks raise `ValueError`.
+file bytes. For PEP 610 editable installs it also hashes the source roots of all
+import packages attributed to the distribution. Missing distributions, absent
+file inventories, unresolved editable sources, missing files, non-regular files,
+and symlinks raise `ValueError`.
 
 ## CuTeDSL object cache
 
@@ -58,10 +60,10 @@ configuration are invalid and must change the contract before opting in.
 File: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
 
 The existing key gains schema and revision fields. The revision is
-`compile_cache_key([fused_cross_entropy_loss package], environment=[schema, JAX
-version, jaxlib version, optional libtpu digest])`. TPU uses actual installed
-`libtpu` bytes. Shapes, dtypes, options, backend, observed device kind, and jaxpr
-remain.
+`compile_cache_key([fused_cross_entropy_loss package, pallas/autotune_utils.py],
+environment=[schema, JAX version, jaxlib version, optional libtpu digest])`. TPU
+uses actual installed `libtpu` bytes. Shapes, dtypes, options, backend, observed
+device kind, and jaxpr remain.
 
 If jaxpr tracing or revision construction fails, `_autotune_cache_key` returns
 `None`. Autotuning may continue, but the cache is neither read nor written; this

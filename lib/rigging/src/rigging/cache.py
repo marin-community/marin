@@ -22,9 +22,12 @@ mirrors newly written files back up. :func:`sync_kv_cache` namespaces it per bui
 
 import atexit
 import hashlib
+import importlib.util
+import json
 import logging
 import os
 import pathlib
+import re
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -103,7 +106,8 @@ def installed_distribution_fingerprint(distribution_names: Sequence[str]) -> str
 
     Distribution versions alone do not identify editable, rebuilt, or locally
     patched installs. This fingerprint covers each installed file listed by the
-    distribution metadata, excluding derived bytecode.
+    distribution metadata and the import roots of editable distributions,
+    excluding derived bytecode.
     """
     digest = hashlib.sha256()
     _hash_component(digest, "schema", b"rigging-installed-distributions-v1")
@@ -127,7 +131,59 @@ def installed_distribution_fingerprint(distribution_names: Sequence[str]) -> str
             if not installed_path.is_file():
                 raise ValueError(f"distribution file is not a regular file: {installed_path}")
             _hash_component(digest, f"distribution/{index}/{logical_path.as_posix()}", installed_path.read_bytes())
+        editable_sources = _editable_distribution_sources(distribution, installed_name)
+        if editable_sources:
+            source_key = compile_cache_key(
+                [path for _package_name, path in editable_sources],
+                environment=[
+                    "rigging-editable-distribution-v1",
+                    *(package_name for package_name, _path in editable_sources),
+                ],
+            )
+            _hash_component(digest, f"distribution/{index}/editable-sources", source_key.encode())
     return digest.hexdigest()
+
+
+def _editable_distribution_sources(
+    distribution: importlib_metadata.Distribution, installed_name: str
+) -> list[tuple[str, pathlib.Path]]:
+    direct_url_text = distribution.read_text("direct_url.json")
+    if direct_url_text is None:
+        return []
+    direct_url = json.loads(direct_url_text)
+    if not isinstance(direct_url, dict):
+        raise ValueError(f"distribution has invalid direct_url.json: {installed_name}")
+    directory_info = direct_url.get("dir_info")
+    if directory_info is None:
+        return []
+    if not isinstance(directory_info, dict):
+        raise ValueError(f"distribution has invalid dir_info in direct_url.json: {installed_name}")
+    if directory_info.get("editable") is not True:
+        return []
+
+    normalized_name = _normalize_distribution_name(installed_name)
+    sources: list[tuple[str, pathlib.Path]] = []
+    for package_name, package_distributions in importlib_metadata.packages_distributions().items():
+        if all(_normalize_distribution_name(name) != normalized_name for name in package_distributions):
+            continue
+        import_name = package_name.replace("/", ".")
+        specification = importlib.util.find_spec(import_name)
+        if specification is None:
+            raise ValueError(f"editable distribution import package is unavailable: {package_name}")
+        if specification.submodule_search_locations is not None:
+            sources.extend(
+                (package_name, pathlib.Path(location)) for location in specification.submodule_search_locations
+            )
+        elif specification.origin not in (None, "built-in", "frozen"):
+            sources.append((package_name, pathlib.Path(specification.origin)))
+
+    if not sources:
+        raise ValueError(f"editable distribution source roots are unavailable: {installed_name}")
+    return sorted(set(sources), key=lambda item: (item[0], item[1].as_posix()))
+
+
+def _normalize_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _hash_component(digest: _Digest, name: str, value: bytes) -> None:

@@ -250,7 +250,8 @@ def _autotune_revision(impl_name: str) -> str:
     if impl_name == "pallas_tpu":
         environment.append(f"libtpu={installed_distribution_fingerprint(['libtpu'])}")
     source_root = pathlib.Path(__file__).resolve().parent
-    return compile_cache_key([source_root], environment=environment)
+    autotune_helpers = source_root.parent / "autotune_utils.py"
+    return compile_cache_key([source_root, autotune_helpers], environment=environment)
 
 
 def _autotune_cache_key(

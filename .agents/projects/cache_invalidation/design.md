@@ -39,8 +39,9 @@ than producing an ambiguous key.
 
 Rigging also adds `installed_distribution_fingerprint`. It hashes distribution
 name, version, installed logical paths, and the actual bytes listed by package
-metadata. Actual bytes, rather than `RECORD` checksums alone, cover local patches
-made without metadata updates.
+metadata. For editable installs it additionally resolves the distribution's
+import packages and hashes their source roots. Actual bytes, rather than
+`RECORD` checksums alone, cover local patches made without metadata updates.
 
 CuTeDSL replaces `launch_provenance().tree_hash` with a process-cached digest of
 `levanter/grug` and a declared Cutlass/CuTe/FA4/Quack toolchain distribution
@@ -50,11 +51,11 @@ definition is inside `levanter.grug`; uncovered launchers compile normally but
 are never written to shared storage. If source identity cannot be built, the
 entire CuTe persistent layer degrades to compile-only for that process.
 
-The fused cross-entropy key adds a digest of its package source and JAX/`jaxlib`
-versions. TPU decisions additionally include actual installed `libtpu` bytes.
-Shapes, dtypes, options, backend, observed device kind, and jaxpr remain. If
-jaxpr tracing or source identity fails, the sweep can run but neither a winner
-nor a negative result is shared.
+The fused cross-entropy key adds a digest of its package source, shared Pallas
+autotune helpers, and JAX/`jaxlib` versions. TPU decisions additionally include
+actual installed `libtpu` bytes. Shapes, dtypes, options, backend, observed
+device kind, and jaxpr remain. If jaxpr tracing or source identity fails, the
+sweep can run but neither a winner nor a negative result is shared.
 
 JAX and Triton keep their compiler-native keys. XLA retains the existing
 tree-scoped mirror in this PR: an observed GPU identity is not available at the
