@@ -52,15 +52,9 @@ def _program_and_inputs(
     rng = np.random.default_rng(17)
     score_map = scaled_score_map(score_scale)
     inputs: dict[str, np.ndarray] = {
-        "query": rng.normal(size=(batch, query_length, query_heads, 4)).astype(
-            np.float32
-        ),
-        "key": rng.normal(size=(batch, key_length, key_value_heads, 4)).astype(
-            np.float32
-        ),
-        "value": rng.normal(size=(batch, key_length, key_value_heads, 3)).astype(
-            np.float32
-        ),
+        "query": rng.normal(size=(batch, query_length, query_heads, 4)).astype(np.float32),
+        "key": rng.normal(size=(batch, key_length, key_value_heads, 4)).astype(np.float32),
+        "value": rng.normal(size=(batch, key_length, key_value_heads, 3)).astype(np.float32),
     }
     if mutation is ScoreMutation.CAUSAL:
         score_map = apply_causal_score_mask(score_map)
@@ -78,12 +72,7 @@ def _program_and_inputs(
                     AttentionScoreAxis.KEY,
                 ),
             )
-            inputs["score.bias"] = (
-                rng.normal(size=(query_heads, query_length, key_length)).astype(
-                    np.float32
-                )
-                * 0.2
-            )
+            inputs["score.bias"] = rng.normal(size=(query_heads, query_length, key_length)).astype(np.float32) * 0.2
         score_map = apply_arbitrary_score_mask(score_map)
         mask = rng.random(size=(batch, query_heads, query_length, key_length)) > 0.45
         mask[..., 0] = True
@@ -105,9 +94,7 @@ def _program_and_inputs(
 
 def test_attention_source_is_only_contract_map_fold_and_derives_bounded_state() -> None:
     source, _ = _program_and_inputs(ScoreMutation.CAUSAL)
-    schedule = StreamingTileSchedule(
-        query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-    )
+    schedule = StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2)
 
     generated = derive_streaming_attention(source, schedule=schedule)
 
@@ -136,9 +123,7 @@ def test_score_semantic_mutations_use_same_generator_and_match_materialized_prog
     source, inputs = _program_and_inputs(mutation)
     generated = derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(
-            query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-        ),
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
     )
 
     materialized = execute_tensor_program(source, inputs)["attention.output"]
@@ -149,9 +134,7 @@ def test_score_semantic_mutations_use_same_generator_and_match_materialized_prog
     assert float(np.mean(difference)) < 2e-7
 
 
-def test_changed_score_map_changes_results_without_changing_streaming_structure() -> (
-    None
-):
+def test_changed_score_map_changes_results_without_changing_streaming_structure() -> None:
     _, inputs = _program_and_inputs(ScoreMutation.BIAS_AND_MASK)
     softcap_source, softcap_inputs = _program_and_inputs(ScoreMutation.TANH_SOFTCAP)
     shared_inputs = {
@@ -173,9 +156,7 @@ def test_changed_score_map_changes_results_without_changing_streaming_structure(
         score_map=plain_score_map,
         input_dtype=DType.FP32,
     )
-    schedule = StreamingTileSchedule(
-        query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-    )
+    schedule = StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2)
 
     plain = derive_streaming_attention(plain_source, schedule=schedule)
     softcap = derive_streaming_attention(softcap_source, schedule=schedule)
@@ -194,9 +175,7 @@ def test_score_scale_mutation_uses_same_generator_and_matches_materialized_progr
     source, inputs = _program_and_inputs(ScoreMutation.CAUSAL, score_scale=score_scale)
     generated = derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(
-            query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-        ),
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
     )
 
     materialized = execute_tensor_program(source, inputs)["attention.output"]
@@ -209,9 +188,7 @@ def test_finalization_mutation_reuses_the_derived_fold_schedule() -> None:
     source, inputs = _program_and_inputs(ScoreMutation.CAUSAL)
     generated = derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(
-            query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-        ),
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
     )
     output_scale = 0.375
     scaled_finalize = replace(
@@ -222,12 +199,8 @@ def test_finalization_mutation_reuses_the_derived_fold_schedule() -> None:
             scalar_constant(output_scale),
         ),
     )
-    scaled_source = replace(
-        source, operations=(*source.operations[:-1], scaled_finalize)
-    )
-    scaled_generated = replace(
-        generated, source=scaled_source, finalize=scaled_finalize
-    )
+    scaled_source = replace(source, operations=(*source.operations[:-1], scaled_finalize))
+    scaled_generated = replace(generated, source=scaled_source, finalize=scaled_finalize)
 
     materialized = execute_tensor_program(scaled_source, inputs)["attention.output"]
     streamed = execute_streaming_attention(scaled_generated, inputs)
@@ -254,9 +227,7 @@ def test_grouped_head_index_map_is_explicit_and_matches_expanded_reference(
     )
     generated = derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(
-            query_tile_size=3, key_value_tile_size=4, pipeline_depth=2
-        ),
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
     )
 
     key_mapping = generated.qk.index_maps_for_input(1)
@@ -302,9 +273,7 @@ def _h100_program(score_map):
     )
     return derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(
-            query_tile_size=128, key_value_tile_size=128, pipeline_depth=2
-        ),
+        schedule=StreamingTileSchedule(query_tile_size=128, key_value_tile_size=128, pipeline_depth=2),
     )
 
 
@@ -324,12 +293,8 @@ def test_h100_lowering_recovers_causal_scale_schedule_and_gqa_without_cuda() -> 
     ) == (128, 128, 2)
 
 
-def test_h100_lowering_accepts_softcap_mutation_without_named_attention_dispatch() -> (
-    None
-):
-    score_map = apply_tanh_softcap(
-        apply_causal_score_mask(scaled_score_map(0.0625)), cap=16.0
-    )
+def test_h100_lowering_accepts_softcap_mutation_without_named_attention_dispatch() -> None:
+    score_map = apply_tanh_softcap(apply_causal_score_mask(scaled_score_map(0.0625)), cap=16.0)
     lowering = lower_h100_streaming_program(_h100_program(score_map))
 
     assert lowering.score_map.scale == 0.0625
@@ -337,9 +302,7 @@ def test_h100_lowering_accepts_softcap_mutation_without_named_attention_dispatch
     assert lowering.score_map.softcap == 16.0
 
 
-def test_h100_lowering_changes_only_finalization_scale_for_output_map_mutation() -> (
-    None
-):
+def test_h100_lowering_changes_only_finalization_scale_for_output_map_mutation() -> None:
     program = _h100_program(apply_causal_score_mask(scaled_score_map(0.125)))
     output_scale = 0.375
     scaled_finalize = replace(
@@ -372,8 +335,7 @@ def test_h100_lowering_reports_tensor_mask_as_missing_auxiliary_emitter() -> Non
 def test_sm90_streaming_skeleton_owns_fold_map_and_domain_semantics() -> None:
     backend = Path(__file__).parents[1] / "backends" / "h100"
     physical_sources = tuple(
-        (backend / filename).read_text()
-        for filename in ("cute_streaming_base.py", "cute_streaming_sm90.py")
+        (backend / filename).read_text() for filename in ("cute_streaming_base.py", "cute_streaming_sm90.py")
     )
     forbidden_dependencies = (
         "flash_attn.cute.softmax",
@@ -392,9 +354,7 @@ def test_sm90_streaming_skeleton_owns_fold_map_and_domain_semantics() -> None:
 
 
 def test_normalized_exp_finalize_binds_register_state_before_child_region() -> None:
-    source = (
-        Path(__file__).parents[1] / "backends" / "h100" / "cute_normalized_exp.py"
-    ).read_text()
+    source = (Path(__file__).parents[1] / "backends" / "h100" / "cute_normalized_exp.py").read_text()
 
     assert "row_sum = self.row_sum" in source
     assert "row_max = self.row_max" in source
