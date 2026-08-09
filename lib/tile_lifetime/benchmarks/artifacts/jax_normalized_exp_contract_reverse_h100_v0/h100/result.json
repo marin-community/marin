@@ -1,0 +1,322 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "iterations_per_sample": 1000,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready; compilation and saved-state forward excluded",
+    "warmups": 10
+  },
+  "correctness": {
+    "independent_natural_jax_vjp": {
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "operand_cotangent": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      }
+    },
+    "matched_explicit_jax_reverse": {
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "operand_cotangent": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      }
+    }
+  },
+  "determinism": {
+    "output_hashes": [
+      [
+        "eb852da611db34bc95677ad302381f2f82fbbb568855b6f97bb26910a963562b",
+        "30ac540c95cf0a8e1ffa2f7ab8fb723e2bdf5db440b3a3eab2138c54ec520dd6"
+      ],
+      [
+        "eb852da611db34bc95677ad302381f2f82fbbb568855b6f97bb26910a963562b",
+        "30ac540c95cf0a8e1ffa2f7ab8fb723e2bdf5db440b3a3eab2138c54ec520dd6"
+      ],
+      [
+        "eb852da611db34bc95677ad302381f2f82fbbb568855b6f97bb26910a963562b",
+        "30ac540c95cf0a8e1ffa2f7ab8fb723e2bdf5db440b3a3eab2138c54ec520dd6"
+      ]
+    ],
+    "trials": 3
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_reverse"
+    ],
+    [
+      "matched_natural_jax_reverse",
+      "generated_ffi"
+    ]
+  ],
+  "fixture": {
+    "fold_invalid_count": 29,
+    "fold_valid_count": 99,
+    "input_hashes": {
+      "fold_validity": "281b29f1c9438b44eebe65c54a00a960b4e46860dda14d046f90b9331063062a",
+      "lhs": "032fbb06bb77edc2a59e49d928d61e772475a51b6f54f15feac3e6215e76eeea",
+      "rhs": "949f413eb76cdf0199d637d1241d37f7749578f5113bbbd6d9eff4eb04114159",
+      "row_cotangent": "07b15f79255eca52b0c2543f17b71e7629368935279741190c44e649315b7530",
+      "row_validity": "e06bc3d14fad0fe4fc1a4ffa43161db7bab596f50c150b5cb6f2d0a3256d136f",
+      "saved_state": "7f2e950eca228a85a4880dd1451ec074c5a2239551e5483c5a0b328aff1e6152",
+      "selected_indices": "5eda96677999f2d3c61d82dda6c958cc85dab1c46d40c96c021bf7cccd11efd5"
+    },
+    "invalid_row_count": 3,
+    "row_validity": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false
+    ],
+    "seed": 20260809,
+    "selected_indices": [
+      1,
+      17,
+      31,
+      47,
+      61,
+      79,
+      101,
+      127
+    ],
+    "selected_indices_all_valid": true
+  },
+  "frontend": {
+    "jax_owns_ad_for_independent_reference": true,
+    "reference": "ordinary JAX BF16 Contract and normalized-exp row objective differentiated by jax.vjp",
+    "stablehlo_sha256": "c26a18f1b3c454343a6597009e028261234e3be2fa01b31b2fb1707c6355b3d1"
+  },
+  "generated": {
+    "expected_handler_count": 30013,
+    "handler_count": 30013,
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_reverse_h100_identity",
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_digest": "03e1a9fa8d267d9137ebe929cbfa91f0cec8ba188d5681b6dc74f43f2d944411",
+    "shared_bytes": 2048,
+    "source_digest": "4ae2d3594942a2ee5429ec80fd80dfc52982ba19d198a0f43f923134ea890f62",
+    "target": "shuttle.generic.normalized_exp_contract_reverse.h100_identity",
+    "threads": 256
+  },
+  "measurements": {
+    "generated_ffi": {
+      "median_ms": 0.02987873750316794,
+      "minimum_ms": 0.029750599001999944,
+      "samples_ms": [
+        0.029770553999696858,
+        0.02975083100318443,
+        0.02976281200244557,
+        0.029766038998786826,
+        0.029771065004752018,
+        0.029750599001999944,
+        0.029842141004337464,
+        0.029779852004139684,
+        0.02980335800384637,
+        0.029780259996186942,
+        0.031085659997188486,
+        0.030839227998512797,
+        0.03151894699840341,
+        0.03160946499701822,
+        0.030332900998473633,
+        0.03129725799954031,
+        0.030227465002099052,
+        0.0311148629989475,
+        0.03068139399692882,
+        0.030127803998766467,
+        0.029784218000713736,
+        0.029772681002214085,
+        0.029755281000689138,
+        0.029965240995807108,
+        0.03073231000598753,
+        0.03110479500173824,
+        0.029841990995919332,
+        0.02995997999823885,
+        0.029915334001998417,
+        0.029762293997919187
+      ]
+    },
+    "matched_natural_jax_reverse": {
+      "median_ms": 0.03756789299950469,
+      "minimum_ms": 0.034591827003168873,
+      "samples_ms": [
+        0.03755034299683757,
+        0.037585443002171814,
+        0.037670995996450074,
+        0.03758645800553495,
+        0.03754687299806392,
+        0.03751300000294577,
+        0.037712669000029564,
+        0.037880410003708676,
+        0.037809813002240844,
+        0.0378867480030749,
+        0.0347427470042021,
+        0.034591827003168873,
+        0.03522695399442455,
+        0.03516777900222223,
+        0.034824643000320066,
+        0.03479115600202931,
+        0.03567530999862356,
+        0.03461438699741848,
+        0.038348287002008874,
+        0.03816998100228375,
+        0.03801421399839455,
+        0.03833877199940616,
+        0.038173422995896544,
+        0.03838997300044866,
+        0.03839278300438309,
+        0.034737975998723414,
+        0.037645732998498715,
+        0.037411836005048826,
+        0.037481406005099416,
+        0.037541532998147886
+      ]
+    }
+  },
+  "mode": "one_h100_proof_of_execution",
+  "numerical_contract": {
+    "error_guard": {
+      "maximum_absolute_error": 0.0625,
+      "mean_absolute_error": 0.0005
+    },
+    "reduction_order": "generated ordered FP32 loops; XLA may choose another FP32 reduction tree",
+    "relaxed_boundary_hashes_differ": true,
+    "reverse_contract_output": "FP32 accumulation rounded to BF16 RNE",
+    "score_contract_output": "FP32 accumulation rounded to BF16 RNE before normalized-exp Map/Fold",
+    "score_cotangent": "FP32 Map/Fold reverse rounded to BF16 RNE before both reverse Contracts"
+  },
+  "ratio_generated_to_matched_jax": 0.7953264108679683,
+  "revision": "bc34335320",
+  "schema_version": 1,
+  "shape": {
+    "fold_extent": 128,
+    "reduction": 32,
+    "rows": 8
+  }
+}

@@ -2955,3 +2955,23 @@ author: dlwh
   records; the publishable artifact retains its checksum and derived launch
   tables. Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_coalesced_v0/`.
+
+### 2026-08-09 - TLTC-XLA-048 normalized-exp reverse physical proof
+
+- A CPU-only preflight compiled, linked, and loaded the generated identity and
+  tanh-softcap normalized-exp reverse families for `sm_90a`. Both typed-FFI
+  symbols resolved. The mutation changed generated Map/derivative source while
+  retaining the same generic physical extents; it was not run on a GPU.
+- The authorized one-H100 run executed the identity family through Torch-free
+  JAX typed FFI at shape `[8,32] @ [32,128]`. The fixture includes 29 restricted
+  Fold positions, three invalid rows, and eight nontrivial selected indices.
+- Generated input and operand cotangents are bitwise identical to both the
+  matched explicit JAX reverse and an independent natural JAX objective
+  differentiated with `jax.vjp`. Three generated runs have identical hashes,
+  and the handler count is exactly `30,013`.
+- Thirty counterbalanced samples measured `0.029879 ms` for generated FFI and
+  `0.037568 ms` for matched JAX, or `0.795326x`. Compilation, saved-state
+  forward work, and input generation are outside both boundaries.
+- This is a small one-CTA component proof, not full-Grug or attention-backward
+  acceptance. No schedule tuning or second GPU invocation was run. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_normalized_exp_contract_reverse_h100_v0/`.

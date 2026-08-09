@@ -1,0 +1,35 @@
+CPU preflight submission:
+
+MARIN_CLUSTER=coreweave iris --cluster cw-us-east-02a job run --no-wait \
+  --job-name shuttle-normalized-exp-reverse-preflight-20260809 \
+  --enable-extra-resources --cpu 1 --memory 8GB --disk 20GB \
+  --priority batch --max-retries 0 --timeout 1800 --extra gpu -- <command>
+
+CPU preflight command at revision bc34335320:
+
+/app/.venv/bin/python /app/benchmarks/jax_generated_normalized_exp_contract_reverse.py \
+  --hlo-fixture /app/fixtures/original-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-normalized-exp-reverse-preflight/generated \
+  --json-output /tmp/shuttle-normalized-exp-reverse-preflight/preflight.json \
+  --shuttle-revision bc34335320 --preflight-only
+
+H100 submission:
+
+MARIN_CLUSTER=coreweave iris --cluster cw-us-east-02a job run --no-wait \
+  --job-name shuttle-normalized-exp-reverse-h100-20260809 \
+  --enable-extra-resources --gpu H100x1 --cpu 1 --memory 16GB --disk 50GB \
+  --priority batch --max-retries 0 --timeout 3600 --extra gpu -- <command>
+
+H100 command at revision bc34335320:
+
+/app/.venv/bin/python /app/benchmarks/jax_generated_normalized_exp_contract_reverse.py \
+  --hlo-fixture /app/fixtures/original-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-normalized-exp-reverse-h100/generated \
+  --json-output /tmp/shuttle-normalized-exp-reverse-h100/result.json \
+  --shuttle-revision bc34335320 --threads 256 --seed 20260809 \
+  --warmups 10 --repeats 30 --iterations 1000
+
