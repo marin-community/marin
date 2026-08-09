@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import jax
+import jax.numpy as jnp
 import jaxlib
 import numpy as np
 from haliax.partitioning import set_mesh
@@ -245,6 +246,8 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
+            transformed_state = jax.tree.map(jnp.array, state)
+            transformed_batch = jax.tree.map(jnp.array, batch)
             baseline = train_step.lower(state, batch, compute_watch=False).compile()
             expected = baseline(state, batch)
             jax.block_until_ready(expected)
@@ -293,14 +296,14 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
             )
             jax.clear_caches()
             try:
-                transformed = train_step.lower(state, batch, compute_watch=False).compile()
+                transformed = train_step.lower(transformed_state, transformed_batch, compute_watch=False).compile()
             finally:
                 xla.clear_hlo_module_transformation(
                     _PASS_NAME,
                     stage=xla.PipelineStage.PRE_SCHEDULER,
                     platforms="cuda",
                 )
-            actual = transformed(state, batch)
+            actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
             comparison = _compare_under_ordered_fp(expected, actual)
             library = holder["library"]
