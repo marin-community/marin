@@ -103,48 +103,47 @@ def _streaming_dq_kernel(
     block_m: tl.constexpr,
     block_n: tl.constexpr,
     head_dimension: tl.constexpr,
+    head_group_size: tl.constexpr,
     causal: tl.constexpr,
     has_softcap: tl.constexpr,
 ):
     query_block_index = tl.program_id(0)
-    batch_query_head = tl.program_id(1)
-    batch_index = batch_query_head // query_heads
-    query_head = batch_query_head % query_heads
-    head_group_size = query_heads // key_value_heads
-    key_value_head = query_head // head_group_size
+    batch_key_value_head = tl.program_id(1)
+    batch_index = batch_key_value_head // key_value_heads
+    key_value_head = batch_key_value_head % key_value_heads
     query_start = query_block_index * block_m
-    query_offsets = query_start + tl.arange(0, block_m)
+    packed_query_rows: tl.constexpr = block_m * head_group_size
+    packed_rows = tl.arange(0, packed_query_rows)
+    query_offsets_in_block = packed_rows // head_group_size
+    query_head_offsets = packed_rows % head_group_size
+    query_heads_for_rows = key_value_head * head_group_size + query_head_offsets
+    query_tokens = query_start + query_offsets_in_block
     key_offsets = tl.arange(0, block_n)
-    query_block = tl.make_block_ptr(
-        base=query + batch_index * stride_qb + query_head * stride_qh,
-        shape=(sequence_length, head_dimension),
-        strides=(stride_qs, stride_qd),
-        offsets=(query_start, 0),
-        block_shape=(block_m, head_dimension),
-        order=(1, 0),
+    features = tl.arange(0, head_dimension)
+    query_offsets = (
+        batch_index * stride_qb
+        + query_tokens[:, None] * stride_qs
+        + query_heads_for_rows[:, None] * stride_qh
+        + features[None, :] * stride_qd
     )
-    output_cotangent_block = tl.make_block_ptr(
-        base=output_cotangent + batch_index * stride_db + query_head * stride_dh,
-        shape=(sequence_length, head_dimension),
-        strides=(stride_ds, stride_dd),
-        offsets=(query_start, 0),
-        block_shape=(block_m, head_dimension),
-        order=(1, 0),
+    output_cotangent_offsets = (
+        batch_index * stride_db
+        + query_tokens[:, None] * stride_ds
+        + query_heads_for_rows[:, None] * stride_dh
+        + features[None, :] * stride_dd
     )
-    query_cotangent_block = tl.make_block_ptr(
-        base=query_cotangent + batch_index * stride_dqb + query_head * stride_dqh,
-        shape=(sequence_length, head_dimension),
-        strides=(stride_dqs, stride_dqd),
-        offsets=(query_start, 0),
-        block_shape=(block_m, head_dimension),
-        order=(1, 0),
+    query_cotangent_offsets = (
+        batch_index * stride_dqb
+        + query_tokens[:, None] * stride_dqs
+        + query_heads_for_rows[:, None] * stride_dqh
+        + features[None, :] * stride_dqd
     )
-    query_tile = tl.load(query_block)
-    output_cotangent_tile = tl.load(output_cotangent_block)
-    row_offset = batch_query_head * sequence_length + query_offsets
+    query_tile = tl.load(query + query_offsets)
+    output_cotangent_tile = tl.load(output_cotangent + output_cotangent_offsets)
+    row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
     lse = tl.load(log_sum_exp + row_offset)
     delta = tl.load(output_dot + row_offset)
-    query_gradient = tl.zeros((block_m, head_dimension), tl.float32)
+    query_gradient = tl.zeros((packed_query_rows, head_dimension), tl.float32)
     key_stop = sequence_length
     if causal:
         key_stop = query_start + block_m
@@ -169,22 +168,22 @@ def _streaming_dq_kernel(
         key_tile = tl.load(key_block)
         value_tile = tl.load(value_block)
         score = tl.dot(query_tile, key_tile) * scale_log2
-        score_slope = tl.full((block_m, block_n), scale, tl.float32)
+        score_slope = tl.full((packed_query_rows, block_n), scale, tl.float32)
         if has_softcap:
             cap_log2 = softcap * 1.4426950408889634
             tanh_score = 2.0 * tl.sigmoid(2.0 * score / cap_log2) - 1.0
             score = cap_log2 * tanh_score
             score_slope *= 1.0 - tanh_score * tanh_score
-        valid = tl.full((block_m, block_n), True, tl.int1)
+        valid = tl.full((packed_query_rows, block_n), True, tl.int1)
         if causal:
-            valid &= query_offsets[:, None] >= key_start + key_offsets[None, :]
+            valid &= query_tokens[:, None] >= key_start + key_offsets[None, :]
         probability = tl.math.exp2(score - lse[:, None])
         probability = tl.where(valid, probability, 0.0)
         probability_cotangent = tl.dot(output_cotangent_tile, value_tile) * output_scale
         mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
         raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
         query_gradient += tl.dot(raw_score_cotangent.to(tl.bfloat16), tl.trans(key_tile))
-    tl.store(query_cotangent_block, query_gradient.to(tl.bfloat16))
+    tl.store(query_cotangent + query_cotangent_offsets, query_gradient.to(tl.bfloat16))
 
 
 @triton.jit
@@ -421,7 +420,7 @@ def emit_streaming_attention_backward(
         program.output_scale,
     )
     common_strides = (*query.stride(), *key.stride(), *value.stride(), *output_cotangent.stride())
-    _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * query.shape[2])](
+    _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * key.shape[2])](
         *common,
         query_cotangent,
         *scalar_arguments,
@@ -430,6 +429,7 @@ def emit_streaming_attention_backward(
         block_m,
         block_n,
         query.shape[-1],
+        head_group_size,
         lowered.causal,
         lowered.softcap is not None,
         num_warps=num_warps,
@@ -680,7 +680,7 @@ def main() -> None:
             "block_n": args.block_n,
             "num_warps": args.num_warps,
             "num_stages": args.num_stages,
-            "query_gradient_orientation": "query_major",
+            "query_gradient_orientation": "query_major_grouped_query_rows",
             "key_value_gradient_orientation": "key_value_major_grouped_query_rows",
             "query_heads_per_key_value_tile": backward_schedule.query_heads_per_key_value_tile,
             "domain_traversal": backward_schedule.domain_traversal.value,
@@ -690,8 +690,20 @@ def main() -> None:
                 "logical_query_key_tile_pairs": work_estimate.logical_query_key_tile_pairs,
                 "fully_restricted_tile_pairs": work_estimate.fully_restricted_tile_pairs,
                 "query_gradient_contract_invocations": work_estimate.query_gradient_contract_invocations,
+                "scalar_head_query_gradient_contract_invocations": (
+                    work_estimate.scalar_head_query_gradient_contract_invocations
+                ),
                 "full_domain_query_gradient_contract_invocations": (
                     work_estimate.full_domain_query_gradient_contract_invocations
+                ),
+                "full_domain_scalar_head_query_gradient_contract_invocations": (
+                    work_estimate.full_domain_scalar_head_query_gradient_contract_invocations
+                ),
+                "query_gradient_contract_invocation_reduction": (
+                    work_estimate.query_gradient_contract_invocation_reduction
+                ),
+                "query_gradient_contract_invocation_reduction_from_full_scalar": (
+                    work_estimate.query_gradient_contract_invocation_reduction_from_full_scalar
                 ),
                 "key_value_gradient_contract_invocations": work_estimate.key_value_gradient_contract_invocations,
                 "scalar_head_key_value_contract_invocations": work_estimate.scalar_head_key_value_contract_invocations,
