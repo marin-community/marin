@@ -1,0 +1,555 @@
+{
+  "bitwise_equal_leaf_count": 53,
+  "counterbalanced_timing": {
+    "baseline_median_ms": 0.5524801090359688,
+    "measured_pairs": 30,
+    "raw_samples": [
+      {
+        "baseline": {
+          "latency_ms": 0.5598089192062616,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5779520142823458,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5639679729938507,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5592000670731068,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.551937147974968,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5745599046349525,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5668171215802431,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5765119567513466,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5521278362721205,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5713601130992174,
+          "output_hash": "51c851c98c6d68b67b274dafa7f99b11eb3878be7f964430aeccfe525c6d13f0"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5773759912699461,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5641928873956203,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5659838207066059,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5655998829752207,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5511362105607986,
+          "output_hash": "7237b725211978fedefad404fee2394276ca249a7056afd4e728a4e22ff9760f"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5622399039566517,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5506558809429407,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5694080609828234,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5635521374642849,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5616322159767151,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5679370369762182,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5634240806102753,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5509438924491405,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5595521070063114,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5662078037858009,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5636808928102255,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5635840352624655,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5608319770544767,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5456320941448212,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5613439716398716,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5484160501509905,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5727359093725681,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5523520521819592,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5559360142797232,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5667200312018394,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5710721015930176,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.547679839655757,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.560833141207695,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5526081658899784,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5510400515049696,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5526409950107336,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5535040982067585,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5503690335899591,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5572799127548933,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5411521997302771,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5518719553947449,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.548320822417736,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5571520887315273,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5532160867005587,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5665598437190056,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5539199337363243,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5733759608119726,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5500479601323605,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5705601070076227,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5468160379678011,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5853760521858931,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5426888819783926,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.5684481002390385,
+          "output_hash": "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 0.5550091154873371,
+          "output_hash": "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.5673600826412439,
+          "output_hash": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+        }
+      }
+    ],
+    "transformed_median_ms": 0.5639368901029229,
+    "transformed_over_baseline": 1.020737001893055,
+    "warmup_pairs": 4
+  },
+  "cuda_architecture": "sm_100a",
+  "custom_call_handler_executions": 35,
+  "custom_call_occurrences_in_transformed_hlo": 1,
+  "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
+  "device_kind": "NVIDIA GB200",
+  "explicit_warning": "Execution proof only: 1 generic cuBLAS Contract(s) feed the generated source-ordered Map. Competitive lowering still needs the reusable tiled Contract mainloop and fusion policy.",
+  "ffi_api": "XLA typed FFI api_version=1 with CUDA platform stream",
+  "generated_handler_sha256": "f7118924e8cb16e7a4520cd5c1afb242eeb2a1f84f57619d55923b2f8e37149a",
+  "generated_scalar_expressions": [
+    "projection_value",
+    "shuttle_round_bf16(((shuttle_bf16_to_f32(input0[index])) * (projection_value)))"
+  ],
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_pre_scheduler_grug_backward_multi_output_gpu_custom_call_smoke",
+  "maximum_absolute_error": 0.0,
+  "mean_absolute_error": 0.0,
+  "natural_frontend": "ordinary one-layer Grug train step",
+  "numerical_contract": {
+    "contracts": "ordered_fp using CUBLAS_COMPUTE_32F_PEDANTIC generic Contract primitives",
+    "scalar_map": "source_ordered including recovered BF16 round trips"
+  },
+  "output_hashes": {
+    "baseline_repeated_bitwise_deterministic": false,
+    "baseline_unique_count": 4,
+    "initial_baseline": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+    "initial_transformed": "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+    "measured_baseline": [
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "7237b725211978fedefad404fee2394276ca249a7056afd4e728a4e22ff9760f",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9"
+    ],
+    "measured_transformed": [
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "51c851c98c6d68b67b274dafa7f99b11eb3878be7f964430aeccfe525c6d13f0",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148",
+      "c69a9f84300d60ab23ce9d2f5f442c26b4e0e3455783f31d3c1712ee448c13b9",
+      "38009264f79e6b6bdcf05691dbeb3ff80782f6948f9715aef131129f72dac320",
+      "33edae3045975d3da937aba9b44c98a887f0018e2ce129bd9c0a84dd44d05148"
+    ],
+    "transformed_repeated_bitwise_deterministic": false,
+    "transformed_unique_count": 4
+  },
+  "outputs_match": true,
+  "platform": "cuda",
+  "region_inputs": [
+    [
+      "mul.73",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "reshape.227",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "remat2.66",
+      "bf16[32,32]{1,0}"
+    ]
+  ],
+  "region_outputs": [
+    [
+      "dot_general.226",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "mul.963",
+      "bf16[8,32]{1,0}"
+    ]
+  ],
+  "result_leaf_count": 53,
+  "selection": "shared-input pair-Contract Map when available; otherwise the unique generic one-Contract/multi-output scalar-Map region",
+  "tuple_get_element_count": 2
+}

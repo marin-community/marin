@@ -1,0 +1,48 @@
+{
+  "contract_map": {
+    "candidates": [
+      {
+        "consumer_contract_count": 2,
+        "contract_lhs_input": 3,
+        "contract_rhs_input": 4,
+        "contract_shape": "bf16[8,32]{1,0}",
+        "has_explicit_sharding": false,
+        "has_side_effect": false,
+        "index": 0,
+        "input_shapes": [
+          "bf16[8,32]{1,0}",
+          "bf16[8,32]{1,0}",
+          "bf16[8,32]{1,0}",
+          "bf16[8,32]{1,0}",
+          "bf16[32,32]{1,0}",
+          "bf16[8,32]{1,0}",
+          "bf16[8,32]{1,0}"
+        ],
+        "map_opcodes": [
+          "multiply",
+          "multiply",
+          "multiply",
+          "multiply",
+          "multiply",
+          "add"
+        ],
+        "output_shapes": [
+          "bf16[8,32]{1,0}",
+          "bf16[8,32]{1,0}"
+        ],
+        "rhs_contracting_dimension": 1,
+        "scalar_expressions": [
+          "shuttle_round_bf16(((shuttle_bf16_to_f32(input2[index])) * (projection_value)))",
+          "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(((projection_value) * (shuttle_bf16_to_f32(input5[index]))))) * (shuttle_bf16_to_f32(input1[index]))))) + (shuttle_round_bf16(((shuttle_round_bf16(((shuttle_bf16_to_f32(input0[index])) * (shuttle_round_bf16(((projection_value) * (shuttle_bf16_to_f32(input5[index])))))))) * (shuttle_bf16_to_f32(input6[index])))))))"
+        ]
+      }
+    ],
+    "contract_count": 68,
+    "contract_map_region_count": 1
+  },
+  "pair_map": {
+    "candidates": [],
+    "contract_count": 68,
+    "pair_map_region_count": 0
+  }
+}

@@ -1,0 +1,162 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+cuBLAS < 13.2 (130002 found) has a known issue where many kernels free TMEM buffers multiple times. Executing a cuBLAS kernel concurrently with another kernel (e.g. on another stream) can lead to silent data corruption.
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^
+/usr/bin/ld: cannot find -lcublas: No such file or directory
+collect2: error: ld returned 1 exit status
+Traceback (most recent call last):
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 388, in <module>
+    main()
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 377, in main
+    result = run_smoke(args.nvcc, args.cuda_architecture, args.artifact_directory)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 299, in run_smoke
+    transformed = train_step.lower(transformed_state, transformed_batch, compute_watch=False).compile()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+    return Compiled(self._lowering.compile(**kw), self._lowering.const_args,
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+    executable = UnloadedMeshExecutable.from_hlo(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+    xla_executable = _cached_compilation(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+    xla_executable = compiler.compile_or_get_cached(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+    return backend_compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 360, in backend_compile_and_load
+    raise e
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+    return backend.compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: INTERNAL: Traceback (most recent call last):
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 388, in <module>
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 377, in main
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 299, in run_smoke
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 277, in replace
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_pair_map_custom_call_smoke.py", line 1432, in _compile_cuda_ffi_handler
+  File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+CalledProcessError: Command '['/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc', '-std=c++17', '-O3', '-arch=sm_100a', '-shared', '-Xcompiler', '-fPIC', '-I', '/app/.venv/lib/python3.12/site-packages/jaxlib/include', '/tmp/shuttle-grug-gb200-replay/run3/generated_pair_map_handler.cu', '-o', '/tmp/shuttle-grug-gb200-replay/run3/generated_pair_map_handler.so', '-L', '/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib', '-Xlinker', '-rpath', '-Xlinker', '/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib', '-lcublas']' returned non-zero exit status 1.

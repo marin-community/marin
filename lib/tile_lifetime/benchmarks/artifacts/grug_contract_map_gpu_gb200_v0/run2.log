@@ -1,0 +1,4 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+cuBLAS < 13.2 (130002 found) has a known issue where many kernels free TMEM buffers multiple times. Executing a cuBLAS kernel concurrently with another kernel (e.g. on another stream) can lead to silent data corruption.
+F0809 08:29:26.345037    3021 parse_flags_from_env.cc:234] Unknown flag in XLA_FLAGS: --xla_gpu_unsafe_fallback_to_driver_on_ptxas_error=true

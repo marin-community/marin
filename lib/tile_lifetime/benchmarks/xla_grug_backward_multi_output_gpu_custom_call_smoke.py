@@ -12,7 +12,9 @@ import hashlib
 import importlib
 import json
 import re
+import statistics
 import tempfile
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -226,10 +228,31 @@ def _compare_under_ordered_fp(expected: Any, actual: Any) -> dict[str, Any]:
     }
 
 
-def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) -> dict[str, Any]:
+def _tree_hash(tree: Any) -> str:
+    digest = hashlib.sha256()
+    for leaf in jax.tree.leaves(tree):
+        array = np.asarray(leaf)
+        digest.update(array.dtype.str.encode())
+        digest.update(str(array.shape).encode())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def run_smoke(
+    nvcc: Path,
+    architecture: str,
+    artifact_directory: Path | None,
+    *,
+    warmup: int = 4,
+    repeats: int = 30,
+) -> dict[str, Any]:
     """Compile and execute a GPU replacement from the recovered multi-output AST."""
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the GPU XLA replacement smoke requires a CUDA JAX device")
+    if warmup < 0:
+        raise ValueError("warmup must be nonnegative")
+    if repeats <= 0 or repeats % 2:
+        raise ValueError("repeats must be a positive even number for counterbalanced timing")
     hlo = importlib.import_module("jaxlib._hlo")
     xla = importlib.import_module("jax.extend.xla")
     jax.config.update("jax_enable_compilation_cache", False)
@@ -246,8 +269,17 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
-            transformed_state = jax.tree.map(jnp.array, state)
-            transformed_batch = jax.tree.map(jnp.array, batch)
+            host_state = jax.device_get(state)
+            host_batch = jax.device_get(batch)
+
+            def fresh_inputs() -> tuple[Any, Any]:
+                fresh_state = jax.tree.map(jnp.array, host_state)
+                fresh_batch = jax.tree.map(jnp.array, host_batch)
+                jax.block_until_ready(fresh_state)
+                jax.block_until_ready(fresh_batch)
+                return fresh_state, fresh_batch
+
+            transformed_state, transformed_batch = fresh_inputs()
             baseline = train_step.lower(state, batch, compute_watch=False).compile()
             expected = baseline(state, batch)
             jax.block_until_ready(expected)
@@ -306,6 +338,41 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
             comparison = _compare_under_ordered_fp(expected, actual)
+            baseline_hash = _tree_hash(expected)
+            transformed_hash = _tree_hash(actual)
+
+            def timed_execution(executable: Any) -> tuple[float, str]:
+                timing_state, timing_batch = fresh_inputs()
+                start = time.perf_counter()
+                output = executable(timing_state, timing_batch)
+                jax.block_until_ready(output)
+                elapsed_ms = (time.perf_counter() - start) * 1e3
+                return elapsed_ms, _tree_hash(output)
+
+            for index in range(warmup):
+                executables = (baseline, transformed) if index % 2 == 0 else (transformed, baseline)
+                for executable in executables:
+                    timed_execution(executable)
+
+            raw_samples = []
+            baseline_samples = []
+            transformed_samples = []
+            measured_baseline_hashes = []
+            measured_transformed_hashes = []
+            for index in range(repeats):
+                order = ("baseline", "transformed") if index % 2 == 0 else ("transformed", "baseline")
+                sample: dict[str, Any] = {"order": order}
+                for name in order:
+                    executable = baseline if name == "baseline" else transformed
+                    elapsed_ms, output_hash = timed_execution(executable)
+                    sample[name] = {"latency_ms": elapsed_ms, "output_hash": output_hash}
+                    if name == "baseline":
+                        baseline_samples.append(elapsed_ms)
+                        measured_baseline_hashes.append(output_hash)
+                    else:
+                        transformed_samples.append(elapsed_ms)
+                        measured_transformed_hashes.append(output_hash)
+                raw_samples.append(sample)
             library = holder["library"]
             call_count_function = library.shuttle_pair_map_smoke_call_count
             call_count_function.restype = ctypes.c_int
@@ -322,10 +389,12 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
     transformed_hlo = transformed_modules[0]
     target_occurrences = transformed_hlo.count(_TARGET_NAME)
     tuple_gets = transformed_hlo.count("get-tuple-element(%shuttle_generated_multi_output_region)")
-    if target_occurrences != 1 or tuple_gets != len(rewrite.boundary.outputs) or call_count != 1:
+    expected_call_count = 1 + warmup + repeats
+    if target_occurrences != 1 or tuple_gets != len(rewrite.boundary.outputs) or call_count != expected_call_count:
         raise RuntimeError(
             "GPU custom-call evidence mismatch: "
-            f"targets={target_occurrences}, tuple_gets={tuple_gets}, executions={call_count}"
+            f"targets={target_occurrences}, tuple_gets={tuple_gets}, executions={call_count}, "
+            f"expected_executions={expected_call_count}"
         )
     source = _generate_cuda_handler(rewrite)
     contract_count = 1 if isinstance(rewrite, ContractMapRegionRewrite) else 2
@@ -352,6 +421,24 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "tuple_get_element_count": tuple_gets,
         "custom_call_handler_executions": call_count,
+        "output_hashes": {
+            "initial_baseline": baseline_hash,
+            "initial_transformed": transformed_hash,
+            "measured_baseline": measured_baseline_hashes,
+            "measured_transformed": measured_transformed_hashes,
+            "baseline_unique_count": len(set(measured_baseline_hashes)),
+            "transformed_unique_count": len(set(measured_transformed_hashes)),
+            "baseline_repeated_bitwise_deterministic": len(set(measured_baseline_hashes)) == 1,
+            "transformed_repeated_bitwise_deterministic": len(set(measured_transformed_hashes)) == 1,
+        },
+        "counterbalanced_timing": {
+            "warmup_pairs": warmup,
+            "measured_pairs": repeats,
+            "baseline_median_ms": statistics.median(baseline_samples),
+            "transformed_median_ms": statistics.median(transformed_samples),
+            "transformed_over_baseline": statistics.median(transformed_samples) / statistics.median(baseline_samples),
+            "raw_samples": raw_samples,
+        },
         "numerical_contract": {
             "scalar_map": "source_ordered including recovered BF16 round trips",
             "contracts": "ordered_fp using CUBLAS_COMPUTE_32F_PEDANTIC generic Contract primitives",
@@ -373,8 +460,16 @@ def main() -> None:
     parser.add_argument("--cuda-architecture", choices=("sm_90a", "sm_100a"), required=True)
     parser.add_argument("--artifact-directory", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--warmup", type=int, default=4)
+    parser.add_argument("--repeats", type=int, default=30)
     args = parser.parse_args()
-    result = run_smoke(args.nvcc, args.cuda_architecture, args.artifact_directory)
+    result = run_smoke(
+        args.nvcc,
+        args.cuda_architecture,
+        args.artifact_directory,
+        warmup=args.warmup,
+        repeats=args.repeats,
+    )
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         args.output.write_text(rendered)

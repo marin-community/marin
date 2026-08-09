@@ -1875,3 +1875,36 @@ author: dlwh
   1.0 for the feature Fold). This is a deterministic-tree result; source-order
   equivalence to XLA's selected reduction tree is not established and must not
   be claimed. The benchmark now records that contract explicitly.
+
+### 2026-08-09 01:38 PDT - TLTC-XLA-010 Grug GPU Contract+Map replacement
+
+- Hypothesis: a generic Contract+Map region recovered from the natural Grug
+  reverse HLO can be replaced and executed through XLA typed FFI without a
+  model-name recognizer or opaque workload kernel.
+- Commit Hash: source under test `2ed4741e13`; result checkpoint recorded by the
+  following commit.
+- Command: `xla_grug_backward_multi_output_gpu_custom_call_smoke.py
+  --cuda-architecture sm_100a --warmup 4 --repeats 30` on one low-priority
+  GB200. The exact command and environment are in
+  `benchmarks/artifacts/grug_contract_map_gpu_gb200_v0/provenance.md`.
+- Config: ordinary one-layer Grug training step; JAX/JAXlib 0.11.0; coherent
+  NVCC/CRT/NVVM/NVRTC/NvJitLink 13.0.88; CUDA runtime 13.0.96; cuBLAS
+  13.0.2.14; driver 595.71.05; cluster-default unpinned clocks.
+- Result: the transformed executable contains one custom call and executes it
+  35 times. The initial 53-leaf comparison is bitwise exact. Thirty
+  counterbalanced medians are 0.552480 ms baseline and 0.563937 ms transformed,
+  a `1.020737x` ratio.
+- Determinism: repeated full-step hashes have four variants on both baseline
+  and transformed paths. The initial paired result is exact, but whole-step
+  bitwise determinism is not established.
+- Environment finding: mixed CUDA 13.3 NVVM with 13.0 PTXAS fails at transformed
+  compilation, and pip's versioned-only `libcublas.so.13` defeats `-lcublas`
+  even when the correct search path is present. The checkpoint resolves
+  absolute shared-library paths and uses `-cudart=none`; disposable symlinks
+  were used only for the measured run.
+- Interpretation: the natural JAX-to-HLO-to-generic-region-to-generated-FFI
+  execution chain now works on GB200. The result is an integration proof around
+  a generic cuBLAS Contract, not yet a competitive fused tile mainloop.
+- Next action: replace the generic cuBLAS call plus scalar Map with Shuttle's
+  reusable tiled Contract skeleton, then apply the same post-SPMD replacement
+  mechanism to the larger routed forward/input-adjoint regions.

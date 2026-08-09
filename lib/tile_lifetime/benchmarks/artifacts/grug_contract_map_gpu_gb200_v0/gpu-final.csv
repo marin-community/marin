@@ -1,0 +1,2 @@
+timestamp, name, uuid, driver_version, clocks.current.sm [MHz], clocks.current.memory [MHz], clocks.max.sm [MHz], clocks.max.memory [MHz], power.limit [W], memory.total [MiB]
+2026/08/09 08:37:26.119, NVIDIA GB200, GPU-f41bf5e5-cdb1-343a-fbd5-2ccde1b66b86, 595.71.05, 120 MHz, 3996 MHz, 2062 MHz, 3996 MHz, 1200.00 W, 189471 MiB
