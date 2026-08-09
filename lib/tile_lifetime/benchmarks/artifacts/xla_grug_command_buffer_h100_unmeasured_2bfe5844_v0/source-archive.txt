@@ -1,0 +1,15 @@
+Archive creation:
+
+git archive --format=tar.gz \
+  --output=/tmp/shuttle-cmdbuf-2bfe584438.tar.gz \
+  2bfe584438
+
+Local and in-pod SHA-256:
+
+c39f7f878d19b8d1af60df8674dcc77effd045a42a2361de6c7eacf3b6f59cd1  shuttle-cmdbuf-2bfe584438.tar.gz
+
+Archive size: 41 MB (43,123,896 bytes)
+
+The archive was extracted under `/tmp/shuttle-2bfe584438`. A Git worktree
+probe returned false, confirming that the measured source was the detached
+archive rather than a mutable checkout.

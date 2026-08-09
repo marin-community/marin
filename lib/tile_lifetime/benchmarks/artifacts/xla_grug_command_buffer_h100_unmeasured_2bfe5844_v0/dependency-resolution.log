@@ -1,0 +1,25 @@
+Ignoring existing lockfile due to change in fork strategy: `fewest` vs. `requires-python`
+  × Failed to build `vllm @
+  │ git+https://github.com/marin-community/vllm.git@afb26719464d5957e695bde478ae93a160b11d14`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+
+      [stderr]
+      /uv/cache/builds-v0/.tmpLW12r9/lib/python3.12/site-packages/torch/_subclasses/functional_tensor.py:307:
+      UserWarning: Failed to initialize NumPy: No module named 'numpy'
+      (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:84.)
+        cpu = _conversion_method_template(device=torch.device("cpu"))
+      Traceback (most recent call last):
+        File "<string>", line 14, in <module>
+        File "/uv/cache/builds-v0/.tmpLW12r9/lib/python3.12/site-packages/setuptools/build_meta.py", line 333, in get_requires_for_build_wheel
+          return self._get_build_requires(config_settings, requirements=[])
+        File "/uv/cache/builds-v0/.tmpLW12r9/lib/python3.12/site-packages/setuptools/build_meta.py", line 301, in _get_build_requires
+          self.run_setup()
+        File "/uv/cache/builds-v0/.tmpLW12r9/lib/python3.12/site-packages/setuptools/build_meta.py", line 317, in run_setup
+          exec(code, locals())
+        File "<string>", line 1276, in <module>
+        File "<string>", line 1070, in get_vllm_version
+        File "<string>", line 1030, in get_nvcc_cuda_version
+      AssertionError: CUDA_HOME is not set
+
+command terminated with exit code 1

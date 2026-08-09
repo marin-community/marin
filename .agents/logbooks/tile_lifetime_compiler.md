@@ -3316,3 +3316,30 @@ author: dlwh
   source, toolchain, invocation, source identity, preflight, and release proof
   are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_correctness_failure_d9e8990e_v0/`.
+
+### 2026-08-09 - TLTC-XLA-061 command-buffer task environment remained too broad
+
+- After the prior Contract/Map holder reported release, allocated one bounded
+  batch-priority H100 holder for the command-buffer replay at source revision
+  `2bfe584438`. The holder used one H100, one requested CPU, 32 GB memory, and
+  50 GB disk. Its bootstrap project defined the required empty `dev` group and
+  produced a 468-byte Iris bundle. The detached 41-MB source archive was
+  verified in the pod at SHA-256
+  `c39f7f878d19b8d1af60df8674dcc77effd045a42a2361de6c7eacf3b6f59cd1`.
+- The attempt to construct the exact task environment selected the broad
+  `marin-core[gpu]` dependency set. Resolution reached the unrelated Levanter
+  serve/vLLM dependency and failed in vLLM's build backend because `CUDA_HOME`
+  was unset. This happened before `--dependency-preflight-only`; JAX did not
+  initialize a backend and no CUDA or benchmark command executed.
+- The benchmark has zero invocations, warmups, timed samples, correctness or
+  determinism checks, target audits, handler counts, and performance results.
+  This is an environment-selection failure, not generated-program evidence.
+- A new fixed-layout Contract/Map replay became the scheduling gate while the
+  holder was active, so the holder was released immediately. Iris reports
+  `JOB_STATE_KILLED`, exit 0, and no active matching job; the local state and
+  exact task-label pod are absent.
+- The next command-buffer attempt must start from canonical `239372d31d` or
+  later and install the narrow natural-Grug runtime plus the pinned JAX 0.11 and
+  Torch/Triton AOT stack without the serve/vLLM extra. It requires new explicit
+  authorization after the fixed-layout component run releases. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_command_buffer_h100_unmeasured_2bfe5844_v0/`.

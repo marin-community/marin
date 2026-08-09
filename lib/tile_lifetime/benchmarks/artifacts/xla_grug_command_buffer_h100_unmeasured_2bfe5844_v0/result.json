@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "status": "unmeasured_dependency_resolution_failure",
+  "source": {
+    "shuttle_revision": "2bfe5844388d4b73db0f532bbf81d78372cbace3",
+    "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+    "source_archive_sha256": "c39f7f878d19b8d1af60df8674dcc77effd045a42a2361de6c7eacf3b6f59cd1",
+    "source_archive_bytes": 43123896,
+    "holder_bundle_bytes": 468
+  },
+  "request": {
+    "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
+    "gpu_variant": "H100",
+    "gpu_count": 1,
+    "cpu": 1,
+    "memory": "32GB",
+    "disk": "50GB",
+    "priority": "batch",
+    "warmups": 4,
+    "counterbalanced_samples": 30,
+    "composition_mode": "shared_map_fused_reverses",
+    "command_buffer_candidate": "normalized_exp_pair",
+    "tuning": false,
+    "retry_count": 0
+  },
+  "job": {
+    "job_id": "/dlwh/dev-gpu-dlwh-shuttle-cmdbuf-2bfe",
+    "state": "JOB_STATE_KILLED",
+    "exit_code": 0,
+    "error": "Terminated by user",
+    "submitted_at": "2026-08-09T23:32:54Z",
+    "started_at": "2026-08-09T23:33:01Z",
+    "finished_at": "2026-08-09T23:34:38Z",
+    "failure_count": 0,
+    "preemption_count": 1,
+    "task_state_counts": {
+      "killed": 1
+    }
+  },
+  "execution": {
+    "source_archive_transferred": true,
+    "source_archive_verified": true,
+    "environment_resolution_attempts": 1,
+    "dependency_preflight_invocations": 0,
+    "benchmark_invocations": 0,
+    "device_access": false,
+    "cuda_commands": 0,
+    "warmup_samples_completed": 0,
+    "timed_samples_completed": 0,
+    "correctness_available": false,
+    "determinism_available": false,
+    "handler_counts_available": false,
+    "performance_available": false
+  },
+  "failure": {
+    "stage": "task_environment_dependency_resolution",
+    "dependency": "vllm",
+    "type": "build_backend_failure",
+    "message": "AssertionError: CUDA_HOME is not set",
+    "interpretation": "The broad marin-core GPU environment pulled an unrelated serve/vLLM dependency before the CPU-only dependency preflight."
+  },
+  "required_next_environment": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "torch": "2.11.0",
+    "triton": "3.6.x",
+    "must_import": [
+      "triton.tools.compile",
+      "triton.language"
+    ],
+    "must_validate": [
+      "HLO parser",
+      "compiler-IR proto roundtrip",
+      "jax.extend.xla transformation hooks"
+    ],
+    "must_exclude": "unrelated Levanter serve/vLLM extra",
+    "minimum_shuttle_revision": "239372d31d"
+  },
+  "release": {
+    "active_matching_jobs": [],
+    "local_session_state_present": false,
+    "matching_pods": 0
+  }
+}
