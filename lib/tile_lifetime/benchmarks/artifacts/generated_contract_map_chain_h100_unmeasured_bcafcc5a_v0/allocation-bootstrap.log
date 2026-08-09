@@ -1,0 +1,11 @@
+2026-08-09 16:16:37,666 - INFO - Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+2026-08-09 16:16:37,671 - INFO - Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+2026-08-09 16:16:38,698 - INFO - Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+2026-08-09 16:16:38,818 - INFO - Workspace bundle size: 0.0 MB
+Error: Dev GPU allocation failed: [iris setup] step 1/2
+syncing deps
+Using CPython 3.12.13 interpreter at: /usr/local/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 1 package in 1ms
+error: Group `dev` is not defined in any project's `dependency-groups` table
+

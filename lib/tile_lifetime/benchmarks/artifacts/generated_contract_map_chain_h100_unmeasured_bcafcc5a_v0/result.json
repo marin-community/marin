@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "status": "unmeasured_infrastructure_bootstrap_failure",
+  "component": "generated_two_contract_scalar_map_training",
+  "source": {
+    "shuttle_revision": "bcafcc5ab13677146af36644b4f12b008790b676",
+    "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+    "benchmark": "lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py"
+  },
+  "request": {
+    "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
+    "gpu_variant": "H100",
+    "gpu_count": 1,
+    "cpu": 1,
+    "memory": "32GB",
+    "disk": "50GB",
+    "priority": "batch",
+    "allocation_timeout_seconds": 1800,
+    "pod_timeout_seconds": 300
+  },
+  "job": {
+    "job_id": "/dlwh/dev-gpu-dlwh-shuttle-contract-map-chain-h100-bcaf",
+    "state": "JOB_STATE_FAILED",
+    "submitted_at": "2026-08-09T23:16:39.268Z",
+    "started_at": "2026-08-09T23:16:45.083Z",
+    "finished_at": "2026-08-09T23:16:51.921Z",
+    "failure_count": 1,
+    "preemption_count": 0,
+    "error": "[iris setup] step 1/2\nsyncing deps\nUsing CPython 3.12.13 interpreter at: /usr/local/bin/python3.12\nCreating virtual environment at: .venv\nResolved 1 package in 1ms\nerror: Group `dev` is not defined in any project's `dependency-groups` table\n"
+  },
+  "execution": {
+    "benchmark_process_started": false,
+    "compile_link_load_preflight_completed": false,
+    "gpu_execution": false,
+    "correctness_checked": false,
+    "determinism_checked": false,
+    "handler_counts_checked": false,
+    "counterbalanced_samples": [],
+    "latency_ratio": null
+  },
+  "required_but_unobserved_toolchain": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "architecture": "sm_90a"
+  },
+  "release": {
+    "active_matching_jobs_after_failure": 0,
+    "explicit_terminate_issued": true,
+    "matching_pods_after_release": 0,
+    "local_session_state_present": false,
+    "verified_at": "2026-08-09T23:19:37Z"
+  },
+  "interpretation": "Infrastructure-only failure before component execution; no H100 component evidence was produced."
+}
+
