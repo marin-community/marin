@@ -14,6 +14,12 @@ from tile_lifetime.attention import (
     normalize_attention_partial,
     summarize_attention_partial,
 )
+from tile_lifetime.autodiff import (
+    DifferentiatedTensorProgram,
+    differentiate_scalar_expression,
+    differentiate_tensor_program,
+    scalar_expression_vjp,
+)
 from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
 from tile_lifetime.dense_algebra import DenseSemanticErasureError, erase_dense_semantics
 from tile_lifetime.dense_flow import (

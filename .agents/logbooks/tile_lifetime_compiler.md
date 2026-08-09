@@ -1468,3 +1468,27 @@ author: dlwh
 - Raw samples, reuse fixtures, device pins, failure caveats, and interpretation
   are frozen under
   `benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.
+
+### 2026-08-08 - TLTC-TRAIN-001 clean Grug train-step boundary and reverse mode
+
+- A natural one-layer Grug MoE train step lowers through ordinary JAX
+  `value_and_grad` and an optimizer update with zero StableHLO custom calls when
+  the fixture selects reference attention, scatter MoE, and XLA ragged
+  contraction. The SGD/AdamW modules contain 329,403/466,782 characters and 82
+  `dot_general` operations each.
+- Added a reproducible StableHLO exporter and frozen both modules under
+  `benchmarks/artifacts/grug_moe_train_step_stablehlo_v0`. This demonstrates
+  that Grug itself does not need an opaque-kernel rewrite before Shuttle can
+  analyze training math.
+- Added generic reverse-mode construction for scalar Map ASTs, multilinear
+  Contract adjoints, sum-Fold broadcast adjoints, broadcast-Map reductions, and
+  fanout accumulation. A SwiGLU-to-tanh semantic mutation changes the generated
+  VJP without editing a backend.
+- An RMSNorm-GEMM program differentiates into two transposed Contracts plus
+  generated Map/Fold work. Independent formulas for `dx`, `dgamma`, and `dW`
+  agree within 2e-5. The package suite passes 220 tests and Pyrefly reports no
+  errors.
+- Next experiment: pin JAX/JAXLIB 0.11 in an isolated H100 environment, capture
+  the post-SPMD train-step `HloModuleProto` through the pre-scheduler extension,
+  recover one forward/backward contraction region without rewriting it, then
+  replace the linear-SwiGLU family through a generic XLA FFI region call.

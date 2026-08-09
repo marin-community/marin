@@ -427,3 +427,21 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
   selection remains open and is not hidden behind the performance result.
 - Evidence is under
   `benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.
+
+## 2026-08-08: Training boundary and generic reverse mode
+
+- Exported a natural one-layer Grug MoE train step containing JAX autodiff and
+  optimizer update. Reference attention, scatter MoE, and XLA ragged
+  contraction produce zero StableHLO custom calls; SGD and AdamW fixtures
+  contain 82 `dot_general` operations each.
+- Added generic reverse mode for scalar Map ASTs, multilinear Contract
+  adjoints, sum-Fold broadcast adjoints, and broadcast-Map reductions.
+- A SwiGLU-to-tanh mutation changes the derived VJP without backend source
+  changes. A generated RMSNorm-GEMM backward matches independent `dx`,
+  `dgamma`, and `dW` formulas within 2e-5.
+- The package suite passes 220 tests. Physical backward generation and matched
+  H100 timing remain open.
+- StableHLO evidence is under
+  `benchmarks/artifacts/grug_moe_train_step_stablehlo_v0`; the recommended
+  out-of-tree XLA integration sequence is in
+  `.agents/projects/shuttle_grug_training_lowering.md`.
