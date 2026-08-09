@@ -214,6 +214,16 @@ concrete persistence implementation, `ControllerRuntime`, the canonical
 `Controller`, and both RPC adapters. Persistence is organized by noun and
 transaction rather than hidden behind a generic repository framework.
 
+`Controller` is intentionally the stable application facade, not another
+transport or persistence layer. Callers should not have to select separate Job,
+Task, Endpoint, observability, or inventory controllers before they can perform
+one resource operation. Those areas may use private collaborators and named
+transaction/dispatch stages internally, but the public ownership remains one
+cohesive resource contract over the same snapshot, authorization policy,
+backends, and federation runtime. This is the facade exception to the ordinary
+god-class rule; splitting its public surface would expose implementation
+taxonomy and recreate the ambiguous ownership this layout removes.
+
 ## Target package layout
 
 ```text

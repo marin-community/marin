@@ -213,6 +213,31 @@ class _ActivityItem:
         return (self.entry.occurred_at.epoch_ms(), self.source_rank, self.source_key)
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteActionContext:
+    peer_id: str
+    authority_cluster_id: str
+    backend_id: str
+    execution_cluster_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletedCancel:
+    receipt: ActionReceipt
+    cancel_target: CancelTarget | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletedAction:
+    receipt: ActionReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class _RemoteTerminalAction:
+    context: _RemoteActionContext
+    attempt: AttemptIdentity
+
+
 class ResourceRuntime(Protocol):
     """Controller capabilities needed by resource operations."""
 
@@ -339,22 +364,35 @@ def _validated_task_event_source_key(
     )
 
 
-def _sql_key_before(columns: tuple[str, ...], values: tuple[int | str, ...]) -> str:
+def _sql_key_before(columns: tuple[str, ...], literals: tuple[str, ...]) -> str:
     terms = []
-    for index, (column, value) in enumerate(zip(columns, values, strict=True)):
+    for index, (column, literal) in enumerate(zip(columns, literals, strict=True)):
         equal_prefix = " AND ".join(
-            f"{prefix_column} = {_sql_literal(prefix_value)}"
-            for prefix_column, prefix_value in zip(columns[:index], values[:index], strict=True)
+            f"{prefix_column} = {prefix_literal}"
+            for prefix_column, prefix_literal in zip(columns[:index], literals[:index], strict=True)
         )
-        comparison = f"{column} < {_sql_literal(value)}"
+        comparison = f"{column} < {literal}"
         terms.append(f"({equal_prefix} AND {comparison})" if equal_prefix else comparison)
     return " OR ".join(terms)
 
 
-def _sql_literal(value: int | str) -> str:
-    if type(value) is int:
-        return str(value)
+def _sql_text_literal(value: str) -> str:
     return f"'{value.replace("'", "''")}'"
+
+
+def _task_event_sql_literals(
+    key: tuple[int, str, str, str, str, str, int],
+) -> tuple[str, str, str, str, str, str, str]:
+    attempt_id, attempt_uid, event_type, reason, message, source, count = key
+    return (
+        str(attempt_id),
+        _sql_text_literal(attempt_uid),
+        _sql_text_literal(event_type),
+        _sql_text_literal(reason),
+        _sql_text_literal(message),
+        _sql_text_literal(source),
+        str(count),
+    )
 
 
 def _available_source(source_id: str, *, backend_id: str = "") -> ResourceSourceStatus:
@@ -839,9 +877,41 @@ class Controller:
         principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None)
+        preparation = self._prepare_cancel_job(
+            identity,
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+        if isinstance(preparation, _RemoteActionContext):
+            receipt = self._runtime.federation.proxy_to_peer(
+                preparation.peer_id,
+                lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key),
+            )
+            return self._persist_remote_action(
+                receipt,
+                preparation,
+                principal_id=principal_id,
+                kind=ActionKind.CANCEL_JOB,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+            )
+
+        if preparation.cancel_target is not None:
+            self._runtime.federation.deliver_cancel(preparation.cancel_target)
+        else:
+            self._runtime.wake()
+        return preparation.receipt
+
+    def _prepare_cancel_job(
+        self,
+        identity: JobIdentity,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        payload_hash: str,
+    ) -> _CompletedCancel | _RemoteActionContext:
         cancel_target: CancelTarget | None = None
-        peer_id: str | None = None
-        execution_cluster_id = ""
         with self._db.transaction() as tx:
             duplicate = _duplicate_action(
                 tx,
@@ -851,7 +921,7 @@ class Controller:
                 payload_hash=payload_hash,
             )
             if duplicate is not None:
-                return duplicate
+                return _CompletedCancel(duplicate, None)
             row = reads.get_job_detail(tx, JobName.from_wire(identity.key.resource_id))
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
@@ -866,7 +936,7 @@ class Controller:
                 job_ops.cancel(tx, job_id=row.job_id, reason="Cancelled by resource action")
                 writes.record_federation_change(tx, row.job_id)
             elif row.job_id != row.job_id.root_job:
-                peer_id = handle.peer_id
+                return _RemoteActionContext(handle.peer_id, authority, "", execution_cluster_id)
             else:
                 writes.bump_cancel_intent(tx, row.job_id)
                 if handle.handoff_state in {
@@ -881,57 +951,25 @@ class Controller:
                     )
                 if handle.handoff_state != int(HandoffState.QUEUED_HANDOFF):
                     cancel_target = CancelTarget(row.job_id, handle.peer_id)
-            if peer_id is None:
-                receipt = _completed_action(
-                    kind=ActionKind.CANCEL_JOB,
-                    target=identity.key,
-                    expected_target_uid=identity.job_uid,
-                    expected_attempt_uid=None,
-                    result=ActionResult.SATISFIED,
-                )
-                action_persistence.insert_action(
-                    tx,
-                    receipt,
-                    authority_cluster_id=authority,
-                    authority_action_id=receipt.action_id,
-                    backend_id="",
-                    execution_cluster_id=execution_cluster_id,
-                    principal_id=principal_id,
-                    idempotency_key=_require_idempotency_key(idempotency_key),
-                    payload_hash=payload_hash,
-                )
-        if peer_id is not None:
-            receipt = self._runtime.federation.proxy_to_peer(
-                peer_id,
-                lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key),
+            receipt = _completed_action(
+                kind=ActionKind.CANCEL_JOB,
+                target=identity.key,
+                expected_target_uid=identity.job_uid,
+                expected_attempt_uid=None,
+                result=ActionResult.SATISFIED,
             )
-            with self._db.transaction() as tx:
-                duplicate = _duplicate_action(
-                    tx,
-                    principal_id=principal_id,
-                    kind=ActionKind.CANCEL_JOB,
-                    idempotency_key=idempotency_key,
-                    payload_hash=payload_hash,
-                )
-                if duplicate is not None:
-                    return duplicate
-                action_persistence.insert_action(
-                    tx,
-                    receipt,
-                    authority_cluster_id=authority,
-                    authority_action_id=receipt.action_id,
-                    backend_id="",
-                    execution_cluster_id=execution_cluster_id,
-                    principal_id=principal_id,
-                    idempotency_key=_require_idempotency_key(idempotency_key),
-                    payload_hash=payload_hash,
-                )
-            return receipt
-        if cancel_target is not None:
-            self._runtime.federation.deliver_cancel(cancel_target)
-        else:
-            self._runtime.wake()
-        return receipt
+            action_persistence.insert_action(
+                tx,
+                receipt,
+                authority_cluster_id=authority,
+                authority_action_id=receipt.action_id,
+                backend_id="",
+                execution_cluster_id=execution_cluster_id,
+                principal_id=principal_id,
+                idempotency_key=_require_idempotency_key(idempotency_key),
+                payload_hash=payload_hash,
+            )
+        return _CompletedCancel(receipt, cancel_target)
 
     def retry_task(
         self,
@@ -1258,7 +1296,7 @@ class Controller:
                 event_key = _validated_task_event_source_key(before_source_key)
                 equal_time_predicate = _sql_key_before(
                     ("attempt_id", "attempt_uid", "type", "reason", "message", "source", "count"),
-                    event_key,
+                    _task_event_sql_literals(event_key),
                 )
                 before_predicate = (
                     f" AND (ts < {before_timestamp} OR (ts = {before_timestamp} AND ({equal_time_predicate})))"
@@ -1888,10 +1926,50 @@ class Controller:
         expected_attempt_number: int | None = None,
     ) -> ActionReceipt:
         payload_hash = _action_payload_hash(kind, identity.task_uid, expected_attempt_uid)
-        peer_id: str | None = None
-        backend_id = ""
-        execution_cluster_id = ""
-        remote_attempt: AttemptIdentity | None = None
+        preparation = self._prepare_terminal_action(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            expected_attempt_number=expected_attempt_number,
+            idempotency_key=idempotency_key,
+            principal_id=principal_id,
+            kind=kind,
+            terminal_kind=terminal_kind,
+            result=result,
+            payload_hash=payload_hash,
+        )
+        if isinstance(preparation, _CompletedAction):
+            return preparation.receipt
+
+        receipt = self._proxy_terminal_action(
+            preparation.context,
+            preparation.attempt,
+            identity,
+            kind=kind,
+            idempotency_key=idempotency_key,
+            expected_attempt_uid=expected_attempt_uid,
+        )
+        return self._persist_remote_action(
+            receipt,
+            preparation.context,
+            principal_id=principal_id,
+            kind=kind,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+
+    def _prepare_terminal_action(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        expected_attempt_number: int | None,
+        idempotency_key: str,
+        principal_id: str,
+        kind: ActionKind,
+        terminal_kind: TerminalKind,
+        result: ActionResult,
+        payload_hash: str,
+    ) -> _CompletedAction | _RemoteTerminalAction:
         with self._db.transaction() as tx:
             duplicate = _duplicate_action(
                 tx,
@@ -1901,7 +1979,7 @@ class Controller:
                 payload_hash=payload_hash,
             )
             if duplicate is not None:
-                return duplicate
+                return _CompletedAction(duplicate)
             task_id = JobName.from_wire(identity.key.resource_id)
             row = reads.get_task_detail(tx, task_id)
             if row is None:
@@ -1922,22 +2000,26 @@ class Controller:
                 raise ResourceReplaced(f"{identity.key.resource_id}:{attempt.attempt_id}")
             handle = reads.federated_handle(tx, row.task_id.root_job)
             if handle is not None:
-                peer_id = handle.peer_id
-                backend_id = str(row.backend_id or "")
-                execution_cluster_id = _execution_cluster(self._cluster_id, str(row.cluster))
                 remote_attempt = AttemptIdentity(identity.key, int(attempt.attempt_id), str(attempt.attempt_uid))
-            else:
-                finalize(
-                    tx,
-                    [
-                        TerminalDecision(
-                            kind=terminal_kind,
-                            task_id=row.task_id,
-                            reason="Requested through the resource action API",
-                        )
-                    ],
-                    now=Timestamp.now(),
+                remote = _RemoteActionContext(
+                    handle.peer_id,
+                    authority,
+                    str(row.backend_id or ""),
+                    _execution_cluster(self._cluster_id, str(row.cluster)),
                 )
+                return _RemoteTerminalAction(remote, remote_attempt)
+
+            finalize(
+                tx,
+                [
+                    TerminalDecision(
+                        kind=terminal_kind,
+                        task_id=row.task_id,
+                        reason="Requested through the resource action API",
+                    )
+                ],
+                now=Timestamp.now(),
+            )
             target = identity.key
             if kind is ActionKind.TERMINATE_ATTEMPT:
                 target = ResourceKey(
@@ -1945,42 +2027,60 @@ class Controller:
                     ResourceKind.ATTEMPT,
                     f"{row.task_id.to_wire()}:{attempt.attempt_id}",
                 )
-            if peer_id is None:
-                receipt = _completed_action(
-                    kind=kind,
-                    target=target,
-                    expected_target_uid=identity.task_uid,
-                    expected_attempt_uid=expected_attempt_uid,
-                    result=result,
-                )
-                action_persistence.insert_action(
-                    tx,
-                    receipt,
-                    authority_cluster_id=authority,
-                    authority_action_id=receipt.action_id,
-                    backend_id=self._backend_id(str(row.backend_id)),
-                    execution_cluster_id=_execution_cluster(self._cluster_id, str(row.cluster)),
-                    principal_id=principal_id,
-                    idempotency_key=_require_idempotency_key(idempotency_key),
-                    payload_hash=payload_hash,
-                )
-                return receipt
+            receipt = _completed_action(
+                kind=kind,
+                target=target,
+                expected_target_uid=identity.task_uid,
+                expected_attempt_uid=expected_attempt_uid,
+                result=result,
+            )
+            action_persistence.insert_action(
+                tx,
+                receipt,
+                authority_cluster_id=authority,
+                authority_action_id=receipt.action_id,
+                backend_id=self._backend_id(str(row.backend_id)),
+                execution_cluster_id=_execution_cluster(self._cluster_id, str(row.cluster)),
+                principal_id=principal_id,
+                idempotency_key=_require_idempotency_key(idempotency_key),
+                payload_hash=payload_hash,
+            )
+        return _CompletedAction(receipt)
 
-        assert peer_id is not None and remote_attempt is not None
+    def _proxy_terminal_action(
+        self,
+        remote: _RemoteActionContext,
+        remote_attempt: AttemptIdentity,
+        identity: TaskIdentity,
+        *,
+        kind: ActionKind,
+        idempotency_key: str,
+        expected_attempt_uid: str,
+    ) -> ActionReceipt:
         if kind is ActionKind.RETRY_TASK:
-            receipt = self._runtime.federation.proxy_to_peer(
-                peer_id,
+            return self._runtime.federation.proxy_to_peer(
+                remote.peer_id,
                 lambda peer: peer.retry_task(
                     identity,
                     expected_attempt_uid=expected_attempt_uid,
                     idempotency_key=idempotency_key,
                 ),
             )
-        else:
-            receipt = self._runtime.federation.proxy_to_peer(
-                peer_id,
-                lambda peer: peer.terminate_attempt(remote_attempt, idempotency_key=idempotency_key),
-            )
+        return self._runtime.federation.proxy_to_peer(
+            remote.peer_id,
+            lambda peer: peer.terminate_attempt(remote_attempt, idempotency_key=idempotency_key),
+        )
+
+    def _persist_remote_action(
+        self,
+        receipt: ActionReceipt,
+        remote: _RemoteActionContext,
+        *,
+        principal_id: str,
+        kind: ActionKind,
+        idempotency_key: str,
+        payload_hash: str,
+    ) -> ActionReceipt:
         with self._db.transaction() as tx:
             duplicate = _duplicate_action(
                 tx,
@@ -1994,10 +2094,10 @@ class Controller:
             action_persistence.insert_action(
                 tx,
                 receipt,
-                authority_cluster_id=authority,
+                authority_cluster_id=remote.authority_cluster_id,
                 authority_action_id=receipt.action_id,
-                backend_id=backend_id,
-                execution_cluster_id=execution_cluster_id,
+                backend_id=remote.backend_id,
+                execution_cluster_id=remote.execution_cluster_id,
                 principal_id=principal_id,
                 idempotency_key=_require_idempotency_key(idempotency_key),
                 payload_hash=payload_hash,

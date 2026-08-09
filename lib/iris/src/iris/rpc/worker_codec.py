@@ -3,6 +3,8 @@
 
 """Translate WorkerService protobuf messages at the RPC boundary."""
 
+from dataclasses import dataclass
+
 from rigging.provenance import Provenance
 from rigging.timing import Duration
 
@@ -40,6 +42,13 @@ from iris.rpc.legacy_job_codec import (
 )
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.time_proto import duration_to_proto, timestamp_from_proto, timestamp_to_proto
+
+
+@dataclass(frozen=True)
+class ProfileConfigurationRequest:
+    target: str
+    duration: Duration
+    profile: ProfileConfiguration | None
 
 
 def provenance_to_proto(value: Provenance) -> job_pb2.Provenance:
@@ -245,11 +254,11 @@ def task_status_to_proto(value: WorkerTaskStatus) -> job_pb2.TaskStatus:
 
 def profile_configuration_request_from_proto(
     value: job_pb2.ProfileTaskRequest,
-) -> tuple[str, Duration, ProfileConfiguration | None]:
-    return (
-        value.target,
-        Duration.from_seconds(value.duration_seconds),
-        profile_configuration_from_proto(value.profile_type) if value.HasField("profile_type") else None,
+) -> ProfileConfigurationRequest:
+    return ProfileConfigurationRequest(
+        target=value.target,
+        duration=Duration.from_seconds(value.duration_seconds),
+        profile=profile_configuration_from_proto(value.profile_type) if value.HasField("profile_type") else None,
     )
 
 

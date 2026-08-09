@@ -130,13 +130,13 @@ class WorkerServiceImpl:
             try:
                 if not request.HasField("profile_type"):
                     raise ValueError("profile_type is required")
-                target, duration, profile = profile_configuration_request_from_proto(request)
-                if profile is None:
+                configuration = profile_configuration_request_from_proto(request)
+                if configuration.profile is None:
                     raise ValueError("profile_type is required")
                 data = self._provider.capture_and_log_profile(
-                    target=target,
-                    duration=int(duration.to_seconds()),
-                    profile=profile,
+                    target=configuration.target,
+                    duration=int(configuration.duration.to_seconds()),
+                    profile=configuration.profile,
                     trigger=ProfileTrigger.ON_DEMAND,
                 )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
