@@ -2200,3 +2200,38 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_output_dot_fold_h100_72397500a2/`
   and
   `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_output_dot_fold_gb200_72397500a2/`.
+
+### 2026-08-09 - TLTC-XLA-019 routed Grug weight-gradient Contracts on GB200
+
+- Hypothesis: the two routed expert weight adjoints in the natural differentiated
+  Grug HLO can use one generic group-batched Contract generator instantiated at
+  two shapes, while XLA retains the placement collectives.
+- Commit Hash: implementation `375d6ede60`; integrated artifact `577801269e`;
+  ignored telemetry correction `1615367599`.
+- Recovered boundaries: `[4,512,32] x [4,512,64] -> [4,32,64]` and
+  `[4,512,32] x [4,512,32] -> [4,32,32]`. Both lower through the same generic
+  `(E,K,M) x (E,K,N) -> (E,M,N)` strided-batched Contract interface. A shape
+  mutation changes the generated right-feature extent without editing physical
+  source. `psum.52` and `psum.53` consume the custom-call results directly and
+  remain outside Shuttle.
+- Numerical contract: BF16 operands, FP32 accumulation, one round-to-nearest-even
+  BF16 output conversion, and `ALLOW_ROUNDING_REORDER`. `BITWISE_EXACT` is
+  rejected because the source HLO does not specify a bitwise dot reduction
+  tree. Each output element has one Contract owner; there are no atomics or
+  output aliases.
+- Result: the primary telemetry replay measures 0.774129 ms for the transformed
+  full train step and 0.725728 ms for stock XLA, a 1.066692x ratio. An
+  independent preceding 30-pair capture measures 0.744593/0.681649 ms, or
+  1.092341x. Both use one actual NVIDIA GB200 at compute capability 10.0; no
+  B200 result is involved.
+- Correctness/audit: maximum and mean absolute errors are 3.725e-9 and
+  1.188e-12; 49 of 53 result leaves are bitwise equal. Both generated handlers
+  execute 35 times, the transformed HLO has exactly two targets, every operand
+  has runtime parameter ancestry, and copy/transpose counts are unchanged.
+- Interpretation: routed forward, input-adjoint, and weight-adjoint slices now
+  each have clean natural-JAX-to-HLO generated execution proofs. They remain
+  separate transformed runs. The next compiler integration step is to compose
+  these replacements in one train step before taking ownership of placement
+  collectives.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_weight_gradient_gpu_gb200_v0/`.
