@@ -219,6 +219,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     def matched_xla_feature_scale_cotangent() -> jax.Array:
         return jnp.sum(projected * standardized.astype(jnp.float32), axis=0)
 
+    if args.xla_dump_directory is not None:
+        args.xla_dump_directory.mkdir(parents=True, exist_ok=True)
+        (args.xla_dump_directory / "matched_full_optimized_hlo.txt").write_text(
+            matched_xla_algebra.lower().compile().as_text()
+        )
+        (args.xla_dump_directory / "matched_input_cotangent_optimized_hlo.txt").write_text(
+            matched_xla_input_cotangent.lower().compile().as_text()
+        )
+        (args.xla_dump_directory / "matched_feature_scale_cotangent_optimized_hlo.txt").write_text(
+            matched_xla_feature_scale_cotangent.lower().compile().as_text()
+        )
+
     generated_outputs = generated_reverse()
     xla_outputs = matched_xla_algebra()
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
@@ -403,6 +415,7 @@ def main() -> None:
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", choices=("sm_90a", "sm_100a"), required=True)
     parser.add_argument("--artifact-directory", type=Path, required=True)
+    parser.add_argument("--xla-dump-directory", type=Path)
     parser.add_argument("--json-output", type=Path, required=True)
     parser.add_argument("--shuttle-revision", required=True)
     args = parser.parse_args()
