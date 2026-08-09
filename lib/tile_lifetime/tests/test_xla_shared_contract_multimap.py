@@ -17,6 +17,7 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _generate_axis_fold_programs,
     _plan_shared_map_composition,
     _replace_shared_map_composition,
+    _single_custom_call_target_occurrences,
 )
 from tile_lifetime.jax_streaming_attention_backward_ffi import generate_streaming_attention_backward_ffi
 from tile_lifetime.plan import NumericalPolicy
@@ -184,7 +185,9 @@ def test_shared_map_harness_composes_seven_calls_and_retains_adjoint_remainder()
         *_SHARED_ROUTED_TARGETS.weight_gradients,
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
-    assert all(transformed.count(target) == 1 for target in targets)
+    selected_targets = (*targets, *(generated.target_name for generated in axis_folds))
+    exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
+    assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
     assert "dot.67" in audit.routed.deferred_input_adjoint_instructions
     assert "dot.68" in audit.routed.deferred_input_adjoint_instructions
