@@ -1,0 +1,14 @@
+#ifndef TT_KERNEL_INCLUDES
+#define TT_KERNEL_INCLUDES
+
+#include <cuda.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#endif
+
+void unload_shuttle_streaming_dkdv_c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344(void);
+void load_shuttle_streaming_dkdv_c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344(void);
+// tt-linker: shuttle_streaming_dkdv_c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344:CUdeviceptr query, CUdeviceptr key, CUdeviceptr value, CUdeviceptr output_cotangent, CUdeviceptr log_sum_exp, CUdeviceptr output_dot, CUdeviceptr key_cotangent, CUdeviceptr value_cotangent:2048x32x8x0.0883883461x0.12751742859084736x1.0x1.0x8388608x4096x128x1x2097152x1024x128x1x2097152x1024x128x1x8388608x4096x128x1x2097152x1024x128x1x2097152x1024x128x1x32x32x128x4x1x0_warps8xstages3
+CUresult shuttle_streaming_dkdv_c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344(CUstream stream, CUdeviceptr query, CUdeviceptr key, CUdeviceptr value, CUdeviceptr output_cotangent, CUdeviceptr log_sum_exp, CUdeviceptr output_dot, CUdeviceptr key_cotangent, CUdeviceptr value_cotangent);

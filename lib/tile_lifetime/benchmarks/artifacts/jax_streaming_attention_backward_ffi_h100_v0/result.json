@@ -1,0 +1,465 @@
+{
+  "benchmark_oracle": {
+    "backend_policy": "flash enabled; cuDNN, memory-efficient, and math disabled",
+    "cuda": "12.8",
+    "name": "torch_flash_sdpa_recompute",
+    "saved_forward_state": false,
+    "torch": "2.11.0+cu128"
+  },
+  "boundary": "natural JAX VJP Q/K/V/output-cotangent to Q/K/V cotangents; forward state recomputed",
+  "build": {
+    "aot_headers": [
+      {
+        "bytes": 1279,
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_dkdv.c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.h",
+        "sha256": "6273176654af7655ab388de04f990bb44b3f7d9bf6e9e499bb0a1f1673aaed54"
+      },
+      {
+        "bytes": 1257,
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_dq.f0d1870d_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.h",
+        "sha256": "f0bf3600c05566b2928fdb96187ac6985878b45e9a7f234dd52b2c8dc6b61e8c"
+      },
+      {
+        "bytes": 1304,
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_forward.de92f901_0d1d2d3d4d5d6d7d8d91011121314151617181920212223242526272829303132333435363738394041424344454647.h",
+        "sha256": "5475b3bf2e22e87f363cfdb631f43c2e798a98950246c6ac786ac14daa790a69"
+      }
+    ],
+    "aot_input_sources": [
+      {
+        "bytes": 43020,
+        "path": "/tmp/attn-ffi-h100-final/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention.py",
+        "sha256": "04b51f3b7b79452b50b386e3a1708b3789cdea743a1ac7513f68772d7575d1f8"
+      },
+      {
+        "bytes": 39306,
+        "path": "/tmp/attn-ffi-h100-final/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py",
+        "sha256": "aa8f74554fa18b788d87014e728c5bb1fe07e2ee0d1588ee1c0ca39a5509f452"
+      }
+    ],
+    "aot_sources": [
+      {
+        "bytes": 510674,
+        "embedded_cubin": {
+          "bytes": 84296,
+          "sha256": "56e8e3a569dddfc58d1487716fa95b3a4ea0ae9f0c3e11c6e62cb6672020644d"
+        },
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_forward.de92f901_0d1d2d3d4d5d6d7d8d91011121314151617181920212223242526272829303132333435363738394041424344454647.c",
+        "sha256": "dc2476d9e95f9ba48b335f7219d1e950ef5f5f25964cebc3dae954396f2520cb"
+      },
+      {
+        "bytes": 448163,
+        "embedded_cubin": {
+          "bytes": 73920,
+          "sha256": "6125dccb18d208133d6f3a548f76ba442819950433493c5ea5603a66a18dec1c"
+        },
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_dq.f0d1870d_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c",
+        "sha256": "b8b2308e95c55ef368579f5d8426f31868dd760194dcf91c7edcbbc57ea3827f"
+      },
+      {
+        "bytes": 452821,
+        "embedded_cubin": {
+          "bytes": 74688,
+          "sha256": "40b8aa11da4be11b6de741f288b908bf413477128bebc98f3d24a0e7b70a6fec"
+        },
+        "path": "/tmp/attn-ffi-h100-final/shuttle_streaming_dkdv.c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c",
+        "sha256": "43e23949438f72805aad31a7dd98b7bbff8dc270b8c82272d5ca2407fcd27692"
+      }
+    ],
+    "ffi_compile_command": [
+      "/tmp/cuda132-toolkit/bin/nvcc",
+      "-std=c++17",
+      "-O3",
+      "-arch=sm_90a",
+      "-shared",
+      "-Xcompiler",
+      "-fPIC",
+      "-I",
+      "/app/.venv/lib/python3.12/site-packages/jaxlib/include",
+      "-I",
+      "/tmp/cuda132-toolkit/include",
+      "/tmp/attn-ffi-h100-final/shuttle_streaming_reverse_recompute_s2048_d128_bm32_bn32_v1.cu",
+      "/tmp/attn-ffi-h100-final/shuttle_streaming_forward.de92f901_0d1d2d3d4d5d6d7d8d91011121314151617181920212223242526272829303132333435363738394041424344454647.c",
+      "/tmp/attn-ffi-h100-final/shuttle_streaming_dq.f0d1870d_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c",
+      "/tmp/attn-ffi-h100-final/shuttle_streaming_dkdv.c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c",
+      "-o",
+      "/tmp/attn-ffi-h100-final/shuttle_streaming_reverse_recompute_s2048_d128_bm32_bn32_v1.so",
+      "-cudart=none",
+      "-L",
+      "/tmp/cuda132-toolkit/lib",
+      "-Xlinker",
+      "-rpath",
+      "-Xlinker",
+      "/tmp/cuda132-toolkit/lib",
+      "-Xlinker",
+      "/tmp/cuda132-toolkit/lib/libcudart.so.13",
+      "-lcuda"
+    ],
+    "handler_source": "/tmp/attn-ffi-h100-final/shuttle_streaming_reverse_recompute_s2048_d128_bm32_bn32_v1.cu",
+    "handler_source_sha256": "32f4792de5f66089a12a5a0a5edd6fab00d8ce457f792e95efa4b6fa240b84fc",
+    "library": "/tmp/attn-ffi-h100-final/shuttle_streaming_reverse_recompute_s2048_d128_bm32_bn32_v1.so",
+    "library_sha256": "47c60b42bd24ba90987d0fddd51ada86339f40df0bf3c613184e117548d32c04",
+    "stablehlo_fixture": {
+      "bytes": 4813,
+      "path": "/tmp/attn-ffi-h100-final/source_vjp_stablehlo.mlir.bc",
+      "sha256": "156dc10e602cea9cbb7b8e54a53eba937340ab85adfb79b244add05829d7a2cd"
+    },
+    "triton_aot_commands": [
+      [
+        "/app/.venv/bin/python",
+        "-m",
+        "triton.tools.compile",
+        "/tmp/shuttle/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention.py",
+        "--kernel-name",
+        "_streaming_grouped_query_forward",
+        "--out-name",
+        "shuttle_streaming_forward",
+        "--out-path",
+        "/tmp/attn-ffi-h100-final/shuttle_streaming_forward",
+        "--signature",
+        "*bf16:16,*bf16:16,*bf16:16,*bf16:16,*fp32:16,*fp32:16,*i1:16,*i32:16,*i32:16,2048,32,8,0.12751742859084736,1.0,8388608,4096,128,1,2097152,1024,128,1,2097152,1024,128,1,8388608,4096,128,1,0,0,0,0,0,0,0,0,1,1,32,32,128,4,1,0,0,0",
+        "--grid",
+        "64,8,1",
+        "--num-warps",
+        "8",
+        "--num-stages",
+        "3"
+      ],
+      [
+        "/app/.venv/bin/python",
+        "-m",
+        "triton.tools.compile",
+        "/tmp/shuttle/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py",
+        "--kernel-name",
+        "_streaming_dq_kernel",
+        "--out-name",
+        "shuttle_streaming_dq",
+        "--out-path",
+        "/tmp/attn-ffi-h100-final/shuttle_streaming_dq",
+        "--signature",
+        "*bf16:16,*bf16:16,*bf16:16,*bf16:16,*bf16:16,*fp32:16,*fp32:16,*bf16:16,2048,32,8,0.0883883461,0.12751742859084736,1.0,1.0,8388608,4096,128,1,2097152,1024,128,1,2097152,1024,128,1,8388608,4096,128,1,8388608,4096,128,1,8388608,4096,128,1,32,32,128,4,1,0",
+        "--grid",
+        "64,8,1",
+        "--num-warps",
+        "8",
+        "--num-stages",
+        "3"
+      ],
+      [
+        "/app/.venv/bin/python",
+        "-m",
+        "triton.tools.compile",
+        "/tmp/shuttle/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py",
+        "--kernel-name",
+        "_streaming_dkdv_kernel",
+        "--out-name",
+        "shuttle_streaming_dkdv",
+        "--out-path",
+        "/tmp/attn-ffi-h100-final/shuttle_streaming_dkdv",
+        "--signature",
+        "*bf16:16,*bf16:16,*bf16:16,*bf16:16,*fp32:16,*fp32:16,*bf16:16,*bf16:16,2048,32,8,0.0883883461,0.12751742859084736,1.0,1.0,8388608,4096,128,1,2097152,1024,128,1,2097152,1024,128,1,8388608,4096,128,1,2097152,1024,128,1,2097152,1024,128,1,32,32,128,4,1,0",
+        "--grid",
+        "64,8,1",
+        "--num-warps",
+        "8",
+        "--num-stages",
+        "3"
+      ]
+    ]
+  },
+  "correctness": {
+    "benchmark_oracle_against_semantic_reference": {
+      "key": {
+        "maximum_absolute_error": 0.03125,
+        "mean_absolute_error": 0.00019823244656436145
+      },
+      "query": {
+        "maximum_absolute_error": 0.015625,
+        "mean_absolute_error": 8.805357356322929e-05
+      },
+      "value": {
+        "maximum_absolute_error": 0.03125,
+        "mean_absolute_error": 0.00020685006165876985
+      }
+    },
+    "deterministic": true,
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00014224331243894994
+    },
+    "query": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 8.815703040454537e-05
+    },
+    "value": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00014518963871523738
+    }
+  },
+  "deterministic_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa",
+  "environment": {
+    "device": "cuda:0",
+    "gpu_telemetry": "NVIDIA H100 80GB HBM3, GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e, 9.0, 595.71.05, 700.00, 1830, 2619",
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:12:51_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0",
+    "python": "3.12.13",
+    "triton_build_time": "3.6.0"
+  },
+  "measurements": {
+    "execution_order": [
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ]
+    ],
+    "ratio_generated_to_oracle": 1.0703533890063703,
+    "variants": {
+      "generated": {
+        "median_ms": 0.6792285999836167,
+        "minimum_ms": 0.6770649997633882,
+        "samples_ms": [
+          0.6783821998396888,
+          0.6796683999709785,
+          0.6779467999876942,
+          0.6783736003853846,
+          0.6814238004153594,
+          0.6792574000428431,
+          0.6794437998905778,
+          0.6776829999580514,
+          0.6778383998607751,
+          0.6824420001066756,
+          0.6791089996113442,
+          0.6770649997633882,
+          0.6801312003517523,
+          0.6785271994885989,
+          0.6795815999794286,
+          0.6789357998059131,
+          0.6807319994550198,
+          0.6796032001147978,
+          0.6792161999328528,
+          0.6792410000343807,
+          0.6785637997381855,
+          0.6800018003559671,
+          0.6813822001277003,
+          0.6779296003514901,
+          0.6777071997930761,
+          0.6779158000426833,
+          0.6829498001025058,
+          0.6822167997597717,
+          0.6774146000680048,
+          0.6794177999836393
+        ]
+      },
+      "oracle": {
+        "median_ms": 0.6345835001411615,
+        "minimum_ms": 0.6240741997316945,
+        "samples_ms": [
+          0.6415066003683023,
+          0.6256596003368031,
+          0.6382250001479406,
+          0.6309509997663554,
+          0.6418211996788159,
+          0.6240741997316945,
+          0.6386156004737131,
+          0.6288251999649219,
+          0.6448979998822324,
+          0.6303620000835508,
+          0.642937800148502,
+          0.6317603998468257,
+          0.6377098005032167,
+          0.6284869996306952,
+          0.6369850001647137,
+          0.6305440001597162,
+          0.6395388001692481,
+          0.6299498003500048,
+          0.6380075996275991,
+          0.6308256000920665,
+          0.6374981996486895,
+          0.6266321994189639,
+          0.6413728006009478,
+          0.6266602002142463,
+          0.6387781999364961,
+          0.6321820001176093,
+          0.64286999986507,
+          0.6306705996394157,
+          0.6393806004780345,
+          0.6302038003923371
+        ]
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "e96c1cfba79b47b0b5a158c08fb969545e6d2726"
+  },
+  "runtime_dependency_audit": {
+    "benchmark_process_imports_after_expert_oracle": {
+      "torch": true,
+      "triton": false
+    },
+    "ffi_handler_calls": 157,
+    "generated_path_imports_before_expert_oracle": {
+      "torch": false,
+      "triton": false
+    },
+    "handler_contains_torch": false,
+    "handler_contains_triton": false,
+    "library_dependencies": [
+      "\tlinux-vdso.so.1 (0x00007ffdd214a000)",
+      "\tlibcudart.so.13 => /tmp/cuda132-toolkit/lib/libcudart.so.13 (0x00007cecce000000)",
+      "\tlibcuda.so.1 => /usr/lib/x86_64-linux-gnu/libcuda.so.1 (0x00007cecc8855000)",
+      "\tlibstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007cecc85ef000)",
+      "\tlibgcc_s.so.1 => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007cecce2d7000)",
+      "\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007cecc83fb000)",
+      "\tlibdl.so.2 => /usr/lib/x86_64-linux-gnu/libdl.so.2 (0x00007cecce2d0000)",
+      "\tlibpthread.so.0 => /usr/lib/x86_64-linux-gnu/libpthread.so.0 (0x00007cecce2cb000)",
+      "\tlibrt.so.1 => /usr/lib/x86_64-linux-gnu/librt.so.1 (0x00007cecce2c6000)",
+      "\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007cecc830b000)",
+      "\t/lib64/ld-linux-x86-64.so.2 (0x00007cecce35b000)"
+    ],
+    "note": "Triton is a build-time AOT compiler; the registered DSO embeds CUBIN launchers. Torch is imported only when explicitly selected as the benchmark oracle."
+  },
+  "schedule": {
+    "atomic_accumulation": false,
+    "block_m": 32,
+    "block_n": 32,
+    "num_stages": 3,
+    "num_warps": 8,
+    "standalone_output_dot": false
+  },
+  "schema_version": 1,
+  "semantic": {
+    "contract_operation_count": 5,
+    "fingerprint": "640f1830be2ed7d5a4f8cdfb04711d7b80b85d2dfadf8f48599e2b12f5deea91",
+    "fold_operation_count": 5,
+    "maximum_vjp": "normalized_exp_invariant",
+    "numerical_policy": "allow_rounding_reorder",
+    "provenance": "jax_vjp_hlo_recovery",
+    "source_operation_count": 80,
+    "state_policy": "recompute"
+  },
+  "shape": {
+    "batch": 1,
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}
