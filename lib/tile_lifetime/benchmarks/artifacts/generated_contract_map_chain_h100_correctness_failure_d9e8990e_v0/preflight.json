@@ -1,0 +1,79 @@
+{
+  "compile_command": [
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+    "-std=c++17",
+    "-O3",
+    "-arch=sm_90a",
+    "-shared",
+    "-Xcompiler",
+    "-fPIC",
+    "-I",
+    "/app/.venv/lib/python3.12/site-packages/jaxlib/include",
+    "/tmp/shuttle-contract-map-chain-h100-d9/preflight/generated/generated_contract_map_chain.cu",
+    "-o",
+    "/tmp/shuttle-contract-map-chain-h100-d9/preflight/generated/generated_contract_map_chain.so",
+    "-cudart=none",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nvshmem/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nvshmem/lib",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13"
+  ],
+  "environment": {
+    "jax": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jaxlib": "0.11.0"
+  },
+  "generated": {
+    "forward_handler_symbol": "shuttle_generic_contract_map_chain_forward_h100",
+    "forward_target": "shuttle.generic.contract_map_chain.forward.h100",
+    "handler_counts_after_load": [
+      0,
+      0
+    ],
+    "reverse_handler_symbol": "shuttle_generic_contract_map_chain_reverse_h100",
+    "reverse_target": "shuttle.generic.contract_map_chain.reverse.h100",
+    "semantic_digest": "7bf1bafa3966278fdc46de0e149a2a9fff050105f7f3474fa56319c44a31380a",
+    "source_audit": {
+      "has_atomics": false,
+      "has_explicit_bf16_contract_boundaries": true,
+      "has_generated_forward_maps": true,
+      "has_generated_reverse_maps": true,
+      "has_handler_counters": true,
+      "kernel_count": 2,
+      "opaque_semantic_dependencies": []
+    },
+    "source_digest": "3e679b2aa5cc3b1fbeb6347d66aa5ea23bb7b393bb9c465beea3fc21f6122f6c"
+  },
+  "gpu_execution": false,
+  "mode": "compile_link_load_only",
+  "revision": "d9e8990e878def454d683bc7ae36d0ed39510c25",
+  "schema_version": 1,
+  "shape": {
+    "input_features": 32,
+    "rank": 128,
+    "rows": 8
+  }
+}

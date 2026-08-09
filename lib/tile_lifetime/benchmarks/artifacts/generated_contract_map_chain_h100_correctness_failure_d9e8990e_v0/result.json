@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "status": "correctness_failure_before_measurement",
+  "component": "generated_two_contract_scalar_map_training",
+  "source": {
+    "shuttle_revision": "d9e8990e878def454d683bc7ae36d0ed39510c25",
+    "comparison_revision": "bcafcc5ab13677146af36644b4f12b008790b676",
+    "measured_component_files_identical_to_comparison": true,
+    "source_archive_sha256": "a5243468bedd30b69b3aa99146bfbed2f53e8d30fbfbaf64f96d6c53704ef84b",
+    "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb"
+  },
+  "request": {
+    "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
+    "gpu_variant": "H100",
+    "gpu_count": 1,
+    "cpu": 1,
+    "memory": "32GB",
+    "disk": "50GB",
+    "priority": "batch"
+  },
+  "job": {
+    "job_id": "/dlwh/dev-gpu-dlwh-shuttle-contract-map-chain-h100-d9",
+    "submitted_at": "2026-08-09T23:28:01.780Z",
+    "started_at": "2026-08-09T23:28:12.528Z",
+    "finished_at": "2026-08-09T23:31:55.461Z",
+    "terminal_state": "JOB_STATE_KILLED",
+    "terminal_reason": "Terminated by user after evidence copy"
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "driver": "595.71.05",
+    "power_limit_watts": 700.0,
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "nvcc": "13.3.73",
+    "architecture": "sm_90a",
+    "torch_present": false
+  },
+  "preflight": {
+    "completed": true,
+    "fresh_handler_counts": {"forward": 0, "reverse": 0},
+    "semantic_digest": "7bf1bafa3966278fdc46de0e149a2a9fff050105f7f3474fa56319c44a31380a",
+    "source_digest": "3e679b2aa5cc3b1fbeb6347d66aa5ea23bb7b393bb9c465beea3fc21f6122f6c",
+    "generated_source_sha256": "cf6362dbaa5c45880f2038767207fbe486996b2d2b609b78f175547105c3bde7",
+    "kernel_count": 2,
+    "has_atomics": false,
+    "opaque_semantic_dependencies": []
+  },
+  "benchmark": {
+    "warmups_requested": 10,
+    "repeats_requested": 30,
+    "iterations_per_sample_requested": 1000,
+    "counterbalanced": true,
+    "benchmark_process_exit_code": 1,
+    "measurement_started": false,
+    "samples": [],
+    "latency_ratio": null
+  },
+  "correctness": {
+    "reference": "ordinary JAX forward differentiated by jax.vjp",
+    "failure_output": "input_adjoint",
+    "maximum_absolute_error": 0.47265625,
+    "mean_absolute_error": 0.11554032564163208,
+    "maximum_absolute_error_limit": 0.0078125,
+    "mean_absolute_error_limit": 0.0005,
+    "ordered_cpu_input_adjoint_checked": false,
+    "weight_adjoint_parity_checked": false,
+    "determinism_checked": false,
+    "final_handler_counts_checked": false
+  },
+  "weight_adjoint_layout": {
+    "first_minor_to_major": [0, 1],
+    "second_minor_to_major": [0, 1],
+    "generated_store_layout_present": true,
+    "runtime_parity_validated": false
+  },
+  "release": {
+    "active_matching_jobs": 0,
+    "matching_pods": 0,
+    "local_session_state_present": false,
+    "verified_at": "2026-08-09T23:33:15Z"
+  },
+  "interpretation": "Standalone component correctness failure before counterbalanced measurement; no whole-step or latency evidence."
+}

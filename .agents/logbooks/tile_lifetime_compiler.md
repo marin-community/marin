@@ -3290,3 +3290,29 @@ author: dlwh
 - The local macOS environment correctly fails the new preflight because its JAX
   build lacks `jax.extend.xla`. A future H100 submission must pass the same CLI
   preflight in its exact task environment before allocation or execution.
+
+### 2026-08-09 - TLTC-XLA-060 Contract/Map H100 reverse correctness failure
+
+- Replayed the standalone generated two-Contract scalar-Map training component
+  exactly once on one batch-priority H100 at source revision `d9e8990e87`.
+  The measured harness, generator, wrapper, recovery files, and frozen HLO
+  fixture are byte-identical to the preceding `bcafcc5ab1` checkpoint.
+- The environment used JAX, JAXLIB, CUDA plugin, and PJRT 0.11.0 with NVCC
+  13.3.73. Compile/link/load preflight passed. Fresh forward and reverse handler
+  counts were both zero; the source audit found two generated kernels, no
+  atomics, explicit BF16 Contract boundaries, and no opaque semantic dependency.
+- GPU execution failed before timing. Generated `input_adjoint` differs from
+  natural `jax.vjp` by maximum absolute error `0.47265625` and mean absolute
+  error `0.1155403256`, exceeding the fixed `0.0078125` and `0.0005` limits.
+  The process aborted before ordered-CPU input-adjoint parity, dW parity,
+  determinism, final handler counts, or the 30-sample counterbalanced loop.
+- The generated source contains the recovered `{0,1}` physical dW store layouts,
+  but this run does not validate their output values because the earlier
+  input-adjoint guard terminated the process. No component latency or whole-
+  Grug claim is attached.
+- No retry or tuning followed. The holder was explicitly terminated after
+  copying evidence; the controller has no active matching job, the task-label
+  pod is absent, and the local session state is absent. Raw logs, generated
+  source, toolchain, invocation, source identity, preflight, and release proof
+  are under
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_correctness_failure_d9e8990e_v0/`.
