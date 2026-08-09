@@ -19,14 +19,21 @@ from tile_lifetime.xla_relation_program_recovery import (
     ContractChainRole,
     RoutedForwardCodegenDisposition,
     RoutedForwardFfiOperandRole,
+    RoutedInputAdjointFfiOperandRole,
     SegmentedLayoutRelation,
     plan_routed_forward_typed_ffi,
+    plan_routed_input_adjoint_typed_ffi,
     recover_relation_programs,
 )
 from tile_lifetime.xla_routed_forward_ffi import (
     evaluate_routed_forward_plan,
     generate_cuda_routed_forward_ffi,
     replace_routed_forward_region_with_custom_call,
+)
+from tile_lifetime.xla_routed_input_adjoint_ffi import (
+    evaluate_routed_input_adjoint_plan,
+    generate_cuda_routed_input_adjoint_ffi,
+    replace_routed_input_adjoint_region_with_custom_call,
 )
 
 _ARTIFACT = (
@@ -37,6 +44,10 @@ _GPU_ARTIFACT = (
     Path(__file__).parents[1]
     / "benchmarks/artifacts/grug_contract_map_gpu_gb200_v0/final/original-gpu-pre-scheduler-hlo.txt.gz"
 )
+_NATURAL_TRAIN_GPU_ARTIFACT = (
+    Path(__file__).parents[1]
+    / "benchmarks/artifacts/xla_grug_routed_forward_gpu_gb200_v0/original-gpu-pre-scheduler-hlo.txt.gz"
+)
 
 
 def _frozen_hlo() -> str:
@@ -45,6 +56,113 @@ def _frozen_hlo() -> str:
 
 def _frozen_gpu_hlo() -> str:
     return gzip.decompress(_GPU_ARTIFACT.read_bytes()).decode()
+
+
+def _natural_train_gpu_hlo() -> str:
+    return gzip.decompress(_NATURAL_TRAIN_GPU_ARTIFACT.read_bytes()).decode()
+
+
+def test_natural_grug_hlo_forms_ready_routed_input_adjoint_plan() -> None:
+    plan = plan_routed_input_adjoint_typed_ffi(_natural_train_gpu_hlo())
+
+    assert plan.region.convex
+    assert plan.region.topologically_insertable
+    assert plan.segmented_layout.relation_plan.endswith("/sort.3")
+    assert tuple(contract.output_shape for contract in plan.contracts) == (
+        "bf16[512,32]{1,0}",
+        "bf16[512,32]{1,0}",
+    )
+    assert tuple(operand.role for operand in plan.operands) == tuple(RoutedInputAdjointFfiOperandRole)
+    assert tuple(operand.value.instruction for operand in plan.operands) == (
+        "reshape.361",
+        "broadcast.113",
+        "broadcast_in_dim.428",
+        "and.35",
+        "reshape.357",
+        "reshape.358",
+        "dot.66",
+    )
+    assert tuple((output.feature_offset, output.feature_extent) for output in plan.map_stage.scalar_outputs) == (
+        (0, 32),
+        (32, 32),
+    )
+    assert plan.segmented_layout.index_map.feature_stride == 1
+    assert plan.segmented_layout.index_map.segment_stride == 64
+    assert tuple(output.instruction for output in plan.region.boundary.outputs) == (
+        "select.7",
+        "scatter-add.42",
+    )
+
+
+def test_natural_grug_input_adjoint_generates_and_replaces_multi_output_region() -> None:
+    hlo = _natural_train_gpu_hlo()
+    plan = plan_routed_input_adjoint_typed_ffi(hlo)
+    generated = generate_cuda_routed_input_adjoint_ffi(plan, target="shuttle.routed_input_adjoint.test")
+    rewritten = replace_routed_input_adjoint_region_with_custom_call(
+        hlo,
+        plan,
+        target="shuttle.routed_input_adjoint.test",
+    )
+
+    assert "ShuttleReverseMapKernel" in generated.source
+    assert "ShuttleSourceFoldKernel" in generated.source
+    assert "CUDA_R_16BF" in generated.source
+    assert "__float2bfloat16_rn" in generated.source
+    assert "atomicAdd" not in generated.source
+    assert rewritten.count('custom_call_target="shuttle.routed_input_adjoint.test"') == 1
+    assert "%dot.67 =" not in rewritten
+    assert "%select.7 = bf16[4,512,64]{2,1,0} get-tuple-element" in rewritten
+    assert "%scatter-add.42 = bf16[8,32]{1,0} get-tuple-element" in rewritten
+    assert "%dot.6 =" in rewritten
+    parse_hlo_module_text(rewritten)
+
+
+def test_natural_grug_input_adjoint_mutation_regenerates_physical_source() -> None:
+    hlo = _natural_train_gpu_hlo()
+    baseline_plan = plan_routed_input_adjoint_typed_ffi(hlo)
+    old = "%mul.972 = bf16[16,32]{1,0} multiply(%mul.83, %slice.54)"
+    new = "%mul.972 = bf16[16,32]{1,0} add(%mul.83, %slice.54)"
+    assert hlo.count(old) == 1
+    mutated_plan = plan_routed_input_adjoint_typed_ffi(hlo.replace(old, new, 1))
+    baseline = generate_cuda_routed_input_adjoint_ffi(baseline_plan, target="shuttle.input_adjoint.mutation")
+    mutated = generate_cuda_routed_input_adjoint_ffi(mutated_plan, target="shuttle.input_adjoint.mutation")
+
+    assert baseline_plan.map_stage.scalar_outputs[0].scalar_program.digest == (
+        mutated_plan.map_stage.scalar_outputs[0].scalar_program.digest
+    )
+    assert baseline_plan.map_stage.scalar_outputs[1].scalar_program.digest != (
+        mutated_plan.map_stage.scalar_outputs[1].scalar_program.digest
+    )
+    assert baseline.semantic_digest != mutated.semantic_digest
+    assert baseline.source_digest != mutated.source_digest
+
+
+def test_natural_grug_input_adjoint_cpu_interpreter_is_deterministic() -> None:
+    plan = plan_routed_input_adjoint_typed_ffi(_natural_train_gpu_hlo())
+    rng = np.random.default_rng(7)
+    source_indices = np.repeat(np.arange(8, dtype=np.int32), 2).reshape(16, 1)
+    validity = np.zeros((4, 512, 64), dtype=np.bool_)
+    for edge in range(16):
+        validity[edge % 4, edge, :] = True
+    by_role = {
+        RoutedInputAdjointFfiOperandRole.SECOND_CONTRACT_RHS: rng.normal(size=(256, 32)).astype(np.float32),
+        RoutedInputAdjointFfiOperandRole.FOLD_INITIAL: np.zeros((8, 32), dtype=np.float32),
+        RoutedInputAdjointFfiOperandRole.FOLD_INDICES: source_indices,
+        RoutedInputAdjointFfiOperandRole.SEGMENT_VALIDITY: validity,
+        RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_LHS: rng.normal(size=(512, 128)).astype(np.float32),
+        RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_RHS: rng.normal(size=(128, 32)).astype(np.float32),
+        RoutedInputAdjointFfiOperandRole.MAP_AUXILIARY: rng.normal(size=(512, 64)).astype(np.float32),
+    }
+    operands = tuple(by_role[binding.role] for binding in plan.operands)
+
+    first = evaluate_routed_input_adjoint_plan(plan, operands)
+    second = evaluate_routed_input_adjoint_plan(plan, operands)
+
+    assert first[0].shape == (4, 512, 64)
+    assert first[1].shape == (8, 32)
+    assert np.array_equal(first[0], second[0])
+    assert np.array_equal(first[1], second[1])
+    assert np.count_nonzero(first[0][:, 16:, :]) == 0
 
 
 def test_gpu_grug_hlo_generates_bf16_routed_forward_executor() -> None:
