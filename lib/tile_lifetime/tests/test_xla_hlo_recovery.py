@@ -4,6 +4,10 @@
 import gzip
 from pathlib import Path
 
+from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
+    MultiOutputFixedShapeProgram,
+    generate_cuda_multi_output_ffi_handler,
+)
 from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
     inline_elementwise_fusions,
@@ -129,3 +133,24 @@ def test_frozen_grug_backward_pair_map_forms_generic_multi_output_boundary() -> 
     assert tuple(len(users) for _, users in boundary.external_users) == (2, 2, 1)
     assert not boundary.has_explicit_sharding
     assert not boundary.has_side_effect
+
+
+def test_cuda_multi_output_ffi_uses_one_generic_thread_local_scalar_body() -> None:
+    program = MultiOutputFixedShapeProgram(
+        rows=8,
+        reduction=32,
+        features=32,
+        scalar_expressions=(
+            "shuttle_round_bf16(projection0[row * kFeatures + feature] * "
+            "shuttle_bf16_to_f32(cotangent[row * kFeatures + feature]))",
+            "projection1[row * kFeatures + feature]",
+        ),
+    )
+
+    source = generate_cuda_multi_output_ffi_handler(program)
+
+    assert ".Ctx<ffi::PlatformStream<cudaStream_t>>()" in source
+    assert "left * shuttle_bf16_to_f32(cotangent[index])" in source
+    assert "output1[index] = right;" in source
+    assert "projection0[kRows" not in source
+    assert "projection1[kRows" not in source
