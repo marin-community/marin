@@ -6,14 +6,22 @@ from functools import lru_cache
 import hashlib
 import json
 import logging
+import pathlib
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
 import jax.numpy as jnp
+import jaxlib
 from jaxtyping import Array, Float, Int
-from rigging.cache import PersistentKvCache
+from rigging.cache import (
+    PersistentKvCache,
+    combined_content_hash,
+    directory_content_hash,
+    file_content_hash,
+    workspace_lock_hash,
+)
 
 from levanter.kernels.pallas import autotune_utils
 
@@ -55,6 +63,7 @@ _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 # Bump the trailing version when the entry encoding changes so stale entries are ignored.
 _AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
+_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v3"
 
 
 class _NoViableCandidate:
@@ -236,8 +245,26 @@ def _autotune_jaxpr_hash(
 
         traced = jax.make_jaxpr(_loss_only)(x, labels, w)
         return hashlib.sha256(str(traced.jaxpr).encode("utf-8")).hexdigest()[:16]
-    except Exception:
+    except Exception as exc:
+        logger.warning("Fused CE autotune result will not be shared because the kernel jaxpr is unavailable: %s", exc)
         return None
+
+
+@lru_cache(maxsize=None)
+def _autotune_revision(impl_name: str) -> str:
+    source_root = pathlib.Path(__file__).resolve().parent
+    autotune_helpers = source_root.parent / "autotune_utils.py"
+    return combined_content_hash(
+        [
+            _AUTOTUNE_SOURCE_SCHEMA,
+            f"implementation={impl_name}",
+            f"source={directory_content_hash(source_root)}",
+            f"autotune_helpers={file_content_hash(autotune_helpers)}",
+            f"dependencies={workspace_lock_hash(pathlib.Path(__file__))}",
+            f"jax={jax.__version__}",
+            f"jaxlib={jaxlib.__version__}",
+        ]
+    )
 
 
 def _autotune_cache_key(
@@ -252,7 +279,12 @@ def _autotune_cache_key(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
-) -> str:
+) -> str | None:
+    """Return a shared autotune identity, or ``None`` when safe identity is unavailable.
+
+    A missing jaxpr or source/compiler revision disables both cache reads and
+    writes, including negative entries, while still allowing the sweep to run.
+    """
     devices = jax.devices()
     device_kind = devices[0].device_kind.lower() if devices else ""
     compute_dtype = jnp.dtype(dtype).name if dtype is not None else "none"
@@ -267,8 +299,17 @@ def _autotune_cache_key(
         precision=precision,
         return_argmax=return_argmax,
     )
+    if jaxpr_hash is None:
+        return None
+    try:
+        revision = _autotune_revision(impl_name)
+    except (OSError, ValueError) as exc:
+        logger.warning("Fused CE autotune result will not be shared because source identity is unavailable: %s", exc)
+        return None
     return "|".join(
         (
+            _AUTOTUNE_SOURCE_SCHEMA,
+            revision,
             impl_name,
             jax.default_backend(),
             device_kind,
@@ -281,7 +322,7 @@ def _autotune_cache_key(
             str(logit_soft_cap),
             str(precision),
             str(return_argmax),
-            f"jaxpr={jaxpr_hash}" if jaxpr_hash is not None else "jaxpr=unavailable",
+            f"jaxpr={jaxpr_hash}",
         )
     )
 
@@ -423,7 +464,7 @@ def _autotune_block_sizes_on_miss(
         precision=precision,
         return_argmax=return_argmax,
     )
-    cached = _AUTOTUNE_CACHE.get(cache_key)
+    cached = _AUTOTUNE_CACHE.get(cache_key) if cache_key is not None else None
     if cached is not None:
         if isinstance(cached, _NoViableCandidate):
             logger.info(
@@ -468,14 +509,15 @@ def _autotune_block_sizes_on_miss(
             best = candidate
 
     if best is None:
-        # The jaxpr-derived cache key invalidates this entry if the kernel changes.
-        _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
+        if cache_key is not None:
+            _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
             errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
         )
 
-    _AUTOTUNE_CACHE.put(cache_key, best)
+    if cache_key is not None:
+        _AUTOTUNE_CACHE.put(cache_key, best)
     logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
 
