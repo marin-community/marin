@@ -3132,3 +3132,32 @@ author: dlwh
   `.agents/projects/tile_lifetime_compiler/grug_low_rank_gated_product_training.md`.
 - Verification: four focused tests pass; Pyrefly reports zero errors; scoped
   pre-commit and `git diff --check` pass.
+
+### 2026-08-09 15:48 PDT - TLTC-XLA-054 exact Contract/Map replacement boundaries
+
+- Commit `db82fba39d` forms ten exact generic typed-FFI boundaries from the
+  recovered low-rank Contract/Map structure in the frozen thirteen-call natural
+  Grug HLO: six forward/rematerialization calls and four JAX-owned reverse
+  calls. No model name or HLO metadata affects boundary formation.
+- Every forward call has four BF16 inputs. Output arities are `5,1,1,5,5,5`:
+  forward-only realizations return the final value, while reverse-bearing
+  realizations also return the exact BF16 saved values already consumed by JAX
+  reverse. Every reverse call has nine BF16 inputs and returns the input,
+  down-weight, and up-weight adjoints.
+- The replacement removes 28 live dots and `1,835,008` static dot FLOPs from
+  the old HLO region. All replaced scalar arithmetic is absent or dead. The
+  transformed module contains 23 calls: the existing thirteen plus the ten new
+  structural placeholders.
+- All ten placement all-reduces retain their original names and remain outside
+  the generated boundaries. The audit traces each reverse cotangent input to
+  its upstream collectives and verifies the generated outputs retain their
+  exact external users. JAX still owns AD, save/rematerialization, and placement.
+- Replacing the hidden scalar Map with tanh changes the semantic digest and
+  generated scalar source without changing the boundary family, target, ABI,
+  or Contract shapes.
+- Verification:
+  `uv run --frozen --package marin-tile-lifetime --group test pytest -q
+  lib/tile_lifetime/tests/test_xla_low_rank_gated_product.py` passes all eight
+  tests. Scoped pre-commit, including Pyrefly, and `git diff --check` pass.
+- This is a structural typed-FFI checkpoint. No GPU body was generated or run,
+  and it makes no latency or launch-count claim.
