@@ -25,6 +25,11 @@ from tile_lifetime.h100_streaming_lowering import (
     lower_h100_streaming_program,
 )
 from tile_lifetime.streaming_attention import StreamingAttentionProgram
+from tile_lifetime.streaming_event_schedule import (
+    StreamingPhysicalEventSchedule,
+    derive_streaming_physical_event_schedule,
+    verify_streaming_event_backend_parameters,
+)
 
 from .cute_streaming_sm90 import ShuttleStreamingAttentionSm90
 
@@ -36,6 +41,7 @@ class CompiledH100StreamingProgram:
     program: StreamingAttentionProgram
     score_map: LoweredScoreMap
     schedule: H100StreamingSchedule
+    event_schedule: StreamingPhysicalEventSchedule
     query_shape: tuple[int, ...]
     key_shape: tuple[int, ...]
     value_shape: tuple[int, ...]
@@ -95,6 +101,19 @@ def compile_h100_streaming_program(
     head_group_size = lowering.head_group_size
     score_map = lowering.score_map
     schedule = lowering.schedule
+    event_schedule = derive_streaming_physical_event_schedule(program)
+    if event_schedule.key_stages != schedule.stages or event_schedule.value_stages != schedule.stages:
+        raise ValueError("Event Tensor buffer depth disagrees with the legalized streaming schedule")
+    verify_streaming_event_backend_parameters(
+        event_schedule,
+        query_stages=event_schedule.query_stages,
+        key_stages=event_schedule.key_stages,
+        value_stages=event_schedule.value_stages,
+        barriers_per_stage=event_schedule.barriers_per_stage,
+        transfer_warps=event_schedule.workers.transfer_warps,
+        matrix_warpgroups=event_schedule.workers.matrix_warpgroups,
+        scheduler_arrival_threads=event_schedule.workers.scheduler_arrival_threads,
+    )
 
     score_mod = _softcap_score_map(score_map.softcap) if score_map.softcap is not None else None
     skeleton = ShuttleStreamingAttentionSm90(
@@ -107,7 +126,7 @@ def compile_h100_streaming_program(
         pack_gqa=schedule.pack_gqa,
         tile_m=schedule.tile_m,
         tile_n=schedule.tile_n,
-        num_stages=schedule.stages,
+        num_stages=event_schedule.key_stages,
         num_threads=schedule.threads,
         Q_in_regs=schedule.q_in_registers,
         score_mod=score_mod,
@@ -116,6 +135,16 @@ def compile_h100_streaming_program(
         output_scale=lowering.output_scale,
         intra_wg_overlap=schedule.intra_warpgroup_overlap,
         mma_pv_is_rs=schedule.pv_register_source,
+        query_pipeline_stages=event_schedule.query_stages,
+        key_pipeline_stages=event_schedule.key_stages,
+        value_pipeline_stages=event_schedule.value_stages,
+        pipeline_barriers_per_stage=event_schedule.barriers_per_stage,
+        transfer_warps=event_schedule.workers.transfer_warps,
+        matrix_warpgroups=event_schedule.workers.matrix_warpgroups,
+        scheduler_arrival_threads=event_schedule.workers.scheduler_arrival_threads,
+        query_transaction_bytes=event_schedule.query_transaction_bytes,
+        key_transaction_bytes=event_schedule.key_transaction_bytes,
+        value_transaction_bytes=event_schedule.value_transaction_bytes,
     )
     fake_stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     cute_arguments = [to_cute_tensor(tensor) for tensor in (query, key, value, output)]
@@ -127,6 +156,7 @@ def compile_h100_streaming_program(
         program=program,
         score_map=score_map,
         schedule=schedule,
+        event_schedule=event_schedule,
         query_shape=query_shape,
         key_shape=key_shape,
         value_shape=value_shape,
