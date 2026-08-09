@@ -1,0 +1,14 @@
+{
+  "compute_capability": "10.0",
+  "cuda_compiler": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:11:41_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0\n",
+  "device_kind": "NVIDIA GB200",
+  "jax": "0.11.0",
+  "jaxlib": "0.11.0",
+  "resource_request": {
+    "cpu": 4,
+    "gpu_count": 1,
+    "memory_gib": 64,
+    "priority": "batch"
+  },
+  "shuttle_revision": "ed5a2305153cdaf672ea3e49e1dd39f17237efbf"
+}
