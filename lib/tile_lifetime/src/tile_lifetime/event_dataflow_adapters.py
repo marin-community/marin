@@ -8,11 +8,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, prod
 
+from tile_lifetime.collective_transport import CollectiveCompletionPlan
 from tile_lifetime.event_buffering import BoundedBufferPlan, derive_bounded_buffer_plan
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
     EventGenerationPolicy,
     EventMemoryScope,
+    EventSchedulingMode,
     MemoryVisibility,
     TaskAxis,
     TaskDependence,
@@ -49,6 +51,38 @@ class SegmentedContractTaskDataflow:
     contract: TaskFamily
     segment_count: int
     output_tile_count: int
+
+
+@dataclass(frozen=True)
+class CollectiveCompletionSchedule:
+    """Bounded schedule choice for one placement-changing Fold."""
+
+    tile_count: int
+    scheduling_mode: EventSchedulingMode
+
+    def __post_init__(self) -> None:
+        if self.tile_count <= 0:
+            raise ValueError("collective completion tile count must be positive")
+
+
+@dataclass(frozen=True)
+class CollectiveCompletionTaskDataflow:
+    """System-visible transport completions feeding generic Fold tiles.
+
+    The source tasks represent completion of a placement transition, not a
+    selected NCCL, XLA, or device-side transport implementation. A target
+    lowering may erase or replace them once it proves the corresponding
+    transport completion and visibility contract.
+    """
+
+    completion: CollectiveCompletionPlan
+    schedule: CollectiveCompletionSchedule
+    program: EventDataflowProgram
+    partial_tile: TaskFamily
+    transport_completion: TaskFamily
+    fold_tile: TaskFamily
+    contribution_devices: tuple[int, ...]
+    contribution_groups: tuple[int, ...]
 
 
 def streaming_fold_task_dataflow(
@@ -191,4 +225,78 @@ def relation_segmented_contract_task_dataflow(
         contract=contract,
         segment_count=relation.destination_count,
         output_tile_count=output_tile_count,
+    )
+
+
+def collective_completion_task_dataflow(
+    completion: CollectiveCompletionPlan,
+    *,
+    schedule: CollectiveCompletionSchedule,
+) -> CollectiveCompletionTaskDataflow:
+    """Derive readiness for a tiled partial-value completion.
+
+    Replica-group membership determines the producer-to-Fold relation and the
+    Event Tensor indegree. The Fold operator affects the consumer's semantic
+    body but not the readiness construction.
+    """
+    replica_groups = completion.transport.replica_domain.groups
+    contribution_devices = tuple(device for group in replica_groups for device in group)
+    contribution_groups = tuple(group_index for group_index, group in enumerate(replica_groups) for _ in group)
+    tile_axis = TaskAxis("tile", schedule.tile_count)
+    partial_tile = TaskFamily(
+        "partial_value_tile",
+        (TaskAxis("contribution", len(contribution_devices)), tile_axis),
+        placement=completion.transport.source_value,
+    )
+    transport_completion = TaskFamily(
+        "placement_transition_completion",
+        (TaskAxis("contribution", len(contribution_devices)), tile_axis),
+        placement=completion.transport.destination_value,
+    )
+    fold_tile = TaskFamily(
+        "collective_fold_tile",
+        (TaskAxis("replica_group", len(replica_groups)), tile_axis),
+        placement=completion.transport.destination_value,
+    )
+    pointwise_pairs = tuple(
+        ((contribution, tile), (contribution, tile))
+        for contribution in range(len(contribution_devices))
+        for tile in range(schedule.tile_count)
+    )
+    fold_pairs = tuple(
+        ((contribution, tile), (group, tile))
+        for contribution, group in enumerate(contribution_groups)
+        for tile in range(schedule.tile_count)
+    )
+    partial_to_transport = TaskDependence(
+        TaskRelation.from_pairs(partial_tile, transport_completion, pointwise_pairs),
+        MemoryVisibility(EventMemoryScope.DEVICE),
+    )
+    transport_to_fold = TaskDependence(
+        TaskRelation.from_pairs(transport_completion, fold_tile, fold_pairs),
+        MemoryVisibility(EventMemoryScope.SYSTEM),
+    )
+    partial_event_plan = derive_event_tensor_plan(
+        partial_to_transport,
+        name="partial_value_to_placement_transition",
+        scheduling_mode=schedule.scheduling_mode,
+    )
+    completion_event_plan = derive_event_tensor_plan(
+        transport_to_fold,
+        name="placement_transition_to_collective_fold",
+        scheduling_mode=schedule.scheduling_mode,
+    )
+    return CollectiveCompletionTaskDataflow(
+        completion=completion,
+        schedule=schedule,
+        program=EventDataflowProgram(
+            task_families=(partial_tile, transport_completion, fold_tile),
+            dependences=(partial_to_transport, transport_to_fold),
+            event_plans=(partial_event_plan, completion_event_plan),
+        ),
+        partial_tile=partial_tile,
+        transport_completion=transport_completion,
+        fold_tile=fold_tile,
+        contribution_devices=contribution_devices,
+        contribution_groups=contribution_groups,
     )
