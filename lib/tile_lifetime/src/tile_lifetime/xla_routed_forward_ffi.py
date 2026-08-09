@@ -39,6 +39,17 @@ def generate_cuda_routed_forward_ffi(
 ) -> GeneratedRoutedForwardFfi:
     """Generate one deterministic CUDA executor from a READY generic plan."""
     dimensions = _validated_dimensions(plan)
+    storage_dtype = _validated_storage_dtype(plan)
+    storage_cpp_type = {"bf16": "std::uint16_t", "f32": "float"}[storage_dtype]
+    storage_ffi_type = {"bf16": "ffi::BF16", "f32": "ffi::F32"}[storage_dtype]
+    storage_cuda_type = {"bf16": "CUDA_R_16BF", "f32": "CUDA_R_32F"}[storage_dtype]
+
+    def load_scalar(expression: str, dtype: str) -> str:
+        return f"shuttle_bf16_to_f32({expression})" if dtype == "bf16" else expression
+
+    def store_scalar(expression: str) -> str:
+        return f"shuttle_f32_to_bf16({expression})" if storage_dtype == "bf16" else expression
+
     roles = {operand.role: index for index, operand in enumerate(plan.operands)}
     if len(roles) != len(RoutedForwardFfiOperandRole):
         raise ValueError("routed FFI plan does not bind every generic operand role exactly once")
@@ -51,15 +62,32 @@ def generate_cuda_routed_forward_ffi(
     for value in map_program.inputs:
         if value.input_index is None or value.input_index.row_offset != 0:
             raise ValueError("routed Map supports only same-row scalar inputs")
-        map_arguments.append(f"projection[row * kFirstOutputFeatures + feature + {value.input_index.feature_offset}]")
+        map_arguments.append(
+            load_scalar(
+                f"projection[row * kFirstOutputFeatures + feature + {value.input_index.feature_offset}]",
+                storage_dtype,
+            )
+        )
+    contribution_input_dtype, contribution_input_shape, _ = _shape_for_role(
+        plan,
+        RoutedForwardFfiOperandRole.FOLD_CONTRIBUTION_INPUT,
+    )
+    if contribution_input_shape == (dimensions["logical_edges"], dimensions["output_features"]):
+        contribution_input_index = "edge * kOutputFeatures + feature"
+    elif contribution_input_shape in {(dimensions["logical_edges"],), (dimensions["logical_edges"], 1)}:
+        contribution_input_index = "edge"
+    else:
+        raise ValueError("Fold contribution input is not edge-scalar or edge-by-feature")
     contribution_arguments = []
     for value in plan.fold_stage.contribution_program.inputs:
         if value.input_index is None or value.input_index.row_offset != 0 or value.input_index.feature_offset != 0:
             raise ValueError("routed Fold contribution supports one same-element value per input")
         if value.input_name is not None and value.input_name.startswith("input0"):
-            contribution_arguments.append("routed_output[edge * kOutputFeatures + feature]")
+            contribution_arguments.append(load_scalar("routed_output[edge * kOutputFeatures + feature]", storage_dtype))
         elif value.input_name is not None and value.input_name.startswith("input1"):
-            contribution_arguments.append("shuttle_bf16_to_f32(route_weight[edge])")
+            contribution_arguments.append(
+                load_scalar(f"fold_input[{contribution_input_index}]", contribution_input_dtype)
+            )
         else:
             raise ValueError(f"unsupported Fold contribution input {value.input_name!r}")
 
@@ -155,11 +183,17 @@ __device__ __forceinline__ float shuttle_bf16_to_f32(std::uint16_t value) {{
   return __uint_as_float(static_cast<std::uint32_t>(value) << 16);
 }}
 
+__device__ __forceinline__ std::uint16_t shuttle_f32_to_bf16(float value) {{
+  const std::uint32_t bits = __float_as_uint(value);
+  const std::uint32_t rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<std::uint16_t>(rounded >> 16);
+}}
+
 ffi::Error Contract(
     cudaStream_t stream,
-    const float* lhs,
-    const float* rhs,
-    float* output,
+    const {storage_cpp_type}* lhs,
+    const {storage_cpp_type}* rhs,
+    {storage_cpp_type}* output,
     int rows,
     int reduction,
     int features) {{
@@ -186,14 +220,14 @@ ffi::Error Contract(
       reduction,
       &alpha,
       rhs,
-      CUDA_R_32F,
+      {storage_cuda_type},
       features,
       lhs,
-      CUDA_R_32F,
+      {storage_cuda_type},
       reduction,
       &beta,
       output,
-      CUDA_R_32F,
+      {storage_cuda_type},
       features,
       CUBLAS_COMPUTE_32F_PEDANTIC,
       CUBLAS_GEMM_DEFAULT);
@@ -205,9 +239,9 @@ ffi::Error Contract(
 }}
 
 __global__ void ShuttleSegmentedMapKernel(
-    const float* projection,
+    const {storage_cpp_type}* projection,
     const bool* validity,
-    float* mapped) {{
+    {storage_cpp_type}* mapped) {{
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= kPaddedRows * kLogicalFeatures * kSegments) {{
     return;
@@ -218,23 +252,24 @@ __global__ void ShuttleSegmentedMapKernel(
   const int physical_feature = feature * kFeatureStride + segment * kSegmentStride;
   const int validity_index = (segment * kPaddedRows + row) * kLogicalFeatures + feature;
   const bool valid = row < kLogicalEdges && validity[validity_index];
-  mapped[row * kPhysicalMapFeatures + physical_feature] =
+  const float value =
       valid ? {map_output[0].generated_cuda.symbol}({", ".join(map_arguments)}) : {fill_value}f;
+  mapped[row * kPhysicalMapFeatures + physical_feature] = {store_scalar("value")};
 }}
 
 __global__ void ShuttleSourceFoldKernel(
-    const float* initial,
+    const {storage_cpp_type}* initial,
     const std::int32_t* source_indices,
-    const std::uint16_t* route_weight,
-    const float* routed_output,
-    float* output) {{
+    const {cpp_types[contribution_input_dtype]}* fold_input,
+    const {storage_cpp_type}* routed_output,
+    {storage_cpp_type}* output) {{
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= kOutputRows * kOutputFeatures) {{
     return;
   }}
   const int source = index / kOutputFeatures;
   const int feature = index - source * kOutputFeatures;
-  float accumulator = initial[index];
+  float accumulator = {load_scalar("initial[index]", storage_dtype)};
   for (int edge = 0; edge < kLogicalEdges; ++edge) {{
     if (source_indices[edge] != source) {{
       continue;
@@ -242,28 +277,28 @@ __global__ void ShuttleSourceFoldKernel(
     const float contribution = {plan.fold_stage.generated_contribution_cuda.symbol}({", ".join(contribution_arguments)});
     accumulator = {plan.fold_stage.generated_reducer_cuda.symbol}(accumulator, contribution);
   }}
-  output[index] = accumulator;
+  output[index] = {store_scalar("accumulator")};
 }}
 
 ffi::Error ShuttleRoutedForward(
     cudaStream_t stream,
     ffi::ScratchAllocator scratch,
     {",\n    ".join(ffi_arguments)},
-    ffi::Result<ffi::Buffer<ffi::F32, 2>> output_buffer) {{
+    ffi::Result<ffi::Buffer<{storage_ffi_type}, 2>> output_buffer) {{
 {chr(10).join(data_bindings)}
-  auto* output = output_buffer->typed_data();
+  auto* output = reinterpret_cast<{storage_cpp_type}*>(output_buffer->typed_data());
   auto projection_storage = scratch.Allocate(
-      sizeof(float) * kPaddedRows * kFirstOutputFeatures, alignof(float));
+      sizeof({storage_cpp_type}) * kPaddedRows * kFirstOutputFeatures, alignof({storage_cpp_type}));
   auto mapped_storage = scratch.Allocate(
-      sizeof(float) * kPaddedRows * kPhysicalMapFeatures, alignof(float));
+      sizeof({storage_cpp_type}) * kPaddedRows * kPhysicalMapFeatures, alignof({storage_cpp_type}));
   auto routed_output_storage = scratch.Allocate(
-      sizeof(float) * kPaddedRows * kOutputFeatures, alignof(float));
+      sizeof({storage_cpp_type}) * kPaddedRows * kOutputFeatures, alignof({storage_cpp_type}));
   if (!projection_storage || !mapped_storage || !routed_output_storage) {{
     return ffi::Error::Internal("failed to allocate routed-region scratch storage");
   }}
-  auto* projection = static_cast<float*>(*projection_storage);
-  auto* mapped = static_cast<float*>(*mapped_storage);
-  auto* routed_output = static_cast<float*>(*routed_output_storage);
+  auto* projection = static_cast<{storage_cpp_type}*>(*projection_storage);
+  auto* mapped = static_cast<{storage_cpp_type}*>(*mapped_storage);
+  auto* routed_output = static_cast<{storage_cpp_type}*>(*routed_output_storage);
 
   ffi::Error first_contract = Contract(
       stream, input{first_lhs}, input{first_rhs}, projection,
@@ -304,7 +339,7 @@ auto ShuttleRoutedForwardBinding() {{
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Ctx<ffi::ScratchAllocator>()
 {chr(10).join(ffi_bindings)}
-      .Ret<ffi::Buffer<ffi::F32, 2>>();
+      .Ret<ffi::Buffer<{storage_ffi_type}, 2>>();
 }}
 }}
 
@@ -393,7 +428,8 @@ def evaluate_routed_forward_plan(
     ).astype(np.float32)
     output = by_role[RoutedForwardFfiOperandRole.FOLD_INITIAL].astype(np.float32).copy()
     source_indices = by_role[RoutedForwardFfiOperandRole.FOLD_INDICES].reshape(-1)
-    route_weight = by_role[RoutedForwardFfiOperandRole.FOLD_CONTRIBUTION_INPUT].reshape(-1).astype(np.float32)
+    fold_input = by_role[RoutedForwardFfiOperandRole.FOLD_CONTRIBUTION_INPUT].astype(np.float32)
+    fold_input_is_scalar = fold_input.ndim == 1 or fold_input.shape[1] == 1
     for edge in range(dimensions["logical_edges"]):
         source = int(source_indices[edge])
         for feature in range(dimensions["output_features"]):
@@ -401,7 +437,7 @@ def evaluate_routed_forward_plan(
                 plan.fold_stage.contribution_program,
                 {
                     "input0_r0_f0": routed_output[edge, feature],
-                    "input1_r0_f0": route_weight[edge],
+                    "input1_r0_f0": fold_input.reshape(-1)[edge] if fold_input_is_scalar else fold_input[edge, feature],
                 },
             )
             output[source, feature] = evaluate_cast_scalar_program(
@@ -420,8 +456,10 @@ def _validated_dimensions(plan: RoutedForwardTypedFfiCodegenPlan) -> dict[str, i
     second_output_dtype, second_output, second_layout = _parse_shape(plan.contracts[1].output_shape)
     physical_dtype, physical_map, physical_layout = _parse_shape(plan.map_stage.physical_output_shape)
     output_dtype, output, output_layout = _parse_shape(plan.fold_stage.output_shape)
-    if any(dtype != "f32" for dtype in (first_output_dtype, second_output_dtype, physical_dtype, output_dtype)):
-        raise ValueError("routed CUDA prototype requires FP32 Contract, Map, and Fold storage")
+    storage_dtypes = {first_output_dtype, second_output_dtype, physical_dtype, output_dtype}
+    if len(storage_dtypes) != 1 or next(iter(storage_dtypes)) not in {"bf16", "f32"}:
+        raise ValueError("routed CUDA prototype requires one common BF16 or FP32 storage dtype")
+    storage_dtype = next(iter(storage_dtypes))
     if any(
         layout != tuple(reversed(range(len(shape))))
         for shape, layout in (
@@ -435,8 +473,8 @@ def _validated_dimensions(plan: RoutedForwardTypedFfiCodegenPlan) -> dict[str, i
     first_lhs = _shape_for_role(plan, RoutedForwardFfiOperandRole.FIRST_CONTRACT_LHS)
     first_rhs = _shape_for_role(plan, RoutedForwardFfiOperandRole.FIRST_CONTRACT_RHS)
     second_rhs = _shape_for_role(plan, RoutedForwardFfiOperandRole.SECOND_CONTRACT_RHS)
-    if first_lhs[0] != "f32" or first_rhs[0] != "f32" or second_rhs[0] != "f32":
-        raise ValueError("generic cuBLAS prototype requires FP32 Contract operands")
+    if any(shape[0] != storage_dtype for shape in (first_lhs, first_rhs, second_rhs)):
+        raise ValueError("generic cuBLAS prototype requires Contract operands to match storage dtype")
     if first_lhs[1][0] != first_output[0] or first_rhs[1] != (first_lhs[1][1], first_output[1]):
         raise ValueError("first Contract dimensions do not match physical operands")
     if physical_map[0] != second_output[0] or second_rhs[1] != (physical_map[1], second_output[1]):
@@ -461,6 +499,18 @@ def _validated_dimensions(plan: RoutedForwardTypedFfiCodegenPlan) -> dict[str, i
         "output_rows": output[0],
         "output_features": output[1],
     }
+
+
+def _validated_storage_dtype(plan: RoutedForwardTypedFfiCodegenPlan) -> str:
+    dtypes = {
+        _parse_shape(plan.contracts[0].output_shape)[0],
+        _parse_shape(plan.contracts[1].output_shape)[0],
+        _parse_shape(plan.map_stage.physical_output_shape)[0],
+        _parse_shape(plan.fold_stage.output_shape)[0],
+    }
+    if len(dtypes) != 1:
+        raise ValueError("routed CUDA storage dtypes disagree")
+    return next(iter(dtypes))
 
 
 def _shape_for_role(

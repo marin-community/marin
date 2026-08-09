@@ -33,10 +33,35 @@ _ARTIFACT = (
     Path(__file__).parents[1]
     / "benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz"
 )
+_GPU_ARTIFACT = (
+    Path(__file__).parents[1]
+    / "benchmarks/artifacts/grug_contract_map_gpu_gb200_v0/final/original-gpu-pre-scheduler-hlo.txt.gz"
+)
 
 
 def _frozen_hlo() -> str:
     return gzip.decompress(_ARTIFACT.read_bytes()).decode()
+
+
+def _frozen_gpu_hlo() -> str:
+    return gzip.decompress(_GPU_ARTIFACT.read_bytes()).decode()
+
+
+def test_gpu_grug_hlo_generates_bf16_routed_forward_executor() -> None:
+    plan = plan_routed_forward_typed_ffi(_frozen_gpu_hlo())
+    generated = generate_cuda_routed_forward_ffi(plan, target="shuttle.routed_forward.bf16.v1")
+
+    assert plan.disposition is RoutedForwardCodegenDisposition.READY
+    assert tuple(contract.output_shape for contract in plan.contracts) == (
+        "bf16[512,64]{1,0}",
+        "bf16[512,32]{1,0}",
+    )
+    assert tuple(operand.role for operand in plan.operands) == tuple(RoutedForwardFfiOperandRole)
+    assert "CUDA_R_16BF" in generated.source
+    assert "ffi::Result<ffi::Buffer<ffi::BF16, 2>>" in generated.source
+    assert "__float2bfloat16_rn" in generated.source
+    assert "fold_input[edge * kOutputFeatures + feature]" in generated.source
+    assert "atomicAdd" not in generated.source
 
 
 def test_grug_hlo_recovers_generic_routed_forward_and_backward_program() -> None:

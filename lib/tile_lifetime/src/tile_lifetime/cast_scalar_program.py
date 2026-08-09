@@ -275,14 +275,12 @@ def _render_cuda_expression(expression: CastScalarExpression) -> str:
         return _cuda_float(float(expression.constant))
     operands = tuple(_render_cuda_expression(operand) for operand in expression.operands)
     if expression.kind is CastScalarKind.CONVERT:
-        if expression.dtype is CastScalarDType.BF16:
-            return f"__bfloat162float(__float2bfloat16_rn({operands[0]}))"
-        if expression.dtype is CastScalarDType.F32:
-            return operands[0]
-        raise ValueError("CUDA scalar conversion to predicate is unsupported")
-    if expression.kind is CastScalarKind.NEGATE:
-        return f"(-{operands[0]})"
-    if expression.kind in {
+        if expression.dtype is CastScalarDType.PRED:
+            raise ValueError("CUDA scalar conversion to predicate is unsupported")
+        rendered = operands[0]
+    elif expression.kind is CastScalarKind.NEGATE:
+        rendered = f"(-{operands[0]})"
+    elif expression.kind in {
         CastScalarKind.ADD,
         CastScalarKind.SUBTRACT,
         CastScalarKind.MULTIPLY,
@@ -294,14 +292,18 @@ def _render_cuda_expression(expression: CastScalarExpression) -> str:
             CastScalarKind.MULTIPLY: "__fmul_rn",
             CastScalarKind.DIVIDE: "__fdiv_rn",
         }[expression.kind]
-        return f"{intrinsic}({operands[0]}, {operands[1]})"
-    if expression.kind is CastScalarKind.EXP:
-        return f"expf({operands[0]})"
-    if expression.kind is CastScalarKind.TANH:
-        return f"tanhf({operands[0]})"
-    if expression.kind is CastScalarKind.SELECT:
-        return f"({operands[0]} ? {operands[1]} : {operands[2]})"
-    raise AssertionError(f"unhandled scalar kind {expression.kind.value}")
+        rendered = f"{intrinsic}({operands[0]}, {operands[1]})"
+    elif expression.kind is CastScalarKind.EXP:
+        rendered = f"expf({operands[0]})"
+    elif expression.kind is CastScalarKind.TANH:
+        rendered = f"tanhf({operands[0]})"
+    elif expression.kind is CastScalarKind.SELECT:
+        rendered = f"({operands[0]} ? {operands[1]} : {operands[2]})"
+    else:
+        raise AssertionError(f"unhandled scalar kind {expression.kind.value}")
+    if expression.dtype is CastScalarDType.BF16:
+        return f"__bfloat162float(__float2bfloat16_rn({rendered}))"
+    return rendered
 
 
 def _round_float32_to_bfloat16(value: float) -> float:

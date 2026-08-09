@@ -562,7 +562,7 @@ def form_routed_forward_region(hlo_text: str) -> RoutedForwardRegionRecord:
     boundary = _entry_region_boundary(entry, internal)
     convex = _entry_region_is_convex(entry, internal)
     source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
-    insertion_instruction = min(internal, key=source_order.__getitem__)
+    insertion_instruction = fold_instruction
     topologically_insertable = all(
         source_order[value.instruction] < source_order[insertion_instruction] for value in boundary.inputs
     )
@@ -707,15 +707,16 @@ def _recover_routed_forward_ffi_operands(
     fold_indices = boundary[fold_indices_name]
 
     contract_inputs = {first_lhs.instruction, first_rhs.instruction, second_rhs.instruction}
+    static_boundary = {name for name in boundary if _entry_is_constant_expression(instructions, name)}
     map_output = _entry_instruction_for_node(module, region.map_stage.physical_output)
     map_external = _entry_external_ancestors(instructions, map_output, internal, set(boundary))
-    validity_candidates = map_external - contract_inputs
+    validity_candidates = map_external - contract_inputs - static_boundary
     if len(validity_candidates) != 1:
         raise ValueError(f"physical Map has {len(validity_candidates)} non-Contract boundary inputs")
     validity = boundary[next(iter(validity_candidates))]
 
     update_external = _entry_external_ancestors(instructions, fold_updates_name, internal, set(boundary))
-    contribution_candidates = update_external - contract_inputs - {validity.instruction}
+    contribution_candidates = update_external - contract_inputs - {validity.instruction} - static_boundary
     if len(contribution_candidates) != 1:
         raise ValueError(f"Fold update has {len(contribution_candidates)} external contribution inputs")
     contribution = boundary[next(iter(contribution_candidates))]
@@ -729,9 +730,26 @@ def _recover_routed_forward_ffi_operands(
         RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FIRST_CONTRACT_LHS, first_lhs),
         RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FIRST_CONTRACT_RHS, first_rhs),
     )
-    if {operand.value.instruction for operand in values} != set(boundary):
+    if {operand.value.instruction for operand in values} | static_boundary != set(boundary):
         raise ValueError("generic routed FFI roles do not cover the exact region boundary")
     return values
+
+
+def _entry_is_constant_expression(instructions: dict[str, HloInstruction], start: str) -> bool:
+    pending = [start]
+    seen: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        instruction = instructions[current]
+        if instruction.opcode == "constant":
+            continue
+        if instruction.opcode not in {"bitcast", "broadcast", "convert", "copy", "reshape"}:
+            return False
+        pending.extend(instruction.operands)
+    return True
 
 
 def _entry_external_ancestors(
@@ -772,7 +790,7 @@ class _SegmentedMapLayoutTrace:
     broadcast: str
     select: str
     transpose: str
-    copy: str
+    copy: str | None
     bitcast: str
     predicate: str
     logical_edge_count: int
@@ -895,14 +913,18 @@ def _recover_segmented_layout(
     feature_stride, segment_stride = pair_strides[trace.flattened_pair_order]
     edge_proof = SegmentedLayoutProof(
         relation=SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
-        nodes=(
-            *edge_order_proof.nodes,
-            trace.logical_value,
-            trace.pad,
-            trace.broadcast,
-            trace.transpose,
-            trace.copy,
-            trace.bitcast,
+        nodes=tuple(
+            node
+            for node in (
+                *edge_order_proof.nodes,
+                trace.logical_value,
+                trace.pad,
+                trace.broadcast,
+                trace.transpose,
+                trace.copy,
+                trace.bitcast,
+            )
+            if node is not None
         ),
     )
     return (
@@ -1003,13 +1025,20 @@ def _segmented_map_layout_trace(
 
     transpose_position = layout_path.index(transpose.id)
     suffix = tuple(graph.node(node_id) for node_id in layout_path[transpose_position + 1 :])
-    if len(suffix) != 2 or suffix[0].opcode != "copy" or suffix[1].opcode != "bitcast":
-        raise _SegmentedLayoutRecoveryError(relation, "flattening is not an explicit transpose-copy-bitcast chain")
-    copy, bitcast = suffix
-    copy_shape = _physical_array_shape(copy.shape)
+    copy: InlinedHloNode | None
+    if len(suffix) == 2 and suffix[0].opcode == "copy" and suffix[1].opcode in {"bitcast", "reshape"}:
+        copy, bitcast = suffix
+    elif len(suffix) == 1 and suffix[0].opcode in {"bitcast", "reshape"}:
+        copy, bitcast = None, suffix[0]
+    else:
+        raise _SegmentedLayoutRecoveryError(
+            relation,
+            "flattening is not a layout-proven transpose followed by reshape/bitcast",
+        )
+    copy_shape = _physical_array_shape(copy.shape) if copy is not None else transpose_shape
     bitcast_shape = _physical_array_shape(bitcast.shape)
     if copy_shape is None or copy_shape.minor_to_major != (2, 1, 0):
-        raise _SegmentedLayoutRecoveryError(relation, "flattening copy does not make the trailing pair contiguous")
+        raise _SegmentedLayoutRecoveryError(relation, "flattening layout does not make the trailing pair contiguous")
     expected_physical = (padded.dimensions[0], logical_feature_extent * segment_count)
     if (
         bitcast.id != physical_value
@@ -1026,7 +1055,7 @@ def _segmented_map_layout_trace(
         broadcast=broadcast.id,
         select=select.id,
         transpose=transpose.id,
-        copy=copy.id,
+        copy=copy.id if copy is not None else None,
         bitcast=bitcast.id,
         predicate=select.operands[0],
         logical_edge_count=relation_plan.edge_count,
@@ -1045,37 +1074,40 @@ def _verify_segmented_weight_flattening(
 ) -> SegmentedLayoutProof:
     relation = SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL
     bitcast = graph.node(weight_value)
-    if bitcast.opcode != "bitcast" or len(bitcast.operands) != 1:
-        raise _SegmentedLayoutRecoveryError(relation, "Contract weight is not an explicit flattened bitcast")
-    copy = graph.node(bitcast.operands[0])
-    transpose = graph.node(copy.operands[0]) if copy.opcode == "copy" and len(copy.operands) == 1 else None
-    if transpose is None or transpose.opcode != "transpose" or len(transpose.operands) != 1:
-        raise _SegmentedLayoutRecoveryError(relation, "Contract weight is not a transpose-copy-bitcast layout")
-    source = graph.node(transpose.operands[0])
+    if bitcast.opcode not in {"bitcast", "reshape"} or len(bitcast.operands) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "Contract weight is not a flattened reshape/bitcast")
+    physical_source = graph.node(bitcast.operands[0])
+    current = physical_source
+    proof_nodes = [current.id]
+    if current.opcode == "copy" and len(current.operands) == 1:
+        current = graph.node(current.operands[0])
+        proof_nodes.insert(0, current.id)
+    source = graph.node(current.operands[0]) if current.opcode == "transpose" and len(current.operands) == 1 else current
     source_shape = _physical_array_shape(source.shape)
-    transpose_shape = _physical_array_shape(transpose.shape)
-    copy_shape = _physical_array_shape(copy.shape)
+    physical_source_shape = _physical_array_shape(physical_source.shape)
     bitcast_shape = _physical_array_shape(bitcast.shape)
-    if source_shape is None or len(source_shape.dimensions) != 3:
+    if source_shape is None or physical_source_shape is None or len(physical_source_shape.dimensions) != 3:
         raise _SegmentedLayoutRecoveryError(relation, "weight source is not segment-by-feature-by-output")
-    segment_count, feature_extent, output_extent = source_shape.dimensions
-    if (segment_count, feature_extent) != (trace.segment_count, trace.logical_feature_extent):
-        raise _SegmentedLayoutRecoveryError(relation, "weight segment/feature axes disagree with the Map layout")
-    weight_axes = _attribute_axes(transpose.attributes)
-    pair_orders = {
-        (1, 0, 2): ("feature", "segment"),
-        (0, 1, 2): ("segment", "feature"),
-    }
-    if weight_axes not in pair_orders or pair_orders[weight_axes] != trace.flattened_pair_order:
-        raise _SegmentedLayoutRecoveryError(relation, "Map and weight flatten segment/feature in different orders")
-    expected_transpose = tuple(source_shape.dimensions[axis] for axis in weight_axes)
-    expected_bitcast = (trace.logical_feature_extent * trace.segment_count, output_extent)
+    if current.opcode == "transpose":
+        axes = _attribute_axes(current.attributes)
+        physical_roles = tuple(("segment", "feature", "output")[axis] for axis in axes)
+    else:
+        physical_roles = ("segment", "feature", "output")
+    physical_dimensions = dict(zip(physical_roles, physical_source_shape.dimensions, strict=True))
     if (
-        transpose_shape is None
-        or transpose_shape.dimensions != expected_transpose
-        or copy_shape is None
-        or copy_shape.dimensions != expected_transpose
-        or copy_shape.minor_to_major != (2, 1, 0)
+        physical_dimensions["segment"] != trace.segment_count
+        or physical_dimensions["feature"] != trace.logical_feature_extent
+    ):
+        raise _SegmentedLayoutRecoveryError(relation, "weight segment/feature axes disagree with the Map layout")
+    flattened_pair_order = physical_roles[:2]
+    if flattened_pair_order != trace.flattened_pair_order:
+        raise _SegmentedLayoutRecoveryError(relation, "Map and weight flatten segment/feature in different orders")
+    expected_bitcast = (
+        trace.logical_feature_extent * trace.segment_count,
+        physical_dimensions["output"],
+    )
+    if (
+        physical_source_shape.minor_to_major != (2, 1, 0)
         or bitcast_shape is None
         or bitcast_shape.dimensions != expected_bitcast
         or bitcast_shape.minor_to_major != (1, 0)
@@ -1083,7 +1115,7 @@ def _verify_segmented_weight_flattening(
         raise _SegmentedLayoutRecoveryError(
             relation, "weight physical layouts do not legalize the recovered K index map"
         )
-    return SegmentedLayoutProof(relation=relation, nodes=(transpose.id, copy.id, bitcast.id))
+    return SegmentedLayoutProof(relation=relation, nodes=(*proof_nodes, bitcast.id))
 
 
 def _verify_first_contract_edge_order(
@@ -1468,7 +1500,12 @@ def _recover_relation_plans(analysis: _GraphAnalysis) -> tuple[RelationPlanRecor
         if selection is None:
             continue
         permutation = _integer_tuple_projection(analysis, node.id, rank=1)
-        counts = _destination_counts(analysis, selection, token_count * slots_per_token)
+        counts = _destination_counts(
+            analysis,
+            selected_indices=selected,
+            selection=selection,
+            edge_count=token_count * slots_per_token,
+        )
         offsets = analysis.nearest_path(
             counts,
             lambda candidate: candidate.opcode == "reduce-window" and candidate.dtype in {"s32", "s64"},
@@ -1843,11 +1880,11 @@ def _recover_weight_gradients(
 
 
 def _is_destination_sort(node: InlinedHloNode, analysis: _GraphAnalysis) -> bool:
-    if node.opcode != "sort" or "is_stable=true" not in node.attributes or len(node.operands) != 2:
+    if node.opcode != "sort" or len(node.operands) != 2:
         return False
     first = _parse_array_shape(analysis.nodes[node.operands[0]].shape)
     second = _parse_array_shape(analysis.nodes[node.operands[1]].shape)
-    return (
+    structurally_compatible = (
         first is not None
         and second is not None
         and first == second
@@ -1855,6 +1892,39 @@ def _is_destination_sort(node: InlinedHloNode, analysis: _GraphAnalysis) -> bool
         and len(first[1]) == 1
         and analysis.nodes[node.operands[1]].opcode == "iota"
     )
+    if not structurally_compatible:
+        return False
+    if "is_stable=true" in node.attributes:
+        return True
+    return _sort_comparator_uses_unique_iota_tie_break(node, analysis.module)
+
+
+def _sort_comparator_uses_unique_iota_tie_break(node: InlinedHloNode, module: HloModuleGraph) -> bool:
+    """Return whether a destination sort orders equal keys by its unique iota.
+
+    Recent GPU PRE_SCHEDULER HLO lowers ``argsort(stable=True)`` to an
+    explicitly lexicographic comparator instead of retaining the
+    ``is_stable=true`` attribute.  Requiring both left/right key and iota
+    parameters to influence the predicate proves that equal destination keys
+    cannot remain unordered without consulting frontend names.
+    """
+    called = _CALLED_COMPUTATION.search(node.attributes)
+    if called is None:
+        return False
+    computation = module.computation(called.group(1))
+    parameters = tuple(instruction for instruction in computation.instructions if instruction.opcode == "parameter")
+    if len(parameters) != 4:
+        return False
+    instructions = {instruction.name: instruction for instruction in computation.instructions}
+    ancestors = {computation.root.name}
+    pending = list(computation.root.operands)
+    while pending:
+        current = pending.pop()
+        if current in ancestors:
+            continue
+        ancestors.add(current)
+        pending.extend(instructions[current].operands)
+    return all(parameter.name in ancestors for parameter in parameters)
 
 
 def _nearest_selection_ancestor(analysis: _GraphAnalysis, node_id: str) -> str | None:
@@ -1890,26 +1960,50 @@ def _integer_tuple_projection(
     return min(candidates, key=analysis.order.__getitem__) if candidates else None
 
 
-def _destination_counts(analysis: _GraphAnalysis, selection: str, edge_count: int) -> str:
-    candidates = []
-    for node in analysis.graph.nodes:
-        shape = _parse_array_shape(node.shape)
-        if node.opcode != "scatter" or node.dtype not in {"s32", "s64"} or shape is None or len(shape[1]) != 1:
+def _destination_counts(
+    analysis: _GraphAnalysis,
+    *,
+    selected_indices: str,
+    selection: str,
+    edge_count: int,
+) -> str:
+    for source in (selected_indices, selection):
+        candidates: list[tuple[int, str]] = []
+        distances = _forward_distances(analysis, source)
+        for node in analysis.graph.nodes:
+            shape = _parse_array_shape(node.shape)
+            if node.opcode != "scatter" or node.dtype not in {"s32", "s64"} or shape is None or len(shape[1]) != 1:
+                continue
+            if source not in analysis.ancestors(node.id):
+                continue
+            if not any(
+                (operand_shape := _parse_array_shape(analysis.nodes[operand].shape)) is not None
+                and edge_count in operand_shape[1]
+                for operand in node.operands
+            ):
+                continue
+            candidates.append((distances[node.id], node.id))
+        if not candidates:
             continue
-        if selection not in analysis.ancestors(node.id):
-            continue
-        if not any(
-            (operand_shape := _parse_array_shape(analysis.nodes[operand].shape)) is not None
-            and edge_count in operand_shape[1]
-            for operand in node.operands
-        ):
-            continue
-        candidates.append(node.id)
-    if len(candidates) != 1:
-        raise ValueError(
-            f"selection {selection!r} has {len(candidates)} structurally compatible destination-count Folds"
-        )
-    return candidates[0]
+        nearest_distance = min(distance for distance, _ in candidates)
+        nearest = tuple(node_id for distance, node_id in candidates if distance == nearest_distance)
+        if len(nearest) != 1:
+            raise ValueError(f"relation source {source!r} has {len(nearest)} equally near destination-count Folds")
+        return nearest[0]
+    raise ValueError(f"selected indices {selected_indices!r} have no structurally compatible destination-count Folds")
+
+
+def _forward_distances(analysis: _GraphAnalysis, start: str) -> dict[str, int]:
+    distances = {start: 0}
+    pending = deque((start,))
+    while pending:
+        current = pending.popleft()
+        for user in analysis.users.get(current, ()):
+            if user in distances:
+                continue
+            distances[user] = distances[current] + 1
+            pending.append(user)
+    return distances
 
 
 def _contract_record(
