@@ -257,6 +257,7 @@ def build_small_run(
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 60,
+    num_train_steps_override: int | None = None,
     watch_interval: int = 0,
     dp_racks: int = 1,
     steps_per_eval: int = 1000,
@@ -303,6 +304,10 @@ def build_small_run(
     # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
     # capacity is ceil(factor * tokens_per_shard * top-k / experts).
     num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step * tokens_per_active_param / 60))
+    if num_train_steps_override is not None:
+        # A shape that changes the active-param count sets its own budget to match a target compute,
+        # so the token-per-active-param formula above does not apply.
+        num_steps = num_train_steps_override
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
