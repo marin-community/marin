@@ -894,3 +894,11 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Regional contract: both arms start from seed 0 and read no checkpoint. All controller work, nine training caches, 23 evaluation artifacts, v5p-8 workers, W&B, profiles, checkpoints, and outputs remain in `us-central1`. Reject central2, Snowball, S3, east-region, or other cross-region material references. Both phase roots must be empty immediately before first submission.
 - Communication gate: issue #8032 now contains the exact d1280 model, optimizer, topology, arithmetic, commands, sample cardinalities, gates, proof paths, authority, and stop rules. A context-isolated reader using only that body returned `PASS`.
 - Progression: a smoke pass authorizes full automatically. XEM-012 completion authorizes no further width or post-hoc surgery; a full failure stops autonomous scaling under this topology.
+
+### 2026-08-09 05:52 - GRUG-XEM-012 d1280 smoke launch
+
+- Preflight: both `2026.08.09` smoke roots matched no objects, `gs://marin-us-central1` reports `US-CENTRAL1`, and no-run lowering contains no central2, Snowball, S3, or east-region reference. The worktree and upstream were both at pushed preregistration snapshot `ae7726d0acd007c566de99d2c8344dad63860497`; experiment implementation remains `7d6fa47220`.
+- Command: `.venv/bin/iris --config lib/iris/config/marin.yaml job run --no-wait --region us-central1 --cpu 1 --memory 2GB --extra cpu --job-name grug-xem-012-d1280-smoke-20260809 -e MARIN_PREFIX gs://marin-us-central1 -e GRUG_TIED_MODEL d1280 -e GRUG_TIED_PHASE smoke -- python -m experiments.grug.moe.launch_tied_experts --version 2026.08.09 --run --max-concurrent 2`.
+- Controller: `/dlwh/grug-xem-012-d1280-smoke-20260809`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-012-d1280-smoke-20260809. Submission completed at 05:51:22 PDT. The two central1 v5p-8 children may run concurrently.
+- Monitoring: one dedicated babysitter owns allocation, compile, W&B, exact 500-history/cardinality audit, terminal 23-component evaluation, final-50 gate, and step-500 artifacts. It may not mutate a cluster, change experiment identity, or launch full.
+- Next action: launch the fresh 14,315-update full comparison only on a complete smoke pass.
