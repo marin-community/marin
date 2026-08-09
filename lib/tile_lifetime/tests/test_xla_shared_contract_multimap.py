@@ -53,7 +53,12 @@ _ARTIFACT = (
 _TARGET = "shuttle.shared_contract_multi_map.test"
 _COMPOSED_TARGETS = RoutedSharedMapTrainingFfiTargets(
     forward="shuttle.shared_map_training.forward.test",
+    input_contracts=(
+        "shuttle.shared_map_training.input_contract.0.test",
+        "shuttle.shared_map_training.input_contract.1.test",
+    ),
     shared_contract_multi_map="shuttle.shared_map_training.maps.test",
+    source_fold="shuttle.shared_map_training.source_fold.test",
     weight_gradients=(
         "shuttle.shared_map_training.weight_gradient.0.test",
         "shuttle.shared_map_training.weight_gradient.1.test",
@@ -119,24 +124,31 @@ def test_natural_hlo_recovers_one_shared_contract_with_two_live_scalar_maps() ->
     assert plan.numerical_contract.numerical_policy is NumericalPolicy.ALLOW_ROUNDING_REORDER
 
 
-def test_routed_training_composition_defers_only_input_adjoint_work_outside_shared_maps() -> None:
+def test_routed_training_composition_generates_input_adjoint_arithmetic_and_retains_views() -> None:
     plan = plan_routed_shared_map_training_typed_ffi(_hlo())
 
     shared_internal = set(plan.shared_contract_multi_map.boundary.internal_instructions)
-    deferred_internal = set(plan.deferred_input_adjoint.region.boundary.internal_instructions)
-    assert shared_internal & deferred_internal
-    assert deferred_internal - shared_internal
+    input_adjoint_internal = set(plan.recovered_input_adjoint.region.boundary.internal_instructions)
+    assert shared_internal & input_adjoint_internal
     assert {output.value.instruction for output in plan.shared_contract_multi_map.outputs} == {
         "select.5",
         "select.7",
     }
-    assert "scatter-add.42" in deferred_internal - shared_internal
+    assert tuple(contract.instruction for contract in plan.input_contracts) == ("dot.67", "dot.68")
+    assert plan.source_fold.instruction == "scatter-add.42"
+    assert plan.retained_input_adjoint_wrappers == (
+        "slice.54",
+        "transpose.167",
+        "reshape.360",
+        "slice.58",
+        "reshape.408",
+    )
     assert all(
         not shared_internal & set(weight.region.boundary.internal_instructions) for weight in plan.weight_gradients
     )
 
 
-def test_routed_training_composition_replaces_shared_maps_without_double_owning_adjoint() -> None:
+def test_routed_training_composition_replaces_all_input_adjoint_arithmetic_once() -> None:
     hlo = _hlo()
     plan = plan_routed_shared_map_training_typed_ffi(hlo)
 
@@ -154,21 +166,23 @@ def test_routed_training_composition_replaces_shared_maps_without_double_owning_
 
     assert audit.target_instructions == (
         "shuttle_generated_routed_forward_region",
+        "dot.67",
         "shuttle_generated_shared_contract_multi_map",
+        "dot.68",
+        "scatter-add.42",
         "dot.6",
         "dot.7",
     )
     assert audit.weight_gradient_collectives == ("psum.52", "psum.53")
+    assert audit.source_fold_collective == "psum.50"
     assert audit.shared_contract_multi_map.outputs == ("select.5", "select.7")
-    assert "dot.67" in audit.deferred_input_adjoint_instructions
-    assert "dot.68" in audit.deferred_input_adjoint_instructions
-    assert "scatter-add.42" in audit.deferred_input_adjoint_instructions
+    assert audit.retained_input_adjoint_wrappers == plan.retained_input_adjoint_wrappers
     assert "shuttle_generated_routed_input_adjoint_region" not in rewritten
     assert audit.copy_count[1] <= audit.copy_count[0]
     assert audit.transpose_count[1] <= audit.transpose_count[0]
 
 
-def test_shared_map_harness_composes_seven_calls_and_retains_adjoint_remainder() -> None:
+def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
     hlo = _hlo()
     attention_program, attention_schedule, _ = _attention_reverse_program()
     default_attention = generate_streaming_attention_backward_ffi(
@@ -195,7 +209,9 @@ def test_shared_map_harness_composes_seven_calls_and_retains_adjoint_remainder()
 
     targets = (
         _SHARED_ROUTED_TARGETS.forward,
+        *_SHARED_ROUTED_TARGETS.input_contracts,
         _SHARED_ROUTED_TARGETS.shared_contract_multi_map,
+        _SHARED_ROUTED_TARGETS.source_fold,
         *_SHARED_ROUTED_TARGETS.weight_gradients,
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
@@ -203,9 +219,7 @@ def test_shared_map_harness_composes_seven_calls_and_retains_adjoint_remainder()
     exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
     assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
-    assert "dot.67" in audit.routed.deferred_input_adjoint_instructions
-    assert "dot.68" in audit.routed.deferred_input_adjoint_instructions
-    assert "scatter-add.42" in audit.routed.deferred_input_adjoint_instructions
+    assert audit.routed.retained_input_adjoint_wrappers == plan.routed.retained_input_adjoint_wrappers
     assert len(audit.axis_folds) == 2
     assert audit.routed.shared_contract_multi_map.outputs == ("select.5", "select.7")
 
