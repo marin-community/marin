@@ -37,11 +37,11 @@ baseline have identical payloads; all finite values have zero maximum and mean
 absolute error. The tuple handler executed once, and the transformed HLO
 contains one call and three tuple projections.
 
-This remains a disposable CPU proof. It uses a structurally checked HLO text
-edit and XLA's removed legacy CPU custom-call tuple ABI. Production needs typed
-C++ connected-region replacement, supported multi-result FFI, generic
-sharding/alias/effect transfer, and a GPU skeleton consuming the same generated
-multi-output AST.
+This remains a disposable CPU proof because it uses a structurally checked HLO
+text edit. The three-result handler now uses XLA's supported typed FFI, so the
+multi-result ABI is no longer an open question. Production needs typed C++
+connected-region replacement, generic sharding/alias/effect transfer, and a GPU
+skeleton consuming the same generated multi-output AST.
 
 Reproduce from the repository root:
 

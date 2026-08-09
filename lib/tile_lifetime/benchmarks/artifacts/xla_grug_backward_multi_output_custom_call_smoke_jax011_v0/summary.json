@@ -4,7 +4,7 @@
   "custom_call_occurrences_in_transformed_hlo": 1,
   "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
   "device_kind": "cpu",
-  "explicit_warning": "Disposable proof only: tuple ABI works here but still uses text mutation and removed legacy CPU ABI.",
+  "explicit_warning": "Disposable text mutation proof; the multi-result ABI itself is supported typed FFI.",
   "external_users": [
     [
       "convert_convert_fusion.3",
@@ -27,7 +27,8 @@
       ]
     ]
   ],
-  "generated_handler_sha256": "185e4f4c39aa970d4c436e8ab6c722ecd4575c0df150108daa1dc7a4a2a751c2",
+  "ffi_api": "XLA typed FFI api_version=1",
+  "generated_handler_sha256": "f2cc4f05a7e2c8ff18948d99ad9654e79d222e69b51656cc6bc863f8d14cbf2f",
   "generated_scalar_expressions": [
     "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(((shuttle_bf16_to_f32(cotangent[row * kFeatures + feature])) * (shuttle_round_bf16(projection0[row * kFeatures + feature]))))) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) + (shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((shuttle_bf16_to_f32(cotangent[row * kFeatures + feature])) * (shuttle_round_bf16(projection0[row * kFeatures + feature])))))))) * (shuttle_round_bf16(((shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature]))))))))))))) * (shuttle_round_bf16(((1) - (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature]))))))))))))))))))))))))",
     "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) * (shuttle_bf16_to_f32(cotangent[row * kFeatures + feature]))))",
@@ -48,7 +49,6 @@
   "platform": "cpu",
   "production_blockers": [
     "typed C++ connected-region replacement and dead instruction deletion",
-    "supported multi-result XLA FFI handler",
     "generic output alias/sharding/effect transfer",
     "GPU lowering from the same multi-output semantic AST"
   ],

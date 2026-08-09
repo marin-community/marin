@@ -35,9 +35,9 @@ from lib.tile_lifetime.benchmarks.xla_grug_pair_map_custom_call_smoke import (
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _PASS_NAME,
     _TARGET_NAME,
-    _compile_handler,
-    _register_legacy_custom_call,
-    generate_cpu_multi_output_handler,
+    _compile_ffi_handler,
+    _register_ffi_custom_call,
+    generate_cpu_multi_output_ffi_handler,
     recover_multi_output_region_rewrite,
     replace_multi_output_region_with_custom_call,
     write_gzip_text,
@@ -90,9 +90,9 @@ def run_smoke(artifact_directory: Path | None) -> dict[str, Any]:
                     original,
                     _multi_output_region_index(original),
                 )
-                source = generate_cpu_multi_output_handler(rewrite.program)
-                library = _compile_handler(source, directory)
-                _register_legacy_custom_call(library)
+                source = generate_cpu_multi_output_ffi_handler(rewrite.program)
+                library = _compile_ffi_handler(source, directory)
+                _register_ffi_custom_call(library)
                 holder["library"] = library
                 original_modules.append(original)
                 rewrites.append(rewrite)
@@ -100,6 +100,7 @@ def run_smoke(artifact_directory: Path | None) -> dict[str, Any]:
                     original,
                     rewrite,
                     _TARGET_NAME,
+                    typed_ffi=True,
                 )
                 transformed_module = hlo.hlo_module_from_text(transformed_text)
                 transformed_modules.append(transformed_module.to_string())
@@ -144,7 +145,7 @@ def run_smoke(artifact_directory: Path | None) -> dict[str, Any]:
             "multi-output custom-call evidence mismatch: "
             f"targets={target_occurrences}, tuple_gets={tuple_gets}, executions={call_count}"
         )
-    source = generate_cpu_multi_output_handler(rewrite.program)
+    source = generate_cpu_multi_output_ffi_handler(rewrite.program)
     if artifact_directory is not None:
         write_gzip_text(artifact_directory / "original-pre-scheduler-hlo.txt.gz", original_modules[0])
         write_gzip_text(artifact_directory / "transformed-pre-scheduler-hlo.txt.gz", transformed_hlo)
@@ -170,12 +171,10 @@ def run_smoke(artifact_directory: Path | None) -> dict[str, Any]:
         "custom_call_handler_executions": call_count,
         **comparison,
         "outputs_match": True,
-        "explicit_warning": (
-            "Disposable proof only: tuple ABI works here but still uses text mutation and removed legacy CPU ABI."
-        ),
+        "ffi_api": "XLA typed FFI api_version=1",
+        "explicit_warning": "Disposable text mutation proof; the multi-result ABI itself is supported typed FFI.",
         "production_blockers": (
             "typed C++ connected-region replacement and dead instruction deletion",
-            "supported multi-result XLA FFI handler",
             "generic output alias/sharding/effect transfer",
             "GPU lowering from the same multi-output semantic AST",
         ),
