@@ -59,6 +59,7 @@ author: dlwh
 - 2026-08-06: model inverse-RMS placement explicitly. Keep CODA's consumer-epilogue scale as the performance-oriented plan and add a consumer-prologue plan for source-like BF16 ordering.
 - 2026-08-06: use CODA commit `8fa88065e541f6a5b52fb400d94d4be02f18c543` with QuACK commit `02c7f69881737731173a6a009aeb6f032e449b61` for the first executable RMS oracle. CODA `v0.2` lacks the scale entry point and current main is between QuACK epilogue APIs.
 - 2026-08-06: use explicit FP32 round-to-nearest multiplication and addition for deterministic routed merge. FMA remains a measured numerical alternative but is not the selected exact-order path.
+- 2026-08-09: treat H100, B200, and GB200 as separate evidence classes. B200 is useful for SM100 portability and single-GPU experiments, but it does not substitute for GB200 measurements of the four-GPU MoE boundary.
 
 ## Entry Log
 
@@ -67,7 +68,7 @@ author: dlwh
 - Hypothesis: the existing generic `RelationPlan`, orientation, readiness, bounded-buffer, `Contract`, `DomainRestriction`, and normalized-exponential `Fold` machinery can express MSA's native `(query token, KV group) -> selected KV block` computation. The only new workload-specific code should be frontend recovery and SM100 physical legalization; online-state, mask, merge, and routing semantics must remain Shuttle-owned.
 - Baseline: branch `research/shuttle-clean-helper-boundaries` at commit `dd3bb84759`.
 - Oracle revisions: MiniMax Sparse Attention `80434d7f67877c6570ca19cac444b84bc9855dac`; its CUTLASS submodule `eb61c911471867a5fd2466bfd8f29306cea6ebf8`.
-- Primary configuration: one low-priority B200/GB200 GPU, BF16 Q/K/V and FP32 online state, batch 1, sequence 65536, 64 query heads, 4 KV heads, head dimension 128, KV block 128, top-k 16, causal. Sequence 16384 is the bring-up configuration.
+- Primary configuration: one low-priority GB200 GPU, BF16 Q/K/V and FP32 online state, batch 1, sequence 65536, 64 query heads, 4 KV heads, head dimension 128, KV block 128, top-k 16, causal. Sequence 16384 is the bring-up configuration. A B200 replay is a separate SM100 portability result, not GB200 acceptance evidence.
 - Natural semantics: index-Q/index-K `Contract`s; causal token-score `Contract`; per-block maximum `Fold`; deterministic per-GQA-group top-k `Selection` with the local block forced; generic `Relation`; selected exact QK `Contract`; score-scale `Map`; `DomainRestriction`; normalized-exponential `Fold`; and PV `Contract`.
 - Measurement boundary A, payload: identical precomputed `q2k_indices`; q2k-to-k2q orientation/schedule preparation; sparse attention body. Boundary B, full route: index projections and scores; block-max; top-k; relation construction; and sparse attention. Routing/index planning is never silently excluded from the full boundary.
 - Acceptance: deterministic numerical correctness against the natural semantic reference; one semantic mutation through the same generator; no opaque official MSA/FlashAttention semantic call; generated Shuttle latency no more than 1.20 times the pinned official MSA implementation for one matched primary configuration.
