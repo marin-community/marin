@@ -2267,3 +2267,41 @@ author: dlwh
   363 tests.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
+
+### 2026-08-09 - TLTC-XLA-021 Torch-free JAX attention reverse execution
+
+- Hypothesis: the generic Contract/Fold/Map/DomainRestriction reverse recovered
+  from ordinary JAX VJP StableHLO can execute through JAX typed FFI without a
+  Torch or Triton runtime while remaining within 1.20x of Flash-SDPA at the
+  same state-recompute boundary.
+- Commit Hash: implementation and benchmark source
+  `e96c1cfba79b47b0b5a158c08fb969545e6d2726`.
+- Boundary: BF16 Q/K/V and output cotangent to Q/K/V cotangents. The natural
+  input does not expose forward output or log-sum-exp, so both Shuttle and the
+  expert oracle recompute that state. The previously sealed 0.462 ms
+  Flash-SDPA result consumes saved state and remains a separately labeled lower
+  boundary rather than the denominator here.
+- Physical execution: Triton 3.6 is an AOT build compiler only. Three emitted
+  C launchers embed independently compiled forward, dQ, and dK/dV CUBINs and
+  link with one generated XLA typed-FFI handler. Separate translation units
+  preserve the launcher ABI. Lazy launcher loading avoids per-call module
+  reloads. The handler and DSO contain no Torch or Triton runtime dependency.
+- H100 result: on one NVIDIA H100 80GB HBM3 at compute capability 9.0,
+  Shuttle/Flash-SDPA medians are 0.679229/0.634584 ms across 30
+  counterbalanced samples with five iterations each, a 1.070353x ratio.
+- GB200 result: a fresh `sm_100a` AOT build on one actual NVIDIA GB200 at
+  compute capability 10.0 measures 0.580810/0.555089 ms, a 1.046338x ratio.
+  No H100 binary was reused and no B200 result is involved.
+- Correctness: both generated paths are bitwise deterministic. Generated
+  dQ/dK/dV maximum absolute errors are 0.03125 on both devices, with mean
+  errors at most 0.000146. The expert output independently matches the natural
+  JAX semantic VJP.
+- Audit: the generated runtime imports neither Torch nor Triton before the
+  benchmark-only oracle loads. Artifact metadata preserves every raw sample,
+  StableHLO and semantic fingerprints, AOT input and launcher-header hashes,
+  generated C hashes, embedded CUBIN hashes, handler/DSO hashes, exact commands,
+  hardware UUIDs, driver, power, clocks, and toolchain versions.
+- Artifacts:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_streaming_attention_backward_ffi_h100_v0/`
+  and
+  `lib/tile_lifetime/benchmarks/artifacts/jax_streaming_attention_backward_ffi_gb200_v0/`.
