@@ -6,7 +6,10 @@ import pytest
 
 from tile_lifetime.cuda_dynamic_event_dataflow_codegen import (
     CudaDynamicEventLoweringError,
+    CudaEventFfiKind,
+    generate_cuda_phased_pipeline_ffi_lowering,
     generate_cuda_phased_pipeline_lowering,
+    generate_cuda_runtime_event_ffi_lowering,
     generate_cuda_runtime_event_lowering,
 )
 from tile_lifetime.event_dataflow import EventMemoryScope, derive_event_tensor_plan
@@ -14,6 +17,7 @@ from tile_lifetime.event_dataflow_examples import (
     pipelined_contract_fold_program,
     relation_segment_dependence,
 )
+from tile_lifetime.ir import DType
 from tile_lifetime.relation import build_relation_plan
 
 
@@ -99,3 +103,58 @@ def test_phased_schedule_shape_is_runtime_not_a_kernel_identity_switch() -> None
 def test_phased_pipeline_rejects_more_slots_than_the_bounded_physical_template() -> None:
     with pytest.raises(CudaDynamicEventLoweringError, match="at most 32 slots"):
         generate_cuda_phased_pipeline_lowering(pipelined_contract_fold_program(generation_count=2, pipeline_depth=33))
+
+
+def test_runtime_event_ffi_uses_same_device_body_without_torch_boundary() -> None:
+    relation = _relation_plan(np.asarray([[0, 1], [1, 3], [3, 1]], dtype=np.int32))
+    plan = derive_event_tensor_plan(
+        relation_segment_dependence(relation, visibility_scope=EventMemoryScope.CTA),
+        name="runtime_segments",
+    )
+
+    torch_lowering = generate_cuda_runtime_event_lowering(plan)
+    ffi_lowering = generate_cuda_runtime_event_ffi_lowering(
+        plan,
+        target_name="shuttle.event_tensor.runtime_test_v1",
+    )
+
+    assert ffi_lowering.kind is CudaEventFfiKind.RUNTIME_RELATION
+    assert ffi_lowering.device_source_sha256 == torch_lowering.device_source_sha256
+    assert [(value.name, value.dtype, value.shape) for value in ffi_lowering.inputs] == [
+        ("input", DType.FP32, (6,)),
+        ("event_counts", DType.INT32, (4,)),
+        ("event_source_offsets", DType.INT32, (5,)),
+        ("event_sources", DType.INT32, (6,)),
+    ]
+    assert [(value.name, value.dtype, value.shape) for value in ffi_lowering.outputs] == [
+        ("partials", DType.FP32, (6,)),
+        ("output", DType.FP32, (4,)),
+    ]
+    assert "XLA_FFI_DEFINE_HANDLER_SYMBOL" in ffi_lowering.source
+    assert "torch" not in ffi_lowering.source.lower()
+
+
+def test_phased_event_ffi_uses_same_device_body_and_mutates_by_attributes() -> None:
+    program = pipelined_contract_fold_program(generation_count=3, pipeline_depth=4)
+
+    torch_lowering = generate_cuda_phased_pipeline_lowering(program)
+    ffi_lowering = generate_cuda_phased_pipeline_ffi_lowering(
+        program,
+        dimension=128,
+        target_name="shuttle.event_tensor.phased_test_v1",
+    )
+
+    assert ffi_lowering.kind is CudaEventFfiKind.PHASED_PIPELINE
+    assert ffi_lowering.device_source_sha256 == torch_lowering.device_source_sha256
+    assert [(value.name, value.dtype, value.shape) for value in ffi_lowering.inputs] == [
+        ("query", DType.FP32, (3, 128)),
+        ("key", DType.FP32, (3, 4, 128)),
+        ("value", DType.FP32, (3, 4)),
+    ]
+    assert [(value.name, value.dtype, value.shape) for value in ffi_lowering.outputs] == [
+        ("output", DType.FP32, (3,)),
+    ]
+    assert 'Attr<std::int64_t>("generation_count")' in ffi_lowering.source
+    assert 'Attr<std::int64_t>("pipeline_depth")' in ffi_lowering.source
+    assert 'Attr<std::int64_t>("dimension")' in ffi_lowering.source
+    assert "torch" not in ffi_lowering.source.lower()
