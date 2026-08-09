@@ -22,6 +22,7 @@ Launchers opt in through :func:`cute_launcher_factory`.
 import functools
 import hashlib
 import importlib
+import importlib.util
 import inspect
 import logging
 import pathlib
@@ -48,6 +49,7 @@ _CUTE_TOOLCHAIN_DISTRIBUTIONS = (
     "nvidia-cutlass-dsl-libs-cu13",
     "quack-kernels",
 )
+_CUTE_TOOLCHAIN_PACKAGES = ("cuda", "cutlass", "flash_attn", "quack", "tvm_ffi")
 
 
 def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
@@ -203,7 +205,25 @@ def _kernel_key(fn: Any, spec: Any, source_revision: str | None) -> str | None:
 def _kernel_source_revision() -> str:
     grug_sources = pathlib.Path(__file__).resolve().parent / "grug"
     toolchain = installed_distribution_fingerprint(_CUTE_TOOLCHAIN_DISTRIBUTIONS)
-    return compile_cache_key([grug_sources], environment=[_KERNEL_CACHE_SCHEMA, toolchain])
+    return compile_cache_key(
+        [grug_sources, *_toolchain_source_roots()],
+        environment=[_KERNEL_CACHE_SCHEMA, toolchain, *_CUTE_TOOLCHAIN_PACKAGES],
+    )
+
+
+def _toolchain_source_roots() -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = []
+    for package_name in _CUTE_TOOLCHAIN_PACKAGES:
+        specification = importlib.util.find_spec(package_name)
+        if specification is None:
+            raise ValueError(f"CuTe toolchain package is unavailable: {package_name}")
+        if specification.submodule_search_locations is not None:
+            roots.extend(pathlib.Path(location) for location in specification.submodule_search_locations)
+        elif specification.origin not in (None, "built-in", "frozen"):
+            roots.append(pathlib.Path(specification.origin))
+        else:
+            raise ValueError(f"CuTe toolchain package has no source tree: {package_name}")
+    return roots
 
 
 def _device_architecture() -> str:

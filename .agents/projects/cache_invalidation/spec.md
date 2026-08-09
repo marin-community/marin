@@ -25,10 +25,8 @@ symlinks raise `ValueError`.
 
 `installed_distribution_fingerprint` consumes names in caller order and includes
 installed distribution name, version, metadata-listed logical paths, and actual
-file bytes. For PEP 610 editable installs it also hashes the source roots of all
-import packages attributed to the distribution. Missing distributions, absent
-file inventories, unresolved editable sources, missing files, non-regular files,
-and symlinks raise `ValueError`.
+file bytes. Missing distributions, absent file inventories, missing files,
+non-regular files, and symlinks raise `ValueError`.
 
 ## CuTeDSL object cache
 
@@ -38,13 +36,15 @@ The artifact key is SHA-256 over:
 
 1. cache schema;
 2. factory module, qualified name, and sorted keyword configuration;
-3. `compile_cache_key([levanter/grug], environment=[schema, toolchain digest])`;
+3. `compile_cache_key([levanter/grug, cuda, cutlass, flash_attn, quack,
+   tvm_ffi], environment=[schema, toolchain digest, package names])`;
 4. stable `repr(spec)`;
 5. observed JAX device platform and compute capability/device kind.
 
 The toolchain digest covers actual installed bytes for the declared TVM FFI,
 CUDA Python, nvdisasm, Cutlass DSL/libraries, FlashAttention 4, and Quack
-distributions.
+distributions. The explicit whole-package trees cover editable source changes
+without walking or inferring an import graph.
 
 A launcher without an identity, a launcher defined outside `levanter.grug`, or
 a spec containing a process address compiles without persistent storage. Failure

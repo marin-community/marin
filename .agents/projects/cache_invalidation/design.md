@@ -39,13 +39,14 @@ than producing an ambiguous key.
 
 Rigging also adds `installed_distribution_fingerprint`. It hashes distribution
 name, version, installed logical paths, and the actual bytes listed by package
-metadata. For editable installs it additionally resolves the distribution's
-import packages and hashes their source roots. Actual bytes, rather than
-`RECORD` checksums alone, cover local patches made without metadata updates.
+metadata. Actual bytes, rather than `RECORD` checksums alone, cover local patches
+made without metadata updates.
 
 CuTeDSL replaces `launch_provenance().tree_hash` with a process-cached digest of
-`levanter/grug` and a declared Cutlass/CuTe/FA4/Quack toolchain distribution
-set. The artifact key retains launcher configuration, stable argument spec, and
+`levanter/grug`, the complete imported `cuda`, `cutlass`, `flash_attn`, `quack`,
+and `tvm_ffi` package trees, and a declared toolchain distribution set. Hashing
+whole package trees covers editable installs without inferring an import graph.
+The artifact key retains launcher configuration, stable argument spec, and
 observed JAX device architecture. The launcher factory marks whether its
 definition is inside `levanter.grug`; uncovered launchers compile normally but
 are never written to shared storage. If source identity cannot be built, the
