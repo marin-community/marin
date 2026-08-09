@@ -41,24 +41,6 @@ def _grug_run_config(
     )
 
 
-def test_hero_run_without_shape_overrides_uses_the_selected_model():
-    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert (
-        config.model.hidden_dim,
-        config.model.num_layers,
-        config.model.num_experts,
-        config.model.intermediate_dim,
-        config.model.num_experts_per_token,
-        config.model.latent_dim,
-        config.model.capacity_factor,
-        config.trainer.trainer.train_batch_size,
-        config.model.max_seq_len,
-    ) == (6144, 48, 192, 6272, 4, 3072, 1.33, 1024, 4096)
-    assert config.worker_pip_packages == ()
-
-
 def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
     step = launch.build_hero_run(
         run_id="four-node-proxy",

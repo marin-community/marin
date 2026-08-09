@@ -317,7 +317,7 @@ def build_small_run(
         capacity_factor,
         fleet.attention_implementation,
         sharding.moe_implementation,
-        sharding.expert_chunks,
+        1,
         seq_len,
         num_experts,
         num_experts_per_token,

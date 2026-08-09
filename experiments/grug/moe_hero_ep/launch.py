@@ -64,7 +64,6 @@ class Flavor:
 
     expert_axis_size: int | None  # None spans the EP fleet
     moe_implementation: str
-    expert_chunks: int = 1
 
 
 FLAVORS: dict[str, Flavor] = {

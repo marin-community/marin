@@ -461,9 +461,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
-        del compute_watch
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
