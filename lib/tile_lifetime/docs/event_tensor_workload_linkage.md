@@ -136,3 +136,22 @@ An SM100 emitter can retain the same audit while replacing physical bodies:
 
 This boundary keeps event semantics independent of mbarrier, semaphores,
 programmatic dependent launch, queues, and stream order.
+
+## GB200 replay
+
+The Torch-free typed-FFI path was replayed on one low-priority GB200 with one
+host CPU, JAX 0.10.1, CUDA/NVCC 13.3.73, driver 595.71.05, and `sm_100a`.
+Each case retained 30 samples after 10 warmups:
+
+| Case | Median | Maximum absolute error | Deterministic |
+| --- | ---: | ---: | --- |
+| Segmented Contract | 0.112208 ms | 0 | yes |
+| Relation mutation | 0.121696 ms | 0 | yes |
+| Streaming Contract/Fold | 0.122144 ms | 2.384e-7 | yes |
+| Pipeline-depth/partition mutation | 0.121584 ms | 1.192e-7 | yes |
+
+The purpose of these measurements is proof of physical execution and mutation,
+not kernel throughput. The bodies are deliberately small FP32 reference
+implementations. Raw distributions, generated CUDA, HLO records, hashes, the
+event-realization audit, and exact environment are preserved in
+`benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
