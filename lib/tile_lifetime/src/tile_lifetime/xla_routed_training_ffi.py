@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tile_lifetime.jax_streaming_attention_backward_ffi import GeneratedStreamingAttentionBackwardFfi
 from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProgram
 from tile_lifetime.xla_hlo_recovery import HloComputation, parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     RoutedForwardCodegenDisposition,
@@ -21,6 +23,12 @@ from tile_lifetime.xla_relation_program_recovery import (
 from tile_lifetime.xla_routed_forward_ffi import replace_routed_forward_region_with_custom_call
 from tile_lifetime.xla_routed_input_adjoint_ffi import replace_routed_input_adjoint_region_with_custom_call
 from tile_lifetime.xla_routed_weight_gradient_ffi import replace_group_batched_contract_with_custom_call
+from tile_lifetime.xla_streaming_attention_backward_ffi import (
+    StreamingReverseHloRegionReplacementPlan,
+    audit_streaming_attention_backward_region_replacement,
+    plan_streaming_attention_backward_hlo_region_replacement,
+    replace_streaming_attention_backward_region_with_custom_call,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,30 @@ class RoutedTrainingReplacementAudit:
     input_adjoint_auxiliary: str
     copy_count: tuple[int, int]
     transpose_count: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class RoutedTrainingAndAttentionFfiTargets:
+    """Five independent targets for one routed-plus-attention transform."""
+
+    routed: RoutedTrainingFfiTargets
+    attention_backward: str
+
+
+@dataclass(frozen=True)
+class RoutedTrainingAndAttentionTypedFfiPlan:
+    """Routed training and attention reverse plans over one natural entry."""
+
+    routed: RoutedTrainingTypedFfiPlan
+    attention_backward: StreamingReverseHloRegionReplacementPlan
+
+
+@dataclass(frozen=True)
+class RoutedTrainingAndAttentionReplacementAudit:
+    """Post-roundtrip evidence for all five independently generated regions."""
+
+    routed: RoutedTrainingReplacementAudit
+    attention_backward_instruction: str
 
 
 def plan_routed_training_typed_ffi(
@@ -89,6 +121,27 @@ def plan_routed_training_typed_ffi(
     )
 
 
+def plan_routed_training_and_attention_typed_ffi(
+    hlo_text: str,
+    attention_program: StreamingAttentionBackwardProgram,
+    generated_attention: GeneratedStreamingAttentionBackwardFfi,
+    *,
+    weight_gradient_numerical_policy: NumericalPolicy = NumericalPolicy.ALLOW_ROUNDING_REORDER,
+) -> RoutedTrainingAndAttentionTypedFfiPlan:
+    """Recover four routed regions and one local attention reverse together."""
+    return RoutedTrainingAndAttentionTypedFfiPlan(
+        routed=plan_routed_training_typed_ffi(
+            hlo_text,
+            weight_gradient_numerical_policy=weight_gradient_numerical_policy,
+        ),
+        attention_backward=plan_streaming_attention_backward_hlo_region_replacement(
+            hlo_text,
+            attention_program,
+            generated_attention,
+        ),
+    )
+
+
 def replace_routed_training_regions_with_custom_calls(
     hlo_text: str,
     plan: RoutedTrainingTypedFfiPlan,
@@ -112,6 +165,27 @@ def replace_routed_training_regions_with_custom_calls(
             weight_plan,
             target=target,
         )
+    parse_hlo_module_text(rewritten)
+    return rewritten
+
+
+def replace_routed_training_and_attention_regions_with_custom_calls(
+    hlo_text: str,
+    plan: RoutedTrainingAndAttentionTypedFfiPlan,
+    *,
+    targets: RoutedTrainingAndAttentionFfiTargets,
+) -> str:
+    """Apply five independently proven calls without widening either region."""
+    rewritten = replace_streaming_attention_backward_region_with_custom_call(
+        hlo_text,
+        plan.attention_backward,
+        target=targets.attention_backward,
+    )
+    rewritten = replace_routed_training_regions_with_custom_calls(
+        rewritten,
+        plan.routed,
+        targets=targets.routed,
+    )
     parse_hlo_module_text(rewritten)
     return rewritten
 
@@ -200,6 +274,32 @@ def audit_routed_training_replacement(
         input_adjoint_auxiliary=auxiliary,
         copy_count=copy_count,
         transpose_count=transpose_count,
+    )
+
+
+def audit_routed_training_and_attention_replacement(
+    original_hlo: str,
+    transformed_hlo: str,
+    plan: RoutedTrainingAndAttentionTypedFfiPlan,
+    *,
+    targets: RoutedTrainingAndAttentionFfiTargets,
+) -> RoutedTrainingAndAttentionReplacementAudit:
+    """Verify routed wiring and the local reverse boundary after one round trip."""
+    routed = audit_routed_training_replacement(
+        original_hlo,
+        transformed_hlo,
+        plan.routed,
+        targets=targets.routed,
+    )
+    attention = audit_streaming_attention_backward_region_replacement(
+        original_hlo,
+        transformed_hlo,
+        plan.attention_backward,
+        target=targets.attention_backward,
+    )
+    return RoutedTrainingAndAttentionReplacementAudit(
+        routed=routed,
+        attention_backward_instruction=attention.call_instruction,
     )
 
 

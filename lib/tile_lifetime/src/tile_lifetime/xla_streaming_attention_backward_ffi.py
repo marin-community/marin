@@ -3,10 +3,10 @@
 
 """Replace a recovered JAX reverse region with generated typed FFI.
 
-This pass is intentionally limited to a whole-entry proof.  It derives operand
-roles from Contract, Fold, and DomainRestriction dataflow and rejects modules
-whose physical graph cannot establish that provenance.  No frontend or model
-names participate in matching.
+Both the whole-entry and region-local passes derive operand roles from
+Contract, Fold, and DomainRestriction dataflow.  They reject modules whose
+physical graph cannot establish that provenance.  No frontend or model names
+participate in matching.
 """
 
 from __future__ import annotations
@@ -36,6 +36,27 @@ from tile_lifetime.xla_hlo_recovery import (
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\](?:\{(?P<layout>[0-9,]+)\})?")
 _CALLED_COMPUTATION = re.compile(r"to_apply=%?(?P<name>[A-Za-z0-9_.-]+)")
 _CONSTANT = re.compile(r"constant\((?P<value>-?inf|[-+0-9.eE]+)\)")
+_CONTROL_PREDECESSORS = re.compile(r"control-predecessors=\{(?P<values>[^}]*)\}")
+
+_REGION_MAP_OPCODES = frozenset(
+    {
+        "add",
+        "broadcast",
+        "compare",
+        "constant",
+        "convert",
+        "copy",
+        "divide",
+        "exponential",
+        "multiply",
+        "negate",
+        "reshape",
+        "select",
+        "subtract",
+        "transpose",
+    }
+)
+_REGION_REVERSE_OPCODES = _REGION_MAP_OPCODES | {"dot", "reduce"}
 
 
 class StreamingReverseHloRole(StrEnum):
@@ -85,6 +106,222 @@ class StreamingReverseHloReplacementPlan:
     semantic_fingerprint: str
     maximum_vjp: str
     reassociation: str
+
+
+@dataclass(frozen=True)
+class StreamingReverseHloRegionReplacementPlan:
+    """A reverse-only entry region proven safe for local typed-FFI replacement."""
+
+    inputs: tuple[StreamingReverseHloValue, ...]
+    outputs: tuple[StreamingReverseHloValue, ...]
+    insertion_instruction: str
+    internal_instructions: tuple[str, ...]
+    preserved_shared_inputs: tuple[str, ...]
+    external_users: tuple[tuple[str, tuple[str, ...]], ...]
+    provenance: StreamingReverseHloProvenance
+    state_policy: StreamingAttentionBackwardStatePolicy
+    semantic_fingerprint: str
+    maximum_vjp: str
+    reassociation: str
+
+
+@dataclass(frozen=True)
+class StreamingReverseHloRegionReplacementAudit:
+    """Post-roundtrip liveness evidence for one local reverse replacement."""
+
+    call_instruction: str
+    dead_reverse_closure: tuple[str, ...]
+    preserved_shared_users: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+def plan_streaming_attention_backward_hlo_region_replacement(
+    hlo_text: str,
+    program: StreamingAttentionBackwardProgram,
+    generated: GeneratedStreamingAttentionBackwardFfi,
+) -> StreamingReverseHloRegionReplacementPlan:
+    """Prove a reverse-only attention region inside a larger entry graph.
+
+    The proof starts at normalized-exponential maximum Folds, follows nearest
+    Contracts, and binds the four generated inputs and three cotangent outputs
+    from physical dataflow. Shared forward values are deliberately left live;
+    the generated reverse recomputes them from Q/K/V after dO becomes ready.
+    """
+    _validate_generated_reverse_signature(generated, boundary="region-local")
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    users = _entry_users(entry.instructions)
+    source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    specifications = {value.name: value for value in (*generated.inputs, *generated.outputs)}
+    expected_scale, expected_restriction = _program_score_policy(program)
+
+    candidates: list[StreamingReverseHloRegionReplacementPlan] = []
+    mismatch_reasons: list[str] = []
+    maximum_folds = tuple(
+        instruction
+        for instruction in entry.instructions
+        if instruction.opcode == "reduce" and _entry_fold_reducer(module, instruction) == "maximum"
+    )
+    for maximum_fold in maximum_folds:
+        try:
+            candidates.append(
+                _plan_reverse_region_from_maximum(
+                    entry.instructions,
+                    instructions,
+                    users,
+                    source_order,
+                    module,
+                    maximum_fold,
+                    specifications,
+                    expected_scale=expected_scale,
+                    expected_restriction=expected_restriction,
+                    generated=generated,
+                    program=program,
+                )
+            )
+        except ValueError as error:
+            mismatch_reasons.append(f"%{maximum_fold.name}: {error}")
+    if len(candidates) != 1:
+        detail = "; ".join(mismatch_reasons)
+        raise ValueError(
+            f"expected one region-local streaming reverse candidate, found {len(candidates)}"
+            + (f" ({detail})" if detail else "")
+        )
+    return candidates[0]
+
+
+def replace_streaming_attention_backward_region_with_custom_call(
+    hlo_text: str,
+    plan: StreamingReverseHloRegionReplacementPlan,
+    *,
+    target: str,
+) -> str:
+    """Insert one local reverse call and redirect only proven external users."""
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    reserved_names = set(instructions)
+    generated_names = {
+        "shuttle.generated.streaming_reverse.region",
+        *(f"shuttle.region.{value.role.value}.canonical" for value in (*plan.inputs, *plan.outputs)),
+        *(f"shuttle.region.{value.role.value}.physical" for value in plan.outputs),
+    }
+    collision = reserved_names & generated_names
+    if collision:
+        raise ValueError(f"region replacement names already exist: {sorted(collision)}")
+
+    insertion_pattern = re.compile(
+        rf"^(?P<indent>\s*)(?:ROOT\s+)?%?{re.escape(plan.insertion_instruction)} = .*?$",
+        re.MULTILINE,
+    )
+    insertion_matches = tuple(insertion_pattern.finditer(hlo_text))
+    if len(insertion_matches) != 1:
+        raise ValueError(f"expected one insertion definition for {plan.insertion_instruction!r}")
+    insertion_match = insertion_matches[0]
+    indent = insertion_match.group("indent")
+    input_names: dict[StreamingReverseHloRole, str] = {}
+    lines: list[str] = []
+    for value in plan.inputs:
+        adapted = _emit_boundary_adapter(
+            lines,
+            indent=indent,
+            source=value.instruction,
+            source_shape=value.physical_shape,
+            target_shape=value.canonical_shape,
+            name=f"shuttle.region.{value.role.value}.canonical",
+        )
+        input_names[value.role] = adapted
+    output_shapes = ", ".join(value.canonical_shape for value in plan.outputs)
+    operands = ", ".join(
+        f"%{input_names[role]}"
+        for role in (
+            StreamingReverseHloRole.QUERY,
+            StreamingReverseHloRole.KEY,
+            StreamingReverseHloRole.VALUE,
+            StreamingReverseHloRole.OUTPUT_COTANGENT,
+        )
+    )
+    constraints = ", ".join(value.canonical_shape for value in plan.inputs)
+    call_name = "shuttle.generated.streaming_reverse.region"
+    lines.append(
+        f"{indent}%{call_name} = ({output_shapes}) custom-call({operands}), "
+        f'custom_call_target="{target}", operand_layout_constraints={{{constraints}}}, '
+        "api_version=API_VERSION_TYPED_FFI, backend_config={}"
+    )
+    replacements: dict[str, str] = {}
+    for index, value in enumerate(plan.outputs):
+        canonical_name = f"shuttle.region.{value.role.value}.canonical"
+        lines.append(
+            f"{indent}%{canonical_name} = {value.canonical_shape} " f"get-tuple-element(%{call_name}), index={index}"
+        )
+        physical_name = _emit_boundary_adapter(
+            lines,
+            indent=indent,
+            source=canonical_name,
+            source_shape=value.canonical_shape,
+            target_shape=value.physical_shape,
+            name=f"shuttle.region.{value.role.value}.physical",
+        )
+        replacements[value.instruction] = physical_name
+    insertion = "\n" + "\n".join(lines)
+    rewritten = hlo_text[: insertion_match.end()] + insertion + hlo_text[insertion_match.end() :]
+
+    for old_name, external_users in plan.external_users:
+        new_name = replacements[old_name]
+        for user in external_users:
+            rewritten = _replace_entry_operand(rewritten, user=user, old=old_name, new=new_name)
+    parse_hlo_module_text(rewritten)
+    return rewritten
+
+
+def audit_streaming_attention_backward_region_replacement(
+    original_hlo: str,
+    transformed_hlo: str,
+    plan: StreamingReverseHloRegionReplacementPlan,
+    *,
+    target: str,
+) -> StreamingReverseHloRegionReplacementAudit:
+    """Prove the old reverse closure is dead and shared forward users survive."""
+    original_module = parse_hlo_module_text(original_hlo)
+    transformed_module = parse_hlo_module_text(transformed_hlo)
+    original_entry = original_module.computation(original_module.entry)
+    transformed_entry = transformed_module.computation(transformed_module.entry)
+    original_users = _entry_users(original_entry.instructions)
+    transformed_users = _entry_users(transformed_entry.instructions)
+    transformed_instructions = {instruction.name: instruction for instruction in transformed_entry.instructions}
+    target_attribute = f'custom_call_target="{target}"'
+    calls = tuple(
+        instruction
+        for instruction in transformed_entry.instructions
+        if instruction.opcode == "custom-call" and target_attribute in instruction.attributes
+    )
+    if len(calls) != 1:
+        raise ValueError(f"expected one post-roundtrip reverse call for {target!r}, found {len(calls)}")
+
+    old_closure = set(plan.internal_instructions) | {value.instruction for value in plan.outputs}
+    for name in old_closure:
+        crossing = tuple(user for user in transformed_users[name] if user not in old_closure)
+        if crossing:
+            raise ValueError(f"old reverse value %{name} remains externally live through {crossing}")
+
+    preserved_users: list[tuple[str, tuple[str, ...]]] = []
+    for name in plan.preserved_shared_inputs:
+        before = tuple(user for user in original_users[name] if user not in old_closure)
+        after = tuple(user for user in transformed_users[name] if user not in old_closure)
+        if before != after:
+            raise ValueError(f"shared forward value %{name} users changed: {before} -> {after}")
+        preserved_users.append((name, after))
+    for old_output, external_users in plan.external_users:
+        for user in external_users:
+            if old_output in transformed_instructions[user].operands:
+                raise ValueError(f"external user %{user} still consumes old reverse output %{old_output}")
+    return StreamingReverseHloRegionReplacementAudit(
+        call_instruction=calls[0].name,
+        dead_reverse_closure=tuple(
+            name for name in (*plan.internal_instructions, *(value.instruction for value in plan.outputs))
+        ),
+        preserved_shared_users=tuple(preserved_users),
+    )
 
 
 def plan_streaming_attention_backward_hlo_replacement(
@@ -291,6 +528,654 @@ def replace_streaming_attention_backward_entry_with_custom_call(
     lines.append(f"{indent}ROOT %{plan.root_instruction} = {plan.root_shape} tuple({root_operands})")
     replacement = "\n".join(lines)
     return hlo_text[: match.start()] + replacement + hlo_text[match.end() :]
+
+
+def _plan_reverse_region_from_maximum(
+    ordered_instructions: tuple[HloInstruction, ...],
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+    source_order: dict[str, int],
+    module: HloModuleGraph,
+    maximum_fold: HloInstruction,
+    specifications: dict[str, StreamingAttentionBackwardFfiBuffer],
+    *,
+    expected_scale: float,
+    expected_restriction: bool,
+    generated: GeneratedStreamingAttentionBackwardFfi,
+    program: StreamingAttentionBackwardProgram,
+) -> StreamingReverseHloRegionReplacementPlan:
+    nearest_ancestors = _nearest_entry_opcode_ancestor_function(instructions)
+    score_contracts = nearest_ancestors(maximum_fold.operands[0], "dot")
+    if len(score_contracts) != 1:
+        raise ValueError(f"maximum Fold has {len(score_contracts)} nearest Contracts")
+    score_contract = instructions[next(iter(score_contracts))]
+    if len(score_contract.operands) != 2:
+        raise ValueError("score Contract must have two operands")
+    query_name, key_name, physical_scale = _bind_region_score_inputs(
+        score_contract,
+        instructions,
+        specifications["query"],
+        specifications["key"],
+    )
+    # XLA's HLO printer may abbreviate BF16 constants (for example 0.32421875
+    # as 0.3242), so compare at the precision retained by the physical dtype.
+    if not math.isclose(physical_scale, expected_scale, rel_tol=5e-4, abs_tol=1e-12):
+        raise ValueError(f"physical score scale {physical_scale} does not match recovered scale {expected_scale}")
+
+    score_slice = _entry_ancestor_slice(maximum_fold.operands[0], instructions, stop={score_contract.name})
+    restrictions = tuple(instructions[name] for name in score_slice if instructions[name].opcode == "select")
+    comparisons = tuple(instructions[name] for name in score_slice if instructions[name].opcode == "compare")
+    if expected_restriction:
+        if len(restrictions) != 1 or len(comparisons) != 1:
+            raise ValueError("causal DomainRestriction must lower to one select and one comparison")
+        if "direction=LE" not in comparisons[0].attributes:
+            raise ValueError("only less-equal DomainRestriction is supported by the generated skeleton")
+    elif restrictions or comparisons:
+        raise ValueError("physical HLO has a DomainRestriction absent from the recovered program")
+
+    exponentials = tuple(
+        instructions[name]
+        for name in _first_entry_opcode_users(
+            maximum_fold.name,
+            instructions,
+            users,
+            opcode="exponential",
+        )
+        if score_contract.name in _entry_ancestors(name, instructions)
+    )
+    if len(exponentials) != 1:
+        raise ValueError(f"expected one normalized-exponential Map, found {len(exponentials)}")
+    exponential = exponentials[0]
+    probability_candidates = tuple(
+        instruction
+        for instruction in ordered_instructions
+        if instruction.opcode == "divide"
+        and _shape_signature(instruction.shape)[1] == _shape_signature(score_contract.shape)[1]
+        and exponential.name in _entry_ancestors(instruction.name, instructions)
+        and nearest_ancestors(instruction.name, "dot") == frozenset({score_contract.name})
+    )
+    if len(probability_candidates) != 1:
+        raise ValueError(f"expected one normalized probability value, found {len(probability_candidates)}")
+    probability = probability_candidates[0]
+    normalized_sum_folds = tuple(
+        instruction
+        for instruction in ordered_instructions
+        if instruction.opcode == "reduce"
+        and _entry_fold_reducer(module, instruction) == "add"
+        and exponential.name in _entry_ancestors(instruction.name, instructions)
+        and instruction.name in _entry_ancestors(probability.name, instructions)
+    )
+    if len(normalized_sum_folds) != 1:
+        raise ValueError(f"expected one normalized-exponential sum Fold, found {len(normalized_sum_folds)}")
+
+    score_shaped_contracts = tuple(
+        instruction
+        for instruction in ordered_instructions
+        if instruction.opcode == "dot"
+        and instruction.name != score_contract.name
+        and _shape_signature(instruction.shape) == _shape_signature(score_contract.shape)
+        and source_order[instruction.name] > source_order[probability.name]
+    )
+    reverse_score_candidates: list[tuple[HloInstruction, str, str]] = []
+    for contract in score_shaped_contracts:
+        if len(contract.operands) != 2:
+            continue
+        for output_operand, value_operand in (contract.operands, tuple(reversed(contract.operands))):
+            output_boundary = _closest_compatible_ancestor(
+                output_operand,
+                instructions,
+                specifications["output_cotangent"],
+                allow_singleton_elision=False,
+            )
+            value_boundary = _closest_compatible_ancestor(
+                value_operand,
+                instructions,
+                specifications["value"],
+                allow_singleton_elision=True,
+            )
+            if output_boundary is not None and value_boundary is not None:
+                reverse_score_candidates.append((contract, output_boundary, value_boundary))
+    if len(reverse_score_candidates) != 1:
+        raise ValueError(f"expected one output-cotangent/value Contract, found {len(reverse_score_candidates)}")
+    reverse_score_contract, output_cotangent_name, value_name = reverse_score_candidates[0]
+
+    first_reverse_contracts = _first_entry_opcode_users(
+        reverse_score_contract.name,
+        instructions,
+        users,
+        opcode="dot",
+    )
+    if len(first_reverse_contracts) != 2:
+        raise ValueError(f"score Map reverse must feed two nearest Contracts, found {len(first_reverse_contracts)}")
+    contract_external_operands: dict[str, str] = {}
+    for name in first_reverse_contracts:
+        contract = instructions[name]
+        score_paths = tuple(
+            reverse_score_contract.name in _entry_ancestors(operand, instructions) for operand in contract.operands
+        )
+        if score_paths.count(True) != 1:
+            raise ValueError(f"terminal Contract %{name} does not have one score-cotangent operand")
+        contract_external_operands[name] = contract.operands[score_paths.index(False)]
+    query_ancestor_contracts = tuple(
+        name
+        for name, operand in contract_external_operands.items()
+        if query_name in _entry_ancestors(operand, instructions)
+    )
+    key_ancestor_contracts = tuple(
+        name
+        for name, operand in contract_external_operands.items()
+        if key_name in _entry_ancestors(operand, instructions)
+    )
+    if len(query_ancestor_contracts) != 1 or len(key_ancestor_contracts) != 1:
+        raise ValueError("could not distinguish query- and key-dependent reverse Contracts")
+    key_contract = query_ancestor_contracts[0]
+    query_contract = key_ancestor_contracts[0]
+    if key_contract == query_contract:
+        raise ValueError("query and key cotangents require distinct terminal Contracts")
+
+    probability_contracts = _first_entry_opcode_users(
+        probability.name,
+        instructions,
+        users,
+        opcode="dot",
+    )
+    value_contracts = tuple(
+        name for name in probability_contracts if output_cotangent_name in _entry_ancestors(name, instructions)
+    )
+    if len(value_contracts) != 1:
+        raise ValueError(f"expected one probability/output-cotangent Contract, found {len(value_contracts)}")
+    value_contract = value_contracts[0]
+
+    output_bindings = (
+        (
+            StreamingReverseHloRole.QUERY_COTANGENT,
+            _unique_compatible_descendant(
+                query_contract,
+                instructions,
+                users,
+                specifications["query_cotangent"],
+                allow_singleton_elision=False,
+            ),
+        ),
+        (
+            StreamingReverseHloRole.KEY_COTANGENT,
+            _unique_compatible_descendant(
+                key_contract,
+                instructions,
+                users,
+                specifications["key_cotangent"],
+                allow_singleton_elision=False,
+            ),
+        ),
+        (
+            StreamingReverseHloRole.VALUE_COTANGENT,
+            _unique_compatible_descendant(
+                value_contract,
+                instructions,
+                users,
+                specifications["value_cotangent"],
+                allow_singleton_elision=True,
+            ),
+        ),
+    )
+    output_names = {name for _, name in output_bindings}
+    if len(output_names) != 3:
+        raise ValueError("reverse cotangent boundaries are not distinct")
+
+    output_ancestors = _entry_ancestors_many(output_names, instructions)
+    cotangent_descendants = _entry_descendants(output_cotangent_name, users)
+    internal = (output_ancestors & cotangent_descendants) - output_names - {output_cotangent_name}
+    required_contracts = {reverse_score_contract.name, query_contract, key_contract, value_contract}
+    if not required_contracts <= internal:
+        raise ValueError("reverse-only closure omits a required Contract")
+    unsupported = tuple(name for name in internal if instructions[name].opcode not in _REGION_REVERSE_OPCODES)
+    if unsupported:
+        raise ValueError(f"reverse-only closure contains unsupported operations: {sorted(unsupported)}")
+    _validate_region_effect_and_control_safety(internal | output_names, instructions)
+
+    external_users: list[tuple[str, tuple[str, ...]]] = []
+    for name in sorted(internal, key=source_order.__getitem__):
+        crossing = tuple(user for user in users[name] if user not in internal and user not in output_names)
+        if crossing:
+            raise ValueError(f"reverse internal value %{name} has external users {crossing}")
+    for _, name in output_bindings:
+        crossing = tuple(user for user in users[name] if user not in internal and user not in output_names)
+        if not crossing:
+            raise ValueError(f"reverse output %{name} has no external user")
+        external_users.append((name, crossing))
+
+    role_names = {
+        StreamingReverseHloRole.QUERY: query_name,
+        StreamingReverseHloRole.KEY: key_name,
+        StreamingReverseHloRole.VALUE: value_name,
+        StreamingReverseHloRole.OUTPUT_COTANGENT: output_cotangent_name,
+    }
+    inputs = tuple(
+        StreamingReverseHloValue(
+            role=role,
+            instruction=role_names[role],
+            physical_shape=instructions[role_names[role]].shape,
+            canonical_shape=_canonical_shape(specifications[role.value]),
+        )
+        for role in (
+            StreamingReverseHloRole.QUERY,
+            StreamingReverseHloRole.KEY,
+            StreamingReverseHloRole.VALUE,
+            StreamingReverseHloRole.OUTPUT_COTANGENT,
+        )
+    )
+    outputs = tuple(
+        StreamingReverseHloValue(
+            role=role,
+            instruction=name,
+            physical_shape=instructions[name].shape,
+            canonical_shape=_canonical_shape(specifications[role.value]),
+        )
+        for role, name in output_bindings
+    )
+    for value in (*inputs, *outputs):
+        _boundary_adapter_opcode(value.physical_shape, value.canonical_shape)
+
+    insertion_instruction = max((value.instruction for value in inputs), key=source_order.__getitem__)
+    first_internal = min(internal | output_names, key=source_order.__getitem__)
+    if source_order[insertion_instruction] >= source_order[first_internal]:
+        raise ValueError("all generated inputs must dominate the reverse-only closure")
+    shared_inputs = {
+        operand
+        for name in internal | output_names
+        for operand in instructions[name].operands
+        if operand not in internal
+        and operand not in output_names
+        and operand != output_cotangent_name
+        and instructions[operand].opcode != "constant"
+        and any(user not in internal and user not in output_names for user in users[operand])
+    }
+    additive_folds = tuple(
+        name
+        for name in sorted(internal, key=source_order.__getitem__)
+        if instructions[name].opcode == "reduce" and _entry_fold_reducer(module, instructions[name]) == "add"
+    )
+    if len(additive_folds) < 2:
+        raise ValueError("reverse-only closure lacks the required additive Folds")
+    return StreamingReverseHloRegionReplacementPlan(
+        inputs=inputs,
+        outputs=outputs,
+        insertion_instruction=insertion_instruction,
+        internal_instructions=tuple(sorted(internal, key=source_order.__getitem__)),
+        preserved_shared_inputs=tuple(sorted(shared_inputs, key=source_order.__getitem__)),
+        external_users=tuple(external_users),
+        provenance=StreamingReverseHloProvenance(
+            score_contract=score_contract.name,
+            reverse_contracts=(
+                reverse_score_contract.name,
+                value_contract,
+                query_contract,
+                key_contract,
+            ),
+            maximum_fold=maximum_fold.name,
+            additive_folds=additive_folds,
+            domain_restriction=restrictions[0].name if restrictions else None,
+            score_scale=physical_scale,
+        ),
+        state_policy=generated.state_policy,
+        semantic_fingerprint=generated.semantic_fingerprint,
+        maximum_vjp=program.maximum_vjp.value,
+        reassociation=program.reassociation.value,
+    )
+
+
+def _validate_generated_reverse_signature(
+    generated: GeneratedStreamingAttentionBackwardFfi,
+    *,
+    boundary: str,
+) -> None:
+    if generated.state_policy is not StreamingAttentionBackwardStatePolicy.RECOMPUTE:
+        raise ValueError(f"{boundary} reverse replacement requires explicit recompute state policy")
+    if tuple(value.name for value in generated.inputs) != ("query", "key", "value", "output_cotangent"):
+        raise ValueError(f"{boundary} reverse replacement requires the natural four-buffer input signature")
+    if tuple(value.name for value in generated.outputs) != (
+        "query_cotangent",
+        "key_cotangent",
+        "value_cotangent",
+    ):
+        raise ValueError(f"{boundary} reverse replacement requires three input-cotangent outputs")
+
+
+def _entry_users(instructions: tuple[HloInstruction, ...]) -> dict[str, tuple[str, ...]]:
+    users: dict[str, list[str]] = {instruction.name: [] for instruction in instructions}
+    for instruction in instructions:
+        for operand in instruction.operands:
+            users.setdefault(operand, []).append(instruction.name)
+    return {name: tuple(values) for name, values in users.items()}
+
+
+def _entry_fold_reducer(module: HloModuleGraph, instruction: HloInstruction) -> str | None:
+    match = _CALLED_COMPUTATION.search(instruction.attributes)
+    if match is None:
+        return None
+    return module.computation(match.group("name")).root.opcode
+
+
+def _entry_ancestors(name: str, instructions: dict[str, HloInstruction]) -> frozenset[str]:
+    return _entry_ancestors_many({name}, instructions)
+
+
+def _entry_ancestors_many(names: Iterable[str], instructions: dict[str, HloInstruction]) -> frozenset[str]:
+    pending = list(names)
+    seen: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        pending.extend(instructions[name].operands)
+    return frozenset(seen)
+
+
+def _entry_descendants(name: str, users: dict[str, tuple[str, ...]]) -> frozenset[str]:
+    pending = [name]
+    seen: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(users[current])
+    return frozenset(seen)
+
+
+def _nearest_entry_opcode_ancestor_function(
+    instructions: dict[str, HloInstruction],
+) -> Callable[[str, str], frozenset[str]]:
+    memo: dict[tuple[str, str], frozenset[str]] = {}
+
+    def nearest(name: str, opcode: str) -> frozenset[str]:
+        key = (name, opcode)
+        if key in memo:
+            return memo[key]
+        instruction = instructions[name]
+        if instruction.opcode == opcode:
+            result = frozenset({name})
+        else:
+            result = frozenset().union(*(nearest(operand, opcode) for operand in instruction.operands))
+        memo[key] = result
+        return result
+
+    return nearest
+
+
+def _first_entry_opcode_users(
+    name: str,
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+    *,
+    opcode: str,
+) -> frozenset[str]:
+    pending = list(users[name])
+    seen: set[str] = set()
+    found: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        instruction = instructions[current]
+        if instruction.opcode == opcode:
+            found.add(current)
+            continue
+        if instruction.opcode in _REGION_REVERSE_OPCODES:
+            pending.extend(users[current])
+    return frozenset(found)
+
+
+def _entry_ancestor_slice(
+    name: str,
+    instructions: dict[str, HloInstruction],
+    *,
+    stop: set[str],
+) -> frozenset[str]:
+    pending = [name]
+    seen: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen or current in stop:
+            continue
+        seen.add(current)
+        pending.extend(instructions[current].operands)
+    return frozenset(seen)
+
+
+def _bind_region_score_inputs(
+    score_contract: HloInstruction,
+    instructions: dict[str, HloInstruction],
+    query: StreamingAttentionBackwardFfiBuffer,
+    key: StreamingAttentionBackwardFfiBuffer,
+) -> tuple[str, str, float]:
+    bindings: list[tuple[str, str, float]] = []
+    for query_operand, key_operand in (score_contract.operands, tuple(reversed(score_contract.operands))):
+        query_boundary, query_scale = _scaled_boundary_ancestor(query_operand, instructions, query)
+        key_boundary, key_scale = _scaled_boundary_ancestor(key_operand, instructions, key)
+        if query_boundary is not None and key_boundary is not None:
+            bindings.append((query_boundary, key_boundary, query_scale * key_scale))
+    if len(bindings) != 1:
+        raise ValueError(f"could not uniquely bind score Contract Q/K operands, found {len(bindings)}")
+    return bindings[0]
+
+
+def _scaled_boundary_ancestor(
+    name: str,
+    instructions: dict[str, HloInstruction],
+    specification: StreamingAttentionBackwardFfiBuffer,
+) -> tuple[str | None, float]:
+    current = name
+    scale = 1.0
+    seen: set[str] = set()
+    while current not in seen:
+        seen.add(current)
+        instruction = instructions[current]
+        if instruction.opcode == "multiply" and len(instruction.operands) == 2:
+            scalar_edges = tuple(
+                (value, constant)
+                for value, scalar in (
+                    (instruction.operands[0], instruction.operands[1]),
+                    (instruction.operands[1], instruction.operands[0]),
+                )
+                if (constant := _entry_broadcast_scalar_constant(scalar, instructions)) is not None
+                and math.isfinite(constant)
+            )
+            if len(scalar_edges) == 1:
+                value, constant = scalar_edges[0]
+                scale *= constant
+                current = value
+                continue
+        if _buffer_compatible_shape(instruction.shape, specification, allow_singleton_elision=False):
+            return current, scale
+        if instruction.opcode not in {"broadcast", "convert", "copy", "reshape", "transpose"}:
+            break
+        if len(instruction.operands) != 1:
+            break
+        current = instruction.operands[0]
+    return None, 1.0
+
+
+def _entry_broadcast_scalar_constant(name: str, instructions: dict[str, HloInstruction]) -> float | None:
+    instruction = instructions[name]
+    if instruction.opcode == "constant":
+        match = _CONSTANT.search(instruction.attributes)
+        return float(match.group("value")) if match is not None else None
+    if instruction.opcode in {"broadcast", "copy", "reshape"} and len(instruction.operands) == 1:
+        return _entry_broadcast_scalar_constant(instruction.operands[0], instructions)
+    return None
+
+
+def _closest_compatible_ancestor(
+    name: str,
+    instructions: dict[str, HloInstruction],
+    specification: StreamingAttentionBackwardFfiBuffer,
+    *,
+    allow_singleton_elision: bool,
+) -> str | None:
+    pending = [(name, 0)]
+    seen: set[str] = set()
+    matches: list[str] = []
+    match_depth: int | None = None
+    while pending:
+        current, depth = pending.pop(0)
+        if current in seen:
+            continue
+        if match_depth is not None and depth > match_depth:
+            break
+        seen.add(current)
+        instruction = instructions[current]
+        if _buffer_compatible_shape(
+            instruction.shape,
+            specification,
+            allow_singleton_elision=allow_singleton_elision,
+        ):
+            match_depth = depth
+            matches.append(current)
+            continue
+        if instruction.opcode not in _REGION_MAP_OPCODES or instruction.opcode in {
+            "add",
+            "compare",
+            "constant",
+            "divide",
+            "exponential",
+            "select",
+            "subtract",
+        }:
+            continue
+        pending.extend((operand, depth + 1) for operand in instruction.operands)
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous compatible ancestors at depth {match_depth}: {matches}")
+    return matches[0] if matches else None
+
+
+def _unique_compatible_descendant(
+    name: str,
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+    specification: StreamingAttentionBackwardFfiBuffer,
+    *,
+    allow_singleton_elision: bool,
+) -> str:
+    pending = list(users[name])
+    seen: set[str] = set()
+    depth: dict[str, int] = {value: 1 for value in pending}
+    matches: list[tuple[int, str]] = []
+    while pending:
+        current = pending.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        instruction = instructions[current]
+        if _buffer_compatible_shape(
+            instruction.shape,
+            specification,
+            allow_singleton_elision=allow_singleton_elision,
+        ):
+            matches.append((depth[current], current))
+            continue
+        if instruction.opcode not in _REGION_REVERSE_OPCODES or instruction.opcode == "dot":
+            continue
+        for user in users[current]:
+            depth.setdefault(user, depth[current] + 1)
+            pending.append(user)
+    if not matches:
+        raise ValueError(f"Contract %{name} has no compatible cotangent boundary")
+    minimum_depth = min(depth_value for depth_value, _ in matches)
+    nearest = tuple(value for depth_value, value in matches if depth_value == minimum_depth)
+    if len(nearest) != 1:
+        raise ValueError(f"Contract %{name} has ambiguous cotangent boundaries {nearest}")
+    return nearest[0]
+
+
+def _buffer_compatible_shape(
+    shape: str,
+    specification: StreamingAttentionBackwardFfiBuffer,
+    *,
+    allow_singleton_elision: bool,
+) -> bool:
+    dtype, dimensions = _shape_signature(shape)
+    if dtype != specification.dtype.value:
+        return False
+    if dimensions == specification.shape:
+        return True
+    if not allow_singleton_elision:
+        return False
+    return tuple(value for value in dimensions if value != 1) == tuple(
+        value for value in specification.shape if value != 1
+    )
+
+
+def _validate_region_effect_and_control_safety(
+    region: set[str],
+    instructions: dict[str, HloInstruction],
+) -> None:
+    side_effects = tuple(
+        name
+        for name in region
+        if instructions[name].opcode in {"infeed", "outfeed", "recv", "send"}
+        or "custom_call_has_side_effect=true" in instructions[name].attributes
+    )
+    if side_effects:
+        raise ValueError(f"reverse-only closure contains side effects: {sorted(side_effects)}")
+    for instruction in instructions.values():
+        match = _CONTROL_PREDECESSORS.search(instruction.attributes)
+        if match is None:
+            continue
+        predecessors = set(re.findall(r"%?([A-Za-z0-9_.-]+)", match.group("values")))
+        if (instruction.name in region) != bool(predecessors & region):
+            raise ValueError("reverse-only closure crosses an explicit control dependency")
+
+
+def _boundary_adapter_opcode(source_shape: str, target_shape: str) -> str | None:
+    if source_shape == target_shape:
+        return None
+    source_dtype, source_dimensions = _shape_signature(source_shape)
+    target_dtype, target_dimensions = _shape_signature(target_shape)
+    if source_dtype != target_dtype:
+        raise ValueError(f"boundary adapter cannot change dtype: {source_shape} -> {target_shape}")
+    if source_dimensions == target_dimensions:
+        return "copy"
+    if tuple(value for value in source_dimensions if value != 1) == tuple(
+        value for value in target_dimensions if value != 1
+    ):
+        return "reshape"
+    raise ValueError(f"boundary adapter cannot reorder logical dimensions: {source_shape} -> {target_shape}")
+
+
+def _emit_boundary_adapter(
+    lines: list[str],
+    *,
+    indent: str,
+    source: str,
+    source_shape: str,
+    target_shape: str,
+    name: str,
+) -> str:
+    opcode = _boundary_adapter_opcode(source_shape, target_shape)
+    if opcode is None:
+        return source
+    lines.append(f"{indent}%{name} = {target_shape} {opcode}(%{source})")
+    return name
+
+
+def _replace_entry_operand(hlo_text: str, *, user: str, old: str, new: str) -> str:
+    pattern = re.compile(
+        rf"^(?P<prefix>\s*(?:ROOT\s+)?%?{re.escape(user)} = )(?P<body>.*?)$",
+        re.MULTILINE,
+    )
+    matches = tuple(pattern.finditer(hlo_text))
+    if len(matches) != 1:
+        raise ValueError(f"expected one external user definition for {user!r}")
+    match = matches[0]
+    body = match.group("body")
+    operand_pattern = re.compile(rf"%{re.escape(old)}(?![A-Za-z0-9_.-])")
+    replaced_body, count = operand_pattern.subn(f"%{new}", body)
+    if count == 0:
+        raise ValueError(f"external user %{user} does not consume %{old}")
+    return hlo_text[: match.start("body")] + replaced_body + hlo_text[match.end("body") :]
 
 
 def _bind_score_contract_parameters(

@@ -416,9 +416,14 @@ from tile_lifetime.tiled_fold_finalize import (
 )
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
     StreamingReverseHloProvenance,
+    StreamingReverseHloRegionReplacementAudit,
+    StreamingReverseHloRegionReplacementPlan,
     StreamingReverseHloReplacementPlan,
     StreamingReverseHloRole,
     StreamingReverseHloValue,
+    audit_streaming_attention_backward_region_replacement,
+    plan_streaming_attention_backward_hlo_region_replacement,
     plan_streaming_attention_backward_hlo_replacement,
     replace_streaming_attention_backward_entry_with_custom_call,
+    replace_streaming_attention_backward_region_with_custom_call,
 )
