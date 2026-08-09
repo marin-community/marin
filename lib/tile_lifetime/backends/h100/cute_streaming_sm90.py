@@ -60,12 +60,39 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         intra_wg_overlap: bool = True,
         mma_pv_is_rs: bool = True,
         paged_kv_non_tma: bool = False,
+        query_pipeline_stages: int = 1,
+        key_pipeline_stages: int | None = None,
+        value_pipeline_stages: int | None = None,
+        pipeline_barriers_per_stage: int = 2,
+        transfer_warps: int = 1,
+        matrix_warpgroups: int | None = None,
+        scheduler_arrival_threads: int | None = None,
+        query_transaction_bytes: int | None = None,
+        key_transaction_bytes: int | None = None,
+        value_transaction_bytes: int | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.intra_wg_overlap = intra_wg_overlap
         self.mma_pv_is_rs = mma_pv_is_rs
         self.buffer_align_bytes = 1024
+        self.query_pipeline_stages = query_pipeline_stages
+        self.key_pipeline_stages = self.num_stages if key_pipeline_stages is None else key_pipeline_stages
+        self.value_pipeline_stages = self.num_stages if value_pipeline_stages is None else value_pipeline_stages
+        self.pipeline_barriers_per_stage = pipeline_barriers_per_stage
+        self.event_transfer_warps = transfer_warps
+        self.event_matrix_warpgroups = matrix_warpgroups
+        self.scheduler_arrival_threads = scheduler_arrival_threads
+        self.event_transaction_bytes = {
+            "Q": query_transaction_bytes,
+            "K": key_transaction_bytes,
+            "V": value_transaction_bytes,
+        }
+        assert self.query_pipeline_stages == 1
+        assert self.key_pipeline_stages == self.num_stages
+        assert self.value_pipeline_stages == self.num_stages
+        assert self.pipeline_barriers_per_stage == 2
+        assert self.event_transfer_warps == 1
         self.use_tma_KV = not paged_kv_non_tma
         assert self.use_tma_KV or not (self.check_hdim_oob or self.check_hdim_v_oob), (
             "Paged KV does not support irregular head dim"
@@ -132,10 +159,17 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         sQV_struct = cute.struct.Align[cute.struct.MemRange[self.dtype, cosize_sQV], 1024]
         cosize_sP = cute.cosize(self.sP_layout) if const_expr(self.sP_layout is not None) else 0
         sP_struct = cute.struct.Align[cute.struct.MemRange[self.dtype, cosize_sP], 1024]
-        # 1 stage * 2 for Q pipeline (full + empty), self.num_stages*2 for K, self.num_stages*2 for V,
-        mbar_ptr_Q_struct = cute.struct.MemRange[cutlass.Int64, 1 * 2]
-        mbar_ptr_K_struct = cute.struct.MemRange[cutlass.Int64, self.num_stages * 2]
-        mbar_ptr_V_struct = cute.struct.MemRange[cutlass.Int64, self.num_stages * 2]
+        # Event Tensor lowering assigns one full and one empty barrier per
+        # bounded-buffer stage. Barrier IDs remain a backend allocation choice.
+        mbar_ptr_Q_struct = cute.struct.MemRange[
+            cutlass.Int64, self.query_pipeline_stages * self.pipeline_barriers_per_stage
+        ]
+        mbar_ptr_K_struct = cute.struct.MemRange[
+            cutlass.Int64, self.key_pipeline_stages * self.pipeline_barriers_per_stage
+        ]
+        mbar_ptr_V_struct = cute.struct.MemRange[
+            cutlass.Int64, self.value_pipeline_stages * self.pipeline_barriers_per_stage
+        ]
 
         @cute.struct
         class SharedStorageQKV:
@@ -212,8 +246,18 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         self.num_threads_per_warp_group = 128
         self.num_wg_mma = self.num_mma_threads // self.num_threads_per_warp_group
         assert self.num_wg_mma in [1, 2, 3]
+        if self.event_matrix_warpgroups is not None:
+            assert self.num_wg_mma == self.event_matrix_warpgroups
         self.num_threads = self.num_threads_per_warp_group * (self.num_wg_mma + 1)
         self.num_producer_threads = 32
+        assert self.num_producer_threads == self.event_transfer_warps * cute.arch.WARP_SIZE
+        expected_scheduler_arrivals = (
+            2 * self.num_threads_per_warp_group if self.num_wg_mma > 1 else 0
+        )
+        if self.scheduler_arrival_threads is None:
+            self.scheduler_arrival_threads = expected_scheduler_arrivals
+        else:
+            assert self.scheduler_arrival_threads == expected_scheduler_arrivals
         self.num_Q_load_threads = self.num_threads_per_warp_group  # If not TMA_Q
         self.num_epilogue_threads = self.num_mma_threads
         self.num_mma_regs, self.num_producer_regs = {1: (256, 56), 2: (240, 24), 3: (160, 32)}[
@@ -273,6 +317,9 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 ("V", mV, self.sV_layout),
             ]
         }
+        for name, expected_bytes in self.event_transaction_bytes.items():
+            if expected_bytes is not None:
+                assert self.tma_copy_bytes[name] == expected_bytes
         make_tiled_tma_atom_fn = (
             partial(make_packgqa_tiled_tma_atom, qhead_per_kvhead=self.qhead_per_kvhead, head_idx=2)
             if const_expr(self.pack_gqa)
@@ -462,7 +509,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         if const_expr(self.use_tma_Q):
             pipeline_q = pipeline_custom.PipelineTmaAsync.create(
                 barrier_storage=mbar_ptr_Q,
-                num_stages=1,
+                num_stages=self.query_pipeline_stages,
                 producer_group=tma_warp,
                 consumer_group=mma_warps,
                 tx_count=self.tma_copy_bytes["Q"],
@@ -471,7 +518,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         else:
             pipeline_q = pipeline_custom.PipelineCpAsync.create(
                 barrier_storage=mbar_ptr_Q,
-                num_stages=1,
+                num_stages=self.query_pipeline_stages,
                 producer_group=load_threads,
                 consumer_group=mma_warps,
                 defer_sync=True,
@@ -482,7 +529,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         if const_expr(self.use_tma_KV):
             pipeline_k = pipeline_custom.PipelineTmaAsync.create(
                 barrier_storage=storage.mbar_ptr_K.data_ptr(),
-                num_stages=self.num_stages,
+                num_stages=self.key_pipeline_stages,
                 producer_group=tma_warp,
                 consumer_group=mma_warps,
                 tx_count=self.tma_copy_bytes["K"],
@@ -490,7 +537,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             )
             pipeline_v = pipeline_custom.PipelineTmaAsync.create(
                 barrier_storage=storage.mbar_ptr_V.data_ptr(),
-                num_stages=self.num_stages,
+                num_stages=self.value_pipeline_stages,
                 producer_group=tma_warp,
                 consumer_group=mma_warps,
                 tx_count=self.tma_copy_bytes["V"],
@@ -499,7 +546,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         else:
             pipeline_k = pipeline_custom.PipelineCpAsync.create(
                 barrier_storage=storage.mbar_ptr_K.data_ptr(),
-                num_stages=self.num_stages,
+                num_stages=self.key_pipeline_stages,
                 producer_group=load_threads,
                 consumer_group=mma_warps,
                 defer_sync=True,
@@ -508,7 +555,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             )
             pipeline_v = pipeline_custom.PipelineCpAsync.create(
                 barrier_storage=storage.mbar_ptr_V.data_ptr(),
-                num_stages=self.num_stages,
+                num_stages=self.value_pipeline_stages,
                 producer_group=load_threads,
                 consumer_group=mma_warps,
                 defer_sync=True,
@@ -1486,7 +1533,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             if warp_group_idx == 1:
                 cute.arch.barrier_arrive(
                     barrier_id=int(NamedBarrierFwd.WarpSchedulerWG1),
-                    number_of_threads=2 * self.num_threads_per_warp_group,
+                    number_of_threads=self.scheduler_arrival_threads,
                 )
 
     @cute.jit
@@ -1530,7 +1577,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 barrier_id=int(NamedBarrierFwd.WarpSchedulerWG1)
                 - 1
                 + utils.canonical_warp_group_idx(sync=False),
-                number_of_threads=2 * self.num_threads_per_warp_group,
+                number_of_threads=self.scheduler_arrival_threads,
             )
 
     def warp_scheduler_barrier_arrive(self):
@@ -1544,5 +1591,5 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 next_wg = t % self.num_wg_mma
             cute.arch.barrier_arrive(
                 barrier_id=int(NamedBarrierFwd.WarpSchedulerWG1) + next_wg,
-                number_of_threads=2 * self.num_threads_per_warp_group,
+                number_of_threads=self.scheduler_arrival_threads,
             )
