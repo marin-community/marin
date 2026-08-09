@@ -45,6 +45,7 @@ def relation_segment_dependence(
     *,
     producer_name: str = "relation_edge_ready",
     consumer_name: str = "segment_consumer",
+    visibility_scope: EventMemoryScope = EventMemoryScope.DEVICE,
 ) -> TaskDependence:
     """Map each valid runtime relation edge to its physical segment task."""
     producer = TaskFamily(producer_name, (TaskAxis("edge", relation.route_count),))
@@ -57,7 +58,7 @@ def relation_segment_dependence(
     )
     return TaskDependence(
         TaskRelation.from_pairs(producer, consumer, pairs),
-        MemoryVisibility(EventMemoryScope.DEVICE),
+        MemoryVisibility(visibility_scope),
     )
 
 
