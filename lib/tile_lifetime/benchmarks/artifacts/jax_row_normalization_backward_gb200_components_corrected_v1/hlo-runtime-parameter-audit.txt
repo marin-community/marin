@@ -1,0 +1,9 @@
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_full_optimized_hlo.txt:42:  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.4"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_full_optimized_hlo.txt:43:  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.3"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_full_optimized_hlo.txt:48:  %param_1.28 = f32[2048,4096]{1,0} parameter(1), metadata={scheduling_name="param_1.28"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_input_cotangent_optimized_hlo.txt:38:  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.4"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_input_cotangent_optimized_hlo.txt:39:  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.3"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_input_cotangent_optimized_hlo.txt:44:  %param_1.26 = f32[2048,4096]{1,0} parameter(1), metadata={scheduling_name="param_1.26"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_feature_scale_cotangent_optimized_hlo.txt:30:  %param_0 = f32[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_feature_scale_cotangent_optimized_hlo.txt:31:  %param_1.1 = bf16[2048,4096]{1,0} parameter(1), metadata={scheduling_name="param_1.1"}
+/tmp/shuttle-rms-gb200-components/corrected/xla/matched_feature_scale_cotangent_optimized_hlo.txt:37:  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.4"}
