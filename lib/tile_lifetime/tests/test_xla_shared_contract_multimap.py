@@ -15,6 +15,7 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _SHARED_ROUTED_TARGETS,
     _attention_reverse_program,
     _audit_shared_map_composition,
+    _axis_fold_reassociation_report,
     _generate_axis_fold_programs,
     _plan_shared_map_composition,
     _replace_shared_map_composition,
@@ -203,6 +204,8 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
     )
     axis_folds = _generate_axis_fold_programs(hlo)
     plan = _plan_shared_map_composition(hlo, attention_program, attention, axis_folds)
+
+    assert _axis_fold_reassociation_report(plan.axis_folds) == ["deterministic_tree", "deterministic_tree"]
 
     transformed = _replace_shared_map_composition(hlo, plan)
     audit = _audit_shared_map_composition(hlo, transformed, plan)

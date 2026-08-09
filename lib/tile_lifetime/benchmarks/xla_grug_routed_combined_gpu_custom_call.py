@@ -244,6 +244,12 @@ def _generate_axis_fold_programs(hlo_text: str) -> tuple[Any, ...]:
     )
 
 
+def _axis_fold_reassociation_report(
+    plans: tuple[AxisFoldHloRegionReplacementPlan, ...],
+) -> list[str]:
+    return [plan.program.reassociation.value for plan in plans]
+
+
 def _plan_shared_map_composition(
     hlo_text: str,
     attention_program: Any,
@@ -879,24 +885,26 @@ def run_smoke(
     if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
         observed_calls.extend((*call_counts["input_contracts"], call_counts["source_fold"]))
 
+    def write_execution_evidence(status: str, reason: str | None) -> None:
+        if artifact_directory is None:
+            return
+        evidence = {
+            "status": status,
+            "reason": reason,
+            "minimum_custom_call_handler_executions": minimum_calls,
+            "custom_call_occurrences_in_transformed_hlo": target_occurrences,
+            "custom_call_handler_executions": call_counts,
+            "baseline_samples_ms": baseline_samples,
+            "generated_samples_ms": transformed_samples,
+            "baseline_output_hashes": baseline_hashes,
+            "generated_output_hashes": transformed_hashes,
+            "raw_samples": raw_samples,
+            "comparison": comparison,
+        }
+        (directory / "execution-evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+
     def fail_after_execution(message: str) -> None:
-        if artifact_directory is not None:
-            evidence = {
-                "status": "unaccepted",
-                "reason": message,
-                "minimum_custom_call_handler_executions": minimum_calls,
-                "custom_call_occurrences_in_transformed_hlo": target_occurrences,
-                "custom_call_handler_executions": call_counts,
-                "baseline_samples_ms": baseline_samples,
-                "generated_samples_ms": transformed_samples,
-                "baseline_output_hashes": baseline_hashes,
-                "generated_output_hashes": transformed_hashes,
-                "raw_samples": raw_samples,
-                "comparison": comparison,
-            }
-            (directory / "unaccepted-execution-result.json").write_text(
-                json.dumps(evidence, indent=2, sort_keys=True) + "\n"
-            )
+        write_execution_evidence("unaccepted", message)
         raise RuntimeError(message)
 
     if any(count < minimum_calls for count in observed_calls):
@@ -949,6 +957,7 @@ def run_smoke(
     transformed_median = statistics.median(transformed_samples)
     if len(set(transformed_hashes)) != 1:
         fail_after_execution("generated routed composition result is not bitwise deterministic")
+    write_execution_evidence("execution_checks_passed", None)
     return {
         "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
         "composition_mode": composition_mode.value,
@@ -983,7 +992,7 @@ def run_smoke(
                 weight.numerical_contract.numerical_policy.value for weight in routed_plan.weight_gradients
             ],
             "attention_backward": attention_plan.reassociation,
-            "axis_folds": [fold.program.numerical_policy.value for fold in axis_fold_plans],
+            "axis_folds": _axis_fold_reassociation_report(axis_fold_plans),
         },
         "external_collectives": (
             (
