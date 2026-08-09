@@ -96,22 +96,43 @@ Map, and the source Fold. All seven boundary inputs are available before the
 first region instruction. The only boundary output is the Fold result, so this
 case does not require an auxiliary-output split.
 
-The first typed-FFI plan is nevertheless rejected before GPU code generation.
-The recovered scalar AST describes the logical routed Map over `[16,32]`, while
-the second cuBLAS-compatible Contract consumes a physical `[512,128]` operand.
-The intervening path contains select, pad, transpose, copy, and bitcast stages,
-but the current recovery record does not preserve the affine/runtime index map
-that assigns logical routed rows to padded expert feature panels. Opcode and
-shape lists are insufficient to reconstruct that mapping safely.
+The typed-FFI plan now recovers and verifies the intervening segmented layout
+from the physical HLO rather than from an assumed expert layout. For compact
+destination-major edge row `r`, logical feature `f`, and destination segment
+`s`, the recovered relation is:
 
-The next prerequisite is therefore a generic segmented-layout record derived
-from the existing `RelationPlan` and physical HLO indexing. It must describe:
+```text
+physical_row = r
+physical_k = f * segment_count + s
+valid = exclusive_prefix_count[s] <= r < inclusive_prefix_count[s]
+value = logical[r, f] if valid else 0
+```
 
-- the logical edge-row to padded physical-row map;
-- the destination segment to feature-panel map;
-- valid/padded positions and their fill value; and
-- the inverse map needed by the source-keyed Fold.
+The segment dimension is therefore interleaved inside the physical Contract K
+axis. This is not the superficially plausible segment-major layout
+`s * feature_extent + f`. Recovery proves the interleaving from the Map-side
+`broadcast -> select -> transpose -> copy -> bitcast` and separately verifies
+that the weight-side `transpose -> copy -> bitcast` uses the identical K map.
 
-No workload-specific layout rule or GPU kernel is introduced at this
-checkpoint. Map and Fold mutations retain the same convex boundary and cuBLAS
-Contract dimension maps while changing only their generated scalar bodies.
+The source Fold inverse is also explicit. The stable destination sort carries
+the original flattened source-route position, so for destination-major row
+`r`:
+
+```text
+route = stable_permutation[r]
+source_item = route // route_slots
+route_slot = route % route_slots
+```
+
+The verifier evaluates the actual HLO gather/index path for several legal
+runtime permutations before accepting this relation. Destination prefix ends
+and the stable permutation remain runtime inputs to eventual generated GPU
+execution; benchmark callables must not close over routing fixtures in a form
+that XLA could constant-fold.
+
+All four required relations are now present, so region planning is `READY` for
+generic typed-FFI code generation. The current checkpoint deliberately stops
+before CUDA emission. A physical-row-capacity mutation reuses the same recovery
+logic, while a mismatched weight flattening produces a structured rejection.
+Map and Fold mutations retain the same convex boundary and Contract index maps
+while changing only their generated scalar bodies.
