@@ -1,0 +1,100 @@
+{
+  "acceptance": {
+    "comparison": "generated generic axis Folds versus torch.compile of identical scalar/reduction algebra",
+    "passes": true,
+    "ratio": 0.23894230747704268,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 1,
+    "repeats": 2,
+    "warmups": 1
+  },
+  "correctness": {
+    "deterministic_hashes": {
+      "feature_scale_cotangent": "af5700f3336ee2b3026668a425f51655c7458ef79efe6d03dd1ae60b3c0acadb",
+      "input_cotangent": "00ed99f24794737468d10a665e3db21842b62066fefb014a4f5ace4d60bf8f9e"
+    },
+    "feature_scale_cotangent": {
+      "maximum_absolute_error": 4.76837158203125e-07,
+      "mean_absolute_error": 8.847564458847046e-08
+    },
+    "input_cotangent": {
+      "maximum_absolute_error": 2.384185791015625e-07,
+      "mean_absolute_error": 5.968867622385687e-09
+    }
+  },
+  "environment": {
+    "compute_capability": "10.0",
+    "cuda": "13.0",
+    "device": "NVIDIA GB200",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996",
+    "torch": "2.10.0+cu130"
+  },
+  "generated_source": {
+    "feature_scale": "/tmp/shuttle-row-norm-smoke-source/shuttle_axis_fold_scale_61d6de353532ebc0.cu",
+    "feature_scale_sha256": "61d6de353532ebc07bc8319065708726a924c230d0d15d31e51ba32d12126a00",
+    "input": "/tmp/shuttle-row-norm-smoke-source/shuttle_axis_fold_input_c7f78e3b7d4fe593.cu",
+    "input_sha256": "c7f78e3b7d4fe593f76f2b3d8a8684585bc66825e1cc170675c50e2f260a1902"
+  },
+  "measurements": {
+    "full": {
+      "execution_order": [
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ]
+      ],
+      "ratio_generated_to_torch_compile": 0.23894230747704268,
+      "variants": {
+        "generated": {
+          "median_ms": 0.023856000043451786,
+          "minimum_ms": 0.021983999758958817,
+          "samples_ms": [
+            0.025728000327944756,
+            0.021983999758958817
+          ]
+        },
+        "torch_compile": {
+          "median_ms": 0.09984000027179718,
+          "minimum_ms": 0.09171199798583984,
+          "samples_ms": [
+            0.10796800255775452,
+            0.09171199798583984
+          ]
+        }
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "5509e444487df21aceb64c2266419ba92c3bff8e"
+  },
+  "schema_version": 1,
+  "semantic_lowering": {
+    "input_fold_fingerprint": "dbb378b3a71eb8ab7d905e830f007d01adad6e0922237553957b50fb5902db4a",
+    "input_fold_state_count": 1,
+    "named_semantics_erased": true,
+    "reassociation": "deterministic_tree",
+    "scale_fold_fingerprint": "482a741d6ae38815c755a2f15243dceb9c635529547932743f693fbd56df6625"
+  },
+  "workload": {
+    "hidden": 128,
+    "inputs": {
+      "feature_scale": "bfloat16",
+      "inverse_scale": "float32",
+      "projected": "float32",
+      "standardized": "bfloat16"
+    },
+    "outputs": {
+      "feature_scale_cotangent": "float32",
+      "input_cotangent": "float32"
+    },
+    "rows": 8,
+    "statistic": "rms"
+  }
+}

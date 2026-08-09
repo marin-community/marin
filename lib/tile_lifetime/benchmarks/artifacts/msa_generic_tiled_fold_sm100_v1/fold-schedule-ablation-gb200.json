@@ -1,0 +1,974 @@
+{
+  "candidates": [
+    {
+      "candidate": "feature64_buffer1_no_overlap",
+      "combine_only": true,
+      "deterministic": true,
+      "feature_tile": 64,
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 4.910242168421064e-08,
+      "median_ms": 0.015728000551462173,
+      "output_sha256": "9a83c10a46daead804cdc4cc937f5a98d9ebdc7d85b9dd5bcd9724d117fdc8e6",
+      "samples_ms": [
+        0.027615999802947044,
+        0.01897599920630455,
+        0.015744000673294067,
+        0.019680000841617584,
+        0.015135999768972397,
+        0.016383999958634377,
+        0.01571200042963028,
+        0.01583999954164028,
+        0.015552000142633915,
+        0.014271999709308147,
+        0.01571200042963028,
+        0.01568000018596649,
+        0.018079999834299088,
+        0.015263999812304974,
+        0.01600000075995922,
+        0.015519999898970127,
+        0.01679999940097332,
+        0.01616000011563301,
+        0.016063999384641647,
+        0.017343999817967415,
+        0.01539199985563755,
+        0.01500799972563982,
+        0.016383999958634377,
+        0.015647999942302704,
+        0.016383999958634377,
+        0.0144640002399683,
+        0.014911999925971031,
+        0.013439999893307686,
+        0.015968000516295433,
+        0.014495999552309513,
+        0.014688000082969666,
+        0.018400000408291817,
+        0.01775999926030636,
+        0.016704000532627106,
+        0.01775999926030636,
+        0.015615999698638916,
+        0.01679999940097332,
+        0.01600000075995922,
+        0.015519999898970127,
+        0.013887999579310417,
+        0.014368000440299511,
+        0.013472000136971474,
+        0.01708799973130226,
+        0.016416000202298164,
+        0.015584000386297703,
+        0.01414399966597557,
+        0.01484800036996603,
+        0.014879999682307243,
+        0.01571200042963028,
+        0.01484800036996603,
+        0.015072000212967396,
+        0.014688000082969666,
+        0.017952000722289085,
+        0.014271999709308147,
+        0.013728000223636627,
+        0.01727999933063984,
+        0.015039999969303608,
+        0.01696000061929226,
+        0.015936000272631645,
+        0.015039999969303608,
+        0.016063999384641647,
+        0.016127999871969223,
+        0.017152000218629837,
+        0.01635199971497059,
+        0.0161920003592968,
+        0.01548799965530634,
+        0.016127999871969223,
+        0.015456000342965126,
+        0.014303999952971935,
+        0.0161920003592968,
+        0.01587199978530407,
+        0.015584000386297703,
+        0.02191999927163124,
+        0.015744000673294067,
+        0.01484800036996603,
+        0.014688000082969666,
+        0.01532800029963255,
+        0.01727999933063984,
+        0.015424000099301338,
+        0.017311999574303627,
+        0.01414399966597557,
+        0.01679999940097332,
+        0.017216000705957413,
+        0.014976000413298607,
+        0.015072000212967396,
+        0.016287999227643013,
+        0.015039999969303608,
+        0.01568000018596649,
+        0.016767999157309532,
+        0.01603199914097786,
+        0.016448000445961952,
+        0.016607999801635742,
+        0.015039999969303608,
+        0.01587199978530407,
+        0.016575999557971954,
+        0.014399999752640724,
+        0.015776000916957855,
+        0.015135999768972397,
+        0.015456000342965126,
+        0.016127999871969223
+      ],
+      "semantic_sha256": "a35503885b92358e9734dd8ad31e961b3d05b804314d6b8d2d6d97f3c74ffc59",
+      "shared_buffers": 1,
+      "source_sha256": "bc976e6a7b67484993c5ab9a5d24d5b0c1ca5d9b07cdd7bd4d7b7d78a8fef1f9"
+    },
+    {
+      "candidate": "feature64_buffer2_ping_pong",
+      "combine_only": true,
+      "deterministic": true,
+      "feature_tile": 64,
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 4.910242168421064e-08,
+      "median_ms": 0.014895999804139137,
+      "output_sha256": "9a83c10a46daead804cdc4cc937f5a98d9ebdc7d85b9dd5bcd9724d117fdc8e6",
+      "samples_ms": [
+        0.02051199972629547,
+        0.014944000169634819,
+        0.02175999991595745,
+        0.015519999898970127,
+        0.014495999552309513,
+        0.014720000326633453,
+        0.013952000066637993,
+        0.013824000023305416,
+        0.014976000413298607,
+        0.015231999568641186,
+        0.014431999996304512,
+        0.014271999709308147,
+        0.01711999997496605,
+        0.015200000256299973,
+        0.01414399966597557,
+        0.013919999822974205,
+        0.014208000153303146,
+        0.017664000391960144,
+        0.015968000516295433,
+        0.013791999779641628,
+        0.0144640002399683,
+        0.01568000018596649,
+        0.015552000142633915,
+        0.014816000126302242,
+        0.016448000445961952,
+        0.015039999969303608,
+        0.015039999969303608,
+        0.014303999952971935,
+        0.013632000423967838,
+        0.01462399959564209,
+        0.013151999562978745,
+        0.014944000169634819,
+        0.016063999384641647,
+        0.014336000196635723,
+        0.014271999709308147,
+        0.016704000532627106,
+        0.015359999611973763,
+        0.014047999866306782,
+        0.015231999568641186,
+        0.013344000093638897,
+        0.01321600005030632,
+        0.016287999227643013,
+        0.01788800023496151,
+        0.013824000023305416,
+        0.013919999822974205,
+        0.013567999936640263,
+        0.013791999779641628,
+        0.015807999297976494,
+        0.015968000516295433,
+        0.01600000075995922,
+        0.015647999942302704,
+        0.014112000353634357,
+        0.022816000506281853,
+        0.014720000326633453,
+        0.015807999297976494,
+        0.014336000196635723,
+        0.013567999936640263,
+        0.01360000018030405,
+        0.01532800029963255,
+        0.01635199971497059,
+        0.01462399959564209,
+        0.015456000342965126,
+        0.01600000075995922,
+        0.016063999384641647,
+        0.0163199994713068,
+        0.016863999888300896,
+        0.016767999157309532,
+        0.0144640002399683,
+        0.015647999942302704,
+        0.015776000916957855,
+        0.014911999925971031,
+        0.014175999909639359,
+        0.017535999417304993,
+        0.013952000066637993,
+        0.016575999557971954,
+        0.014879999682307243,
+        0.014495999552309513,
+        0.016704000532627106,
+        0.01414399966597557,
+        0.01398400031030178,
+        0.03296000137925148,
+        0.01635199971497059,
+        0.015519999898970127,
+        0.01408000010997057,
+        0.014495999552309513,
+        0.013344000093638897,
+        0.014816000126302242,
+        0.016416000202298164,
+        0.015231999568641186,
+        0.014527999795973301,
+        0.014015999622642994,
+        0.01740800030529499,
+        0.014655999839305878,
+        0.01616000011563301,
+        0.014368000440299511,
+        0.014592000283300877,
+        0.01568000018596649,
+        0.014112000353634357,
+        0.014655999839305878,
+        0.01408000010997057
+      ],
+      "semantic_sha256": "a35503885b92358e9734dd8ad31e961b3d05b804314d6b8d2d6d97f3c74ffc59",
+      "shared_buffers": 2,
+      "source_sha256": "0f0834ef23bb1901636e27f424f0874bb5510c0d3649a3053fed13d8f7db675c"
+    },
+    {
+      "candidate": "feature128_buffer2_ping_pong",
+      "combine_only": true,
+      "deterministic": true,
+      "feature_tile": 128,
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 4.910242168421064e-08,
+      "median_ms": 0.013824000023305416,
+      "output_sha256": "9a83c10a46daead804cdc4cc937f5a98d9ebdc7d85b9dd5bcd9724d117fdc8e6",
+      "samples_ms": [
+        0.024671999737620354,
+        0.014688000082969666,
+        0.017632000148296356,
+        0.02393599972128868,
+        0.014336000196635723,
+        0.012415999546647072,
+        0.01408000010997057,
+        0.012992000207304955,
+        0.01548799965530634,
+        0.016095999628305435,
+        0.013952000066637993,
+        0.013887999579310417,
+        0.021856000646948814,
+        0.013663999736309052,
+        0.012768000364303589,
+        0.013055999763309956,
+        0.01360000018030405,
+        0.01244799979031086,
+        0.01708799973130226,
+        0.01568000018596649,
+        0.013824000023305416,
+        0.03558399900794029,
+        0.01360000018030405,
+        0.012223999947309494,
+        0.014431999996304512,
+        0.011839999817311764,
+        0.012223999947309494,
+        0.013055999763309956,
+        0.012160000391304493,
+        0.011872000060975552,
+        0.011776000261306763,
+        0.013663999736309052,
+        0.017664000391960144,
+        0.015359999611973763,
+        0.012992000207304955,
+        0.015263999812304974,
+        0.01462399959564209,
+        0.012640000320971012,
+        0.013088000006973743,
+        0.013311999849975109,
+        0.012543999589979649,
+        0.015104000456631184,
+        0.018624000251293182,
+        0.013535999692976475,
+        0.013183999806642532,
+        0.012927999719977379,
+        0.012032000347971916,
+        0.012000000104308128,
+        0.015647999942302704,
+        0.013824000023305416,
+        0.01228800043463707,
+        0.015072000212967396,
+        0.015263999812304974,
+        0.01244799979031086,
+        0.014368000440299511,
+        0.014527999795973301,
+        0.013344000093638897,
+        0.013824000023305416,
+        0.013439999893307686,
+        0.012223999947309494,
+        0.015456000342965126,
+        0.013824000023305416,
+        0.014208000153303146,
+        0.01961600035429001,
+        0.013344000093638897,
+        0.01321600005030632,
+        0.018015999346971512,
+        0.013344000093638897,
+        0.01321600005030632,
+        0.016831999644637108,
+        0.01369599997997284,
+        0.013311999849975109,
+        0.026176000013947487,
+        0.012671999633312225,
+        0.014720000326633453,
+        0.014720000326633453,
+        0.012191999703645706,
+        0.013472000136971474,
+        0.01775999926030636,
+        0.01206399966031313,
+        0.012927999719977379,
+        0.022463999688625336,
+        0.013376000337302685,
+        0.01462399959564209,
+        0.014688000082969666,
+        0.013344000093638897,
+        0.01142400037497282,
+        0.014751999638974667,
+        0.014399999752640724,
+        0.012415999546647072,
+        0.022175999358296394,
+        0.0163199994713068,
+        0.013151999562978745,
+        0.01651199907064438,
+        0.012992000207304955,
+        0.014655999839305878,
+        0.015776000916957855,
+        0.012768000364303589,
+        0.013824000023305416,
+        0.014303999952971935
+      ],
+      "semantic_sha256": "a35503885b92358e9734dd8ad31e961b3d05b804314d6b8d2d6d97f3c74ffc59",
+      "shared_buffers": 2,
+      "source_sha256": "1130968cb41214482b01bdb339e1c224e16e47cdaeae6efc997009f5ec2ff905"
+    }
+  ],
+  "command": [
+    "lib/tile_lifetime/backends/sm100/smoke_tiled_fold_finalize.py",
+    "--semantics",
+    "normalized_exp",
+    "--rows",
+    "4096",
+    "--partials",
+    "16",
+    "--features",
+    "128",
+    "--warmups",
+    "20",
+    "--repeats",
+    "100",
+    "--build-directory",
+    "/tmp/shuttle-fold-ablation-build",
+    "--output",
+    "/tmp/shuttle-fold-ablation-gb200.json"
+  ],
+  "device": {
+    "compute_capability": [
+      10,
+      0
+    ],
+    "cuda_runtime": "13.0",
+    "device_name": "NVIDIA GB200",
+    "torch_version": "2.10.0+cu130"
+  },
+  "features": 128,
+  "partials": 16,
+  "reference_sha256": "adcc9cb454a2e9428418b0a428f40e39a99163323295810a2aa730fcb74dd544",
+  "repeat_orders": [
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap"
+    ],
+    [
+      "feature128_buffer2_ping_pong",
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong"
+    ],
+    [
+      "feature64_buffer1_no_overlap",
+      "feature64_buffer2_ping_pong",
+      "feature128_buffer2_ping_pong"
+    ]
+  ],
+  "rows": 4096,
+  "seed": 0,
+  "semantic_program": {
+    "accumulation_dtype": "fp32",
+    "contribution_expression": {
+      "kind": "multiply",
+      "operands": [
+        {
+          "input": "partial_value",
+          "kind": "input"
+        },
+        {
+          "input": "weight",
+          "kind": "input"
+        }
+      ]
+    },
+    "denominator": "sum_weights",
+    "finalize_expression": {
+      "kind": "multiply",
+      "operands": [
+        {
+          "kind": "divide",
+          "operands": [
+            {
+              "input": "state",
+              "kind": "input"
+            },
+            {
+              "input": "denominator",
+              "kind": "input"
+            }
+          ]
+        },
+        {
+          "constant": 1.0,
+          "kind": "constant"
+        }
+      ]
+    },
+    "output_dtype": "bf16",
+    "partial_scalar_dtype": "fp32",
+    "partial_value_dtype": "bf16",
+    "reassociation": "deterministic_tree",
+    "scalar_reduction": "maximum",
+    "update_expression": {
+      "kind": "add",
+      "operands": [
+        {
+          "input": "state",
+          "kind": "input"
+        },
+        {
+          "input": "contribution",
+          "kind": "input"
+        }
+      ]
+    },
+    "weight_expression": {
+      "kind": "select",
+      "operands": [
+        {
+          "input": "valid",
+          "kind": "input"
+        },
+        {
+          "kind": "exp",
+          "operands": [
+            {
+              "kind": "subtract",
+              "operands": [
+                {
+                  "input": "partial_scalar",
+                  "kind": "input"
+                },
+                {
+                  "input": "reduced_scalar",
+                  "kind": "input"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "constant": 0.0,
+          "kind": "constant"
+        }
+      ]
+    }
+  },
+  "semantics": "normalized_exp",
+  "warmups_per_candidate": 20
+}

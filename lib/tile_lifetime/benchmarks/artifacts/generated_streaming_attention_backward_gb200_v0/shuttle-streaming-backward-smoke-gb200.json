@@ -1,0 +1,109 @@
+{
+  "acceptance": {
+    "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
+    "passes": true,
+    "ratio": 0.723867418280468,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 1,
+    "repeats": 2,
+    "warmups": 5
+  },
+  "correctness": {
+    "deterministic_hash": "8b0d656a1ccca530cf8b7d9112db3e2f681c012b151848533481c33b5a0a7ff5",
+    "key": {
+      "maximum_absolute_error": 0.84375,
+      "mean_absolute_error": 0.06916540116071701
+    },
+    "query": {
+      "maximum_absolute_error": 0.76171875,
+      "mean_absolute_error": 0.026238560676574707
+    },
+    "value": {
+      "maximum_absolute_error": 0.765625,
+      "mean_absolute_error": 0.07352179288864136
+    }
+  },
+  "environment": {
+    "cuda": "13.0",
+    "device": "NVIDIA GB200",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996",
+    "torch": "2.10.0+cu130",
+    "triton": "3.6.0"
+  },
+  "measurements": {
+    "execution_order": [
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ]
+    ],
+    "ratio_generated_to_oracle": 0.723867418280468,
+    "variants": {
+      "generated": {
+        "median_ms": 0.13140799850225449,
+        "minimum_ms": 0.1292479932308197,
+        "samples_ms": [
+          0.1292479932308197,
+          0.13356800377368927
+        ]
+      },
+      "oracle": {
+        "median_ms": 0.181536003947258,
+        "minimum_ms": 0.1720000058412552,
+        "samples_ms": [
+          0.1910720020532608,
+          0.1720000058412552
+        ]
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "2f45798ff4f0adaaf52e3ae0bd003ba52c90e701"
+  },
+  "schedule": {
+    "atomic_accumulation": false,
+    "block_m": 32,
+    "block_n": 32,
+    "key_value_gradient_orientation": "key_value_major",
+    "num_stages": 3,
+    "num_warps": 8,
+    "query_gradient_orientation": "query_major"
+  },
+  "schema_version": 1,
+  "semantic_generation": {
+    "materialized_values": [
+      "cotangent.query",
+      "cotangent.key",
+      "cotangent.value"
+    ],
+    "reassociation": "deterministic_tree",
+    "score_map_vjp": "{\"kind\":\"select\",\"operands\":[{\"kind\":\"less_equal\",\"operands\":[{\"input\":\"key.position\",\"kind\":\"input\"},{\"input\":\"query.position\",\"kind\":\"input\"}]},{\"constant\":0.08838834764831843,\"kind\":\"constant\"},{\"constant\":0.0,\"kind\":\"constant\"}]}",
+    "stages": [
+      "load_query_and_state",
+      "load_key_value",
+      "recompute_qk",
+      "recompute_probability",
+      "dv_contract",
+      "dp_contract",
+      "score_map_vjp",
+      "dq_contract",
+      "dk_contract"
+    ]
+  },
+  "source_sha256": "bf3a78f5ecc7e805a1f97a9c3988e764cfe1a8aa9bdd0252243fb8b6939e3eed",
+  "workload": {
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "mutation": "causal",
+    "query_heads": 32,
+    "sequence": 128
+  }
+}

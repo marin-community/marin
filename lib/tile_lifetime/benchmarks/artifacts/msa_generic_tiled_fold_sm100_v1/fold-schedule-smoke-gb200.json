@@ -1,0 +1,150 @@
+{
+  "candidates": [
+    {
+      "candidate": "feature64_buffer1_no_overlap",
+      "combine_only": true,
+      "deterministic": true,
+      "feature_tile": 64,
+      "maximum_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "median_ms": 0.036448001861572266,
+      "output_sha256": "598bfcde955b7df7c7c4d571638190498e2492c718e0e7577f08f076f973de5f",
+      "samples_ms": [
+        0.036448001861572266
+      ],
+      "semantic_sha256": "a35503885b92358e9734dd8ad31e961b3d05b804314d6b8d2d6d97f3c74ffc59",
+      "shared_buffers": 1,
+      "source_sha256": "49a145ae02ff8ba88838e7c43541d64ad5e3628958c7dc776f5a540c98ec0769"
+    }
+  ],
+  "command": [
+    "lib/tile_lifetime/backends/sm100/smoke_tiled_fold_finalize.py",
+    "--semantics",
+    "normalized_exp",
+    "--rows",
+    "8",
+    "--partials",
+    "2",
+    "--features",
+    "64",
+    "--candidate",
+    "feature64_buffer1_no_overlap",
+    "--warmups",
+    "1",
+    "--repeats",
+    "1",
+    "--build-directory",
+    "/tmp/shuttle-fold-smoke-build",
+    "--output",
+    "/tmp/shuttle-fold-smoke-gb200.json"
+  ],
+  "device": {
+    "compute_capability": [
+      10,
+      0
+    ],
+    "cuda_runtime": "13.0",
+    "device_name": "NVIDIA GB200",
+    "torch_version": "2.10.0+cu130"
+  },
+  "features": 64,
+  "partials": 2,
+  "reference_sha256": "598bfcde955b7df7c7c4d571638190498e2492c718e0e7577f08f076f973de5f",
+  "repeat_orders": [
+    [
+      "feature64_buffer1_no_overlap"
+    ]
+  ],
+  "rows": 8,
+  "seed": 0,
+  "semantic_program": {
+    "accumulation_dtype": "fp32",
+    "contribution_expression": {
+      "kind": "multiply",
+      "operands": [
+        {
+          "input": "partial_value",
+          "kind": "input"
+        },
+        {
+          "input": "weight",
+          "kind": "input"
+        }
+      ]
+    },
+    "denominator": "sum_weights",
+    "finalize_expression": {
+      "kind": "multiply",
+      "operands": [
+        {
+          "kind": "divide",
+          "operands": [
+            {
+              "input": "state",
+              "kind": "input"
+            },
+            {
+              "input": "denominator",
+              "kind": "input"
+            }
+          ]
+        },
+        {
+          "constant": 1.0,
+          "kind": "constant"
+        }
+      ]
+    },
+    "output_dtype": "bf16",
+    "partial_scalar_dtype": "fp32",
+    "partial_value_dtype": "bf16",
+    "reassociation": "deterministic_tree",
+    "scalar_reduction": "maximum",
+    "update_expression": {
+      "kind": "add",
+      "operands": [
+        {
+          "input": "state",
+          "kind": "input"
+        },
+        {
+          "input": "contribution",
+          "kind": "input"
+        }
+      ]
+    },
+    "weight_expression": {
+      "kind": "select",
+      "operands": [
+        {
+          "input": "valid",
+          "kind": "input"
+        },
+        {
+          "kind": "exp",
+          "operands": [
+            {
+              "kind": "subtract",
+              "operands": [
+                {
+                  "input": "partial_scalar",
+                  "kind": "input"
+                },
+                {
+                  "input": "reduced_scalar",
+                  "kind": "input"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "constant": 0.0,
+          "kind": "constant"
+        }
+      ]
+    }
+  },
+  "semantics": "normalized_exp",
+  "warmups_per_candidate": 1
+}

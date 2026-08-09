@@ -1592,3 +1592,130 @@ author: dlwh
 - CUDA compilation and timing remain pending. The accepted full MSA result is
   unchanged until the direct ablation and complete natural boundary are both
   measured on GB200.
+
+### 2026-08-08 - TLTC-TRAIN-004 executable row-normalization Folds
+
+- Added one rank-two CUDA Map/Fold generator with row- and column-reduction
+  layouts, element and reduced outputs, scalar contribution/finalization ASTs,
+  and explicit source-ordered versus deterministic-tree policies.
+- The same generator lowers RMSNorm backward and a centered LayerNorm mutation.
+  RMSNorm emits a row correlation Fold plus final dX Map and a column dgamma
+  Fold; LayerNorm adds the local-sum Fold and backward centering without a
+  workload-named kernel.
+- Independent NumPy execution agrees for both forms. A matched H100/GB200
+  harness compiles the emitted CUDA and compares the identical algebra against
+  `torch.compile`; hardware compilation and performance remain pending.
+- Commit `5509e44448` is pushed.
+
+### 2026-08-08 - TLTC-TRAIN-005 generated streaming-attention backward
+
+- The forward normalized-exponential Fold now exposes saved output, row
+  maximum, and row sum-exp state. A generic reverse derivation emits QK
+  recomputation, probability reconstruction, dV and dP Contracts, score-Map
+  VJP, and dQ/dK Contracts.
+- The generated physical schedule uses deterministic query-major dQ and
+  key-major dK/dV loops with no atomics and no score/probability
+  materialization. It supports BF16, head dimensions 64/128, GQA, causality,
+  scale Maps, and a tanh-softcap mutation through the same generator.
+- JAX autodiff parity passes for causal scaling and for the noncausal softcap
+  mutation. H100/GB200 compile smoke and matched performance remain pending.
+- Commit `2f45798ff4` is pushed.
+
+### 2026-08-08 - TLTC-XLA-003 natural Grug forward/backward replacement
+
+- The JAX 0.11 pre-scheduler callback now replaces a structurally recovered
+  pair-Contract/Map/Contract forward region inside the natural one-layer Grug
+  train step. The generated scalar body preserves all 16 BF16/F32 cast
+  boundaries and all 58 result leaves are bitwise identical.
+- Starting from the second recovered Contract pair, generic entry-region growth
+  follows only pointwise/wrapper users, treats additional saved/cotangent values
+  as inputs, and treats every externally consumed value as an output. On Grug
+  this forms a nine-instruction backward region with four inputs and three live
+  outputs feeding five downstream Contracts.
+- A generated tuple-result body replaces that backward region through one
+  custom call and three tuple projections. All 58 leaves remain bitwise
+  identical, including the two baseline NaN payloads, and the handler executes
+  exactly once.
+- This is disposable insertion evidence: HLO text mutation and the removed
+  legacy CPU ABI are not the production bridge. Typed connected-region
+  replacement, supported multi-result FFI, sharding/alias/effect transfer, and
+  GPU lowering from the same AST remain open.
+- Reproducible compressed modules and generated handlers are frozen under the
+  three `xla_*custom_call_smoke_jax011_v0` artifact directories. Commit
+  `023755efca` is pushed; the package suite passes 256 tests.
+
+### 2026-08-08 - TLTC-MSA-009 measured Fold schedules
+
+- On one GB200, 100-sample combine-only measurements give 0.015728 ms for the
+  64-feature one-buffer control, 0.014896 ms for 64-feature ping-pong, and
+  0.013824 ms for 128-feature ping-pong. All three share one semantic hash and
+  deterministic output hash.
+- A single generated-only full natural confirmation with 128-feature
+  ping-pong measures 3.310736 ms versus the preserved 3.831632-ms 64-feature
+  result. Selection and sparse core timing are unchanged, localizing the gain
+  to the Fold/finalization boundary.
+- The one-sided confirmation is diagnostic rather than a new counterbalanced
+  acceptance capture. The prior pooled 1.198069x generated/oracle comparison
+  remains the strict accepted result. Exact source-order top-k tie behavior is
+  still open.
+
+### 2026-08-08 - TLTC-TRAIN-006 first GB200 gradient measurements
+
+- Generic RMSNorm backward measures 0.087160 ms versus 0.054582 ms for the
+  identical `torch.compile` algebra (1.597x). The centered LayerNorm mutation
+  measures 0.088042 versus 0.053051 ms (1.660x). Both are deterministic and
+  correct but fail the 1.20x performance gate.
+- The measured column Fold used one block per feature and therefore loaded
+  row-major elements with a hidden-size stride. Commit `82bedcd6b4` adds a
+  generic 32-feature schedule whose warps load contiguous columns while eight
+  row lanes reduce each feature. A new measurement is pending.
+- The first physical streaming-attention backward compiles and measures
+  0.131408 ms versus 0.181536 ms for SDPA, but dQ/dK/dV maximum errors are
+  0.762/0.844/0.766. This is a correctness failure, not acceptance.
+- Diagnosis found that the backward harness saved forward state from a causal
+  M=32,N=64 kernel even though its diagonal splitting is legal only when M is
+  a multiple of N. The schedule double-counted/unmasked keys before backward.
+  Commit `14f2bbc3f9` uses the matched legal 32x32 forward state, rejects
+  illegal causal tile pairs, and requires numerical gates in acceptance. A
+  corrected GB200/H100 replay is pending.
+
+### 2026-08-08 - TLTC-XLA-004 supported multi-result FFI
+
+- The natural Grug backward-region proof now emits an XLA typed-FFI handler
+  with four typed inputs and three typed results. One pre-scheduler tuple call
+  plus three tuple projections executes through FFI API version 1; all 58
+  train-step leaves remain bitwise identical.
+- This removes the obsolete legacy tuple ABI from the backward proof. Text HLO
+  mutation, sharding/alias/effect transfer, and a GPU body generated from the
+  same multi-output AST remain open. Commit `1ff3e6b77e` is pushed.
+
+### 2026-08-08 - TLTC-XLA-004 routed train-step ownership boundary
+
+- Hypothesis: physical XLA HLO retains enough name-free structure to recover
+  the main routed forward and backward program after fusion and padding, while
+  leaving placement collectives external.
+- Commit Hash: uncommitted on `023755efca`.
+- Command: `uv run --frozen --package marin-tile-lifetime python
+  lib/tile_lifetime/benchmarks/analyze_xla_relation_program_hlo.py
+  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz
+  --output
+  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/relation-program-recovery.json`.
+- Result: a metadata-independent pass recovers two equivalent 8-row, 2-slot,
+  16-edge, 4-segment `RelationPlan`s; the executed and rematerialized segmented
+  Contract/Map/Contract forward chains; one segmented input-gradient
+  Contract/Map-adjoint/Contract chain; two additive source scatter Folds; and
+  two group-batched weight-gradient Contracts. The associated all-reduce stays
+  visible as an external boundary.
+- Numerical boundary: every BF16/F32 conversion along the recovered Maps and
+  the scatter reducer's BF16 round trip are retained in the report. The
+  executed forward Fold includes an explicit multiply before additive scatter.
+  The physical HLO does not prove source-ordered GPU scatter updates, so the
+  replacement must choose that policy explicitly rather than infer it.
+- Interpretation: the train-step HLO supports a concrete Shuttle ownership
+  boundary spanning routing metadata, routed expert forward, routed input
+  gradient, and routed weight gradients. The pass does not use model/source
+  names or select an opaque MoE kernel.
+- Next action: share the existing HLO scalar-AST importer with this routed Map,
+  then replace the recovered forward and backward regions with the generic GMM,
+  generated Map/Fold, and RelationPlan runtime. Preserve the all-reduce as an
+  external placement transition until Shuttle owns collectives.

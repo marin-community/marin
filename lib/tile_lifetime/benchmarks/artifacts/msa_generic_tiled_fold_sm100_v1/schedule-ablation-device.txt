@@ -1,0 +1,22 @@
+GPU: NVIDIA GB200
+GPU UUID: GPU-578a30b8-753f-0180-8e0e-64d9dafa8aa9
+Driver: 595.71.05
+P-state: P0
+Observed power: 206.52 W
+Power limit: 1200.00 W
+Observed SM clock: 1942 MHz
+Observed memory clock: 3996 MHz
+Maximum SM clock: 2062 MHz
+Temperature: 36 C
+
+Torch: 2.10.0+cu130
+Triton: 3.6.0
+CUDA runtime: 13.0.96
+CUDA NVCC/CRT/NVVM: 13.0.88
+CUDA CCCL: 13.0.85
+CUTLASS DSL: 4.4.1
+CUTLASS DSL base/cu13 libraries: 4.4.1
+QuACK: 0.2.10
+
+The GPU was a single low-priority GB200 reservation. Clocks and power were
+observed, not pinned. Telemetry was sampled after the runs.

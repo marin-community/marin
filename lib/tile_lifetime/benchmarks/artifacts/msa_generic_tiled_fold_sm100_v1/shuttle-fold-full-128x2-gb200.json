@@ -1,0 +1,323 @@
+{
+  "acceptance_boundary": "natural_projection_selection_and_payload",
+  "boundaries": {
+    "natural_projection_and_selection": {
+      "excluded": [
+        "main QKV projection",
+        "sparse payload",
+        "output projection"
+      ],
+      "generated_shuttle": {
+        "maximum_ms": 0.7851840257644653,
+        "mean_ms": 0.7723424017429352,
+        "median_ms": 0.7738880217075348,
+        "minimum_ms": 0.7562559843063354,
+        "samples_ms": [
+          0.7562559843063354,
+          0.7747840285301208,
+          0.776095986366272,
+          0.7844799757003784,
+          0.7625920176506042,
+          0.7729920148849487,
+          0.776416003704071,
+          0.7622720003128052,
+          0.7851840257644653,
+          0.7723519802093506
+        ]
+      },
+      "generated_to_oracle_ratio": null,
+      "included": [
+        "BF16 hidden inputs",
+        "FP32-accumulating index Q/K Contracts",
+        "BF16 projection casts",
+        "score Contract",
+        "block maximum Fold",
+        "top-k Selection",
+        "underfilled-slot validity (generated explicit Map; oracle native contract)"
+      ],
+      "matched_msa_oracle": null,
+      "sample_launch_orders": [
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ]
+      ],
+      "sample_pairing": "generated-only run; compare the isolated oracle artifact separately"
+    },
+    "natural_projection_selection_and_payload": {
+      "excluded": [
+        "main QKV projection",
+        "output projection"
+      ],
+      "generated_shuttle": {
+        "maximum_ms": 3.4015679359436035,
+        "mean_ms": 3.322489595413208,
+        "median_ms": 3.310736060142517,
+        "minimum_ms": 3.2663679122924805,
+        "samples_ms": [
+          3.4015679359436035,
+          3.299776077270508,
+          3.313728094100952,
+          3.298367977142334,
+          3.3726720809936523,
+          3.3014719486236572,
+          3.3185598850250244,
+          3.344640016555786,
+          3.2663679122924805,
+          3.307744026184082
+        ]
+      },
+      "generated_to_oracle_ratio": null,
+      "included": [
+        "BF16 hidden inputs",
+        "FP32-accumulating index Q/K Contracts",
+        "BF16 projection casts",
+        "selection",
+        "relation scheduling",
+        "sparse QK/normalized-exp/PV",
+        "deterministic partial-state merge"
+      ],
+      "matched_msa_oracle": null,
+      "sample_launch_orders": [
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ]
+      ],
+      "sample_pairing": "generated-only run; compare the isolated oracle artifact separately"
+    },
+    "projected_selection_core": {
+      "excluded": [
+        "index Q Contract",
+        "index K Contract",
+        "sparse payload"
+      ],
+      "generated_shuttle": {
+        "maximum_ms": 0.6479679942131042,
+        "mean_ms": 0.6359807968139648,
+        "median_ms": 0.6359519958496094,
+        "minimum_ms": 0.6225600242614746,
+        "samples_ms": [
+          0.641152024269104,
+          0.6376320123672485,
+          0.6479679942131042,
+          0.628063976764679,
+          0.6336320042610168,
+          0.6439359784126282,
+          0.6327679753303528,
+          0.6378239989280701,
+          0.6342719793319702,
+          0.6225600242614746
+        ]
+      },
+      "generated_to_oracle_ratio": null,
+      "included": [
+        "score Contract",
+        "block maximum Fold",
+        "top-k Selection",
+        "underfilled-slot validity (generated explicit Map; oracle native contract)"
+      ],
+      "matched_msa_oracle": null,
+      "sample_launch_orders": [
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ],
+        [
+          "generated_shuttle"
+        ]
+      ],
+      "sample_pairing": "generated-only run; compare the isolated oracle artifact separately"
+    }
+  },
+  "device": {
+    "capability": [
+      10,
+      0
+    ],
+    "cuda": "13.0",
+    "name": "NVIDIA GB200",
+    "torch": "2.10.0+cu130"
+  },
+  "execution_mode": "generated_only",
+  "kind": "direct_generated_msa_natural_route_sm100",
+  "oracle_manifest": null,
+  "payload_correctness": {
+    "declared_tolerance": {
+      "maximum_absolute_error": 0.01,
+      "mean_absolute_error": 0.001
+    },
+    "generated_maximum_absolute_error": 0.05364990234375,
+    "generated_mean_absolute_error": 6.870202196296304e-05,
+    "generated_repeat_bitwise": true,
+    "generated_sha256": "63e03978fd880330aed5b86fe3242181a6f0482b96e494dbbbdc95a8a0d9328e",
+    "generated_within_tolerance": false,
+    "oracle_maximum_absolute_error": null,
+    "oracle_mean_absolute_error": null,
+    "oracle_repeat_bitwise": null,
+    "oracle_sha256": null,
+    "oracle_within_tolerance": null,
+    "reference_sha256": "b509ff74574c0f2d2783d9d1680a162d970ab6dc5c3d224adee5f29689e2a70a"
+  },
+  "physical_source": {
+    "accepted_runtime_audit_clean": true,
+    "direct_source_clean": true,
+    "direct_source_sha256": {
+      "fmha_sm100_inst.jinja": "7181b94bae8be3631824343e8ff68cbc001d38d1b929eebe9958928f968a7423",
+      "fmha_sm100_params.h": "a776dc84103e87931672d903a2b5737b163182d0a1ea7d07c9d3d105e8b34782",
+      "fmha_sm100_variant_run.cu.jinja": "3e8af59327dcbe3bf354a17b7445c027b9aa04b664a97ff4dad4cb52e8c4a9cc",
+      "gmem_bounds_check.h": "c6a174cd5d392bca154c17a119da4bd2ff1116371a20609b38f4eea27fa43597",
+      "tvm_ffi_utils.h": "e77134f7fc39637bcdd490e6371ee140014dbadf9a670627b673c9737a7e9b86"
+    },
+    "external_semantic_kernels": [],
+    "generated": "direct_generated_contract_maximum_fold",
+    "oracle": null,
+    "oracle_adapter_classification": null,
+    "payload": {
+      "external_semantic_kernels": [],
+      "generated_source_sha256": {
+        "partial_merge": "1130968cb41214482b01bdb339e1c224e16e47cdaeae6efc997009f5ec2ff905",
+        "physical": "425341e8e87277e89624197c0b271d1c4a70874af889a735674342e303cf6027",
+        "relation_builder": "e22cfc1ccaf12eb150e529dae5018b568cc7c693ad276cbe3184f0333510fd1a",
+        "scheduler": "30616bc83c4b92236200db82b613b0fa955eea97d5404b2653f30c62cfac5670",
+        "semantics": "a0443203c325c071b71af496c253d022c5997e2cee08f20914466a438f16f53a"
+      },
+      "partial_merge_schedule": "tiled_pipelined",
+      "partial_value_dtype": "bf16",
+      "physical_audit_clean": true,
+      "relation_builder_audit_clean": true,
+      "scheduler_audit_clean": true,
+      "semantic_audit_clean": true
+    }
+  },
+  "raw_samples_preserved": true,
+  "selection_correctness": {
+    "cutoff_margins": {
+      "finite_cutoff_count": 57344,
+      "mean_finite_cutoff_margin": 3.5678505897521973,
+      "minimum_finite_cutoff_margin": 0.0,
+      "nonfinite_cutoff_count": 8192
+    },
+    "generated_matches_reference": false,
+    "generated_oracle_mismatch_count": null,
+    "generated_reference_mismatch_count": 6,
+    "generated_repeat_bitwise": true,
+    "numerical_policy": "real_algebra_equivalent",
+    "oracle_matches_reference": null,
+    "oracle_reference_mismatch_count": null,
+    "oracle_repeat_bitwise": null,
+    "route_sha256": "18886bcb75eacd42fe00c5fff2bd4de5577b12edfc62b84ae60e62ec7de5a07a"
+  },
+  "shape": {
+    "block_size": 128,
+    "key_value": [
+      16384,
+      4,
+      128
+    ],
+    "key_value_hidden": [
+      16384,
+      128
+    ],
+    "left_index_weight": [
+      128,
+      512
+    ],
+    "query": [
+      16384,
+      64,
+      128
+    ],
+    "query_hidden": [
+      16384,
+      128
+    ],
+    "query_position_offset": 0,
+    "right_index_weight": [
+      128,
+      128
+    ],
+    "top_k": 16
+  },
+  "source_revision": "80434d7f67877c6570ca19cac444b84bc9855dac",
+  "target": {
+    "maximum_generated_to_oracle_ratio": 1.2,
+    "natural_route_absolute_target_ms": null,
+    "paired_oracle_derived": false
+  }
+}

@@ -72,20 +72,74 @@ A smaller dense-attention binding (`Q=128`, `K=512`, `Hq/Hkv=8/2`, `D=128`,
 four partials) is finite and deterministic, with maximum/mean error
 `0.00134033`/`0.000149893` against the semantic reference.
 
+## Fold schedule ablation
+
+At Shuttle revision `5dd21768c15501fe5cd10966b4c3737789bbd0d7`, one
+low-priority GB200 run compared exactly three generic normalized-exp Fold
+schedules at 4,096 rows, 16 partials, and 128 features. Each candidate has 100
+raw samples and produces the same deterministic output hash.
+
+| Feature tile x shared buffers | Median | Change from 64x1 |
+| --- | ---: | ---: |
+| 64x1, no overlap | 0.015728 ms | baseline |
+| 64x2, ping-pong | 0.014896 ms | -5.29% |
+| 128x2, ping-pong | 0.013824 ms | -12.11% |
+
+One full generated-only MSA confirmation used the winning 128x2 schedule at
+the primary 16K shape. Its natural projection/selection/payload median was
+3.310736 ms, 13.59% below the preserved 64x2 result of 3.831632 ms. The
+selection-only median changed from 0.766000 to 0.773888 ms and the projected
+selection core changed from 0.637680 to 0.635952 ms, so the full-path gain is
+localized to the Fold/finalization path rather than selection. No 64x1 full
+candidate was added.
+
+The confirmation remains under the artifact's `real_algebra_equivalent`
+selection policy. It is deterministic, but six selected slots differ from the
+materialized reference and the maximum payload error remains 0.0536499; it is
+not a source-order numerical acceptance result.
+
+Commands:
+
+```text
+TORCH_CUDA_ARCH_LIST=10.0a uv run --frozen --package marin-tile-lifetime \
+  python lib/tile_lifetime/backends/sm100/smoke_tiled_fold_finalize.py \
+  --semantics normalized_exp --rows 4096 --partials 16 --features 128 \
+  --warmups 20 --repeats 100 \
+  --build-directory /tmp/shuttle-fold-ablation-build \
+  --output /tmp/shuttle-fold-ablation-gb200.json
+
+TORCH_CUDA_ARCH_LIST=10.0a python \
+  lib/tile_lifetime/benchmarks/sm100_fused_projected_selection.py \
+  --msa-root /tmp/shuttle-msa \
+  --build-directory /tmp/shuttle-fold-full-128x2-build-441 \
+  --query-count 16384 --right-count 16384 \
+  --query-heads 64 --key-value-heads 4 \
+  --warmups 3 --repeats 10 --execution-mode generated_only \
+  --output /tmp/shuttle-fold-full-128x2-gb200.json
+```
+
+The full confirmation used MSA `80434d7f67877c6570ca19cac444b84bc9855dac`,
+CUTLASS `eb61c911471867a5fd2466bfd8f29306cea6ebf8`, CUTLASS DSL 4.4.1,
+QuACK 0.2.10, Torch 2.10.0+cu130, CUDA 13.0.88, and driver 595.71.05.
+The first compile attempt accidentally used CUTLASS DSL 4.6.2 and failed on an
+`nvvm.fmax` signature incompatibility. It produced no timing sample; the one
+documented rerun restored the pinned 4.4.1 environment.
+
 ## Performance interpretation
 
-The old generic scalar merge measured 1.831552 ms. The new full natural path
-improves by about 0.62 ms while selection changes by only a few hundredths of
-a millisecond. This strongly attributes most of the gain to Fold finalization,
-but there is no direct combine-only timing for the new skeleton; subtractive
-component numbers are estimates and are not recorded as measured facts.
+The old generic scalar merge measured 1.831552 ms. The bounded direct
+combine-only experiment now measures the winning 128x2 Fold at 0.013824 ms,
+and the full natural path improves by about 0.52 ms while selection changes by
+only a few thousandths of a millisecond. Both measurements attribute the gain
+to Fold finalization rather than selection.
 
 Pinned MSA still has a tighter workload-integrated implementation: its KV-major
 pipeline, partial layout, dependent launch, and combine were designed together.
 Shuttle intentionally keeps relation scheduling, attention tile work, and Fold
-finalization as generic compiler-owned components. The remaining roughly 20%
-full-path gap is consistent with extra boundaries and less specialized layout
-coordination, not with different attention semantics.
+finalization as generic compiler-owned components. Comparing the one-sided
+128x2 confirmation with the preserved oracle median suggests a 3.7% full-path
+gap, but it is not a fresh counterbalanced acceptance capture. The stricter
+accepted comparison remains the pooled 1.198069x checkpoint above.
 
 For scale, the preserved naive selected-attention reference takes
 220.194427 ms at the same 16K shape. It launches 256 eager group/chunk bodies,
@@ -104,4 +158,6 @@ prior generated streaming payload and 83.26x slower than MSA.
 - Isolated oracle captures: `shuttle-fold-primary-oracle*.json`
 - Non-attention reuse: `shuttle-fold-indexed.json`
 - Attention binding: `shuttle-fold-attention.json`
-
+- Schedule smoke: `fold-schedule-smoke-gb200.json`
+- Three-candidate schedule ablation: `fold-schedule-ablation-gb200.json`
+- 128x2 full confirmation: `shuttle-fold-full-128x2-gb200.json`
