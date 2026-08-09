@@ -13,6 +13,8 @@ from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
     _ROUTED_ATTENTION_TARGETS,
     _SHARED_ROUTED_TARGETS,
+    _WEIGHTED_RELATION_CONTRACT_TARGET,
+    _WEIGHTED_RELATION_FOLD_TARGET,
     _attention_reverse_program,
     _audit_shared_map_composition,
     _axis_fold_reassociation_report,
@@ -216,15 +218,27 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
         _SHARED_ROUTED_TARGETS.shared_contract_multi_map,
         _SHARED_ROUTED_TARGETS.source_fold,
         *_SHARED_ROUTED_TARGETS.weight_gradients,
+        _WEIGHTED_RELATION_CONTRACT_TARGET,
+        _WEIGHTED_RELATION_FOLD_TARGET,
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
     selected_targets = (*targets, *(generated.target_name for generated in axis_folds))
     exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
+    assert len(exact_occurrences) == 12
     assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
     assert audit.routed.retained_input_adjoint_wrappers == plan.routed.retained_input_adjoint_wrappers
     assert len(audit.axis_folds) == 2
     assert audit.routed.shared_contract_multi_map.outputs == ("select.5", "select.7")
+    assert audit.weighted_relation_reverse.contract_instruction == "dot.69"
+    assert audit.weighted_relation_reverse.fold_instruction == "scatter-add.41"
+    assert audit.weighted_relation_reverse.dead_replaced_instructions == (
+        "slice.35",
+        "mul.967",
+        "reduce_sum.710",
+        "reshape.409",
+    )
+    assert audit.weighted_relation_reverse.placement_collective == "psum.51"
 
 
 def test_shared_contract_multi_map_cpu_reference_matches_source_ordered_formula() -> None:
