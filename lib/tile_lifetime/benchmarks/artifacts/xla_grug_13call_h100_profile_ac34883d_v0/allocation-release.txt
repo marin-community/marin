@@ -1,0 +1,5 @@
+Session: dlwh-shuttle-grug-13call-profile
+Job: /dlwh/dev-gpu-dlwh-shuttle-grug-13call-profile
+Request: 1 H100, 1 CPU, 32GB memory, 50GB disk, batch priority
+Final local session state: absent
+Final Kubernetes pod lookup: no resources found in iris namespace
