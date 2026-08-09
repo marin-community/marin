@@ -1,0 +1,110 @@
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/tmp/attn-hlo-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^

@@ -2469,3 +2469,40 @@ author: dlwh
   checksum manifest seals the replay results and JAX/JAXlib/host environment.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_collective_completion_cpu_v0/`.
+
+### 2026-08-09 - TLTC-XLA-028 live H100 attention-reverse replacement
+
+- Hypothesis: the generic whole-entry replacement can match live optimized GPU
+  HLO at XLA `PRE_SCHEDULER` and execute the generated typed-FFI handler, rather
+  than only reproducing the boundary through a direct benchmark wrapper.
+- Replay revision: `ab6c6493f1` on one H100 with two host CPUs, 32 GB host
+  memory, and batch priority. The allocation was released after artifact copy.
+- Replacement proof: the callback saw one natural JAX differentiated module,
+  recovered five Contracts, four additive Folds, normalized-exponential state,
+  and a causal DomainRestriction, then emitted one typed-FFI custom call. The
+  handler executed 160 times. Exact source StableHLO and pre/post HLO modules
+  are preserved.
+- Measurement: 30 counterbalanced samples with five executions each measure
+  4.466521 ms for stock natural JAX/XLA and 0.880135 ms for the transformed
+  executable. Both are bitwise stable. dQ/dK/dV maximum absolute errors are
+  0.03125 and mean errors are at most 0.000146.
+- Acceptance caveat: this closes the live XLA replacement proof, not the expert
+  performance gate. The closest preserved direct H100 results are 0.679229 ms
+  for Shuttle typed FFI and 0.634584 ms for the expert recompute oracle, so the
+  integrated replay is approximately 1.387x the expert number across different
+  captures/toolchains.
+- Layout gap: inputs require no copies and dQ is root-layout native. dK and dV
+  require two output copies over 8 MiB of payload, or 16 MiB nominal
+  read-plus-write traffic. The next bounded experiment is physical-layout-
+  native FFI output binding and generated dK/dV strides so XLA can erase both
+  copies.
+- Build/runtime boundary: Torch is an incidental top-level import in the copied
+  AOT input module and is build-only. Runtime imports contain neither Torch nor
+  Triton, and the DSO links only CUDA and system libraries.
+- Negative result: S=64 executes the replacement but fails the primary BF16
+  bound with dV maximum absolute error 0.0625. It remains unaccepted rather
+  than being relabeled a compiler failure.
+- Artifacts:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_pre_scheduler_h100_v0/`
+  and
+  `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_pre_scheduler_h100_s64_negative_v0/`.

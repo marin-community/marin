@@ -1,0 +1,693 @@
+{
+  "additive_fold_count": 4,
+  "allocation": {
+    "cpu": 2.0,
+    "disk": "50GB",
+    "gpu_count": 1,
+    "gpu_variant": "H100",
+    "memory": "32GB",
+    "priority": "batch"
+  },
+  "architecture": "sm_90a",
+  "baseline_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600",
+  "command": {
+    "argv": [
+      "lib/tile_lifetime/benchmarks/xla_streaming_attention_backward_gpu_custom_call.py",
+      "--repository",
+      ".",
+      "--build-directory",
+      "/tmp/attn-hlo-h100-build",
+      "--artifact-directory",
+      "/tmp/attn-hlo-h100-artifact",
+      "--nvcc",
+      "/tmp/attn-hlo-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+      "--architecture",
+      "sm_90a",
+      "--sequence",
+      "2048",
+      "--query-heads",
+      "32",
+      "--key-value-heads",
+      "8",
+      "--head-dimension",
+      "128",
+      "--block-m",
+      "32",
+      "--block-n",
+      "32",
+      "--num-warps",
+      "8",
+      "--num-stages",
+      "3",
+      "--warmups",
+      "4",
+      "--repeats",
+      "30",
+      "--iterations",
+      "5",
+      "--determinism-repeats",
+      "5",
+      "--shuttle-revision",
+      "ab6c6493f14f447cb723640dd04a4a7bfa0a5562",
+      "--holder-revision",
+      "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+      "--allocation-cpu",
+      "2",
+      "--allocation-memory",
+      "32GB",
+      "--allocation-disk",
+      "50GB",
+      "--allocation-priority",
+      "batch"
+    ],
+    "environment": {
+      "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    },
+    "shell": "lib/tile_lifetime/benchmarks/xla_streaming_attention_backward_gpu_custom_call.py --repository . --build-directory /tmp/attn-hlo-h100-build --artifact-directory /tmp/attn-hlo-h100-artifact --nvcc /tmp/attn-hlo-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc --architecture sm_90a --sequence 2048 --query-heads 32 --key-value-heads 8 --head-dimension 128 --block-m 32 --block-n 32 --num-warps 8 --num-stages 3 --warmups 4 --repeats 30 --iterations 5 --determinism-repeats 5 --shuttle-revision ab6c6493f14f447cb723640dd04a4a7bfa0a5562 --holder-revision eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb --allocation-cpu 2 --allocation-memory 32GB --allocation-disk 50GB --allocation-priority batch",
+    "working_directory": "/tmp/shuttle-repo"
+  },
+  "contract_count": 5,
+  "custom_call_occurrences": 1,
+  "determinism": {
+    "baseline": {
+      "bitwise_stable": true,
+      "hashes": [
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600",
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600",
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600",
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600",
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+      ]
+    },
+    "transformed": {
+      "bitwise_stable": true,
+      "hashes": [
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa",
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa",
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa",
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa",
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+      ]
+    }
+  },
+  "device_kind": "NVIDIA H100 80GB HBM3",
+  "domain_restriction_recovered": true,
+  "errors": {
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00014224331243894994
+    },
+    "query": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 8.815703040454537e-05
+    },
+    "value": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00014518963871523738
+    }
+  },
+  "generated_handler": {
+    "aot_source_sha256": {
+      "shuttle_streaming_dkdv.c8bb3723_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c": "0a3f50f1e28828b6284c5ba78820a6af0f60b6d6374a9ead4678351086417137",
+      "shuttle_streaming_dq.f0d1870d_0d1d2d3d4d5d6d7d891011121314151617181920212223242526272829303132333435363738394041424344.c": "c151f46d230c866e55cc8ec2b598d8cd0e5a829e789364f18bad330557549c45",
+      "shuttle_streaming_forward.de92f901_0d1d2d3d4d5d6d7d8d91011121314151617181920212223242526272829303132333435363738394041424344454647.c": "b3881aad7eddbf48a539b504798387e8d2aff8efe38ec59319b7ce42b1bb0554"
+    },
+    "library_sha256": "37bfaf5acb33d993b5836878c0d0b0c6eb674999bf6aa5632c7e897308f75c79",
+    "source_sha256": "28c9f6cd68cb2ba228e93e9e402204fa59478ce7602091a4523776c8d9a8366b"
+  },
+  "handler_executions": 160,
+  "hlo": {
+    "original_proto_sha256": "eaeeb7d26c496ec6d41fef8b61925d63ddc9ffaf8654c1a5ff4b9175bb477337",
+    "original_text_sha256": "6a497d2e25e70c31acd695a32bbda317e84b9851e083d3fcb0b47ed2a073039b",
+    "transformed_proto_sha256": "8c90cad2b9124bec582d04f2a7d76b9b8222549452ddf211f210ff583a28756b",
+    "transformed_text_sha256": "a07c0e3a393244e4097a6d9e31fd6ad2710c960928ec1c60a14491972a961976"
+  },
+  "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "input_roles": [
+    "query",
+    "key",
+    "value",
+    "output_cotangent"
+  ],
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_streaming_attention_backward_pre_scheduler_replacement",
+  "maximum_vjp": "normalized_exp_invariant",
+  "natural_frontend": "ordinary JAX tensor algebra differentiated by JAX",
+  "observed_shuttle_revision": "ab6c6493f14f447cb723640dd04a4a7bfa0a5562",
+  "output_roles": [
+    "query_cotangent",
+    "key_cotangent",
+    "value_cotangent"
+  ],
+  "pipeline_stage": "PRE_SCHEDULER",
+  "platform": "cuda",
+  "reassociation": "deterministic_tree",
+  "requested_shuttle_revision": "ab6c6493f14f447cb723640dd04a4a7bfa0a5562",
+  "runtime_imports": {
+    "torch": false,
+    "triton": false
+  },
+  "score_scale": 0.0883883461,
+  "semantic_fingerprint": "640f1830be2ed7d5a4f8cdfb04711d7b80b85d2dfadf8f48599e2b12f5deea91",
+  "state_policy": "recompute",
+  "telemetry_after": {
+    "field_errors": {},
+    "gpus": [
+      {
+        "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+        "clocks.applications.memory": "[Requested functionality has been deprecated]",
+        "clocks.current.graphics": "1830",
+        "clocks.current.memory": "2619",
+        "clocks.current.sm": "1830",
+        "clocks.max.graphics": "1980",
+        "clocks.max.memory": "2619",
+        "clocks.max.sm": "1980",
+        "driver_version": "595.71.05",
+        "index": "0",
+        "name": "NVIDIA H100 80GB HBM3",
+        "pci.bus_id": "00000000:4C:00.0",
+        "persistence_mode": "Enabled",
+        "power.draw": "227.85",
+        "power.limit": "700.00",
+        "pstate": "P0",
+        "temperature.gpu": "27",
+        "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e"
+      }
+    ],
+    "topology": {
+      "arguments": [
+        "nvidia-smi",
+        "topo",
+        "-m"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tNIC13\tNIC14\tNIC15\tNIC16\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC1\tNODE\tNODE\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC2\tPIX\tNODE\tNODE\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tNODE\tNODE\tNODE\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tSYS\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC6\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC7\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC8\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC11\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC12\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC13\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC14\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC15\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC16\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: ibp4\n  NIC5: ibp5\n  NIC6: ibp6\n  NIC7: ibp7\n  NIC8: mlx5_0\n  NIC9: mlx5_1\n  NIC10: mlx5_2\n  NIC11: mlx5_3\n  NIC12: mlx5_4\n  NIC13: mlx5_5\n  NIC14: mlx5_6\n  NIC15: mlx5_7\n  NIC16: mlx5_8"
+    }
+  },
+  "telemetry_before": {
+    "field_errors": {},
+    "gpus": [
+      {
+        "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+        "clocks.applications.memory": "[Requested functionality has been deprecated]",
+        "clocks.current.graphics": "1830",
+        "clocks.current.memory": "2619",
+        "clocks.current.sm": "1830",
+        "clocks.max.graphics": "1980",
+        "clocks.max.memory": "2619",
+        "clocks.max.sm": "1980",
+        "driver_version": "595.71.05",
+        "index": "0",
+        "name": "NVIDIA H100 80GB HBM3",
+        "pci.bus_id": "00000000:4C:00.0",
+        "persistence_mode": "Enabled",
+        "power.draw": "137.98",
+        "power.limit": "700.00",
+        "pstate": "P0",
+        "temperature.gpu": "26",
+        "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e"
+      }
+    ],
+    "topology": {
+      "arguments": [
+        "nvidia-smi",
+        "topo",
+        "-m"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tNIC13\tNIC14\tNIC15\tNIC16\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC1\tNODE\tNODE\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC2\tPIX\tNODE\tNODE\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tNODE\tNODE\tNODE\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tSYS\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC6\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC7\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC8\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC11\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC12\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC13\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC14\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC15\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC16\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: ibp4\n  NIC5: ibp5\n  NIC6: ibp6\n  NIC7: ibp7\n  NIC8: mlx5_0\n  NIC9: mlx5_1\n  NIC10: mlx5_2\n  NIC11: mlx5_3\n  NIC12: mlx5_4\n  NIC13: mlx5_5\n  NIC14: mlx5_6\n  NIC15: mlx5_7\n  NIC16: mlx5_8"
+    }
+  },
+  "timing": {
+    "baseline_median_ms": 4.466520700225374,
+    "iterations_per_sample": 5,
+    "raw_samples": [
+      {
+        "baseline": {
+          "latency_ms": 4.532807199575473,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8687913999892771,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.451186199730728,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8602273999713361,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.444770400004927,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8653429998958018,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.443215799983591,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8673734002513811,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.449034800200025,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8718719996977597,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.459276599664008,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8692573996086139,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.467245000705589,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8793334003712516,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.45595300043351,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8989768000901677,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.482696399645647,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.9089153994864319,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.4842030001746025,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.9086553996894509,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.465796399745159,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8536920002370607,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.493487799481954,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8678784004587214,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.464631599694258,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8734243994695134,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.4643458000791725,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8739327997318469,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.48949139972683,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8843322000757325,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.488962200412061,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8715216004929971,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.455199399671983,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8805183999356814,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.452528600086225,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8905066002625972,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.476472600072157,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8872071994119324,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.464487400400685,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8919096006138716,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.47653720038943,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8735621995583642,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.478120600106195,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8962644002167508,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.4613728001422714,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8882465997885447,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.474820000177715,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8885800001735333,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.475906000152463,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8761632001551334,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.470905399648473,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8811701998638455,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.468584799906239,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8881966001354158,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.44405679954798,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.8951707997766789,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.4897261999722105,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "baseline",
+          "transformed"
+        ],
+        "transformed": {
+          "latency_ms": 0.8797510003205389,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      },
+      {
+        "baseline": {
+          "latency_ms": 4.4535487999382894,
+          "output_hash": "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+        },
+        "order": [
+          "transformed",
+          "baseline"
+        ],
+        "transformed": {
+          "latency_ms": 0.9538634003547486,
+          "output_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+        }
+      }
+    ],
+    "repeats": 30,
+    "transformed_median_ms": 0.8801347001281101,
+    "transformed_over_baseline": 0.19705152157555206,
+    "unique_output_hashes": {
+      "baseline": [
+        "8165cd507757b983b9cb648ebfda82af4e94391a06c07d3ecf4c80a80e932600"
+      ],
+      "transformed": [
+        "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+      ]
+    },
+    "warmups": 4
+  },
+  "toolchain": {
+    "nvcc": {
+      "arguments": [
+        "/tmp/attn-hlo-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:43:40_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0"
+    },
+    "platform": {
+      "arguments": [
+        "uname",
+        "-a"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Linux g73bb8a 6.8.12-680-6063-coreweave-amd64-f81899c8 #1 SMP PREEMPT_DYNAMIC Fri Apr 25 14:33:53 UTC 2025 x86_64 GNU/Linux"
+    },
+    "ptxas": {
+      "arguments": [
+        "/tmp/attn-hlo-venv/lib/python3.12/site-packages/nvidia/cu13/bin/ptxas",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "ptxas: NVIDIA (R) Ptx optimizing assembler\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:43:40_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0"
+    },
+    "python": "3.12.13 (main, Aug  5 2026, 01:10:24) [GCC 14.2.0]"
+  },
+  "transformed_hash": "3f13b936e121b4e08b33f38b7b3352ebbda3e3d76fcad95ae9e106786928d0fa"
+}
