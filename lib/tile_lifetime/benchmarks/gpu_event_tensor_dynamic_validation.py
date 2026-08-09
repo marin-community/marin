@@ -10,7 +10,7 @@ import hashlib
 import json
 import statistics
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -26,8 +26,19 @@ from tile_lifetime.cuda_dynamic_event_dataflow_codegen import (
     generate_cuda_phased_pipeline_lowering,
     generate_cuda_runtime_event_lowering,
 )
-from tile_lifetime.event_dataflow import EventMemoryScope, derive_event_tensor_plan, event_tensor_runtime_inputs
-from tile_lifetime.event_dataflow_examples import pipelined_contract_fold_program, relation_segment_dependence
+from tile_lifetime.event_dataflow import (
+    EventDataflowProgram,
+    EventMemoryScope,
+    EventSchedulingMode,
+    derive_event_tensor_plan,
+    event_tensor_runtime_inputs,
+    execute_event_dataflow,
+)
+from tile_lifetime.event_dataflow_examples import (
+    pipelined_contract_fold_program,
+    relation_segment_dependence,
+    single_dependence_event_program,
+)
 from tile_lifetime.relation import RelationPlan, build_relation_plan
 
 
@@ -106,6 +117,36 @@ def _benchmark(functions: tuple[tuple[str, Callable[[], None]], ...], args: argp
             }
             for name, values in samples.items()
         },
+    }
+
+
+def _trace_record(program: EventDataflowProgram) -> dict[str, Any]:
+    def execute_task(_coordinate: tuple[int, ...], _state: MutableMapping[str, object]) -> None:
+        return
+
+    result = execute_event_dataflow(
+        program,
+        actions={family.name: execute_task for family in program.task_families},
+        state={},
+        scheduling_mode=EventSchedulingMode.DYNAMIC,
+    )
+    entries = [
+        {
+            "step": entry.step,
+            "kind": entry.kind.value,
+            "subject": entry.subject,
+            "coordinate": list(entry.coordinate),
+            "generation": entry.generation,
+            "remaining": entry.remaining,
+        }
+        for entry in result.trace
+    ]
+    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        "entry_count": len(entries),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "head": entries[:16],
+        "tail": entries[-16:],
     }
 
 
@@ -250,6 +291,13 @@ def main() -> None:
         relation_segment_dependence(first_relation, visibility_scope=EventMemoryScope.CTA),
         name="runtime_segment_readiness",
     )
+    runtime_trace = _trace_record(
+        single_dependence_event_program(
+            relation_segment_dependence(first_relation, visibility_scope=EventMemoryScope.CTA),
+            name="runtime_segment_readiness",
+            scheduling_mode=EventSchedulingMode.DYNAMIC,
+        )
+    )
     generated_runtime: CudaDynamicEventLowering = generate_cuda_runtime_event_lowering(first_event_plan)
     runtime_module, runtime_source_path = _load_source(
         generated_runtime.source,
@@ -272,6 +320,7 @@ def main() -> None:
         pipeline_depth=args.pipeline_depth,
     )
     generated_phased: CudaPhasedPipelineLowering = generate_cuda_phased_pipeline_lowering(phased_program)
+    phased_trace = _trace_record(phased_program)
     phased_module, phased_source_path = _load_source(
         generated_phased.source,
         generated_phased.source_sha256,
@@ -337,6 +386,14 @@ def main() -> None:
             "first": first_runtime,
             "mutation": second_runtime,
             "same_compiled_module": True,
+            "logical_execution_trace": runtime_trace,
+            "visibility_assertion": {
+                "scope": first_event_plan.memory_scope.value,
+                "release_on_notify": first_event_plan.visibility.release_on_notify,
+                "acquire_before_consumer": first_event_plan.visibility.acquire_before_consumer,
+                "physical_realization": "cuda block barrier wait after producer arrivals",
+                "zero_count_policy": "initially ready identity; no barrier initialized",
+            },
         },
         "phased_pipeline": {
             "generated_source": {
@@ -346,6 +403,13 @@ def main() -> None:
             "primary": phased_correctness,
             "mutation": phased_mutation,
             "same_compiled_module": True,
+            "logical_execution_trace": phased_trace,
+            "generation_assertion": {
+                "policy": "phased",
+                "identity": "physical slot plus monotonically increasing generation",
+                "release": "threadfence_block then atomic generation publish",
+                "acquire": "atomic generation poll before shared-buffer read",
+            },
         },
         "timing": timing,
         "toolchain": toolchain_snapshot(args.nvcc),
