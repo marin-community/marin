@@ -2131,3 +2131,38 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_gb200_replay_9cac1dd40b/`
   and the rejected-device record under
   `streaming_attention_backward_gb200_replay_blocked_9cac1dd40b/`.
+
+### 2026-08-09 - TLTC-XLA-017 routed Grug input-adjoint replacement on GB200
+
+- Hypothesis: Shuttle can recover a multi-output routed reverse region from the
+  ordinary differentiated Grug train step and replace it with generated generic
+  Contract/Map/Fold execution without owning model-level AD.
+- Commit Hash: code checkpoint `2145f8eadf`; integrated artifact checkpoint
+  `41af1a047b`.
+- Config: one actual NVIDIA GB200, compute capability 10.0, driver 595.71.05,
+  JAX/JAXlib/CUDA plugin 0.11.0, CUDA compiler 13.0.88, batch priority, one CPU,
+  30 counterbalanced full-step sample pairs. No B200 result is involved.
+- Recovered region: BF16 Contract with FP32 accumulation, generated two-output
+  reverse scalar Map, second BF16 Contract, and a deterministic source Fold.
+  The custom call returns both the reverse-Map physical buffer consumed by the
+  still-XLA-owned grouped weight adjoint and the source adjoint. JAX owns the
+  differentiation; the generated implementation contains no atomics or
+  workload-name dispatch.
+- Result: stock XLA measures 0.904177 ms and the transformed full train step
+  measures 0.837056 ms, a 0.925766x ratio. The complete 53-leaf output has
+  2.328e-10 maximum and 1.308e-14 mean absolute error; 51 leaves are bitwise
+  equal in the direct comparison. There is one transformed custom call and 35
+  observed handler executions. Every dynamic operand has runtime parameter
+  ancestry; only the Fold-zero initial value is static.
+- Determinism: the generated full-step output has one repeated hash versus nine
+  for the stock path. This is whole-step evidence, not a claim about unrelated
+  XLA reductions. The generated source Fold is deterministic by construction:
+  one writer per source-feature visits compact edges in fixed destination-major
+  order.
+- Interpretation: the routed forward and input-adjoint slices now execute from
+  natural JAX through post-SPMD HLO replacement. The next local ownership gap is
+  the routed expert weight-gradient Contracts. Relation construction and
+  collectives remain external until the local forward/backward regions are
+  complete.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_input_adjoint_gpu_gb200_v0/`.
