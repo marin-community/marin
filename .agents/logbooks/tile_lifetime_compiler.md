@@ -2004,3 +2004,67 @@ author: dlwh
   is not justified by the current H100 or GB200 measurements.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_gb200_components_corrected_v1/`.
+
+### 2026-08-09 - TLTC-EVENT-013 Torch-free Event Tensor replay on GB200
+
+- Hypothesis: one generic `EventTensorPlan` lowering can execute runtime
+  `RelationPlan` readiness and phased Contract/Fold readiness through JAX typed
+  FFI without Torch or workload-specific event wiring.
+- Commit Hash: `380f715d74`; measured source `1a04930ecd`.
+- Command: `h100_jax_event_tensor_ffi.py --architecture sm_100a
+  --expected-gpu-substring GB200 --allocation-gpus 1 --allocation-cpu 1
+  --allocation-memory 32GB --allocation-disk 50GB --allocation-priority batch`.
+  The complete argv and environment are stored in `summary.json`.
+- Config: one NVIDIA GB200, driver 595.71.05, JAX 0.10.1 with CUDA 13,
+  NVCC/PTXAS 13.3.73, 30 counterbalanced samples and 100 invocations per
+  sample. The preceding H100 request timed out before admission and consumed no
+  GPU time. No B200 result is involved.
+- Result: runtime primary/mutation are bitwise source-order matches and measure
+  0.061314/0.061152 ms. Phased primary/mutation maximum errors are 8.941e-8 and
+  1.192e-7 and measure 0.169697/0.146477 ms. All four paths are bitwise
+  deterministic over five repeated executions. Optimized HLO retains runtime
+  parameters, one typed-FFI target, and no constant/copy substitution.
+- Interpretation: the generic JAX-to-CUDA readiness boundary works on SM100.
+  The phased payload is a scalar reference Contract/Fold pipeline. It does not
+  establish tensor-core attention performance or complete circular-buffer
+  slot/reuse derivation.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_jax_ffi_gb200_v0/`.
+- Next action: connect buffer-slot assignment and last-consumer reuse edges to
+  a real generated attention or routed-MoE task graph after the current Grug
+  integration work.
+
+### 2026-08-09 - TLTC-XLA-014 routed Grug forward replacement on GB200
+
+- Hypothesis: Shuttle can recover and replace the natural routed
+  Contract→Map→Contract→Fold region from actual GPU PRE_SCHEDULER HLO using
+  only generic Contracts, generated scalar ASTs, and a deterministic Fold.
+- Commit Hash: `9cac1dd40b`.
+- Command: `xla_grug_routed_forward_gpu_custom_call.py --architecture sm_100a
+  --warmup 4 --repeats 30 --artifact-directory <artifact> --output
+  <artifact>/summary.json`, using the pinned NVCC 13.0.88 path recorded in the
+  artifact.
+- Config: ordinary one-layer Grug train step with JAX-owned differentiation;
+  one NVIDIA GB200, compute capability 10.0, driver 595.71.05, JAX/JAXlib/CUDA
+  plugin 0.11.0, cuBLAS 13.4.1.1, batch priority, one CPU. No B200 result is
+  involved.
+- Result: one region is replaced and the handler executes 35 times. All seven
+  operands have runtime parameter ancestry. The transformed full train step
+  measures 0.991105 ms versus 0.851664 ms for XLA, a 1.163727x ratio within the
+  1.20 proof target. Maximum/mean output errors are 2.328e-10/4.183e-15, and 52
+  of 53 result leaves are bitwise equal in the direct comparison.
+- Numerical/scheduling contract: BF16 Contract and Map/Fold storage with FP32
+  Contract accumulation, generated source BF16 rounding, a fixed
+  destination-major Fold traversal, one writer per source-feature, and no
+  atomic accumulation. Whole-step hashes vary because other XLA-owned
+  reductions remain nondeterministic.
+- Interpretation: the natural JAX→GPU HLO→generic region→generated typed-FFI
+  chain now works for a routed forward slice. The first real GPU HLO differed
+  from the CPU-derived fixture; structural recovery was generalized to the
+  unfused BF16 dot/Map/scatter form before code generation.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_forward_gpu_gb200_v0/`.
+- Next action: recover and replace the input-adjoint
+  Contract→reverse-Map→Contract→source-Fold region, followed by the routed
+  weight-gradient Contracts. Keep collectives external until those local
+  regions execute correctly.
