@@ -17,18 +17,18 @@ author: dlwh
 ## Current TL;DR
 
 - The active path replaces generic forward and reverse regions in a natural
-  one-layer Grug training step after JAX-owned AD. A seven-call H100 replay owns
-  routed forward, a shared Contract with two scalar Maps, two expert-weight
-  Contracts, streaming-attention reverse, and two row Folds. It measured
-  `1.142374x` XLA and passed ordered-FP correctness, but three of 30 generated
-  executions produced a second output hash. The result is unaccepted. Per-leaf
-  hash evidence is now recorded before the next bounded replay. Static audit
-  identified the residual BF16 route scatter as the leading source of the hash
-  split. Shuttle now replaces it with a deterministic source-indexed Fold and
-  also owns the remaining two input-adjoint Contracts. Generic RMS reverse is
-  correct on H100 but measures `1.512778x` XLA, so Fold decomposition remains a
-  performance task. H100, B200, and GB200 evidence remain separate; Schmidt
-  provides B200, not GB200.
+  one-layer Grug training step after JAX-owned AD. Ten generated calls now own
+  routed forward, two input-adjoint Contracts, a shared Contract with two scalar
+  Maps, a deterministic source Fold, two expert-weight Contracts,
+  streaming-attention reverse, and two row Folds. A physical-H100 replay passed
+  ordered-FP correctness and bitwise determinism across 30 repetitions at
+  `1.178695x` XLA, inside the `1.20x` target. A static live-HLO audit attributes
+  84.1% of this fixture's pre-scheduler dot FLOPs to Shuttle; the weighted
+  RelationProgram reverse is the largest remaining arithmetic region. Generic
+  RMS reverse is correct on H100 but measures `1.512778x` XLA, so Fold
+  decomposition remains a performance task. H100, B200, and GB200 evidence
+  remain separate. The available secondary Blackwell cluster provides B200
+  portability evidence, not GB200 acceptance evidence.
 
 ## Hypothesis Queue
 
@@ -2575,8 +2575,8 @@ author: dlwh
   derive and generate the exact Map/Fold boundary while retaining an explicit
   deterministic-tree numerical policy.
 - Hardware taxonomy remains strict: the preserved artifact reports an actual
-  NVIDIA GB200. Schmidt allocations, if used later, are B200 portability data
-  and must not be cited as GB200 evidence.
+  NVIDIA GB200. Secondary-cluster allocations, if used later, are B200
+  portability data and must not be cited as GB200 evidence.
 
 ### 2026-08-09 - TLTC-XLA-031 collective replay and anonymous row Folds
 
@@ -2696,3 +2696,38 @@ author: dlwh
   source row in the former XLA `%scatter-add.42`. This is the leading explanation
   for the 3-of-30 alternate hashes. The deterministic Fold requires a bounded
   H100 replay before the diagnosis is confirmed.
+
+### 2026-08-09 - TLTC-XLA-036 accepted ten-call H100 replay
+
+- Revision `992a7467da` replaced the residual BF16 scatter with the generated
+  deterministic source Fold and added both generic input-adjoint Contracts.
+- All ten exact custom-call targets occurred once in transformed HLO and every
+  handler executed 35 times. The evidence file was written after target,
+  handler, correctness, and determinism guards and before summary assembly.
+- Both XLA and Shuttle produced one output hash across all 30 measured
+  repetitions. Ordered-FP comparison covered 53 leaves: 38 were bitwise equal,
+  maximum absolute error was `9.760261e-7`, and mean absolute error was
+  `7.977959e-11`.
+- Median latency was `0.585042 ms` for XLA and `0.689586 ms` for Shuttle, or
+  `1.178695x`. This satisfies the bounded `1.20x` training-region target.
+- The run used one physical H100, requested one CPU, incurred the platform's
+  four-CPU minimum, and made no retry. The allocation was explicitly released.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_992a7467_v0/`.
+
+### 2026-08-09 - TLTC-XLA-037 remaining Grug arithmetic ownership
+
+- A live-entry audit of the exact ten-call transformed HLO counts 46,145,536
+  dot FLOPs inside Shuttle and 8,720,384 dot FLOPs remaining in XLA, or 84.1%
+  static ownership for this padded fixture.
+- The largest remaining region is the weighted RelationProgram reverse:
+  `%dot.69` plus its per-edge hidden Fold, inverse relation, and router VJP. It
+  accounts for 48.1% of remaining dot work and computes 512 padded rows although
+  only the first 16 survive.
+- The next generic ownership targets are normalized-exponential loss Contracts
+  and Fold (26.3% of remaining dot work), followed by repeated GatedNorm/RMS
+  training regions (21.0%). These three families cover 95.5% of the residual dot
+  work.
+- JAX continues to own AD and the natural frontend. Collectives, relation-index
+  construction, views, and non-bottleneck runtime plumbing remain outside the
+  current arithmetic replacement boundary.

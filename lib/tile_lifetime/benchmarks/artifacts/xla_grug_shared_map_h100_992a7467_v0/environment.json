@@ -1,0 +1,36 @@
+{
+  "source": {
+    "revision": "992a7467da14886cbf03f40e27cd21f376f43125",
+    "benchmark": "lib/tile_lifetime/benchmarks/xla_grug_routed_combined_gpu_custom_call.py",
+    "benchmark_sha256": "b267d626f308f3faef8b85b2281447e69df2f2f129f7b1d497230a9ff7f415dc"
+  },
+  "protocol": {
+    "composition_mode": "shared_map_xla_remainder",
+    "warmup_repetitions": 4,
+    "measured_repetitions": 30,
+    "retry_count": 0,
+    "requested_cpu": 1,
+    "normalized_cpu": 4
+  },
+  "device": {
+    "model": "NVIDIA H100 80GB HBM3",
+    "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e",
+    "compute_capability": "9.0",
+    "driver": "595.71.05",
+    "power_limit_watts": 700,
+    "backend_architecture": "sm_90a"
+  },
+  "toolchain": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "triton": "3.6.0",
+    "cuda_nvcc": "13.2.78",
+    "cuda_cccl_python_package": "13.3.3.4.1"
+  },
+  "allocation": {
+    "name": "codex-ten-call-992a",
+    "job": "/dlwh/dev-gpu-codex-ten-call-992a",
+    "released": true,
+    "inactive_status_verified": true
+  }
+}
