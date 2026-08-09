@@ -37,6 +37,14 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     write_gzip_text,
 )
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
+from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
+    GeneratedCudaNormalizedExpContractForwardFfi,
+    generate_cuda_normalized_exp_contract_forward_ffi,
+)
+from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
+    GeneratedCudaNormalizedExpContractReverseFfi,
+    generate_cuda_normalized_exp_contract_reverse_ffi,
+)
 from tile_lifetime.jax_hlo_rewrite_runtime import require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
@@ -75,6 +83,20 @@ from tile_lifetime.xla_contract_relation_fold_ffi import (
     replace_contract_relation_fold_with_custom_call,
 )
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
+from tile_lifetime.xla_normalized_exp_contract_forward import (
+    NormalizedExpContractForwardHloReplacementAudit,
+    NormalizedExpContractForwardHloReplacementPlan,
+    audit_normalized_exp_contract_forward_hlo_replacement,
+    plan_normalized_exp_contract_forward_hlo_replacement,
+    replace_normalized_exp_contract_forward_hlo_region_with_custom_call,
+)
+from tile_lifetime.xla_normalized_exp_contract_reverse import (
+    NormalizedExpContractReverseHloReplacementAudit,
+    NormalizedExpContractReverseHloReplacementPlan,
+    audit_normalized_exp_contract_reverse_hlo_replacement,
+    plan_normalized_exp_contract_reverse_hlo_replacement,
+    replace_normalized_exp_contract_reverse_hlo_region_with_custom_call,
+)
 from tile_lifetime.xla_rank_two_contract_ffi import (
     GeneratedRankTwoContractFfi,
     generate_cuda_rank_two_contract_ffi,
@@ -164,6 +186,8 @@ _SHARED_ROUTED_TARGETS = RoutedSharedMapTrainingFfiTargets(
 _WEIGHTED_RELATION_CONTRACT_TARGET = "shuttle.routed_training.weighted_relation.contract.v1"
 _WEIGHTED_RELATION_FOLD_TARGET = "shuttle.routed_training.weighted_relation.fold.v1"
 _WEIGHTED_RELATION_FUSED_TARGET = "shuttle.routed_training.weighted_relation.contract_fold.v1"
+_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET = "shuttle.routed_training.normalized_exp_contract_forward.v1"
+_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET = "shuttle.routed_training.normalized_exp_contract_reverse.v1"
 
 
 class RoutedTrainingCompositionMode(StrEnum):
@@ -172,6 +196,7 @@ class RoutedTrainingCompositionMode(StrEnum):
     MONOLITHIC_INPUT_ADJOINT = "monolithic_input_adjoint"
     SHARED_MAP_XLA_REMAINDER = "shared_map_xla_remainder"
     SHARED_MAP_FUSED_WEIGHTED_REVERSE = "shared_map_fused_weighted_reverse"
+    SHARED_MAP_FUSED_REVERSES = "shared_map_fused_reverses"
 
     @property
     def uses_shared_map(self) -> bool:
@@ -181,13 +206,23 @@ class RoutedTrainingCompositionMode(StrEnum):
     @property
     def fuses_weighted_reverse(self) -> bool:
         """Whether one bounded Contract/Map/Fold call owns weighted reverse."""
-        return self is RoutedTrainingCompositionMode.SHARED_MAP_FUSED_WEIGHTED_REVERSE
+        return self in {
+            RoutedTrainingCompositionMode.SHARED_MAP_FUSED_WEIGHTED_REVERSE,
+            RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES,
+        }
+
+    @property
+    def generates_normalized_exp_pair(self) -> bool:
+        """Whether generated targets own normalized-exp forward and reverse."""
+        return self is RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES
 
     @property
     def independent_custom_call_count(self) -> int:
         """Return the exact generated-call count selected by this composition."""
         if self is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
             return 7
+        if self.generates_normalized_exp_pair:
+            return 13
         return 11 if self.fuses_weighted_reverse else 12
 
 
@@ -197,6 +232,8 @@ class SharedMapTrainingAttentionAndAxisFoldPlan:
 
     routed: RoutedSharedMapTrainingTypedFfiPlan
     weighted_relation_reverse: WeightedRelationReverseTypedFfiPlan
+    normalized_exp_contract_forward: NormalizedExpContractForwardHloReplacementPlan
+    normalized_exp_contract_reverse: NormalizedExpContractReverseHloReplacementPlan
     attention_backward: StreamingReverseHloRegionReplacementPlan
     axis_folds: tuple[AxisFoldHloRegionReplacementPlan, ...]
 
@@ -207,6 +244,8 @@ class SharedMapTrainingAttentionAndAxisFoldAudit:
 
     routed: RoutedSharedMapTrainingReplacementAudit
     weighted_relation_reverse: WeightedRelationReverseReplacementAudit | ContractRelationFoldReplacementAudit
+    normalized_exp_contract_forward: NormalizedExpContractForwardHloReplacementAudit | None
+    normalized_exp_contract_reverse: NormalizedExpContractReverseHloReplacementAudit | None
     attention_backward_instruction: str
     axis_folds: tuple[AxisFoldHloRegionReplacementAudit, ...]
 
@@ -318,9 +357,17 @@ def _plan_shared_map_composition(
     )
     if len({fold.internal_instructions for fold in axis_folds}) != len(axis_folds):
         raise ValueError("shared-Map composition selected one axis-Fold region more than once")
+    normalized_exp_contract_forward = plan_normalized_exp_contract_forward_hlo_replacement(hlo_text)
+    normalized_exp_forward_hlo = replace_normalized_exp_contract_forward_hlo_region_with_custom_call(
+        hlo_text,
+        normalized_exp_contract_forward,
+        target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+    )
     return SharedMapTrainingAttentionAndAxisFoldPlan(
         routed=plan_routed_shared_map_training_typed_ffi(hlo_text),
         weighted_relation_reverse=plan_weighted_relation_reverse_typed_ffi(hlo_text),
+        normalized_exp_contract_forward=normalized_exp_contract_forward,
+        normalized_exp_contract_reverse=plan_normalized_exp_contract_reverse_hlo_replacement(normalized_exp_forward_hlo),
         attention_backward=plan_streaming_attention_backward_hlo_region_replacement(
             hlo_text,
             attention_program,
@@ -335,6 +382,7 @@ def _replace_shared_map_composition(
     plan: SharedMapTrainingAttentionAndAxisFoldPlan,
     *,
     fuse_weighted_reverse: bool,
+    generate_normalized_exp_pair: bool = False,
 ) -> str:
     """Apply one clean shared-Map composition while retaining physical views."""
     rewritten = replace_streaming_attention_backward_region_with_custom_call(
@@ -361,6 +409,17 @@ def _replace_shared_map_composition(
             contract_target=_WEIGHTED_RELATION_CONTRACT_TARGET,
             fold_target=_WEIGHTED_RELATION_FOLD_TARGET,
         )
+    if generate_normalized_exp_pair:
+        rewritten = replace_normalized_exp_contract_forward_hlo_region_with_custom_call(
+            rewritten,
+            plan.normalized_exp_contract_forward,
+            target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+        )
+        rewritten = replace_normalized_exp_contract_reverse_hlo_region_with_custom_call(
+            rewritten,
+            plan.normalized_exp_contract_reverse,
+            target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+        )
     for axis_fold, target in zip(plan.axis_folds, _TARGETS.axis_folds, strict=True):
         rewritten = replace_axis_fold_hlo_region_with_custom_call(rewritten, axis_fold, target=target)
     return rewritten
@@ -372,6 +431,7 @@ def _audit_shared_map_composition(
     plan: SharedMapTrainingAttentionAndAxisFoldPlan,
     *,
     fuse_weighted_reverse: bool,
+    generate_normalized_exp_pair: bool = False,
 ) -> SharedMapTrainingAttentionAndAxisFoldAudit:
     """Audit every generated call and the XLA-owned physical views."""
     routed = audit_routed_shared_map_training_replacement(
@@ -402,6 +462,33 @@ def _audit_shared_map_composition(
         plan.attention_backward,
         target=_ROUTED_ATTENTION_TARGETS.attention_backward,
     )
+    normalized_exp_contract_forward = None
+    normalized_exp_contract_reverse = None
+    if generate_normalized_exp_pair:
+        forward_only_hlo = replace_normalized_exp_contract_forward_hlo_region_with_custom_call(
+            original_hlo,
+            plan.normalized_exp_contract_forward,
+            target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+        )
+        normalized_exp_contract_reverse = audit_normalized_exp_contract_reverse_hlo_replacement(
+            forward_only_hlo,
+            transformed_hlo,
+            plan.normalized_exp_contract_reverse,
+            target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+        )
+        generated_saved_state = "shuttle.generated.normalized_exp_contract_forward.output.1"
+        if plan.normalized_exp_contract_reverse.region.saved_state.instruction != generated_saved_state:
+            raise ValueError("normalized-exp reverse plan does not consume generated forward state")
+        normalized_exp_contract_forward = audit_normalized_exp_contract_forward_hlo_replacement(
+            original_hlo,
+            transformed_hlo,
+            plan.normalized_exp_contract_forward,
+            target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+            expected_output_users=(
+                plan.normalized_exp_contract_forward.external_users[0][1],
+                (normalized_exp_contract_reverse.call_instruction,),
+            ),
+        )
     axis_folds = tuple(
         audit_axis_fold_hlo_region_replacement(
             original_hlo,
@@ -414,6 +501,8 @@ def _audit_shared_map_composition(
     return SharedMapTrainingAttentionAndAxisFoldAudit(
         routed=routed,
         weighted_relation_reverse=weighted_relation_reverse,
+        normalized_exp_contract_forward=normalized_exp_contract_forward,
+        normalized_exp_contract_reverse=normalized_exp_contract_reverse,
         attention_backward_instruction=attention.call_instruction,
         axis_folds=axis_folds,
     )
@@ -515,6 +604,11 @@ def run_smoke(
             selected_routed_targets.source_fold,
             *selected_routed_targets.weight_gradients,
             *weighted_targets,
+            *(
+                (_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET, _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET)
+                if composition_mode.generates_normalized_exp_pair
+                else ()
+            ),
             _TARGETS.routed_attention.attention_backward,
             *_TARGETS.axis_folds,
         )
@@ -600,6 +694,8 @@ def run_smoke(
                 weighted_relation_contract: GeneratedRankTwoContractFfi | None = None
                 weighted_relation_fold: GeneratedRelationEdgeFoldFfi | None = None
                 weighted_relation_fused: GeneratedContractRelationFoldFfi | None = None
+                normalized_exp_contract_forward: GeneratedCudaNormalizedExpContractForwardFfi | None = None
+                normalized_exp_contract_reverse: GeneratedCudaNormalizedExpContractReverseFfi | None = None
                 if not composition_mode.uses_shared_map:
                     input_adjoint = generate_cuda_routed_input_adjoint_ffi(
                         routed_plan.input_adjoint,
@@ -638,6 +734,15 @@ def run_smoke(
                             plan.weighted_relation_reverse.edge_fold,
                             target=_WEIGHTED_RELATION_FOLD_TARGET,
                         )
+                    if composition_mode.generates_normalized_exp_pair:
+                        normalized_exp_contract_forward = generate_cuda_normalized_exp_contract_forward_ffi(
+                            plan.normalized_exp_contract_forward,
+                            target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                        )
+                        normalized_exp_contract_reverse = generate_cuda_normalized_exp_contract_reverse_ffi(
+                            plan.normalized_exp_contract_reverse,
+                            target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                        )
                     routed_weight_targets = _SHARED_ROUTED_TARGETS.weight_gradients
                 weights = tuple(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
@@ -656,6 +761,8 @@ def run_smoke(
                     *((weighted_relation_contract.source,) if weighted_relation_contract is not None else ()),
                     *((weighted_relation_fold.source,) if weighted_relation_fold is not None else ()),
                     *((weighted_relation_fused.source,) if weighted_relation_fused is not None else ()),
+                    *((normalized_exp_contract_forward.source,) if normalized_exp_contract_forward is not None else ()),
+                    *((normalized_exp_contract_reverse.source,) if normalized_exp_contract_reverse is not None else ()),
                     *(weight.source for weight in weights),
                     *(axis_fold.source for axis_fold in generated_axis_folds),
                 )
@@ -715,6 +822,19 @@ def run_smoke(
                             _WEIGHTED_RELATION_FOLD_TARGET,
                             "weighted_relation_fold",
                         )
+                    if composition_mode.generates_normalized_exp_pair:
+                        if normalized_exp_contract_forward is None or normalized_exp_contract_reverse is None:
+                            raise RuntimeError("shared-Map composition did not generate normalized-exp forward/reverse")
+                        compile_target(
+                            normalized_exp_contract_forward.source,
+                            _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                            "normalized_exp_contract_forward",
+                        )
+                        compile_target(
+                            normalized_exp_contract_reverse.source,
+                            _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                            "normalized_exp_contract_reverse",
+                        )
                 for index, (weight, target) in enumerate(zip(weights, routed_weight_targets, strict=True)):
                     compile_target(weight.source, target, f"group_batched_weight_gradient_{index}")
                 for index, (axis_fold, target) in enumerate(zip(generated_axis_folds, _TARGETS.axis_folds, strict=True)):
@@ -745,6 +865,7 @@ def run_smoke(
                         original,
                         plan,
                         fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
+                        generate_normalized_exp_pair=composition_mode.generates_normalized_exp_pair,
                     )
                 recovered_plans.append(plan)
                 generated_programs.append(
@@ -757,6 +878,8 @@ def run_smoke(
                         "weighted_relation_contract": weighted_relation_contract,
                         "weighted_relation_fold": weighted_relation_fold,
                         "weighted_relation_fused": weighted_relation_fused,
+                        "normalized_exp_contract_forward": normalized_exp_contract_forward,
+                        "normalized_exp_contract_reverse": normalized_exp_contract_reverse,
                         "weights": weights,
                         "attention": compiled_attention,
                         "attention_source_sha256": {
@@ -785,6 +908,7 @@ def run_smoke(
                             transformed_text,
                             plan,
                             fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
+                            generate_normalized_exp_pair=composition_mode.generates_normalized_exp_pair,
                         )
                     )
                 attention_liveness_audits.append(
@@ -926,6 +1050,15 @@ def run_smoke(
                         libraries["weighted_relation_fold"],
                         "shuttle_relation_edge_fold_call_count",
                     )
+                if composition_mode.generates_normalized_exp_pair:
+                    call_counts["normalized_exp_contract_forward"] = _call_count(
+                        libraries["normalized_exp_contract_forward"],
+                        "shuttle_normalized_exp_contract_forward_call_count",
+                    )
+                    call_counts["normalized_exp_contract_reverse"] = _call_count(
+                        libraries["normalized_exp_contract_reverse"],
+                        "shuttle_normalized_exp_contract_reverse_call_count",
+                    )
     finally:
         if artifact_directory is not None:
             for name in (
@@ -938,6 +1071,8 @@ def run_smoke(
                 "weighted_relation_contract",
                 "weighted_relation_fold",
                 "weighted_relation_contract_fold",
+                "normalized_exp_contract_forward",
+                "normalized_exp_contract_reverse",
                 "group_batched_weight_gradient_0",
                 "group_batched_weight_gradient_1",
                 "axis_fold_0",
@@ -972,12 +1107,20 @@ def run_smoke(
     weighted_relation_contract: GeneratedRankTwoContractFfi | None = generated["weighted_relation_contract"]
     weighted_relation_fold: GeneratedRelationEdgeFoldFfi | None = generated["weighted_relation_fold"]
     weighted_relation_fused: GeneratedContractRelationFoldFfi | None = generated["weighted_relation_fused"]
+    normalized_exp_contract_forward: GeneratedCudaNormalizedExpContractForwardFfi | None = generated[
+        "normalized_exp_contract_forward"
+    ]
+    normalized_exp_contract_reverse: GeneratedCudaNormalizedExpContractReverseFfi | None = generated[
+        "normalized_exp_contract_reverse"
+    ]
     weights = generated["weights"]
     compiled_attention = generated["attention"]
     attention_source_sha256 = generated["attention_source_sha256"]
     generated_axis_folds = generated["axis_folds"]
     weighted_relation_plan: WeightedRelationReverseTypedFfiPlan | None = None
     weighted_relation_audit: WeightedRelationReverseReplacementAudit | ContractRelationFoldReplacementAudit | None = None
+    normalized_exp_contract_forward_audit: NormalizedExpContractForwardHloReplacementAudit | None = None
+    normalized_exp_contract_reverse_audit: NormalizedExpContractReverseHloReplacementAudit | None = None
     if not composition_mode.uses_shared_map:
         routed_plan = plan.routed_attention.routed
         attention_plan = plan.routed_attention.attention_backward
@@ -1014,6 +1157,8 @@ def run_smoke(
         retained_input_adjoint_wrappers = routed_audit.retained_input_adjoint_wrappers
         weighted_relation_plan = plan.weighted_relation_reverse
         weighted_relation_audit = replacement_audit.weighted_relation_reverse
+        normalized_exp_contract_forward_audit = replacement_audit.normalized_exp_contract_forward
+        normalized_exp_contract_reverse_audit = replacement_audit.normalized_exp_contract_reverse
         generated_regions = [
             "Contract -> Map -> Contract -> source Fold",
             "rank-two input-adjoint Contract 0",
@@ -1025,6 +1170,14 @@ def run_smoke(
                 if composition_mode.fuses_weighted_reverse
                 else "weighted RelationProgram reverse Contract -> edge Map -> hidden Fold -> source-slot Fold"
             ),
+            *(
+                (
+                    "compact normalized-exp Contract -> Map/Fold forward with saved state",
+                    "normalized-exp saved state -> Map/Fold reverse -> two Contracts",
+                )
+                if composition_mode.generates_normalized_exp_pair
+                else ()
+            ),
         ]
     if mode_generated is None:
         raise RuntimeError(f"composition {composition_mode.value} did not generate its routed mode body")
@@ -1035,6 +1188,13 @@ def run_smoke(
             weighted_relation_contract is None or weighted_relation_fold is None
         ):
             raise RuntimeError("shared-Map composition did not retain generated weighted relation reverse bodies")
+        if composition_mode.generates_normalized_exp_pair and (
+            normalized_exp_contract_forward is None
+            or normalized_exp_contract_reverse is None
+            or normalized_exp_contract_forward_audit is None
+            or normalized_exp_contract_reverse_audit is None
+        ):
+            raise RuntimeError("shared-Map composition did not retain generated normalized-exp forward/reverse")
     if exact_target_occurrences is None:
         raise RuntimeError("exact custom-call target validation did not run before execution")
     target_occurrences: dict[str, Any] = {
@@ -1068,6 +1228,13 @@ def run_smoke(
                 _WEIGHTED_RELATION_CONTRACT_TARGET
             ]
             target_occurrences["weighted_relation_fold"] = exact_target_occurrences[_WEIGHTED_RELATION_FOLD_TARGET]
+        if composition_mode.generates_normalized_exp_pair:
+            target_occurrences["normalized_exp_contract_forward"] = exact_target_occurrences[
+                _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET
+            ]
+            target_occurrences["normalized_exp_contract_reverse"] = exact_target_occurrences[
+                _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET
+            ]
     minimum_calls = repeats + warmup + 1
     observed_calls = [
         call_counts["forward"],
@@ -1091,6 +1258,13 @@ def run_smoke(
                 ),
             )
         )
+        if composition_mode.generates_normalized_exp_pair:
+            observed_calls.extend(
+                (
+                    call_counts["normalized_exp_contract_forward"],
+                    call_counts["normalized_exp_contract_reverse"],
+                )
+            )
 
     def write_execution_evidence(status: str, reason: str | None) -> None:
         if artifact_directory is None:
@@ -1131,6 +1305,52 @@ def run_smoke(
                     weighted_relation_audit.placement_collective if weighted_relation_audit is not None else None
                 ),
             }
+        normalized_exp_evidence = None
+        if normalized_exp_contract_forward is not None and normalized_exp_contract_reverse is not None:
+            normalized_exp_evidence = {
+                "forward": {
+                    "target": _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                    "semantic_sha256": normalized_exp_contract_forward.semantic_digest,
+                    "source_sha256": normalized_exp_contract_forward.source_digest,
+                    "inputs": [
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_forward.inputs
+                    ],
+                    "outputs": [
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_forward.outputs
+                    ],
+                    "dead_instructions": (
+                        normalized_exp_contract_forward_audit.dead_instructions
+                        if normalized_exp_contract_forward_audit is not None
+                        else None
+                    ),
+                },
+                "reverse": {
+                    "target": _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                    "semantic_sha256": normalized_exp_contract_reverse.semantic_digest,
+                    "source_sha256": normalized_exp_contract_reverse.source_digest,
+                    "inputs": [
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_reverse.inputs
+                    ],
+                    "outputs": [
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_reverse.outputs
+                    ],
+                    "dead_instructions": (
+                        normalized_exp_contract_reverse_audit.dead_instructions
+                        if normalized_exp_contract_reverse_audit is not None
+                        else None
+                    ),
+                    "placement_paths": (
+                        normalized_exp_contract_reverse_audit.placement_paths
+                        if normalized_exp_contract_reverse_audit is not None
+                        else None
+                    ),
+                },
+                "saved_state_link": plan.normalized_exp_contract_reverse.region.saved_state.instruction,
+            }
         evidence = {
             "status": status,
             "reason": reason,
@@ -1139,6 +1359,7 @@ def run_smoke(
             "custom_call_handler_executions": call_counts,
             "generated_runtime_dependencies": runtime_dependencies,
             "weighted_relation_reverse": weighted_relation_evidence,
+            "normalized_exp_contract_forward_reverse": normalized_exp_evidence,
             "baseline_samples_ms": baseline_samples,
             "generated_samples_ms": transformed_samples,
             "baseline_output_hashes": baseline_hashes,
@@ -1155,6 +1376,7 @@ def run_smoke(
     if any(count < minimum_calls for count in observed_calls):
         fail_after_execution(f"custom-call handler evidence mismatch: minimum={minimum_calls}, calls={observed_calls}")
     weighted_relation_inputs: tuple[str, ...] = ()
+    normalized_exp_inputs: tuple[str, ...] = ()
     if composition_mode.uses_shared_map:
         if weighted_relation_plan is None:
             fail_after_execution("shared-Map composition lost its weighted relation reverse plan")
@@ -1165,6 +1387,19 @@ def run_smoke(
             weighted_relation_plan.edge_fold.source_indices.instruction,
             weighted_relation_plan.edge_fold.edge_cotangent.instruction,
         )
+        if composition_mode.generates_normalized_exp_pair:
+            normalized_exp_inputs = tuple(
+                dict.fromkeys(
+                    (
+                        *(value.instruction for value in plan.normalized_exp_contract_forward.inputs),
+                        *(
+                            value.instruction
+                            for value in plan.normalized_exp_contract_reverse.inputs
+                            if not value.instruction.startswith("shuttle.generated.")
+                        ),
+                    )
+                )
+            )
     shared_input_operands = (
         (
             *(
@@ -1176,6 +1411,7 @@ def run_smoke(
             routed_plan.source_fold.source_indices.instruction,
             routed_plan.source_fold.contributions.instruction,
             *weighted_relation_inputs,
+            *normalized_exp_inputs,
         )
         if composition_mode.uses_shared_map
         else ()
@@ -1224,6 +1460,12 @@ def run_smoke(
     weighted_relation_source_hashes: dict[str, str] = {}
     weighted_relation_target_instructions: tuple[str, ...] = ()
     weighted_relation_collectives: tuple[str, ...] = ()
+    normalized_exp_report: dict[str, Any] = {}
+    normalized_exp_targets: dict[str, str] = {}
+    normalized_exp_semantic_hashes: dict[str, str] = {}
+    normalized_exp_source_hashes: dict[str, str] = {}
+    normalized_exp_target_instructions: tuple[str, ...] = ()
+    normalized_exp_collectives: tuple[str, ...] = ()
     if composition_mode.uses_shared_map:
         if weighted_relation_plan is None or weighted_relation_audit is None:
             fail_after_execution("shared-Map weighted relation reverse evidence is incomplete")
@@ -1287,6 +1529,66 @@ def run_smoke(
                 weighted_relation_audit.fold_instruction,
             )
         weighted_relation_collectives = (weighted_relation_audit.placement_collective,)
+        if composition_mode.generates_normalized_exp_pair:
+            if (
+                normalized_exp_contract_forward is None
+                or normalized_exp_contract_reverse is None
+                or normalized_exp_contract_forward_audit is None
+                or normalized_exp_contract_reverse_audit is None
+            ):
+                fail_after_execution("generated normalized-exp forward/reverse evidence is incomplete")
+            normalized_exp_report = {
+                "normalized_exp_contract_forward": {
+                    "score_contract_boundary": "bf16_rne",
+                    "fold_order": "source_ordered_fp32",
+                    "dead_instructions": normalized_exp_contract_forward_audit.dead_instructions,
+                    "retained_boundary_instructions": (
+                        normalized_exp_contract_forward_audit.retained_boundary_instructions
+                    ),
+                    "outputs_and_users": normalized_exp_contract_forward_audit.output_users,
+                    "inputs": tuple(
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_forward.inputs
+                    ),
+                    "outputs": tuple(
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_forward.outputs
+                    ),
+                },
+                "normalized_exp_contract_reverse": {
+                    "score_contract_boundary": "bf16_rne",
+                    "score_cotangent_boundary": "bf16_rne",
+                    "accumulation": "ordered_fp32",
+                    "dead_instructions": normalized_exp_contract_reverse_audit.dead_instructions,
+                    "placement_paths": normalized_exp_contract_reverse_audit.placement_paths,
+                    "inputs": tuple(
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_reverse.inputs
+                    ),
+                    "outputs": tuple(
+                        {"instruction": value.instruction, "shape": value.shape}
+                        for value in plan.normalized_exp_contract_reverse.outputs
+                    ),
+                    "saved_state_from_forward": plan.normalized_exp_contract_reverse.region.saved_state.instruction,
+                },
+            }
+            normalized_exp_targets = {
+                "normalized_exp_contract_forward": _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                "normalized_exp_contract_reverse": _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+            }
+            normalized_exp_semantic_hashes = {
+                "normalized_exp_contract_forward": normalized_exp_contract_forward.semantic_digest,
+                "normalized_exp_contract_reverse": normalized_exp_contract_reverse.semantic_digest,
+            }
+            normalized_exp_source_hashes = {
+                "normalized_exp_contract_forward": normalized_exp_contract_forward.source_digest,
+                "normalized_exp_contract_reverse": normalized_exp_contract_reverse.source_digest,
+            }
+            normalized_exp_target_instructions = (
+                normalized_exp_contract_forward_audit.call_instruction,
+                normalized_exp_contract_reverse_audit.call_instruction,
+            )
+            normalized_exp_collectives = tuple(path[2] for path in normalized_exp_contract_reverse_audit.placement_paths)
     write_execution_evidence("execution_checks_passed", None)
     return {
         "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
@@ -1324,11 +1626,13 @@ def run_smoke(
             "attention_backward": attention_plan.reassociation,
             "axis_folds": _axis_fold_reassociation_report(axis_fold_plans),
             **weighted_relation_report,
+            **normalized_exp_report,
         },
         "external_collectives": (
             (
                 routed_audit.source_fold_collective,
                 *weighted_relation_collectives,
+                *normalized_exp_collectives,
                 *routed_audit.weight_gradient_collectives,
             )
             if composition_mode.uses_shared_map
@@ -1353,6 +1657,7 @@ def run_smoke(
             "attention_backward": _TARGETS.routed_attention.attention_backward,
             "axis_folds": _TARGETS.axis_folds,
             **weighted_relation_targets,
+            **normalized_exp_targets,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
@@ -1361,6 +1666,7 @@ def run_smoke(
         "target_instruction_names": (
             *routed_audit.target_instructions,
             *weighted_relation_target_instructions,
+            *normalized_exp_target_instructions,
             attention_instruction,
             *(axis_fold.call_instruction for axis_fold in axis_fold_audits),
         ),
@@ -1389,6 +1695,7 @@ def run_smoke(
             "attention_backward": compiled_attention.generated.semantic_fingerprint,
             "axis_folds": [axis_fold.semantic_fingerprints for axis_fold in generated_axis_folds],
             **weighted_relation_semantic_hashes,
+            **normalized_exp_semantic_hashes,
         },
         "generated_source_sha256": {
             "forward": forward.source_digest,
@@ -1405,6 +1712,7 @@ def run_smoke(
             "attention_backward": attention_source_sha256,
             "axis_folds": [axis_fold.source_sha256 for axis_fold in generated_axis_folds],
             **weighted_relation_source_hashes,
+            **normalized_exp_source_hashes,
         },
         "baseline_median_ms": baseline_median,
         "generated_median_ms": transformed_median,
@@ -1428,7 +1736,8 @@ def run_smoke(
         "remaining_ownership_gap": (
             "The relation index plane, placement collectives, and harmless input-adjoint view wrappers remain "
             "under XLA. Shuttle owns both input-adjoint Contracts, the input source Fold, and the weighted "
-            "RelationProgram reverse through its source-slot Fold; router normalization remains under XLA."
+            "RelationProgram reverse through its source-slot Fold; the selected composition also owns the generic "
+            "normalized-exp Contract/Map/Fold reverse when requested. Router normalization remains under XLA."
             if composition_mode.uses_shared_map
             else "The rematerialized routed forward chain, relation index plane, and placement collectives remain "
             "under XLA; the monolithic generated input-adjoint region owns the overlapping reverse path."

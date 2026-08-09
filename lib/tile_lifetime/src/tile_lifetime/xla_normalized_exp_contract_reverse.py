@@ -75,7 +75,12 @@ class NormalizedExpContractReverseHloReplacementAudit:
     """Post-replacement liveness evidence for a local reverse call."""
 
     call_instruction: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
     rewired_external_users: tuple[tuple[str, tuple[str, ...]], ...]
+    dead_instructions: tuple[str, ...]
+    placement_paths: tuple[tuple[str, tuple[str, ...], str], ...]
+    api_version: int
 
 
 def recover_normalized_exp_contract_reverse_hlo_regions(
@@ -198,7 +203,7 @@ def audit_normalized_exp_contract_reverse_hlo_replacement(
     *,
     target: str,
 ) -> NormalizedExpContractReverseHloReplacementAudit:
-    """Verify the generated call and removal of old external reverse edges."""
+    """Verify the generated boundary, dead old region, and placement paths."""
     original_entry = parse_hlo_module_text(original_hlo).computation(parse_hlo_module_text(original_hlo).entry)
     transformed_module = parse_hlo_module_text(transformed_hlo)
     transformed_entry = transformed_module.computation(transformed_module.entry)
@@ -210,6 +215,19 @@ def audit_normalized_exp_contract_reverse_hlo_replacement(
     )
     if len(calls) != 1:
         raise ValueError(f"expected one generated reverse call for {target!r}, found {len(calls)}")
+    call = calls[0]
+    expected_inputs = tuple(value.instruction for value in plan.inputs)
+    if call.operands != expected_inputs:
+        raise ValueError("normalized-exponential reverse call changed its input boundary")
+    if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
+        raise ValueError("normalized-exponential reverse call is not typed FFI API version 1")
+    call_outputs = tuple(f"{call.name}.output.{index}" for index in range(len(plan.outputs)))
+    for index, (name, expected) in enumerate(zip(call_outputs, plan.outputs, strict=True)):
+        output = transformed_instructions.get(name)
+        if output is None or output.opcode != "get-tuple-element" or output.operands != (call.name,):
+            raise ValueError(f"normalized-exponential reverse output {index} changed its tuple boundary")
+        if output.shape != expected.shape or f"index={index}" not in output.attributes:
+            raise ValueError(f"normalized-exponential reverse output {index} changed its result ABI")
     original_names = {instruction.name for instruction in original_entry.instructions}
     for output, users in plan.external_users:
         if output not in original_names:
@@ -217,7 +235,32 @@ def audit_normalized_exp_contract_reverse_hlo_replacement(
         for user in users:
             if output in transformed_instructions[user].operands:
                 raise ValueError(f"external user %{user} still consumes old reverse output %{output}")
-    return NormalizedExpContractReverseHloReplacementAudit(calls[0].name, plan.external_users)
+    transformed_users = _entry_users(transformed_entry)
+    for (_, expected_users), output_name in zip(plan.external_users, call_outputs, strict=True):
+        if transformed_users[output_name] != expected_users:
+            raise ValueError(f"normalized-exponential reverse output %{output_name} changed its consumers")
+    dead = plan.region.internal_instructions
+    live = _live_entry_instructions(transformed_entry)
+    still_live = tuple(instruction for instruction in dead if instruction in live)
+    if still_live:
+        raise ValueError(f"replaced normalized-exponential reverse arithmetic remains live: {still_live}")
+    placement_paths = tuple(
+        _placement_collective_path(
+            transformed_instructions,
+            transformed_users,
+            output_name,
+        )
+        for output_name in call_outputs
+    )
+    return NormalizedExpContractReverseHloReplacementAudit(
+        call_instruction=call.name,
+        inputs=expected_inputs,
+        outputs=call_outputs,
+        rewired_external_users=plan.external_users,
+        dead_instructions=dead,
+        placement_paths=placement_paths,
+        api_version=plan.api_version,
+    )
 
 
 def _recover_from_exponential(
@@ -490,6 +533,41 @@ def _entry_users(entry: HloComputation) -> dict[str, tuple[str, ...]]:
         for operand in instruction.operands:
             mutable.setdefault(operand, []).append(instruction.name)
     return {name: tuple(values) for name, values in mutable.items()}
+
+
+def _live_entry_instructions(entry: HloComputation) -> frozenset[str]:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    live: set[str] = set()
+    stack = [entry.root.name]
+    while stack:
+        name = stack.pop()
+        if name in live:
+            continue
+        live.add(name)
+        stack.extend(instructions[name].operands)
+    return frozenset(live)
+
+
+def _placement_collective_path(
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+    source: str,
+) -> tuple[str, tuple[str, ...], str]:
+    wrappers: list[str] = []
+    current = source
+    while True:
+        current_users = users.get(current, ())
+        if len(current_users) != 1:
+            raise ValueError(f"normalized-exponential output %{source} has non-unique placement path {current_users}")
+        user = instructions[current_users[0]]
+        if user.opcode == "all-reduce":
+            return source, tuple(wrappers), user.name
+        if user.opcode not in {"bitcast", "copy", "reshape", "slice", "transpose"} or len(user.operands) != 1:
+            raise ValueError(
+                f"normalized-exponential output %{source} reaches %{user.name} ({user.opcode}) before placement"
+            )
+        wrappers.append(user.name)
+        current = user.name
 
 
 def _array_shape(shape: str) -> tuple[str, tuple[int, ...]] | None:

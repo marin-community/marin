@@ -53,6 +53,7 @@ def test_compact_normalized_exp_forward_roundtrips_through_typed_ffi() -> None:
         target=_TARGET,
     )
     audit = audit_normalized_exp_contract_forward_hlo_replacement(
+        hlo,
         transformed,
         plan,
         target=_TARGET,
@@ -66,7 +67,17 @@ def test_compact_normalized_exp_forward_roundtrips_through_typed_ffi() -> None:
     )
     assert tuple(value.shape for value in plan.outputs) == ("f32[8]{0}", "f32[8]{0}")
     assert audit.call_instruction == "shuttle.generated.normalized_exp_contract_forward"
+    assert audit.inputs == tuple(value.instruction for value in plan.inputs)
+    assert audit.outputs == (
+        "shuttle.generated.normalized_exp_contract_forward.output.0",
+        "shuttle.generated.normalized_exp_contract_forward.output.1",
+    )
     assert audit.rewired_external_users == plan.external_users
+    assert audit.output_users == tuple(
+        (output, users) for output, (_, users) in zip(audit.outputs, plan.external_users, strict=True)
+    )
+    assert audit.dead_instructions
+    assert set(audit.dead_instructions).isdisjoint(audit.retained_boundary_instructions)
 
 
 def test_compact_forward_and_reverse_compose_as_two_generic_calls() -> None:

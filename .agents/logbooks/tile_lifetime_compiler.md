@@ -2977,3 +2977,45 @@ author: dlwh
 - GPU compilation, numerical execution, and performance are unmeasured.
   Twenty-one focused forward, reverse, FFI-boundary, and independent semantic
   tests pass; scoped pre-commit and Pyrefly pass.
+
+### 2026-08-09 - TLTC-XLA-049 natural Grug normalized-exp ownership
+
+- A new explicit `shared_map_fused_reverses` composition retains the accepted
+  fused weighted RelationProgram reverse and adds two generated normalized-exp
+  targets. The compact forward is inserted before the reverse, and recovery of
+  the reverse is rerun on that transformed graph so its saved-state operand is
+  exactly `shuttle.generated.normalized_exp_contract_forward.output.1`.
+- The transformed module contains thirteen generated calls, one occurrence of
+  each selected target, and no live old normalized-exp forward or reverse
+  arithmetic outside shared boundary inputs. The forward audit records 69 dead
+  old instructions. The two reverse outputs retain their original placement
+  paths through `reshape.198 -> psum.48` and `slice.87 -> psum.49`.
+- Forward and reverse use the same generated scalar score Map. A tanh soft-cap
+  mutation changes both generated sources and makes the reverse generator emit
+  its derivative without changing either typed-FFI handler family. The sources
+  contain no Torch or Triton reference. Runtime compilation still audits linked
+  libraries with `ldd`, rejects Torch/Triton linkage, counts both handlers, and
+  rejects semantic atomic accumulation.
+- The existing eleven-call `shared_map_fused_weighted_reverse` composition is
+  unchanged and remains independently selectable. Fifty-four focused recovery,
+  code-generation, public compiler-IR preflight, FFI-boundary, and composition
+  tests pass; Pyrefly reports zero errors. No GPU was launched, so numerical
+  execution and latency remain unmeasured.
+- A physical replay must first pass `require_hlo_rewrite_runtime()` on CPU. It
+  requires matched JAX/JAXLIB exposing public compiler-IR proto roundtrip,
+  `jax.extend.xla` transformation registration/clear APIs, and a compatible HLO
+  text parser; the last working environment used JAX/JAXLIB 0.11.0. On an H100
+  CUDA-13 checkout, run:
+
+  ```bash
+  PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD" /app/.venv/bin/python \
+    lib/tile_lifetime/benchmarks/xla_grug_routed_combined_gpu_custom_call.py \
+    --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+    --architecture sm_90a \
+    --repository "$PWD" \
+    --artifact-directory /tmp/shuttle-normalized-exp-grug-raw \
+    --output /tmp/shuttle-normalized-exp-grug-raw/summary.json \
+    --composition-mode shared_map_fused_reverses \
+    --warmup 4 \
+    --repeats 30
+  ```
