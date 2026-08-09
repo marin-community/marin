@@ -39,8 +39,8 @@ from tile_lifetime.jax_event_dataflow_ffi import (
 )
 from tile_lifetime.relation import RelationPlan, build_relation_plan
 
-_RUNTIME_TARGET = "shuttle.event_tensor.runtime_h100_replay_v1"
-_PHASED_TARGET = "shuttle.event_tensor.phased_h100_replay_v1"
+_RUNTIME_TARGET = "shuttle.event_tensor.runtime_gpu_replay_v1"
+_PHASED_TARGET = "shuttle.event_tensor.phased_gpu_replay_v1"
 
 
 def _arguments() -> argparse.Namespace:
@@ -62,6 +62,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--holder-revision", required=True)
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", default="sm_90a")
+    parser.add_argument("--expected-gpu-substring", default="H100")
+    parser.add_argument("--allocation-gpu-variant", default="H100")
     parser.add_argument("--allocation-gpus", type=int, required=True)
     parser.add_argument("--allocation-cpu", type=float, required=True)
     parser.add_argument("--allocation-memory", required=True)
@@ -249,8 +251,10 @@ def _write_optimized_hlo(executable: Any, path: Path, *, target_name: str) -> di
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Compile, execute, mutate, and benchmark both generic event families."""
     devices = jax.devices("gpu")
-    if not devices or "H100" not in devices[0].device_kind:
-        raise RuntimeError(f"H100 replay requires an H100 device, found {devices}")
+    if not devices or args.expected_gpu_substring not in devices[0].device_kind:
+        raise RuntimeError(
+            f"GPU replay requires device kind containing {args.expected_gpu_substring!r}, found {devices}"
+        )
     if args.repeats <= 0 or args.repeats % 2:
         raise ValueError("counterbalanced repeats must be a positive even number")
     if args.active_destinations <= 0 or args.active_destinations >= args.destination_count:
@@ -403,7 +407,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     result = {
-        "kind": "jax_typed_ffi_event_tensor_h100_replay",
+        "kind": "jax_typed_ffi_event_tensor_gpu_replay",
         "command": command_record(),
         "requested_shuttle_revision": args.shuttle_revision,
         "observed_shuttle_revision": (
@@ -411,13 +415,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "holder_revision": args.holder_revision,
         "allocation": {
-            "gpu_variant": "H100",
+            "gpu_variant": args.allocation_gpu_variant,
             "gpu_count": args.allocation_gpus,
             "cpu": args.allocation_cpu,
             "memory": args.allocation_memory,
             "disk": args.allocation_disk,
             "priority": args.allocation_priority,
-            "gb200_used": False,
+            "gb200_used": "GB200" in devices[0].device_kind,
         },
         "runtime_relation": {
             "generated_source": _write_source(
@@ -436,6 +440,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ffi_handler_call_count": runtime_count_symbol(),
         },
         "phased_pipeline": {
+            "audit": {
+                "semantic_adapter": (
+                    "StreamingAttentionProgram structural adapter (not physically linked in this replay)"
+                ),
+                "physical_plan_source": "generic pipelined_contract_fold_program",
+                "physical_payload": "scalar_reference_pipeline",
+                "tensor_core_execution": False,
+                "full_attention_performance_claim": False,
+            },
             "generated_source": _write_source(
                 generated_phased,
                 args.json_output.parent / "generated_phased_event_ffi.cu",
@@ -490,8 +503,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "platform_version": devices[0].client.platform_version,
         },
         "gpu": {
-            "family": "H100",
-            "gb200_or_b200": False,
+            "family": devices[0].device_kind,
+            "gb200_or_b200": any(name in devices[0].device_kind for name in ("GB200", "B200")),
             "before": telemetry_before,
             "after": telemetry_after,
         },
