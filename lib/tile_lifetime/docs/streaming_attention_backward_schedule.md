@@ -42,8 +42,7 @@ invocations from 199,680 to 49,920 and K/V tile loads in that traversal from
 physical Contract count falls from 266,240 to 116,480, a 56.25% reduction.
 Logical FLOPs do not change: each remaining Contract has four times as many
 rows. Peak packed score state remains 128 by 32, which the existing dK/dV path
-already supports. This is a work-granularity and operand-reuse hypothesis, not
-a claim of measured speedup.
+already supports.
 
 The preceding query-partition experiment is a negative control. Four query
 partitions changed 0.864582 ms to 0.854435 ms at sequence length 2,048 while
@@ -52,14 +51,24 @@ the 1.17% latency reduction did not justify the extra work or storage. Packed
 dQ instead reduces physical instruction and load duplication without partial
 gradients, atomics, or an additional Fold finalizer.
 
-The next hardware check should compare the packed and scalar-head dQ schedules
-with the same 32-by-32 tile configuration. The hypothesis is falsified if the
-larger live row tile causes enough register pressure or spilling that generated
-latency fails to improve by at least 10%, or if the numerical/determinism checks
-change. Even a successful result will not close the remaining gap to the
-0.148534 ms SDPA measurement: the Triton prototype still recomputes QK,
-probability, dP, and dS separately in the dQ and dK/dV traversals and lacks the
-TMA/WGMMA producer-consumer overlap of an expert Hopper pipeline.
+The fixed H100 check compared the packed and scalar-head schedules with the
+same 32-by-32 tile, eight-warps, three-stage configuration. Across 30
+counterbalanced samples, scalar-head dQ measured 1.297498 ms and packed dQ
+measured 0.584992 ms. Packing reduced generated latency by 54.91% and preserved
+the exact deterministic output hash. The contemporaneous SDPA medians were
+0.464624 ms and 0.465133 ms, respectively. Packed Shuttle is therefore 1.258x
+SDPA and remains outside the 1.20 acceptance gate.
+
+Triton reports 114,688 bytes of shared memory for packed dQ, versus 45,568
+bytes for scalar-head dQ. The common dK/dV kernel uses 157,696 bytes. Register
+and spill counts were unavailable in the holder image, so no occupancy claim is
+made from these metadata alone. The older 0.864582/0.148534 result came from a
+GB200 and is not a same-hardware baseline for this H100 experiment.
+
+The Triton prototype still recomputes QK, probability, dP, and dS separately in
+the dQ and dK/dV traversals and lacks the TMA/WGMMA producer-consumer overlap of
+an expert Hopper pipeline. The next physical experiment should profile the
+fixed packed schedule before introducing another candidate dimension.
 
 ## Accepted frontend boundary
 

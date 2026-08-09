@@ -17,9 +17,14 @@ versus 0.148534 ms for matched Torch SDPA. The physical implementation uses a
 query-major dQ traversal and a K/V-major dK/dV traversal. Both are generated
 from visible Contract, Fold, Map, and DomainRestriction semantics.
 
-The current dK/dV traversal already packs the four query heads mapped to each
-K/V head. The dQ traversal still launches one program per query head and loads
-the same K/V tile independently for all four mapped heads.
+Before this change, dK/dV already packed the four query heads mapped to each
+K/V head. The dQ traversal launched one program per query head and loaded the
+same K/V tile independently for all four mapped heads.
+
+The completed H100 control measures 1.297498 ms for scalar-head dQ and
+0.584992 ms for packed dQ under the same 32-by-32, eight-warps, three-stage
+configuration. The packed result is 1.258x matched SDPA and remains outside the
+1.20 performance gate.
 
 ## Internal Prior Work
 
@@ -68,10 +73,10 @@ unordered reduction behind the backend.
   - Marin schedule IR: the QK Contract index map already identifies every query head mapped to one K/V head.
   - Marin dK/dV emitter: the same packed-row representation is already executable for the reverse K/V Fold.
 - Contradictions:
-  - The larger live dQ row tile may increase register pressure or spilling.
+  - Packed dQ uses 114,688 bytes of shared memory, versus 45,568 bytes for scalar-head dQ; register and spill counts were unavailable.
 - Directness to Marin: exact primary shape and current emitter.
-- Confidence: exploratory until measured on GB200.
-- Action: compare packed and scalar-head dQ with identical tile and launch settings.
+- Confidence: replicated on one H100 with 30 counterbalanced samples per variant.
+- Action: retain packing and profile the residual 1.258x gap before adding another candidate.
 
 ### Claim: the dominant residual gap is an expert physical pipeline, not task count
 
@@ -89,10 +94,10 @@ unordered reduction behind the backend.
 ### 1. Pack mapped query heads in the dQ traversal
 
 - Minimum experiment: run the existing S=2,048, 32x32 benchmark with the packed dQ emitter and the same numerical thresholds.
-- Baseline/control: reverted scalar-head dQ result, 0.864582 ms.
+- Baseline/control: scalar-head parent commit on the same H100, 1.297498 ms.
 - Expected signal: at least 10% generated latency improvement, with unchanged determinism and error thresholds.
-- Falsifier: less than 10% improvement, spills, or numerical/determinism regression.
-- Cost/risk: one existing GB200 benchmark; no tuning sweep.
+- Result: generated latency fell 54.91%, from 1.297498 ms to 0.584992 ms on H100; correctness and the deterministic hash were unchanged.
+- Cost/risk: one H100 schedule ablation; no tuning sweep.
 - Sources: current Marin schedule/emitter and official FlashAttention physical schedule.
 
 ### 2. Profile one packed run before designing a fused reverse pipeline
@@ -115,10 +120,10 @@ unordered reduction behind the backend.
 
 ## Hypothesis Queue Update
 
-- Add: mapped-head row packing for dQ.
+- Add: profile the residual packed reverse pipeline on H100.
 - Revise: move a fused reverse wavefront behind a profiler gate.
 - Falsify / stop: query-domain partitioning as the primary fix.
-- Promote: explicit Contract index-map reuse across both reverse orientations.
+- Promote: mapped-head packing and explicit Contract index-map reuse across both reverse orientations.
 
 ## Source Ledger
 
@@ -127,13 +132,14 @@ unordered reduction behind the backend.
 | Shuttle logbook | logbook | `.agents/logbooks/tile_lifetime_compiler.md` | measured partition negative result | high | exact recorded timings and storage cost |
 | Shuttle backward IR | Marin code | `lib/tile_lifetime/src/tile_lifetime/streaming_attention_backward.py` | GQA relation derives from Contract index map | high | current branch source |
 | Shuttle backward emitter | Marin code | `lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py` | duplicate scalar-head K/V loads in dQ | high | current branch source |
+| Packed H100 artifact | benchmark | `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_packed_h100/` | same-H100 schedule ablation, correctness, determinism, and resource metadata | high | 30 counterbalanced samples per path |
 | FlashAttention | external code | `https://github.com/Dao-AILab/flash-attention/tree/a369df707e1980fb328abcc1733e3457ec10155f/hopper` | Hopper backward pipeline and accumulator ownership | high | physical reference only |
 | FlashAttention README | external code | `https://github.com/Dao-AILab/flash-attention/blob/a369df707e1980fb328abcc1733e3457ec10155f/README.md` | deterministic backward cost caveat | medium | documentation-level statement |
 | FlashAttention-3 | paper | `https://arxiv.org/abs/2407.08608` | Hopper asynchronous pipeline context | high | forward emphasis; schedule context only |
 
 ## Handoff
 
-- Suggested issue `Prior work` block: The official Hopper backward schedule confirms that persistent operand ownership and pipelined movement matter, while the reverted partition experiment rules out task count as the primary current bottleneck. The next bounded experiment packs GQA-mapped query heads in dQ using the existing Contract index map.
-- Suggested logbook entry: Packed dQ is expected to reduce physical reverse Contract invocations by 56.25% overall and dQ K/V tile loads by 4x at GQA=4, without changing logical FLOPs or adding partial buffers.
+- Suggested issue `Prior work` block: The official Hopper backward schedule confirms that persistent operand ownership and pipelined movement matter, while the reverted partition experiment rules out task count as the primary current bottleneck. Contract-index-map packing reduced generated H100 latency by 54.91%; the remaining 1.258x SDPA gap now needs component profiling.
+- Suggested logbook entry: Packed dQ reduced physical reverse Contract invocations by 56.25% and measured latency by 54.91% on H100 without changing the deterministic output hash. The 0.584992 ms result remains 1.258x matched SDPA.
 - Open questions: Does the 128-row dQ tile spill? How much of the residual gap is duplicated score algebra versus missing TMA/WGMMA overlap?
-- Stop reason: source inspection and one direct negative experiment identify a single smaller, falsifiable change; broader search would not alter the immediate decision.
+- Stop reason: the bounded H100 ablation completed; broader search requires profiler evidence.

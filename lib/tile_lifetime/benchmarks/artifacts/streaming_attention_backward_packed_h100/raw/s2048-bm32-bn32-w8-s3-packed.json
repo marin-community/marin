@@ -1,0 +1,309 @@
+{
+  "acceptance": {
+    "correctness_passes": true,
+    "maximum_absolute_error_threshold": 0.125,
+    "mean_absolute_error_threshold": 0.01,
+    "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
+    "passes": false,
+    "performance_passes": false,
+    "ratio": 1.2576880595726587,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 5,
+    "repeats": 30,
+    "warmups": 5
+  },
+  "correctness": {
+    "deterministic_hash": "6957ec539e0a1d6270a1a8d1efa0531a5bec5a624d885dbd8bc51120d723f58d",
+    "forward_output": {
+      "maximum_absolute_error": 0.00390625,
+      "mean_absolute_error": 8.990010246634483e-05
+    },
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00024274454335682094
+    },
+    "query": {
+      "maximum_absolute_error": 0.015625,
+      "mean_absolute_error": 0.00012260960647836328
+    },
+    "value": {
+      "maximum_absolute_error": 0.0625,
+      "mean_absolute_error": 0.00014158156409393996
+    }
+  },
+  "environment": {
+    "cuda": "12.8",
+    "device": "NVIDIA H100 80GB HBM3",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "measurements": {
+    "execution_order": [
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ]
+    ],
+    "ratio_generated_to_oracle": 1.2576880595726587,
+    "variants": {
+      "generated": {
+        "median_ms": 0.5849919795989991,
+        "minimum_ms": 0.5792960166931153,
+        "samples_ms": [
+          0.5920959949493408,
+          0.5876095771789551,
+          0.587385606765747,
+          0.5882175922393799,
+          0.5863552093505859,
+          0.5897984027862548,
+          0.5853759765625,
+          0.6046016216278076,
+          0.5868544101715087,
+          0.586624002456665,
+          0.5846079826354981,
+          0.5866687774658204,
+          0.5844096183776856,
+          0.5865344047546387,
+          0.583193588256836,
+          0.5855936050415039,
+          0.5828544139862061,
+          0.5855999946594238,
+          0.5792960166931153,
+          0.5811647891998291,
+          0.579641580581665,
+          0.5817535877227783,
+          0.5798719882965088,
+          0.5833536148071289,
+          0.5800000190734863,
+          0.6265920162200928,
+          0.5797440052032471,
+          0.5816127777099609,
+          0.580134391784668,
+          0.5813183784484863
+        ]
+      },
+      "oracle": {
+        "median_ms": 0.4651328086853027,
+        "minimum_ms": 0.4619391918182373,
+        "samples_ms": [
+          0.4689216136932373,
+          0.46596479415893555,
+          0.4692992210388184,
+          0.4641088008880615,
+          0.4666560173034668,
+          0.4651008129119873,
+          0.46755199432373046,
+          0.46460800170898436,
+          0.4684864044189453,
+          0.4651648044586182,
+          0.4674111843109131,
+          0.46677122116088865,
+          0.4683584213256836,
+          0.4642047882080078,
+          0.4658304214477539,
+          0.4637760162353516,
+          0.47009921073913574,
+          0.46581120491027833,
+          0.46518402099609374,
+          0.46251521110534666,
+          0.4634943962097168,
+          0.4619840145111084,
+          0.46328959465026853,
+          0.4619391918182373,
+          0.4640192031860352,
+          0.5044095993041993,
+          0.4640511989593506,
+          0.46216320991516113,
+          0.4640639781951904,
+          0.4622208118438721
+        ]
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "f0f2aa6b73395d360d69a0ce4dd74add86d022ca"
+  },
+  "schedule": {
+    "atomic_accumulation": false,
+    "block_m": 32,
+    "block_n": 32,
+    "domain_traversal": "lower_triangular",
+    "key_value_fold_order": "query_row_major_mapped_head_minor_tree",
+    "key_value_gradient_orientation": "key_value_major_grouped_query_rows",
+    "num_stages": 3,
+    "num_warps": 8,
+    "query_gradient_orientation": "query_major_grouped_query_rows",
+    "query_heads_per_key_value_tile": 4,
+    "static_work": {
+      "full_domain_query_gradient_contract_invocations": 98304,
+      "full_domain_scalar_head_key_value_contract_invocations": 524288,
+      "full_domain_scalar_head_query_gradient_contract_invocations": 393216,
+      "fully_restricted_tile_pairs": 64512,
+      "key_value_contract_invocation_reduction": 4.0,
+      "key_value_contract_invocation_reduction_from_full_scalar": 7.876923076923077,
+      "key_value_gradient_accumulator_elements": 8192,
+      "key_value_gradient_contract_invocations": 66560,
+      "logical_query_key_tile_pairs": 66560,
+      "packed_query_rows": 128,
+      "peak_query_tile_elements": 16384,
+      "peak_score_tile_elements": 4096,
+      "query_gradient_contract_invocation_reduction": 4.0,
+      "query_gradient_contract_invocation_reduction_from_full_scalar": 7.876923076923077,
+      "query_gradient_contract_invocations": 49920,
+      "scalar_head_key_value_contract_invocations": 266240,
+      "scalar_head_query_gradient_contract_invocations": 199680
+    }
+  },
+  "schema_version": 1,
+  "semantic_generation": {
+    "accepted_frontend_boundary": "recover equivalent reverse algebra from JAX VJP HLO",
+    "materialized_values": [
+      "cotangent.query",
+      "cotangent.key",
+      "cotangent.value"
+    ],
+    "provenance": "reference_symbolic_vjp",
+    "reassociation": "deterministic_tree",
+    "score_map_vjp": "{\"kind\":\"select\",\"operands\":[{\"kind\":\"less_equal\",\"operands\":[{\"input\":\"key.position\",\"kind\":\"input\"},{\"input\":\"query.position\",\"kind\":\"input\"}]},{\"constant\":0.08838834764831843,\"kind\":\"constant\"},{\"constant\":0.0,\"kind\":\"constant\"}]}",
+    "stages": [
+      "load_query_and_state",
+      "load_key_value",
+      "recompute_qk",
+      "recompute_probability",
+      "dv_contract",
+      "dp_contract",
+      "score_map_vjp",
+      "dq_contract",
+      "dk_contract"
+    ]
+  },
+  "source_sha256": "bfff9d671188cd7e1e516fb3697b8a5469265cbb30db96d55f9be9acf6b1a36d",
+  "workload": {
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "mutation": "causal",
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}
