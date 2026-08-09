@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import statistics
 import subprocess
@@ -42,6 +43,55 @@ from tile_lifetime.streaming_attention import (
     derive_streaming_attention,
     scaled_score_map,
 )
+
+_GPU_QUERY_FIELDS = (
+    "name",
+    "uuid",
+    "compute_cap",
+    "driver_version",
+    "power.limit",
+    "clocks.current.sm",
+    "clocks.current.memory",
+    "clocks.max.sm",
+    "clocks.max.memory",
+    "pstate",
+    "persistence_mode",
+)
+
+
+def _gpu_record() -> dict[str, str]:
+    output = subprocess.check_output(
+        [
+            "nvidia-smi",
+            f"--query-gpu={','.join(_GPU_QUERY_FIELDS)}",
+            "--format=csv,noheader,nounits",
+        ],
+        text=True,
+    ).strip()
+    rows = output.splitlines()
+    if len(rows) != 1:
+        raise ValueError(f"expected exactly one visible GPU, got {len(rows)}")
+    values = tuple(value.strip() for value in rows[0].split(","))
+    if len(values) != len(_GPU_QUERY_FIELDS):
+        raise ValueError(f"expected {len(_GPU_QUERY_FIELDS)} GPU fields, got {len(values)}")
+    return dict(zip(_GPU_QUERY_FIELDS, values, strict=True))
+
+
+def _toolchain_versions() -> dict[str, str]:
+    selected: dict[str, str] = {}
+    jax_packages = {"jax", "jaxlib", "jax-cuda13-pjrt", "jax-cuda13-plugin"}
+    for distribution in importlib.metadata.distributions():
+        name = str(distribution.metadata["Name"])
+        normalized = name.lower().replace("_", "-")
+        if normalized in jax_packages or normalized.startswith("nvidia-"):
+            selected[name] = distribution.version
+    return dict(sorted(selected.items(), key=lambda item: item[0].lower()))
+
+
+def _source_record() -> dict[str, object]:
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
+    return {"revision": revision, "dirty": dirty}
 
 
 def _relation(*, mutation: bool) -> RelationPlan:
@@ -233,9 +283,18 @@ def main() -> None:
     parser.add_argument("--architecture", default="sm_100a")
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--requested-gpu-model", required=True)
+    parser.add_argument("--requested-gpu-count", type=int, required=True)
+    parser.add_argument("--requested-cpu", type=int, required=True)
+    parser.add_argument("--requested-host-memory-gb", type=int, required=True)
+    parser.add_argument("--requested-disk-gb", type=int, required=True)
+    parser.add_argument("--requested-priority", required=True)
     args = parser.parse_args()
 
     device = jax.devices("gpu")[0]
+    hardware = _gpu_record()
+    if args.requested_gpu_model not in hardware["name"]:
+        raise ValueError(f"requested {args.requested_gpu_model}, got {hardware['name']}")
     rng = np.random.default_rng(20260809)
     records = {}
     libraries = []
@@ -316,17 +375,17 @@ def main() -> None:
 
     result = {
         "benchmark": "shuttle_event_tensor_workload_linkage_sm100",
-        "hardware": (
-            subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-gpu=name,driver_version,power.limit,clocks.current.sm,clocks.current.memory",
-                    "--format=csv,noheader",
-                ],
-                text=True,
-            ).strip()
-        ),
-        "jax": jax.__version__,
+        "hardware": hardware,
+        "resource_request": {
+            "gpu_model": args.requested_gpu_model,
+            "gpu_count": args.requested_gpu_count,
+            "cpu": args.requested_cpu,
+            "host_memory_gb": args.requested_host_memory_gb,
+            "disk_gb": args.requested_disk_gb,
+            "priority": args.requested_priority,
+        },
+        "shuttle_source": _source_record(),
+        "toolchain_packages": _toolchain_versions(),
         "device": str(device),
         "nvcc": subprocess.check_output([str(args.nvcc), "--version"], text=True).strip(),
         "architecture": args.architecture,
