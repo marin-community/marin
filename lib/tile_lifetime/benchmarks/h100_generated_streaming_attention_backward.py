@@ -487,6 +487,8 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--max-absolute-error-threshold", type=float, default=0.125)
+    parser.add_argument("--mean-absolute-error-threshold", type=float, default=0.01)
     parser.add_argument("--json-output", type=Path, required=True)
     parser.add_argument("--shuttle-revision", required=True)
     args = parser.parse_args()
@@ -509,8 +511,8 @@ def main() -> None:
         inputs,
         output,
         log_sum_exp,
-        block_m=32,
-        block_n=64,
+        block_m=args.block_m,
+        block_n=args.block_n,
         heads_per_program=4,
         num_warps=8,
         num_stages=3,
@@ -576,6 +578,7 @@ def main() -> None:
         oracle_call()
         oracle_query, oracle_key, oracle_value = oracle_state["grads"]
         correctness = {
+            "forward_output": _error(output, oracle_output.transpose(1, 2)),
             "query": _error(query_cotangent, oracle_query.transpose(1, 2)),
             "key": _error(key_cotangent, oracle_key.transpose(1, 2)),
             "value": _error(value_cotangent, oracle_value.transpose(1, 2)),
@@ -605,6 +608,15 @@ def main() -> None:
         ),
         text=True,
     ).strip()
+    correctness_passes = args.mutation == "causal" and all(
+        error["maximum_absolute_error"] <= args.max_absolute_error_threshold
+        and error["mean_absolute_error"] <= args.mean_absolute_error_threshold
+        for error in correctness.values()
+        if isinstance(error, dict) and "maximum_absolute_error" in error
+    )
+    performance_passes = (
+        measurements.get("ratio_generated_to_oracle") is not None and measurements["ratio_generated_to_oracle"] <= 1.2
+    )
     result = {
         "schema_version": 1,
         "workload": {
@@ -635,11 +647,12 @@ def main() -> None:
         "acceptance": {
             "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
             "threshold": 1.2,
+            "maximum_absolute_error_threshold": args.max_absolute_error_threshold,
+            "mean_absolute_error_threshold": args.mean_absolute_error_threshold,
             "ratio": measurements.get("ratio_generated_to_oracle"),
-            "passes": (
-                measurements.get("ratio_generated_to_oracle") is not None
-                and measurements["ratio_generated_to_oracle"] <= 1.2
-            ),
+            "correctness_passes": correctness_passes,
+            "performance_passes": performance_passes,
+            "passes": correctness_passes and performance_passes,
         },
         "benchmark": {
             "warmups": args.warmups,

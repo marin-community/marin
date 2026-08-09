@@ -873,6 +873,8 @@ def emit_streaming_attention(
         raise ValueError("the measured H100 path requires sequence lengths aligned to both tile sizes")
 
     lowered = lower_score_map(program)
+    if lowered.causal and block_m % block_n:
+        raise ValueError("causal diagonal splitting requires the query tile to be a multiple of the key tile")
     dummy = query
     bias = inputs[lowered.bias_name] if lowered.bias_name is not None else dummy
     score_mask = inputs[lowered.mask_name] if lowered.mask_name is not None else dummy
