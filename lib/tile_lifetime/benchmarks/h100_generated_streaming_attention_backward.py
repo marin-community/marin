@@ -12,6 +12,7 @@ import math
 import statistics
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -329,7 +330,22 @@ def _streaming_dkdv_kernel(
     tl.store(value_cotangent_block, value_gradient.to(tl.bfloat16))
 
 
-def emit_streaming_attention_backward(
+@dataclass(frozen=True)
+class StreamingAttentionBackwardLaunches:
+    """Validated component launches for one generated reverse schedule."""
+
+    output_dot: Callable[[], None]
+    query_cotangent: Callable[[], None]
+    key_value_cotangents: Callable[[], None]
+
+    def execute(self) -> None:
+        """Launch every reverse stage in dependency order."""
+        self.output_dot()
+        self.query_cotangent()
+        self.key_value_cotangents()
+
+
+def prepare_streaming_attention_backward_launches(
     program: StreamingAttentionBackwardProgram,
     inputs: dict[str, torch.Tensor],
     output: torch.Tensor,
@@ -343,8 +359,8 @@ def emit_streaming_attention_backward(
     schedule: StreamingAttentionBackwardTileSchedule,
     num_warps: int,
     num_stages: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Execute a generic query-major/grouped-key-major reverse schedule."""
+) -> StreamingAttentionBackwardLaunches:
+    """Validate and bind a generic query-major/grouped-key-major reverse schedule."""
     forward = program.forward
     lowered = lower_score_map(forward)
     block_m = schedule.query_tile_size
@@ -391,17 +407,6 @@ def emit_streaming_attention_backward(
     if log_sum_exp.dtype is not torch.float32 or output_dot.dtype is not torch.float32:
         raise ValueError("saved Fold state and output-dot buffer must be FP32")
 
-    _output_dot_kernel[(output_dot.numel(),)](
-        output,
-        output_cotangent,
-        output_dot,
-        query.shape[1],
-        query.shape[2],
-        *output.stride(),
-        *output_cotangent.stride(),
-        query.shape[-1],
-        num_warps=1,
-    )
     common = (
         query,
         key,
@@ -420,38 +425,94 @@ def emit_streaming_attention_backward(
         program.output_scale,
     )
     common_strides = (*query.stride(), *key.stride(), *value.stride(), *output_cotangent.stride())
-    _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * key.shape[2])](
-        *common,
-        query_cotangent,
-        *scalar_arguments,
-        *common_strides,
-        *query_cotangent.stride(),
-        block_m,
-        block_n,
-        query.shape[-1],
-        head_group_size,
-        lowered.causal,
-        lowered.softcap is not None,
-        num_warps=num_warps,
-        num_stages=num_stages,
+
+    def emit_output_dot() -> None:
+        _output_dot_kernel[(output_dot.numel(),)](
+            output,
+            output_cotangent,
+            output_dot,
+            query.shape[1],
+            query.shape[2],
+            *output.stride(),
+            *output_cotangent.stride(),
+            query.shape[-1],
+            num_warps=1,
+        )
+
+    def emit_query_cotangent() -> None:
+        _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * key.shape[2])](
+            *common,
+            query_cotangent,
+            *scalar_arguments,
+            *common_strides,
+            *query_cotangent.stride(),
+            block_m,
+            block_n,
+            query.shape[-1],
+            head_group_size,
+            lowered.causal,
+            lowered.softcap is not None,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
+
+    def emit_key_value_cotangents() -> None:
+        _streaming_dkdv_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2])](
+            *common,
+            key_cotangent,
+            value_cotangent,
+            *scalar_arguments,
+            *common_strides,
+            *key_cotangent.stride(),
+            *value_cotangent.stride(),
+            block_m,
+            block_n,
+            query.shape[-1],
+            head_group_size,
+            lowered.causal,
+            lowered.softcap is not None,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
+
+    return StreamingAttentionBackwardLaunches(
+        output_dot=emit_output_dot,
+        query_cotangent=emit_query_cotangent,
+        key_value_cotangents=emit_key_value_cotangents,
     )
-    _streaming_dkdv_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2])](
-        *common,
+
+
+def emit_streaming_attention_backward(
+    program: StreamingAttentionBackwardProgram,
+    inputs: dict[str, torch.Tensor],
+    output: torch.Tensor,
+    log_sum_exp: torch.Tensor,
+    output_cotangent: torch.Tensor,
+    query_cotangent: torch.Tensor,
+    key_cotangent: torch.Tensor,
+    value_cotangent: torch.Tensor,
+    output_dot: torch.Tensor,
+    *,
+    schedule: StreamingAttentionBackwardTileSchedule,
+    num_warps: int,
+    num_stages: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Execute a generic query-major/grouped-key-major reverse schedule."""
+    launches = prepare_streaming_attention_backward_launches(
+        program,
+        inputs,
+        output,
+        log_sum_exp,
+        output_cotangent,
+        query_cotangent,
         key_cotangent,
         value_cotangent,
-        *scalar_arguments,
-        *common_strides,
-        *key_cotangent.stride(),
-        *value_cotangent.stride(),
-        block_m,
-        block_n,
-        query.shape[-1],
-        head_group_size,
-        lowered.causal,
-        lowered.softcap is not None,
+        output_dot,
+        schedule=schedule,
         num_warps=num_warps,
         num_stages=num_stages,
     )
+    launches.execute()
     return query_cotangent, key_cotangent, value_cotangent
 
 
@@ -514,6 +575,7 @@ def main() -> None:
     parser.add_argument("--block-n", type=int, choices=(16, 32, 64), default=32)
     parser.add_argument("--num-warps", type=int, choices=(4, 8), default=8)
     parser.add_argument("--num-stages", type=int, choices=(2, 3, 4), default=3)
+    parser.add_argument("--profile-components", action="store_true")
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=5)
@@ -565,21 +627,21 @@ def main() -> None:
     value_cotangent = torch.empty_like(inputs["value"])
     output_dot = torch.empty_like(log_sum_exp)
 
-    def generated_call() -> None:
-        emit_streaming_attention_backward(
-            backward,
-            inputs,
-            output,
-            log_sum_exp,
-            output_cotangent,
-            query_cotangent,
-            key_cotangent,
-            value_cotangent,
-            output_dot,
-            schedule=backward_schedule,
-            num_warps=args.num_warps,
-            num_stages=args.num_stages,
-        )
+    generated_launches = prepare_streaming_attention_backward_launches(
+        backward,
+        inputs,
+        output,
+        log_sum_exp,
+        output_cotangent,
+        query_cotangent,
+        key_cotangent,
+        value_cotangent,
+        output_dot,
+        schedule=backward_schedule,
+        num_warps=args.num_warps,
+        num_stages=args.num_stages,
+    )
+    generated_call = generated_launches.execute
 
     generated_call()
     torch.cuda.synchronize()
@@ -657,6 +719,18 @@ def main() -> None:
     performance_passes = (
         measurements.get("ratio_generated_to_oracle") is not None and measurements["ratio_generated_to_oracle"] <= 1.2
     )
+    component_measurements = None
+    if args.profile_components:
+        component_measurements = _benchmark_variants(
+            (
+                ("output_dot", generated_launches.output_dot),
+                ("query_cotangent", generated_launches.query_cotangent),
+                ("key_value_cotangents", generated_launches.key_value_cotangents),
+            ),
+            warmups=args.warmups,
+            repeats=args.repeats,
+            iterations=args.iterations,
+        )
     result = {
         "schema_version": 1,
         "workload": {
@@ -722,6 +796,7 @@ def main() -> None:
         },
         "correctness": correctness,
         "measurements": measurements,
+        "component_measurements": component_measurements,
         "acceptance": {
             "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
             "threshold": 1.2,
