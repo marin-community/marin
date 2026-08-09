@@ -328,6 +328,11 @@ def compile_streaming_attention_backward_ffi(
     python: Path | None = None,
 ) -> CompiledStreamingAttentionBackwardFfi:
     """AOT-compile the skeletons and build one self-contained typed-FFI DSO."""
+    if triton_target is not None:
+        raise ValueError(
+            "Triton 3.6 AOT cross-target compilation is unsupported because its CLI preserves numeric target "
+            "fields as strings; omit triton_target to use the typed current-device target"
+        )
     if not nvcc.is_file():
         raise ValueError(f"CUDA compiler does not exist: {nvcc}")
     interpreter = python or Path(sys.executable)

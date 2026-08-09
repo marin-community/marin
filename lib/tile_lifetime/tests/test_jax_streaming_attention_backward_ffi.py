@@ -13,6 +13,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardStatePolicy,
     _run_triton_aot_compile,
     call_streaming_attention_backward_ffi,
+    compile_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
@@ -232,18 +233,38 @@ def test_aot_compile_plan_is_build_time_triton_but_runtime_handler_is_self_conta
         kernel.compile_argv(
             repository=REPOSITORY,
             output_directory=tmp_path,
-            target="cuda:90:32",
+            target=None,
             python=Path(sys.executable),
         )
         for kernel in generated.aot_kernels
     )
 
     assert all(command[1:3] == ("-m", "triton.tools.compile") for command in commands)
+    assert all("--target" not in command for command in commands)
     assert all("torch" not in " ".join(command).lower() for command in commands)
     assert "#include <cuda.h>" in generated.handler_template
     assert "xla/ffi/api/ffi.h" in generated.handler_template
     assert "triton" not in generated.handler_template.lower()
     assert "torch" not in generated.handler_template.lower()
+
+
+def test_triton_36_cross_target_mode_fails_closed_before_build(tmp_path: Path) -> None:
+    program, schedule = _program_and_schedule()
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.cross_target_rejected_v1",
+    )
+
+    with pytest.raises(ValueError, match="numeric target fields as strings"):
+        compile_streaming_attention_backward_ffi(
+            generated,
+            repository=REPOSITORY,
+            directory=tmp_path,
+            nvcc=tmp_path / "nvcc",
+            architecture="sm_90a",
+            triton_target="cuda:90:32",
+        )
 
 
 def test_triton_aot_subprocess_owns_its_cache_directory(tmp_path: Path) -> None:
