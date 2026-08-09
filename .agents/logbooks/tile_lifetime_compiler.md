@@ -2405,3 +2405,25 @@ author: dlwh
   appears in the generic plan.
 - Verification: 33 focused collective/Event Tensor tests and all 387
   tile-lifetime tests pass; scoped pre-commit checks pass.
+
+### 2026-08-09 - TLTC-EVENT-026 H100 Event Tensor streaming replay
+
+- Hypothesis: once the generic normalized-exp Fold carries its register state
+  correctly across CuTe child regions, Event Tensor-derived pipeline and worker
+  parameters can drive the real SM90 TMA/WGMMA skeleton without changing its
+  result or materially changing latency.
+- Commit Hash: Fold-state fix `ad1a0c3192`; replay artifact `ebc03388a5`.
+- Debug result: aliasing state only in finalization did not repair MLIR
+  dominance. The defining child region was the per-row Fold update. Binding
+  row max, row sum, scale, and architecture before that update loop removed
+  the verifier failure.
+- Result: two counterbalanced 10-sample H100 captures measure 0.080272 ms for
+  the repaired pre-Event source and 0.080352 ms for the Event Tensor source, a
+  1.000997x ratio. Both paths have maximum/mean sampled error
+  0.015625/1.14395e-4 and the same bitwise-stable output hash.
+- Hardware: one actual H100, two host CPUs, 32 GB host memory, batch priority.
+  No B200 or GB200 result is involved, and the allocation was released.
+- Artifacts:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_fold_alias_replay_h100_v1/`
+  and
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_fold_state_replay_h100_v1/`.
