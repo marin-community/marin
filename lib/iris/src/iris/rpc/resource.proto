@@ -333,6 +333,14 @@ message DescribeTaskResponse {
   TaskDetail task = 1;
 }
 
+message BatchDescribeTasksRequest {
+  repeated ResourceKey tasks = 1;
+}
+
+message BatchDescribeTasksResponse {
+  repeated TaskDetail tasks = 1;
+}
+
 message DescribeAttemptRequest {
   AttemptLocator attempt = 1;
 }
@@ -366,6 +374,7 @@ message NodeSummary {
   SliceIdentity slice = 6;
   int32 running_task_count = 7;
   iris.time.Timestamp observed_at = 8;
+  string region = 9;
 }
 
 message NodeAttribute {
@@ -487,6 +496,14 @@ message DescribeEndpointResponse {
   EndpointDetail endpoint = 1;
 }
 
+message BatchDescribeEndpointsRequest {
+  repeated ResourceKey endpoints = 1;
+}
+
+message BatchDescribeEndpointsResponse {
+  repeated EndpointDetail endpoints = 1;
+}
+
 message MintEndpointTokenRequest {
   ResourceKey endpoint = 1;
   iris.time.Duration ttl = 2;
@@ -594,7 +611,7 @@ message GetActionReceiptRequest {
 }
 
 message ExecAttemptRequest {
-  AttemptLocator attempt = 1;
+  AttemptIdentity attempt = 1;
   repeated string command = 2;
   iris.time.Duration timeout = 3;
 }
@@ -607,7 +624,7 @@ message ExecAttemptResponse {
 }
 
 message ProfileAttemptRequest {
-  AttemptLocator attempt = 1;
+  AttemptIdentity attempt = 1;
   iris.job.ProfileType profile = 2;
   iris.time.Duration duration = 3;
 }
@@ -623,6 +640,7 @@ service ResourceService {
   rpc DescribeJob(DescribeJobRequest) returns (DescribeJobResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc DescribeTask(DescribeTaskRequest) returns (DescribeTaskResponse);
+  rpc BatchDescribeTasks(BatchDescribeTasksRequest) returns (BatchDescribeTasksResponse);
   rpc DescribeAttempt(DescribeAttemptRequest) returns (DescribeAttemptResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc DescribeNode(DescribeNodeRequest) returns (DescribeNodeResponse);
@@ -630,6 +648,7 @@ service ResourceService {
   rpc DescribeSlice(DescribeSliceRequest) returns (DescribeSliceResponse);
   rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
   rpc DescribeEndpoint(DescribeEndpointRequest) returns (DescribeEndpointResponse);
+  rpc BatchDescribeEndpoints(BatchDescribeEndpointsRequest) returns (BatchDescribeEndpointsResponse);
   rpc MintEndpointToken(MintEndpointTokenRequest) returns (MintEndpointTokenResponse);
   rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
   rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);

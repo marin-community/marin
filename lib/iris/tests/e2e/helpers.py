@@ -12,6 +12,8 @@ import os
 import time
 
 from iris.cluster.client import get_job_info
+from iris.cluster.client.resource_client import ResourceClient
+from iris.cluster.resources.endpoint import EndpointQuery
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import EndpointServiceClientSync
 from rigging.timing import Duration
@@ -101,6 +103,7 @@ class TestJobs:
             raise ValueError("JobInfo not available")
 
         client = EndpointServiceClientSync(address=info.controller_address, timeout_ms=5000)
+        resources = ResourceClient(info.controller_address, timeout_ms=5000)
         try:
             endpoint_name = f"{prefix}/actor1"
             request = controller_pb2.Controller.RegisterEndpointRequest(
@@ -112,12 +115,12 @@ class TestJobs:
             response = client.register_endpoint(request)
             assert response.endpoint_id
 
-            list_request = controller_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
-            list_response = client.list_endpoints(list_request)
-            assert len(list_response.endpoints) == 1
-            names = [ep.name for ep in list_response.endpoints]
+            listed = resources.list_endpoints(EndpointQuery(name_prefix=f"{prefix}/"))
+            assert len(listed.items) == 1
+            names = [endpoint.name for endpoint in listed.items]
             assert endpoint_name in names
         finally:
+            resources.close()
             client.close()
 
     @staticmethod

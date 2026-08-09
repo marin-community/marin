@@ -18,8 +18,9 @@ import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from iris.client import IrisClient, Task, iris_ctx
+from iris.cluster.resources.identity import AttemptIdentity
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
@@ -132,6 +133,30 @@ def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
     return JobName.from_wire(f"{worker_job_id}/{actor_index}")
 
 
+def _iris_client() -> IrisClient:
+    client = iris_ctx().client
+    if client is None:
+        raise RuntimeError("Iris context has no client")
+    return client
+
+
+def _current_task(client: IrisClient, task_id: JobName) -> Task:
+    job_id = task_id.parent
+    if job_id is None:
+        raise ValueError(f"Task {task_id} has no parent Job")
+    task = next((task for task in client.current_job(job_id).tasks() if task.task_id == task_id), None)
+    if task is None:
+        raise RuntimeError(f"Task {task_id} was not found")
+    return task
+
+
+def _current_attempt(task: Task) -> AttemptIdentity:
+    attempt = task.status().current_attempt
+    if attempt is None:
+        raise RuntimeError(f"Task {task.task_id} has no current Attempt")
+    return attempt
+
+
 def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(local_client, tmp_path):
     partitions = [
         [((0, "a"), "zero-a"), ((0, "b"), "zero-b"), ((0, "none"), None)],
@@ -177,12 +202,14 @@ def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_cl
 
     with _store_context(iris_integration_client, tmp_path) as context:
         task_ids = [_worker_task_id(context, actor_index) for actor_index in range(2)]
-        attempts_before = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
+        client = _iris_client()
+        tasks = [_current_task(client, task_id) for task_id in task_ids]
+        attempts_before = [_current_attempt(task) for task in tasks]
 
         with pytest.raises(MemoryStorePartitionError):
             _load_store(context, dataset, name="invalid-partition", hash_key=_wrong_key_partition)
 
-        attempts_after = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
+        attempts_after = [_current_attempt(task) for task in tasks]
         assert attempts_after == attempts_before
 
 
@@ -328,18 +355,14 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
     with _store_context(iris_integration_client, tmp_path) as context:
         store = _load_store(context, dataset, hash_key=lambda key: key[0], recovery_timeout=15)
         task_id = _worker_task_id(context, 0)
-        initial_attempt = iris_integration_client._iris.task_status(task_id).current_attempt_id
+        task = _current_task(_iris_client(), task_id)
+        initial_attempt = _current_attempt(task)
         gate_reload.signal()
 
-        (kick_result,) = iris_integration_client._iris.kick_tasks(
-            [task_id.to_wire()],
-            desired_state=job_pb2.TASK_STATE_PREEMPTED,
-            reason="memory-store recovery test",
-        )
-        assert kick_result.queued
+        task.retry(idempotency_key="memory-store-recovery")
 
         restarted = ExponentialBackoff(initial=0.1, maximum=1).wait_until(
-            lambda: iris_integration_client._iris.task_status(task_id).current_attempt_id > initial_attempt,
+            lambda: _current_attempt(task).attempt_number > initial_attempt.attempt_number,
             timeout=Duration.from_seconds(15),
         )
         assert restarted

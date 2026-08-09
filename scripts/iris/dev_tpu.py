@@ -28,8 +28,10 @@ from iris.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
-from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.resources.identity import NodeLocator
+from iris.cluster.resources.node import NodeDetail
+from iris.cluster.types import Entrypoint, JobName, ResourceSpec, WellKnownAttribute, tpu_device
+from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
@@ -60,12 +62,6 @@ class DevTpuWorker:
     worker_address: str
     host: str
     node: GcpNodeRef
-
-
-@dataclass(frozen=True)
-class WorkerResolutionMetadata:
-    address: str
-    metadata: job_pb2.WorkerMetadata
 
 
 @dataclass(frozen=True)
@@ -124,61 +120,42 @@ def parse_worker_host(worker_address: str) -> str:
     return host
 
 
-def parse_tpu_worker_id(raw_worker_id: str) -> int:
-    """Parse the TPU worker id stored in Iris worker metadata."""
-    if not raw_worker_id:
-        return 0
-    try:
-        return int(raw_worker_id)
-    except ValueError as exc:
-        raise ValueError(f"invalid TPU worker id in worker metadata: {raw_worker_id!r}") from exc
+def _node_attribute(node: NodeDetail, key: WellKnownAttribute) -> str | int | float | None:
+    attribute = next((candidate for candidate in node.attributes if candidate.key == key), None)
+    if attribute is None:
+        return None
+    if attribute.string_value is not None:
+        return attribute.string_value
+    if attribute.integer_value is not None:
+        return attribute.integer_value
+    return attribute.float_value
 
 
-def resolve_node_ref_from_worker_metadata(
-    metadata: job_pb2.WorkerMetadata,
+def resolve_node_ref_from_resource(
+    node: NodeDetail,
     project: str,
     *,
     find_tpu_by_name: TpuNameLookup | None = None,
 ) -> GcpNodeRef | None:
-    """Resolve a GCP SSH target from Iris worker metadata."""
-    if metadata.tpu_name:
-        zone = metadata.gce_zone
+    """Resolve a GCP SSH target from an Iris Node resource."""
+    if node.summary.slice is not None:
+        tpu_name = node.summary.slice.key.resource_id
+        zone_value = _node_attribute(node, WellKnownAttribute.ZONE)
+        zone = zone_value if isinstance(zone_value, str) else ""
         if not zone and find_tpu_by_name is not None:
-            tpu_match = find_tpu_by_name(metadata.tpu_name, project)
+            tpu_match = find_tpu_by_name(tpu_name, project)
             if tpu_match:
                 _name, zone = tpu_match
         if zone:
+            worker_id = _node_attribute(node, WellKnownAttribute.TPU_WORKER_ID)
             return GcpNodeRef(
                 kind="tpu",
-                name=metadata.tpu_name,
+                name=tpu_name,
                 zone=zone,
                 project=project,
-                tpu_worker_id=parse_tpu_worker_id(metadata.tpu_worker_id),
+                tpu_worker_id=worker_id if isinstance(worker_id, int) else 0,
             )
-
-    if metadata.gce_instance_name and metadata.gce_zone:
-        return GcpNodeRef(
-            kind="vm",
-            name=metadata.gce_instance_name,
-            zone=metadata.gce_zone,
-            project=project,
-        )
-
     return None
-
-
-def worker_address_lookup_values(worker_address: str) -> list[str]:
-    """Return worker address forms used by different Iris controller versions."""
-    if not worker_address:
-        return []
-    values = [worker_address]
-    if "://" in worker_address:
-        parsed = urlsplit(worker_address)
-    else:
-        parsed = urlsplit(f"//{worker_address}")
-    if parsed.netloc:
-        values.append(parsed.netloc)
-    return list(dict.fromkeys(values))
 
 
 logger = logging.getLogger(__name__)
@@ -203,7 +180,6 @@ HOLDER_COMMAND = (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_tpu_iris"
-WORKER_LOOKUP_LIMIT = 25
 
 
 @dataclass
@@ -328,49 +304,6 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
             yield client
         finally:
             client.shutdown()
-
-
-def _worker_resolution_metadata_from_workers(
-    workers: Iterable[controller_pb2.Controller.WorkerHealthStatus],
-    *,
-    worker_id: str,
-    worker_address: str,
-) -> WorkerResolutionMetadata | None:
-    address_values = set(worker_address_lookup_values(worker_address))
-    for worker in workers:
-        if worker.worker_id == worker_id or worker.address in address_values:
-            return WorkerResolutionMetadata(address=worker.address, metadata=worker.metadata)
-    return None
-
-
-def worker_resolution_metadata(
-    client: IrisClient,
-    *,
-    worker_id: str,
-    worker_address: str,
-) -> WorkerResolutionMetadata | None:
-    lookup_values = []
-    if worker_id:
-        lookup_values.append(worker_id)
-    lookup_values.extend(worker_address_lookup_values(worker_address))
-    if not lookup_values:
-        return None
-
-    for lookup_value in dict.fromkeys(lookup_values):
-        workers = client.list_workers(
-            query=controller_pb2.Controller.WorkerQuery(
-                contains=lookup_value,
-                limit=WORKER_LOOKUP_LIMIT,
-            )
-        )
-        metadata = _worker_resolution_metadata_from_workers(
-            workers,
-            worker_id=worker_id,
-            worker_address=worker_address,
-        )
-        if metadata is not None:
-            return metadata
-    return None
 
 
 def resolve_node_ref(host: str, project: str, *, alternate_hosts: Iterable[str] = ()) -> GcpNodeRef:
@@ -529,7 +462,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
             job_pb2.JOB_STATE_UNSCHEDULABLE,
             job_pb2.JOB_STATE_WORKER_FAILED,
         ):
-            error = status.error or job_pb2.JobState.Name(status.state)
+            error = status.error_message or job_pb2.JobState.Name(status.state)
             raise click.ClickException(f"Dev TPU allocation failed: {error}")
 
         tasks = job.tasks()
@@ -538,40 +471,35 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
             all_running = True
             for task in tasks:
                 task_status = task.status()
-                if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
+                node_identity = task_status.current_node
+                if task_status.state != job_pb2.TASK_STATE_RUNNING or node_identity is None:
                     all_running = False
                     break
-                rpc_host = parse_worker_host(task_status.worker_address)
-                node = None
-                host = rpc_host
-                alternate_hosts: list[str] = []
-                worker_metadata = worker_resolution_metadata(
-                    client,
-                    worker_id=task_status.worker_id,
-                    worker_address=task_status.worker_address,
+                node_resource = client.describe_node(
+                    NodeLocator(
+                        key=node_identity.key,
+                        backend_id=node_identity.backend_id,
+                        node_uid=node_identity.node_uid,
+                    )
                 )
-                if worker_metadata is not None:
-                    metadata = worker_metadata.metadata
-                    try:
-                        node = resolve_node_ref_from_worker_metadata(
-                            metadata,
-                            project,
-                            find_tpu_by_name=gcp.find_tpu_by_name,
-                        )
-                    except ValueError as exc:
-                        raise click.ClickException(str(exc)) from exc
-                    if metadata.ip_address:
-                        host = metadata.ip_address
-                        alternate_hosts.append(metadata.ip_address)
-                    if worker_metadata.address:
-                        alternate_hosts.append(parse_worker_host(worker_metadata.address))
+                worker_address = node_resource.address
+                if worker_address is None:
+                    all_running = False
+                    break
+                rpc_host = parse_worker_host(worker_address)
+                host = rpc_host
+                node = resolve_node_ref_from_resource(
+                    node_resource,
+                    project,
+                    find_tpu_by_name=gcp.find_tpu_by_name,
+                )
                 if node is None:
-                    node = resolve_node_ref(rpc_host, project, alternate_hosts=alternate_hosts)
+                    node = resolve_node_ref(rpc_host, project)
                 resolved.append(
                     DevTpuWorker(
                         task_id=str(task.task_id),
-                        worker_id=task_status.worker_id,
-                        worker_address=task_status.worker_address,
+                        worker_id=node_identity.key.resource_id,
+                        worker_address=worker_address,
                         host=host,
                         node=node,
                     )
@@ -584,8 +512,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    status = client.status(JobName.from_wire(job_id))
-    return status.state not in {
+    return client.current_job(JobName.from_wire(job_id)).state not in {
         job_pb2.JOB_STATE_SUCCEEDED,
         job_pb2.JOB_STATE_FAILED,
         job_pb2.JOB_STATE_KILLED,
@@ -815,7 +742,7 @@ def allocate(
     finally:
         if client is not None and job is not None:
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                job.cancel()
             except Exception:
                 logger.warning("Failed to terminate holder job %s", job.job_id, exc_info=True)
         if client_cm is not None:
@@ -865,7 +792,7 @@ def release(ctx) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.current_job(JobName.from_wire(state.job_id)).cancel()
     finally:
         state_file.unlink(missing_ok=True)
 

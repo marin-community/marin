@@ -262,6 +262,7 @@ def drain_for_dispatch(
     *,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
     backend_id: str | None = None,
+    attempt_backend_id: str | None = None,
     defaults: UserBudgetDefaults | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
@@ -338,7 +339,14 @@ def drain_for_dispatch(
             band = effective_bands[heavy[task_id].job_id]
             row = replace(heavy[task_id], priority_band=band)
             attempt_id = row.current_attempt_id + 1
-            writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms, priority_band=band)
+            writes.promote_for_dispatch(
+                cur,
+                row.task_id,
+                attempt_id,
+                now_ms,
+                priority_band=band,
+                backend_id=attempt_backend_id,
+            )
             tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     # Redrive: pods for these rows may not exist yet (crash between

@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Literal
 
 import click
-from google.protobuf import json_format
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.controller.autoscaler.provisioning import STOCKOUT_MARKER
+from iris.cluster.resources.job import JobQuery, JobSummary
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
 from rigging.redaction import redact_value
@@ -79,7 +79,7 @@ class K8sPodStatus:
 class WaitResult:
     """Terminal status or a resource-exhaustion shutdown accepted by Iris."""
 
-    status: job_pb2.JobStatus
+    status: JobSummary
     resource_exhaustion_reason: str | None = None
 
 
@@ -102,42 +102,54 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-def _row(job: job_pb2.JobStatus | None) -> str:
+def _job_id(job: JobSummary) -> str:
+    return job.identity.key.resource_id
+
+
+def _row(job: JobSummary | None) -> str:
     if job is None:
         return "null"
-    return json.dumps(json_format.MessageToDict(job, preserving_proto_field_name=True), sort_keys=True)
+    return json.dumps(
+        {
+            "error_message": job.error_message,
+            "job_id": _job_id(job),
+            "pending_reason": job.pending_reason,
+            "state": job_pb2.JobState.Name(job.state),
+        },
+        sort_keys=True,
+    )
 
 
-def _child_started(child: job_pb2.JobStatus) -> bool:
+def _child_started(child: JobSummary) -> bool:
     """A child has left the queue once it reaches RUNNING or a terminal state other than UNSCHEDULABLE."""
     return child.state == job_pb2.JOB_STATE_RUNNING or (
         is_job_finished(child.state) and child.state != job_pb2.JOB_STATE_UNSCHEDULABLE
     )
 
 
-def _pick_child(parent_job_id: str, jobs: list[job_pb2.JobStatus]) -> job_pb2.JobStatus | None:
+def _pick_child(parent_job_id: str, jobs: list[JobSummary]) -> JobSummary | None:
     """Pick a representative child of the parent (prefer non-finished)."""
     prefix = parent_job_id.rstrip("/") + "/"
-    children = [j for j in jobs if j.job_id.startswith(prefix)]
+    children = [job for job in jobs if _job_id(job).startswith(prefix)]
     if not children:
         return None
     return next((c for c in children if not is_job_finished(c.state)), children[0])
 
 
-def _resource_exhaustion_reason(jobs: list[job_pb2.JobStatus]) -> str | None:
+def _resource_exhaustion_reason(jobs: list[JobSummary]) -> str | None:
     for job in jobs:
         if is_job_finished(job.state):
             continue
         pending_reason = job.pending_reason
         if pending_reason and any(marker in pending_reason.lower() for marker in _RESOURCE_EXHAUSTION_MARKERS):
-            return f"{job.job_id}: {pending_reason}"
+            return f"{_job_id(job)}: {pending_reason}"
     return None
 
 
 def _shutdown_result(
     client: IrisClient,
-    parent: job_pb2.JobStatus,
-    jobs: list[job_pb2.JobStatus],
+    parent: JobSummary,
+    jobs: list[JobSummary],
     resource_exhaustion_policy: ResourceExhaustionPolicy,
 ) -> WaitResult | None:
     if resource_exhaustion_policy != ResourceExhaustionPolicy.SHUTDOWN:
@@ -145,8 +157,22 @@ def _shutdown_result(
     reason = _resource_exhaustion_reason(jobs)
     if reason is None:
         return None
-    client.terminate(JobName.from_wire(parent.job_id))
+    client.cancel_job(
+        parent.identity,
+        idempotency_key=f"iris-monitor-resource-exhaustion:{parent.identity.job_uid}",
+    )
     return WaitResult(status=parent, resource_exhaustion_reason=reason)
+
+
+def _list_jobs(client: IrisClient, prefix: str) -> list[JobSummary]:
+    jobs: list[JobSummary] = []
+    query = JobQuery(job_id_prefix=prefix)
+    while True:
+        page = client.list_jobs(query)
+        jobs.extend(page.items)
+        if page.next_page_token is None:
+            return jobs
+        query = JobQuery(job_id_prefix=prefix, page_token=page.next_page_token)
 
 
 def job_status(
@@ -155,11 +181,11 @@ def job_status(
     iris_config: Path | None,
     repo_root: Path,
     controller_url: str | None = None,
-) -> job_pb2.JobStatus:
+) -> JobSummary:
     prefix = _job_id_prefix(job_id)
     with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
-        for job in client.list_jobs(prefix=prefix):
-            if job.job_id == job_id:
+        for job in _list_jobs(client, prefix):
+            if _job_id(job) == job_id:
                 return job
 
     raise LookupError(f"Job not found in Iris job list: {job_id!r}")
@@ -180,8 +206,8 @@ def wait_for_job(
     start = time.monotonic()
     with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
-            jobs = client.list_jobs(prefix=prefix)
-            job = next((j for j in jobs if j.job_id == job_id), None)
+            jobs = _list_jobs(client, prefix)
+            job = next((candidate for candidate in jobs if _job_id(candidate) == job_id), None)
             if job is None:
                 raise LookupError(f"Job not found in Iris job list: {job_id!r}")
             if is_job_finished(job.state):
@@ -220,8 +246,8 @@ def wait_for_child_job(
     child_running = False
     with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
-            jobs = client.list_jobs(prefix=prefix)
-            parent = next((j for j in jobs if j.job_id == job_id), None)
+            jobs = _list_jobs(client, prefix)
+            parent = next((candidate for candidate in jobs if _job_id(candidate) == job_id), None)
             if parent is None:
                 raise LookupError(f"Job not found in Iris job list: {job_id!r}")
             if is_job_finished(parent.state):
@@ -233,7 +259,7 @@ def wait_for_child_job(
             if not child_running and child is not None and _child_started(child):
                 child_running = True
                 click.echo(
-                    f"Child {child.job_id} reached {job_pb2.JobState.Name(child.state)}; dropping queue timeout.",
+                    f"Child {_job_id(child)} reached {job_pb2.JobState.Name(child.state)}; dropping queue timeout.",
                     err=True,
                 )
 
@@ -671,10 +697,10 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     """Print the current state of an Iris job."""
     s = job_status(job_id, iris_config=iris_config, controller_url=controller_url, repo_root=_REPO_ROOT)
     state = job_pb2.JobState.Name(s.state)
-    click.echo(f"job_id: {s.job_id}")
+    click.echo(f"job_id: {_job_id(s)}")
     click.echo(f"state:  {state}")
-    if s.error:
-        click.echo(f"error:  {s.error}")
+    if s.error_message:
+        click.echo(f"error:  {s.error_message}")
 
 
 @cli.command()
@@ -760,15 +786,15 @@ def wait(
     if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(
-                f"job_id={result.status.job_id}\n"
+                f"job_id={_job_id(result.status)}\n"
                 f"state={state}\n"
                 f"succeeded={succeeded}\n"
                 f"resource_exhausted={resource_exhausted}\n"
             )
 
     click.echo(f"Job {job_id!r} finished with state: {state}", err=True)
-    if result.status.error:
-        click.echo(f"Error: {result.status.error}", err=True)
+    if result.status.error_message:
+        click.echo(f"Error: {result.status.error_message}", err=True)
     if succeeded != "true":
         sys.exit(1)
 

@@ -31,15 +31,16 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.resources import jobs as resource_jobs
 from iris.cluster.controller.resources.jobs import CLIENT_FRESHNESS_WINDOW
+from iris.cluster.controller.resources.legacy_rpc import redact_request_env_vars
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import MAX_LIST_JOBS_OFFSET
-from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
+from iris.cluster.redaction import REDACTED_VALUE
 from iris.cluster.resources.endpoint import ProfileResult
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func
+from sqlalchemy import event, func
 from sqlalchemy import update as sa_update
 from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -983,6 +984,67 @@ def test_list_jobs_returns_all_jobs(service):
     assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == job_pb2.JOB_STATE_KILLED
 
 
+@pytest.mark.parametrize("job_count", [2, 50])
+def test_list_jobs_aggregates_a_page_with_fixed_queries(service, state, job_count):
+    parent = service.launch_job(make_job_request("parent"), None).job_id
+    service.launch_job(make_job_request(f"{parent}/child"), None)
+    for index in range(job_count - 2):
+        service.launch_job(make_job_request(f"root-{index}"), None)
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            statements.append(statement)
+
+    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    try:
+        response = service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None)
+    finally:
+        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+
+    jobs = {job.job_id: job for job in response.jobs}
+    assert len(jobs) == job_count
+    assert jobs[parent].has_children
+    assert jobs[parent].task_count == 1
+    assert jobs[f"{parent}/child"].task_count == 1
+    assert len(statements) == 6
+
+
+def test_get_job_state_accepts_the_public_federation_bind_ceiling(service, state):
+    first = service.launch_job(make_job_request("state-a"), None).job_id
+    second = service.launch_job(make_job_request("state-b"), None).job_id
+    requested = [first, second, *(f"/missing/job-{index}" for index in range(32_765))]
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            statements.append(statement)
+
+    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    try:
+        response = service.get_job_state(controller_pb2.Controller.GetJobStateRequest(job_ids=requested), None)
+    finally:
+        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+
+    assert response.states == {
+        first: job_pb2.JOB_STATE_PENDING,
+        second: job_pb2.JOB_STATE_PENDING,
+    }
+    assert len(statements) == 1
+    assert "json_each" in statements[0]
+
+
+@pytest.mark.parametrize("task_count", [501, 1_001])
+def test_list_tasks_describes_every_task_across_resource_batches(service, task_count):
+    job_id = service.launch_job(make_job_request(f"tasks-{task_count}", replicas=task_count), None).job_id
+
+    response = service.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id), None)
+
+    assert len(response.tasks) == task_count
+    assert {task.task_id for task in response.tasks} == {f"{job_id}/{task_index}" for task_index in range(task_count)}
+
+
 def test_list_jobs_sql_pagination(service):
     """SQL-level pagination returns correct page when sorting by date."""
     for i in range(5):
@@ -1261,6 +1323,35 @@ def test_list_workers_filter_by_contains(service, state):
         None,
     )
     assert by_substring.total_count == 4
+
+
+def test_list_workers_batches_resource_details_without_per_worker_reads(service, state, mock_controller):
+    _register_workers_for_query(service, state, count_cpu=205, count_gpu=0)
+    mock_controller.provider.status.reset_mock()
+    selects: list[str] = []
+
+    def capture_select(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    try:
+        response = service.list_workers(
+            controller_pb2.Controller.ListWorkersRequest(
+                query=controller_pb2.Controller.WorkerQuery(offset=195, limit=5),
+            ),
+            None,
+        )
+    finally:
+        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+
+    expected_ids = sorted(f"cpu-worker-{index:02d}" for index in range(205))[195:200]
+    assert [worker.worker_id for worker in response.workers] == expected_ids
+    assert response.total_count == 205
+    assert response.has_more is True
+    assert len(selects) == 9
+    assert all("task_attempts" not in statement for statement in selects)
+    assert mock_controller.provider.status.call_count == 3
 
 
 # =============================================================================

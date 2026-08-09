@@ -109,8 +109,9 @@ def attempt_activity(ctx: click.Context, attempt_ref: str, limit: int) -> None:
 def attempt_exec(ctx: click.Context, attempt_ref: str, command: tuple[str, ...], timeout: int) -> None:
     """Execute COMMAND in one exact active Attempt."""
     with resource_client_for_ctx(ctx) as client:
+        attempt = client.describe_attempt(attempt_locator(ctx, attempt_ref)).summary.identity
         result = client.exec_attempt(
-            attempt_locator(ctx, attempt_ref),
+            attempt,
             command=command,
             timeout=Duration.from_seconds(timeout),
         )
@@ -137,8 +138,9 @@ def attempt_profile(ctx: click.Context, attempt_ref: str, profile_name: ProfileN
         ProfileName.THREAD: job_pb2.ProfileType(threads=job_pb2.ThreadsProfile()),
     }
     with resource_client_for_ctx(ctx) as client:
+        attempt = client.describe_attempt(attempt_locator(ctx, attempt_ref)).summary.identity
         result = client.profile_attempt(
-            attempt_locator(ctx, attempt_ref),
+            attempt,
             profile=profile_by_name[profile_name],
             duration=Duration.from_seconds(duration),
         )

@@ -17,15 +17,26 @@ from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
 
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
+from iris.cluster.client.resource_conversion import (
+    action_receipt_from_proto,
+    attempt_identity_to_proto,
+    exec_result_from_proto,
+    job_identity_to_proto,
+    profile_result_from_proto,
+    task_identity_to_proto,
+)
 from iris.cluster.config import PeerConfig
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.store import FederationSyncBatch
+from iris.cluster.resources.action import ActionReceipt
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
 from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.time_proto import duration_to_proto
 
 # A handoff carries a full request and a peer's cold boot can outrun the default
@@ -68,6 +79,18 @@ class PeerConnection(Protocol):
     def terminate_job(self, job_id: JobName) -> None: ...
 
     def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch: ...
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt: ...
+
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt: ...
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult: ...
 
@@ -159,6 +182,7 @@ class _PeerRpcConnection:
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
         self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+        self._resources = ResourceServiceClientSync(address=controller_address, interceptors=interceptors)
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         response = self._client.list_backends(controller_pb2.Controller.ListBackendsRequest())
@@ -176,26 +200,61 @@ class _PeerRpcConnection:
         )
         return federation_batch_from_legacy(response)
 
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+        response = self._resources.cancel_job(
+            resource_pb2.CancelJobRequest(
+                job=job_identity_to_proto(identity),
+                idempotency_key=idempotency_key,
+            )
+        )
+        return action_receipt_from_proto(response.receipt)
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        response = self._resources.retry_task(
+            resource_pb2.RetryTaskRequest(
+                task=task_identity_to_proto(identity),
+                expected_attempt_uid=expected_attempt_uid,
+                idempotency_key=idempotency_key,
+            )
+        )
+        return action_receipt_from_proto(response.receipt)
+
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
+        response = self._resources.terminate_attempt(
+            resource_pb2.TerminateAttemptRequest(
+                attempt=attempt_identity_to_proto(identity),
+                idempotency_key=idempotency_key,
+            )
+        )
+        return action_receipt_from_proto(response.receipt)
+
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         if request.attempt is None:
             raise ValueError("federated task profiling requires an Attempt identity")
         duration_seconds = int(request.duration.to_seconds()) if request.duration is not None else 0
-        wire_request = job_pb2.ProfileTaskRequest(
-            target=f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}",
-            duration_seconds=duration_seconds,
-            profile_type=profile_configuration_to_proto(request.profile),
+        wire_request = resource_pb2.ProfileAttemptRequest(
+            attempt=attempt_identity_to_proto(request.attempt),
+            profile=profile_configuration_to_proto(request.profile),
         )
+        if request.duration is not None:
+            wire_request.duration.CopyFrom(duration_to_proto(request.duration))
         timeout_ms = (duration_seconds or _DEFAULT_PROFILE_DURATION) * 1000 + _PROFILE_PROXY_TIMEOUT_MARGIN_MS
-        response = self._client.profile_task(wire_request, timeout_ms=timeout_ms)
-        return ProfileResult(response.profile_data, response.error)
+        return profile_result_from_proto(self._resources.profile_attempt(wire_request, timeout_ms=timeout_ms))
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
         timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 0
-        wire_request = controller_pb2.Controller.ExecInContainerRequest(
-            task_id=request.attempt.task.resource_id,
+        wire_request = resource_pb2.ExecAttemptRequest(
+            attempt=attempt_identity_to_proto(request.attempt),
             command=request.command,
-            timeout_seconds=timeout_seconds,
         )
+        if request.timeout is not None:
+            wire_request.timeout.CopyFrom(duration_to_proto(request.timeout))
         # Mirror the worker backend's exec timeout contract (backend.py): a
         # negative timeout is "no caller limit", which the peer caps at
         # EXEC_IN_CONTAINER_MAX_TIMEOUT, so the parent->peer hop must outlast that
@@ -204,14 +263,16 @@ class _PeerRpcConnection:
             budget_ms = EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
         else:
             budget_ms = (timeout_seconds or _DEFAULT_EXEC_TIMEOUT) * 1000
-        response = self._client.exec_in_container(wire_request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
-        return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
+        return exec_result_from_proto(
+            self._resources.exec_attempt(wire_request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
+        )
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
 
     def shutdown(self) -> None:
         self._client.close()
+        self._resources.close()
 
 
 def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider | None = None) -> PeerConnection:
@@ -274,6 +335,28 @@ class FederationPeer:
     def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         """Run one delta-sync round against the peer."""
         return self._connection.federation_sync(requester_id, cursor)
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+        """Cancel an exact Job incarnation on the execution peer."""
+        return self._connection.cancel_job(identity, idempotency_key=idempotency_key)
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        """Retry an exact Task incarnation on the execution peer."""
+        return self._connection.retry_task(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            idempotency_key=idempotency_key,
+        )
+
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
+        """Terminate an exact Attempt incarnation on the execution peer."""
+        return self._connection.terminate_attempt(identity, idempotency_key=idempotency_key)
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         """Profile an Attempt running on the peer."""

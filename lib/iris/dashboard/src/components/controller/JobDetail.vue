@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
+import { loadJobTasks } from '@/components/controller/jobTaskPages'
 import type {
   ResourceActionResponse,
   Constraint,
@@ -19,11 +20,10 @@ import ConstraintChip from '@/components/shared/ConstraintChip.vue'
 const props = defineProps<{ clusterId: string; jobId: string }>()
 const key = computed(() => ({ clusterId: props.clusterId, kind: 'RESOURCE_KIND_JOB', resourceId: props.jobId }))
 const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeJobResponse>('DescribeJob', () => ({ job: key.value }))
-const { data: taskData, refresh: refreshTasks } = useResourceRpc<ResourceListTasksResponse>('ListTasks', () => ({
-  query: { job: key.value, page: { pageSize: 100 } },
-}))
 const job = computed(() => data.value?.job)
-const tasks = computed(() => taskData.value?.tasks ?? [])
+const tasks = ref<ResourceTaskSummary[]>([])
+const taskLoading = ref(false)
+const taskError = ref<string | null>(null)
 const action = ref<ResourceActionResponse | null>(null)
 const actionError = ref<string | null>(null)
 const acting = ref(false)
@@ -41,6 +41,28 @@ function constraintText(constraint: Constraint): string {
 function taskRoute(task: ResourceTaskSummary) {
   return { name: 'task-detail', params: { clusterId: task.identity.key.clusterId, taskId: task.identity.key.resourceId } }
 }
+
+async function refreshPage() {
+  taskLoading.value = true
+  taskError.value = null
+  await refresh()
+  if (!job.value) {
+    taskLoading.value = false
+    return
+  }
+  try {
+    tasks.value = await loadJobTasks(job.value.summary.numTasks, pageToken =>
+      resourceRpcCall<ResourceListTasksResponse>('ListTasks', {
+        query: { job: key.value, page: { pageSize: 100, pageToken } },
+      }),
+    )
+  } catch (e) {
+    taskError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    taskLoading.value = false
+  }
+}
+
 async function cancelJob() {
   if (!job.value || acting.value) return
   acting.value = true; actionError.value = null
@@ -52,7 +74,7 @@ async function cancelJob() {
   } catch (e) { actionError.value = e instanceof Error ? e.message : String(e) }
   finally { acting.value = false }
 }
-onMounted(() => Promise.all([refresh(), refreshTasks()]))
+onMounted(refreshPage)
 </script>
 
 <template>
@@ -92,7 +114,9 @@ onMounted(() => Promise.all([refresh(), refreshTasks()]))
       </section>
       <section>
         <h3 class="font-semibold mb-2">Tasks</h3>
-        <EmptyState v-if="tasks.length === 0" message="No tasks" />
+        <div v-if="taskError" class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded border">{{ taskError }}</div>
+        <div v-else-if="taskLoading" class="text-sm text-text-muted">Loading tasks…</div>
+        <EmptyState v-else-if="tasks.length === 0" message="No tasks" />
         <div v-else class="border rounded divide-y">
           <RouterLink v-for="task in tasks" :key="task.identity.taskUid" :to="taskRoute(task)" class="flex items-center justify-between p-3 hover:bg-surface-raised">
             <span class="font-mono">{{ task.identity.key.resourceId }}</span><StatusBadge :status="task.state" size="sm" />

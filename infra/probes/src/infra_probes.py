@@ -20,9 +20,12 @@ from cluster import collect_jobs, collect_workers
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from iris.cli.connect import connect_controller, rpc_client
+from iris.client.client import IrisClient
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, zone_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.resources.endpoint import EndpointQuery
+from iris.cluster.resources.node import NodeQuery
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from provisioning import collect_provisioning
@@ -38,8 +41,7 @@ logger = logging.getLogger(__name__)
 _MARIN_CONFIG = load_cluster_config("marin")
 
 # Iris advertises the finelog log-server under this logical name in its endpoint
-# registry; resolve it to a concrete address via list_endpoints (same name the
-# iris worker uses).
+# registry; resolve it to a concrete address through the Endpoint resource API.
 LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
 # Default zones to canary when --zone is not given: the busiest europe-west4 and
@@ -67,8 +69,8 @@ PROVISION_WINDOW_HOURS = 3.0
 PROVISION_CADENCE = 900.0
 PROVISION_TIMEOUT = 60.0
 
-# Cluster-state gauges. Workers is a single ListWorkers RPC paged client-side;
-# jobs is one raw-SQL GROUP BY. Both are sub-second, so the cadences are about
+# Cluster-state gauges. Workers comes from the paginated Node resource inventory;
+# jobs is one raw-SQL GROUP BY. The cadences are about
 # freshness (workers churn faster than the 24h job window) and the timeouts only
 # cover a slow/hung controller.
 WORKERS_CADENCE = 60.0
@@ -99,32 +101,29 @@ PROBE_RESULTS_NAMESPACE = "infra.canary.metrics"
 # ---- health checks --------------------------------------------------------
 
 
-def probe_controller_ping(iris: RemoteClusterClient) -> bool:
-    iris.list_workers()
+def probe_controller_ping(iris: IrisClient) -> bool:
+    iris.list_nodes(NodeQuery(page_size=1))
     return True
 
 
 def iris_job_succeeds(
-    iris: RemoteClusterClient,
+    iris: IrisClient,
     target: str,
-    constraints: list[job_pb2.Constraint],
+    constraints: list[Constraint],
 ) -> bool:
-    job_id = JobName.root(
-        "infra-probes",
-        f"canary-{target}-{int(time.time())}-{uuid.uuid4().hex[:8]}",
-    )
-    submitted = iris.submit_job(
-        job_id=job_id,
+    job = iris.submit(
         entrypoint=Entrypoint.from_command("python", "-c", "import time; time.sleep(1)"),
-        resources=ResourceSpec(cpu=CANARY_CPU, memory=CANARY_MEMORY).to_proto(),
-        environment=EnvironmentSpec(setup_scripts=[]).to_proto(),
+        name=f"canary-{target}-{int(time.time())}-{uuid.uuid4().hex[:8]}",
+        resources=ResourceSpec(cpu=CANARY_CPU, memory=CANARY_MEMORY),
+        environment=EnvironmentSpec(setup_scripts=[]),
         constraints=constraints,
         max_retries_failure=0,
         max_retries_preemption=0,
         scheduling_timeout=Duration.from_seconds(CANARY_SCHEDULING_TIMEOUT),
         timeout=Duration.from_seconds(CANARY_RUNTIME_TIMEOUT),
+        user="infra-probes",
     )
-    status = iris.wait_for_job(submitted, timeout=CANARY_WAIT_TIMEOUT)
+    status = job.wait(timeout=CANARY_WAIT_TIMEOUT, raise_on_failure=False)
     return status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -139,7 +138,7 @@ def _federated_scheduling_health_sample(peer_id: str, succeeded: bool) -> Sample
     )
 
 
-def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sample:
+def _federated_scheduling_sample(iris: IrisClient, peer_id: str) -> Sample:
     constraint = Constraint.create(
         key=CLUSTER_CONSTRAINT_KEY,
         op=ConstraintOp.EQ,
@@ -149,7 +148,7 @@ def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sam
         succeeded = iris_job_succeeds(
             iris,
             f"cluster-{peer_id}",
-            [constraint.to_proto()],
+            [constraint],
         )
     except Exception:
         logger.exception("federated scheduling probe failed for %s", peer_id)
@@ -158,7 +157,7 @@ def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sam
 
 
 def collect_federated_scheduling(
-    iris: RemoteClusterClient,
+    iris: IrisClient,
     peer_client: ControllerServiceClientSync,
 ) -> list[Sample]:
     """Return one scheduling-health sample for every Marin federation peer."""
@@ -228,12 +227,17 @@ def probe_finelog_write(finelog: LogClient) -> bool:
 # ---- entrypoint -----------------------------------------------------------
 
 
-def resolve_finelog_address(iris: RemoteClusterClient, name: str) -> str:
-    """Resolve the finelog log-server address from iris's endpoint registry."""
-    endpoints = iris.list_endpoints(name, exact=True)
-    if not endpoints:
-        raise ConnectionError(f"no {name!r} endpoint registered on the iris controller")
-    return endpoints[0].address
+def resolve_finelog_address(iris: IrisClient, name: str) -> str:
+    """Resolve the exact finelog Endpoint resource to its concrete address."""
+    query = EndpointQuery(name_prefix=name, page_size=500)
+    while True:
+        page = iris.list_endpoints(query)
+        for endpoint in page.items:
+            if endpoint.name == name:
+                return iris.describe_endpoint(endpoint.key).address
+        if page.next_page_token is None:
+            raise ConnectionError(f"no {name!r} endpoint registered on the iris controller")
+        query = EndpointQuery(name_prefix=name, page_size=500, page_token=page.next_page_token)
 
 
 def build_sinks(finelog: LogClient) -> list[MetricSink]:
@@ -252,8 +256,8 @@ def build_sinks(finelog: LogClient) -> list[MetricSink]:
 
 
 def build_collectors(
-    iris: RemoteClusterClient,
-    federated_iris: RemoteClusterClient,
+    iris: IrisClient,
+    federated_iris: IrisClient,
     finelog: LogClient,
     query_client: ControllerServiceClientSync,
     zones: tuple[str, ...],
@@ -288,7 +292,7 @@ def build_collectors(
                 lambda z=zone: iris_job_succeeds(
                     iris,
                     z,
-                    [zone_constraint(z).to_proto()],
+                    [zone_constraint(z)],
                 ),
                 timeout=CANARY_COLLECTOR_TIMEOUT,
                 cadence=CANARY_CADENCE,
@@ -322,7 +326,7 @@ def build_collectors(
 def main(iris_endpoint: str, iris_cluster: str, zones: tuple[str, ...]) -> None:
     zones = zones or DEFAULT_ZONES
 
-    iris = RemoteClusterClient(controller_address=iris_endpoint)
+    iris = IrisClient(RemoteClusterClient(controller_address=iris_endpoint))
     finelog = LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,
         resolver=lambda name: resolve_finelog_address(iris, name),
@@ -335,9 +339,11 @@ def main(iris_endpoint: str, iris_cluster: str, zones: tuple[str, ...]) -> None:
     # service-account credentials become the IAP token; the Marin controller
     # then authenticates and signs each downstream peer handoff.
     with connect_controller(cluster_name=iris_cluster) as public_endpoint:
-        federated_iris = RemoteClusterClient(
-            controller_address=public_endpoint.url,
-            interceptors=public_endpoint.credentials.interceptors(),
+        federated_iris = IrisClient(
+            RemoteClusterClient(
+                controller_address=public_endpoint.url,
+                interceptors=public_endpoint.credentials.interceptors(),
+            )
         )
         runner = CollectorRunner(sinks=build_sinks(finelog))
         for collector in build_collectors(iris, federated_iris, finelog, query_client, zones):

@@ -108,7 +108,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
@@ -392,7 +392,15 @@ class Controller:
         # one attribute-less worker-daemon backend per id: every job routes to it
         # and every scale group maps to it, so routing/partition is the identity.
         if backend_configs is None:
-            backend_configs = {bid: BackendConfig(kind="worker_daemon") for bid in self._backends}
+            backend_configs = {
+                bid: BackendConfig(
+                    kind="k8s" if BackendCapability.CLUSTER_VIEW in backend.capabilities else "worker_daemon"
+                )
+                for bid, backend in self._backends.items()
+            }
+        if backend_configs.keys() != self._backends.keys():
+            raise ValueError("backend_configs keys must exactly match live backend keys")
+        self._backend_configs = dict(backend_configs)
         # The meta-scheduler routes against what each backend advertises, not the
         # config. Attributes are immutable, so the routing index is built once.
         self._backend_routing = {
@@ -512,6 +520,7 @@ class Controller:
             user_budget_defaults=config.user_budget_defaults,
             capability_url_config=capability_url_config,
             backends=self._backends,
+            backend_configs=self._backend_configs,
             log_client=self._log_client,
         )
         self._service = ControllerServiceImpl(
@@ -566,10 +575,6 @@ class Controller:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
-        # Task terminal-state overrides queued off the control loop for the next
-        # tick; see request_task_kicks / _drain_pending_kicks.
-        self._pending_kicks: list[PendingKick] = []
-        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
         self._native_proxy_metrics: NativeProxyTelemetry | None = None
@@ -636,19 +641,6 @@ class Controller:
             return
         with self._pending_evictions_lock:
             self._pending_evictions.update(worker_ids)
-        self.wake()
-
-    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
-        """Queue task terminal-state overrides to apply on the next control tick.
-
-        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
-        kicks inside the tick's single write transaction so they cannot race the
-        scheduler's view of task state.
-        """
-        if not kicks:
-            return
-        with self._pending_kicks_lock:
-            self._pending_kicks.extend(kicks)
         self.wake()
 
     def _seed_backend_liveness(self) -> None:
@@ -1022,8 +1014,6 @@ class Controller:
             return
 
         self._drain_pending_evictions()
-        pending_kicks = self._drain_pending_kicks()
-
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
@@ -1081,7 +1071,6 @@ class Controller:
             routing_unschedulable=routing_unschedulable,
             recon_results=recon_results,
             timeout_decisions=timeout_decisions,
-            pending_kicks=pending_kicks,
             auto_results=auto_results,
             federation_promotions=federation_promotions,
             expired_queued_federation=inputs.expired_queued_federation,
@@ -1098,12 +1087,6 @@ class Controller:
                 len(confirmed_promotions),
                 ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
             )
-
-        # Force the next reconcile so workers are told to stop the kicked attempts
-        # promptly instead of waiting a full reconcile interval.
-        if pending_kicks:
-            self._force_reconcile = True
-            self._tick_wake.set()
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments.
@@ -1361,7 +1344,6 @@ class Controller:
         routing_unschedulable: list[tuple[PendingTask, str]],
         recon_results: dict[str, ReconcileResult],
         timeout_decisions: list[TerminalDecision],
-        pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         federation_promotions: list[Promotion],
         expired_queued_federation: list[JobName],
@@ -1372,8 +1354,8 @@ class Controller:
         Order within the txn: schedule decisions (incl. backend pins + routing
         UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
         promotions, each backend's reconcile effects, execution-timeout finalizations,
-        administrative kicks, per-backend autoscaler state. Each backend already authored
-        its own ``effects`` during reconcile; the controller just commits them uniformly.
+        per-backend autoscaler state. Each backend already authored its own
+        ``effects`` during reconcile; the controller just commits them uniformly.
         A no-op tick opens no transaction.
 
         Returns the federation promotions whose conditional CAS actually committed (a
@@ -1391,13 +1373,7 @@ class Controller:
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
         if not (
-            has_sched
-            or has_recon
-            or timeout_decisions
-            or pending_kicks
-            or states
-            or federation_promotions
-            or expired_queued_federation
+            has_sched or has_recon or timeout_decisions or states or federation_promotions or expired_queued_federation
         ):
             return []
 
@@ -1425,13 +1401,6 @@ class Controller:
                     commit_effects(cur, result.effects)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, now=now)
-            if pending_kicks:
-                # Resolve after the schedule/reconcile writes so the attempt
-                # re-check sees this tick's reassignments.
-                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
-                if kick_decisions:
-                    finalize(cur, kick_decisions, now=now)
-                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
         return confirmed
@@ -1685,6 +1654,7 @@ class Controller:
                 cur,
                 max_promotions=max_promotions,
                 backend_id=backend_filter,
+                attempt_backend_id=backend_id,
                 defaults=self._config.user_budget_defaults,
             )
         if batch.tasks_to_run:
@@ -1718,36 +1688,6 @@ class Controller:
             group = [wid for wid in drained if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
             if group:
                 self._backends[backend_id].teardown(group, reason=reason)
-
-    def _drain_pending_kicks(self) -> list[PendingKick]:
-        """Take the queued administrative kicks for this tick's commit."""
-        with self._pending_kicks_lock:
-            if not self._pending_kicks:
-                return []
-            drained = self._pending_kicks
-            self._pending_kicks = []
-        return drained
-
-    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
-        """Turn queued kicks into terminal decisions, dropping superseded attempts.
-
-        A kick targeting a specific attempt is dropped if that attempt is no longer
-        current (the task retried in the meantime); a kick with no attempt id takes
-        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
-        """
-        decisions: list[TerminalDecision] = []
-        for kick in pending_kicks:
-            if kick.attempt_id is not None:
-                detail = reads.get_task_detail(cur, kick.task_id)
-                if detail is None or detail.current_attempt_id != kick.attempt_id:
-                    logger.info(
-                        "Dropping kick for %s: attempt %d is no longer current",
-                        kick.task_id.to_wire(),
-                        kick.attempt_id,
-                    )
-                    continue
-            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
-        return decisions
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Write a consistent SQLite checkpoint copy.

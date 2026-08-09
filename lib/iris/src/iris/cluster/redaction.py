@@ -1,16 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris-specific redaction wrappers around :mod:`rigging.redaction`.
+"""Iris CLI redaction wrappers around :mod:`rigging.redaction`."""
 
-The actual secret-pattern matching lives in ``rigging``; this module only
-adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
-for ``iris job run``) into a form the shared redactor can consume.
-"""
-
-from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
-
-from iris.rpc import controller_pb2
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string
 
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
@@ -35,22 +28,6 @@ def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
     if token.startswith(_ENV_VAR_SHORT_FLAG) and len(token) > 2 and not token.startswith("--"):
         return token[2:]
     return None
-
-
-def redact_request_env_vars(
-    request: controller_pb2.Controller.LaunchJobRequest,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Return a copy of *request* with sensitive env var values replaced."""
-    if not request.environment.env_vars:
-        return request
-
-    redacted = controller_pb2.Controller.LaunchJobRequest()
-    redacted.CopyFrom(request)
-    env_vars = redacted.environment.env_vars
-    redacted_env = redact_value(dict(env_vars))
-    env_vars.clear()
-    env_vars.update(redacted_env)
-    return redacted
 
 
 def redact_submit_argv(argv: list[str]) -> list[str]:

@@ -462,20 +462,27 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoint_instances(prefixed_name)
+        matches = self._cluster.resolve_endpoints(prefixed_name)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
-            [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
+            [
+                {
+                    "name": endpoint.summary.name,
+                    "id": endpoint.summary.endpoint_id,
+                    "address": endpoint.address,
+                }
+                for endpoint in matches
+            ],
         )
 
         endpoints = [
             ResolvedEndpoint(
-                url=ep.address,
-                actor_id=ep.endpoint_id,
-                metadata=dict(ep.metadata),
+                url=endpoint.address,
+                actor_id=endpoint.summary.endpoint_id,
+                metadata=dict(endpoint.metadata),
             )
-            for ep in matches
+            for endpoint in matches
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)
@@ -841,6 +848,9 @@ class IrisClient:
     def describe_task(self, key: ResourceKey) -> TaskDetail:
         return self._cluster_client.describe_task(key)
 
+    def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]:
+        return self._cluster_client.describe_tasks(keys)
+
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         return self._cluster_client.describe_attempt(locator)
 
@@ -861,6 +871,12 @@ class IrisClient:
 
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
         return self._cluster_client.describe_endpoint(key)
+
+    def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
+        return self._cluster_client.describe_endpoints(keys)
+
+    def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]:
+        return self._cluster_client.resolve_endpoints(name)
 
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
         return self._cluster_client.mint_endpoint_token(key, ttl=ttl)
@@ -925,29 +941,36 @@ class IrisClient:
 
     def exec_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         command: Sequence[str],
         timeout: Duration,
     ) -> ExecResult:
-        return self._cluster_client.exec_attempt(locator, command=command, timeout=timeout)
+        return self._cluster_client.exec_attempt(identity, command=command, timeout=timeout)
 
     def profile_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         profile: job_pb2.ProfileType,
         duration: Duration,
     ) -> ProfileResult:
-        return self._cluster_client.profile_attempt(locator, profile=profile, duration=duration)
+        return self._cluster_client.profile_attempt(identity, profile=profile, duration=duration)
 
     def current_job(self, job_id: JobName) -> Job:
         """Resolve the current Job incarnation for a wire ID."""
-        page = self.list_jobs(JobQuery(job_id_prefix=job_id.to_wire(), page_size=100))
-        match = next((summary for summary in page.items if summary.identity.key.resource_id == job_id.to_wire()), None)
-        if match is None:
-            raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
-        return Job(self, match.identity)
+        query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=500)
+        while True:
+            page = self.list_jobs(query)
+            match = next(
+                (summary for summary in page.items if summary.identity.key.resource_id == job_id.to_wire()),
+                None,
+            )
+            if match is not None:
+                return Job(self, match.identity)
+            if page.next_page_token is None:
+                raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
+            query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=500, page_token=page.next_page_token)
 
     def report_task_status_text(
         self,

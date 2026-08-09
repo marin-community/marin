@@ -112,13 +112,17 @@ class JourneyWorld:
         self._unavailable_backend_ids = unavailable_backend_ids or set()
         self._jobs: dict[str, JobRef] = {}
         self._checkpoint_jobs: dict[str, frozenset[str]] = {}
-        self._task_history: dict[str, tuple[tuple[int, int], ...]] = {}
-        self._terminal_tasks: set[str] = set()
+        self._task_history: dict[tuple[str, str], tuple[tuple[int, int], ...]] = {}
+        self._terminal_tasks: set[tuple[str, str]] = set()
+        self._task_uids: dict[str, str] = {}
+        self._seen_launches: set[tuple[str, int]] = set()
+        self._checked_launch_event_count = 0
         self._prior_backend_events: list[BackendEvent] = []
         self._prior_backend_calls: list[tuple[str, str]] = []
         self.trace: list[str] = []
 
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
@@ -172,6 +176,7 @@ class JourneyWorld:
         self._remember_backend_activity()
         self.controller.stop()
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
         self._check_invariants()
@@ -197,14 +202,17 @@ class JourneyWorld:
         retained = self._checkpoint_jobs[checkpoint]
         self._jobs = {job_id: job for job_id, job in self._jobs.items() if job_id in retained}
         self._task_history = {
-            task_id: history
-            for task_id, history in self._task_history.items()
-            if any(task_id.startswith(f"{job_id}/") for job_id in retained)
+            task_key: history
+            for task_key, history in self._task_history.items()
+            if any(task_key[0].startswith(f"{job_id}/") for job_id in retained)
         }
         self._terminal_tasks = {
-            task_id for task_id in self._terminal_tasks if any(task_id.startswith(f"{job_id}/") for job_id in retained)
+            task_key
+            for task_key in self._terminal_tasks
+            if any(task_key[0].startswith(f"{job_id}/") for job_id in retained)
         }
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
         self._check_invariants()
@@ -490,7 +498,11 @@ class JourneyWorld:
         return self.controller.resources.list_tasks(TaskQuery(job=job_key, backend_id=backend_id))
 
     def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
-        return self.controller.resources.cancel_job(identity, idempotency_key=idempotency_key)
+        return self.controller.resources.cancel_job(
+            identity,
+            idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.key.resource_id).user,
+        )
 
     def retry_task(
         self,
@@ -503,6 +515,7 @@ class JourneyWorld:
             identity,
             expected_attempt_uid=expected_attempt_uid,
             idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.key.resource_id).user,
         )
 
     def terminate_attempt(
@@ -511,7 +524,11 @@ class JourneyWorld:
         *,
         idempotency_key: str,
     ) -> ActionReceipt:
-        return self.controller.resources.terminate_attempt(identity, idempotency_key=idempotency_key)
+        return self.controller.resources.terminate_attempt(
+            identity,
+            idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.task.resource_id).user,
+        )
 
     def action_receipt(self, action_id: str) -> ActionReceipt:
         return self.controller.resources.get_action_receipt(action_id)
@@ -631,9 +648,14 @@ class JourneyWorld:
                 raise AssertionError(f"coscheduled Job split between active and pending Tasks: {self.timeline}")
             for task in listed:
                 task_id = task.identity.key.resource_id
+                task_key = (task_id, task.identity.task_uid)
+                previous_task_uid = self._task_uids.get(task_id)
+                if previous_task_uid is not None and previous_task_uid != task.identity.task_uid:
+                    self._seen_launches = {launch for launch in self._seen_launches if launch[0] != task_id}
+                self._task_uids[task_id] = task.identity.task_uid
                 detail = self.task(TaskRef(task_id, task.identity.key.cluster_id))
                 attempts = tuple((attempt.identity.attempt_number, attempt.state) for attempt in detail.attempts)
-                previous = self._task_history.get(task_id, ())
+                previous = self._task_history.get(task_key, ())
                 if tuple(attempt_id for attempt_id, _ in attempts[: len(previous)]) != tuple(
                     attempt_id for attempt_id, _ in previous
                 ):
@@ -650,19 +672,23 @@ class JourneyWorld:
                 for (_, previous_state), (_, current_state) in zip(previous, attempts, strict=False):
                     if previous_state in terminal_attempt_states and current_state != previous_state:
                         raise AssertionError(f"terminal Attempt changed for {task_id}: {self.timeline}")
-                self._task_history[task_id] = attempts
+                self._task_history[task_key] = attempts
                 if sum(attempt.state in active_states for attempt in detail.attempts) > 1:
                     raise AssertionError(f"multiple live Attempts for {task_id}: {self.timeline}")
                 if task.state in terminal_states and any(attempt.state in active_states for attempt in detail.attempts):
                     raise AssertionError(f"terminal Task retained a live Attempt: {task_id}: {self.timeline}")
-                if task_id in self._terminal_tasks and task.state not in terminal_states:
+                if task_key in self._terminal_tasks and task.state not in terminal_states:
                     raise AssertionError(f"terminal Task revived: {task_id}: {self.timeline}")
                 if task.state in terminal_states:
-                    self._terminal_tasks.add(task_id)
+                    self._terminal_tasks.add(task_key)
 
-        launches = [(event.task_id, event.attempt_id) for event in self.backend_events(kind="launched")]
-        if len(launches) != len(set(launches)):
-            raise AssertionError(f"duplicate backend launch: {self.timeline}")
+        launch_events = self.backend_events(kind="launched")
+        for event in launch_events[self._checked_launch_event_count :]:
+            launch = (event.task_id, event.attempt_id)
+            if launch in self._seen_launches:
+                raise AssertionError(f"duplicate backend launch: {self.timeline}")
+            self._seen_launches.add(launch)
+        self._checked_launch_event_count = len(launch_events)
 
 
 @contextlib.contextmanager

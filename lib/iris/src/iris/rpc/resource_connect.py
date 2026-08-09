@@ -32,6 +32,9 @@ class ResourceService(Protocol):
     async def describe_task(self, request: resource__pb2.DescribeTaskRequest, ctx: RequestContext) -> resource__pb2.DescribeTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def batch_describe_tasks(self, request: resource__pb2.BatchDescribeTasksRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def describe_attempt(self, request: resource__pb2.DescribeAttemptRequest, ctx: RequestContext) -> resource__pb2.DescribeAttemptResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -51,6 +54,9 @@ class ResourceService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def describe_endpoint(self, request: resource__pb2.DescribeEndpointRequest, ctx: RequestContext) -> resource__pb2.DescribeEndpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def batch_describe_endpoints(self, request: resource__pb2.BatchDescribeEndpointsRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def mint_endpoint_token(self, request: resource__pb2.MintEndpointTokenRequest, ctx: RequestContext) -> resource__pb2.MintEndpointTokenResponse:
@@ -136,6 +142,16 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                     ),
                     function=svc.describe_task,
                 ),
+                "/iris.resource.ResourceService/BatchDescribeTasks": Endpoint.unary(
+                    method=MethodInfo(
+                        name="BatchDescribeTasks",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.BatchDescribeTasksRequest,
+                        output=resource__pb2.BatchDescribeTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.batch_describe_tasks,
+                ),
                 "/iris.resource.ResourceService/DescribeAttempt": Endpoint.unary(
                     method=MethodInfo(
                         name="DescribeAttempt",
@@ -205,6 +221,16 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.describe_endpoint,
+                ),
+                "/iris.resource.ResourceService/BatchDescribeEndpoints": Endpoint.unary(
+                    method=MethodInfo(
+                        name="BatchDescribeEndpoints",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.BatchDescribeEndpointsRequest,
+                        output=resource__pb2.BatchDescribeEndpointsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.batch_describe_endpoints,
                 ),
                 "/iris.resource.ResourceService/MintEndpointToken": Endpoint.unary(
                     method=MethodInfo(
@@ -409,6 +435,26 @@ class ResourceServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def batch_describe_tasks(
+        self,
+        request: resource__pb2.BatchDescribeTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.BatchDescribeTasksResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BatchDescribeTasks",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.BatchDescribeTasksRequest,
+                output=resource__pb2.BatchDescribeTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def describe_attempt(
         self,
         request: resource__pb2.DescribeAttemptRequest,
@@ -543,6 +589,26 @@ class ResourceServiceClient(ConnectClient):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.DescribeEndpointRequest,
                 output=resource__pb2.DescribeEndpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def batch_describe_endpoints(
+        self,
+        request: resource__pb2.BatchDescribeEndpointsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.BatchDescribeEndpointsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BatchDescribeEndpoints",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.BatchDescribeEndpointsRequest,
+                output=resource__pb2.BatchDescribeEndpointsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -741,6 +807,8 @@ class ResourceServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_task(self, request: resource__pb2.DescribeTaskRequest, ctx: RequestContext) -> resource__pb2.DescribeTaskResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def batch_describe_tasks(self, request: resource__pb2.BatchDescribeTasksRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_attempt(self, request: resource__pb2.DescribeAttemptRequest, ctx: RequestContext) -> resource__pb2.DescribeAttemptResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_nodes(self, request: resource__pb2.ListNodesRequest, ctx: RequestContext) -> resource__pb2.ListNodesResponse:
@@ -754,6 +822,8 @@ class ResourceServiceSync(Protocol):
     def list_endpoints(self, request: resource__pb2.ListEndpointsRequest, ctx: RequestContext) -> resource__pb2.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_endpoint(self, request: resource__pb2.DescribeEndpointRequest, ctx: RequestContext) -> resource__pb2.DescribeEndpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def batch_describe_endpoints(self, request: resource__pb2.BatchDescribeEndpointsRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def mint_endpoint_token(self, request: resource__pb2.MintEndpointTokenRequest, ctx: RequestContext) -> resource__pb2.MintEndpointTokenResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -829,6 +899,16 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.describe_task,
                 ),
+                "/iris.resource.ResourceService/BatchDescribeTasks": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="BatchDescribeTasks",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.BatchDescribeTasksRequest,
+                        output=resource__pb2.BatchDescribeTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.batch_describe_tasks,
+                ),
                 "/iris.resource.ResourceService/DescribeAttempt": EndpointSync.unary(
                     method=MethodInfo(
                         name="DescribeAttempt",
@@ -898,6 +978,16 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.describe_endpoint,
+                ),
+                "/iris.resource.ResourceService/BatchDescribeEndpoints": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="BatchDescribeEndpoints",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.BatchDescribeEndpointsRequest,
+                        output=resource__pb2.BatchDescribeEndpointsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.batch_describe_endpoints,
                 ),
                 "/iris.resource.ResourceService/MintEndpointToken": EndpointSync.unary(
                     method=MethodInfo(
@@ -1102,6 +1192,26 @@ class ResourceServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
+    def batch_describe_tasks(
+        self,
+        request: resource__pb2.BatchDescribeTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.BatchDescribeTasksResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BatchDescribeTasks",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.BatchDescribeTasksRequest,
+                output=resource__pb2.BatchDescribeTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     def describe_attempt(
         self,
         request: resource__pb2.DescribeAttemptRequest,
@@ -1236,6 +1346,26 @@ class ResourceServiceClientSync(ConnectClientSync):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.DescribeEndpointRequest,
                 output=resource__pb2.DescribeEndpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def batch_describe_endpoints(
+        self,
+        request: resource__pb2.BatchDescribeEndpointsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.BatchDescribeEndpointsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="BatchDescribeEndpoints",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.BatchDescribeEndpointsRequest,
+                output=resource__pb2.BatchDescribeEndpointsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

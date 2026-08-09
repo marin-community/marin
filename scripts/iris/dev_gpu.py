@@ -268,7 +268,7 @@ def save_state(path: Path, state: DevGpuState) -> None:
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    return client.job_state(JobName.from_wire(job_id)) not in INACTIVE_JOB_STATES
+    return client.current_job(JobName.from_wire(job_id)).state not in INACTIVE_JOB_STATES
 
 
 def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list[str]:
@@ -281,10 +281,10 @@ def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list
     while time.monotonic() < deadline:
         state = job.state_only()
         if state in TERMINAL_JOB_STATES:
-            error = job.status().error or job_pb2.JobState.Name(state)
+            error = job.status().error_message or job_pb2.JobState.Name(state)
             raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
-        if len(tasks) == node_count and all(task.status().state == job_pb2.TASK_STATE_RUNNING for task in tasks):
+        if len(tasks) == node_count and all(task.state == job_pb2.TASK_STATE_RUNNING for task in tasks):
             return [str(task.task_id) for task in sorted(tasks, key=lambda task: task.task_index)]
         time.sleep(5)
     raise click.ClickException(f"Timed out waiting for {node_count} dev GPU task(s) after {int(timeout)}s")
@@ -464,7 +464,7 @@ def allocate(
         finally:
             terminated = False
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                job.cancel()
                 terminated = True
             except Exception:
                 logger.warning(
@@ -535,7 +535,7 @@ def release(ctx, force: bool) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.current_job(JobName.from_wire(state.job_id)).cancel()
     except Exception as exc:
         # Keep the state file on failure so the job id isn't lost while the pod may
         # still be running; --force is the escape hatch for already-dead jobs.

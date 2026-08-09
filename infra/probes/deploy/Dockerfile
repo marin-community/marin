@@ -1,11 +1,10 @@
 # probes daemon image — synthetic infra canary.
 #
-# Build context is THIS directory's parent (infra/probes/):
-#   docker build -f deploy/Dockerfile -t probes:dev infra/probes
+# Build context is the Marin repository root:
+#   docker build -f infra/probes/deploy/Dockerfile -t probes:dev .
 #
-# marin-iris, marin-finelog, marin-rigging are installed from PyPI per the
-# lockfile (their nightly dev wheels). No marin source is required in the
-# build context.
+# The probe and its Iris client are installed from the same checkout. This is
+# required when a controller API and its first-party probe change together.
 
 FROM python:3.12-slim AS base
 
@@ -29,13 +28,28 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY pyproject.toml uv.lock ./
+COPY infra/probes/pyproject.toml ./infra/probes/pyproject.toml
+COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
+COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --frozen --package marin-infra-probes --no-install-workspace --no-dev
 
-# Project source, then install the project itself.
-COPY src/ ./src/
+# Install the probe and the first-party libraries it imports from this commit.
+COPY infra/probes/src/ ./infra/probes/src/
+COPY lib/rigging/src/ ./lib/rigging/src/
+COPY config/ ./config/
+COPY lib/finelog/src/ ./lib/finelog/src/
+COPY lib/finelog/config/ ./lib/finelog/config/
+COPY lib/iris/src/ ./lib/iris/src/
+COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --frozen --package marin-infra-probes --no-dev
 
 
 # ── runtime stage ────────────────────────────────────────────────────

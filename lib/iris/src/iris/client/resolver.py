@@ -7,10 +7,8 @@ import os
 
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.client import get_iris_ctx
+from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.types import Namespace
-from iris.rpc import controller_pb2
-from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import EndpointServiceClientSync
 
 
 def _rewrite_address_for_host(address: str) -> str:
@@ -53,12 +51,7 @@ class ClusterResolver:
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
         self._explicit_namespace = namespace
-        self._client = EndpointServiceClientSync(
-            address=self._address,
-            timeout_ms=int(timeout * 1000),
-            accept_compression=IRIS_RPC_COMPRESSIONS,
-            send_compression=None,
-        )
+        self._client = ResourceClient(self._address, timeout_ms=int(timeout * 1000))
 
     def _namespace_prefix(self) -> str:
         if self._explicit_namespace is not None:
@@ -81,21 +74,16 @@ class ClusterResolver:
         """
         prefixed_name = f"{self._namespace_prefix()}/{name}"
 
-        request = controller_pb2.Controller.ListEndpointsRequest(
-            prefix=prefixed_name,
-            exact=True,
-        )
-
-        resp = self._client.list_endpoints(request)
+        matches = self._client.resolve_endpoints(prefixed_name)
 
         # Rewrite addresses for host/container compatibility
         endpoints = [
             ResolvedEndpoint(
-                url=f"http://{_rewrite_address_for_host(ep.address)}",
-                actor_id=ep.endpoint_id,
-                metadata=dict(ep.metadata),
+                url=f"http://{_rewrite_address_for_host(endpoint.address)}",
+                actor_id=endpoint.summary.endpoint_id,
+                metadata=dict(endpoint.metadata),
             )
-            for ep in resp.endpoints
+            for endpoint in matches
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)

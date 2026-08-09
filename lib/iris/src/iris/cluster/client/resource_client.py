@@ -18,6 +18,7 @@ from iris.cluster.client.resource_conversion import (
     attempt_identity_to_proto,
     attempt_locator_to_proto,
     endpoint_detail_from_proto,
+    endpoint_details_from_proto,
     endpoint_page_from_proto,
     endpoint_query_to_proto,
     endpoint_token_from_proto,
@@ -41,6 +42,7 @@ from iris.cluster.client.resource_conversion import (
     slice_page_from_proto,
     slice_query_to_proto,
     task_detail_from_proto,
+    task_details_from_proto,
     task_identity_to_proto,
     task_page_from_proto,
     task_query_to_proto,
@@ -80,6 +82,8 @@ from iris.time_proto import duration_to_proto
 _ACTION_POLL_INITIAL = 0.1
 _ACTION_POLL_MAXIMUM = 2.0
 _LONG_RUNNING_RPC_MARGIN_MS = 60_000
+_SUBMIT_JOB_TIMEOUT_MS = 180_000
+_ENDPOINT_PAGE_SIZE = 500
 
 
 class ResourceClient:
@@ -111,7 +115,10 @@ class ResourceClient:
 
     def submit_job(self, spec: JobSpec, *, bundle: bytes | None = None) -> JobIdentity:
         request = resource_pb2.SubmitJobRequest(spec=job_spec_to_proto(spec), bundle_blob=bundle or b"")
-        response = call_with_retry("submit_job", lambda: self._client.submit_job(request))
+        response = call_with_retry(
+            "submit_job",
+            lambda: self._client.submit_job(request, timeout_ms=_SUBMIT_JOB_TIMEOUT_MS),
+        )
         return job_identity_from_proto(response.job)
 
     def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
@@ -133,6 +140,11 @@ class ResourceClient:
         request = resource_pb2.DescribeTaskRequest(task=resource_key_to_proto(key))
         response = call_with_retry("describe_task", lambda: self._client.describe_task(request))
         return task_detail_from_proto(response.task)
+
+    def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]:
+        request = resource_pb2.BatchDescribeTasksRequest(tasks=[resource_key_to_proto(key) for key in keys])
+        response = call_with_retry("batch_describe_tasks", lambda: self._client.batch_describe_tasks(request))
+        return task_details_from_proto(response)
 
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         request = resource_pb2.DescribeAttemptRequest(attempt=attempt_locator_to_proto(locator))
@@ -168,6 +180,33 @@ class ResourceClient:
         request = resource_pb2.DescribeEndpointRequest(endpoint=resource_key_to_proto(key))
         response = call_with_retry("describe_endpoint", lambda: self._client.describe_endpoint(request))
         return endpoint_detail_from_proto(response.endpoint)
+
+    def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
+        request = resource_pb2.BatchDescribeEndpointsRequest(endpoints=[resource_key_to_proto(key) for key in keys])
+        response = call_with_retry(
+            "batch_describe_endpoints",
+            lambda: self._client.batch_describe_endpoints(request),
+        )
+        return endpoint_details_from_proto(response)
+
+    def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]:
+        """Return every endpoint with the exact resource name."""
+        details: list[EndpointDetail] = []
+        page_token: str | None = None
+        while True:
+            page = self.list_endpoints(
+                EndpointQuery(
+                    name_prefix=name,
+                    page_size=_ENDPOINT_PAGE_SIZE,
+                    page_token=page_token,
+                )
+            )
+            keys = tuple(endpoint.key for endpoint in page.items if endpoint.name == name)
+            if keys:
+                details.extend(self.describe_endpoints(keys))
+            page_token = page.next_page_token
+            if page_token is None:
+                return tuple(details)
 
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
         request = resource_pb2.MintEndpointTokenRequest(
@@ -280,13 +319,13 @@ class ResourceClient:
 
     def exec_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         command: Sequence[str],
         timeout: Duration,
     ) -> ExecResult:
         request = resource_pb2.ExecAttemptRequest(
-            attempt=attempt_locator_to_proto(locator),
+            attempt=attempt_identity_to_proto(identity),
             command=command,
             timeout=duration_to_proto(timeout),
         )
@@ -299,13 +338,13 @@ class ResourceClient:
 
     def profile_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         profile: job_pb2.ProfileType,
         duration: Duration,
     ) -> ProfileResult:
         request = resource_pb2.ProfileAttemptRequest(
-            attempt=attempt_locator_to_proto(locator),
+            attempt=attempt_identity_to_proto(identity),
             profile=profile,
             duration=duration_to_proto(duration),
         )

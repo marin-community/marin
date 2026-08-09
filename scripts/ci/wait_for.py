@@ -80,10 +80,10 @@ from typing import NamedTuple
 
 import click
 from connectrpc.errors import ConnectError
-from iris.client import IrisClient, Job
+from iris.client import IrisClient
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.resources.job import JobSummary
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
 from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
@@ -677,14 +677,14 @@ class ReviewSource(PrActivitySource):
 class IrisJobSource(Source):
     """Fires when an Iris job reaches a terminal state."""
 
-    def __init__(self, spec: EventSpec, wait_for_job: Callable[[JobName], job_pb2.JobStatus]):
+    def __init__(self, spec: EventSpec, wait_for_job: Callable[[JobName], JobSummary]):
         super().__init__(spec)
         try:
             self.job_id = JobName.from_wire(spec.arg)
         except ValueError:
             raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
         self._wait_for_job = wait_for_job
-        self._result: Future[job_pb2.JobStatus] = Future()
+        self._result: Future[JobSummary] = Future()
         self._wakeup: Event | None = None
         # The selector is a command-line process and exits after any arm fires.
         # A daemon worker lets that exit proceed without joining an Iris wait
@@ -748,7 +748,7 @@ def build_source(
     ignore_authors: set[str],
     poll_timeout: float,
     comment_filter: CommentFilter,
-    iris_job_waiter: Callable[[JobName], job_pb2.JobStatus] | None,
+    iris_job_waiter: Callable[[JobName], JobSummary] | None,
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
@@ -868,12 +868,12 @@ def _wait_for_iris_job(
     controller_address: str,
     bundle_id: str | None,
     job_id: JobName,
-) -> job_pb2.JobStatus:
+) -> JobSummary:
     with IrisClient.in_cluster(controller_address, bundle_id=bundle_id) as client:
-        return Job(client, job_id).wait(timeout=float("inf"), raise_on_failure=False)
+        return client.current_job(job_id).wait(timeout=float("inf"), raise_on_failure=False)
 
 
-def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
+def _iris_job_waiter_from_job_info() -> Callable[[JobName], JobSummary]:
     info = get_job_info()
     if info is None:
         raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")

@@ -13,7 +13,7 @@ drives; a crashed task simply stops renewing and its lease expires.
 import logging
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -41,8 +41,6 @@ RETRY_MAXIMUM = Duration.from_minutes(1)
 # Cap on a single sleep so the loop revisits its state; track/untrack/close wake
 # it sooner.
 _MAX_WAIT = Duration.from_minutes(5)
-# Per-call deadline for ListEndpoints.
-_LIST_TIMEOUT_MS = 10_000
 # Short deadline for the best-effort unregisters on close() so an unreachable
 # controller can't stall shutdown; the lease expires on its own regardless.
 _CLOSE_TIMEOUT_MS = 5_000
@@ -70,24 +68,7 @@ class EndpointStub(Protocol):
         timeout_ms: int | None = ...,
     ) -> Any: ...
 
-    def list_endpoints(
-        self,
-        request: controller_pb2.Controller.ListEndpointsRequest,
-        *,
-        timeout_ms: int | None = ...,
-    ) -> controller_pb2.Controller.ListEndpointsResponse: ...
-
     def close(self) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class EndpointInstance:
-    """Address and metadata for one live endpoint registration."""
-
-    endpoint_id: str
-    name: str
-    address: str
-    metadata: Mapping[str, str]
 
 
 class EndpointClient:
@@ -141,25 +122,6 @@ class EndpointClient:
         self._renewer.untrack(endpoint_id)
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
-
-    def _list_endpoints(self, prefix: str, *, exact: bool) -> list[EndpointInstance]:
-        def _call() -> list[EndpointInstance]:
-            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
-            response = self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS)
-            return [
-                EndpointInstance(endpoint.endpoint_id, endpoint.name, endpoint.address, dict(endpoint.metadata))
-                for endpoint in response.endpoints
-            ]
-
-        return call_with_retry("list_endpoints", _call)
-
-    def list_endpoints(self, prefix: str) -> list[EndpointInstance]:
-        """List endpoints whose names start with ``prefix``."""
-        return self._list_endpoints(prefix, exact=False)
-
-    def list_endpoint_instances(self, name: str) -> list[EndpointInstance]:
-        """List every registered instance with the exact endpoint ``name``."""
-        return self._list_endpoints(name, exact=True)
 
     def close(self) -> None:
         """Stop renewing and best-effort unregister everything still registered.

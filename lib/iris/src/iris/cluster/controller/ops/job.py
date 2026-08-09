@@ -27,10 +27,13 @@ from iris.cluster.controller.reconcile.policy import (
 from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
+    meta_table,
 )
 from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName, ResourceSpec
 from iris.rpc import job_pb2
+
+_JOB_SUBMISSION_EPOCH_KEY = "job_submission_epoch_ms"
 
 
 def _extract_resource_cols(resources: ResourceSpec) -> tuple[int, int, int, str | None]:
@@ -189,14 +192,17 @@ def insert_job_and_config(
 
     submitted_ms = ts.epoch_ms()
 
-    # Derive monotone submission timestamp from MAX(jobs.submitted_at_ms)
-    # instead of a separate meta-table key. O(log n) with the existing index.
-    # Cast to Integer to bypass TimestampMsType's result-value hook so we get
-    # a plain int (needed for arithmetic below).
-    last_ms: int = cur.execute(
-        select(func.coalesce(func.max(cast(jobs_table.c.submitted_at_ms, Integer)), 0))
-    ).scalar_one()
+    stored_epoch = cur.execute(select(meta_table.c.value).where(meta_table.c.key == _JOB_SUBMISSION_EPOCH_KEY)).scalar()
+    if stored_epoch is None:
+        # Lazy initialization keeps upgraded databases monotone without a schema
+        # migration. Cast bypasses TimestampMsType so arithmetic uses a plain int.
+        last_ms = int(
+            cur.execute(select(func.coalesce(func.max(cast(jobs_table.c.submitted_at_ms, Integer)), 0))).scalar_one()
+        )
+    else:
+        last_ms = int(stored_epoch)
     effective_submission_ms = max(submitted_ms, last_ms + 1)
+    writes.meta_value_set(cur, _JOB_SUBMISSION_EPOCH_KEY, effective_submission_ms)
 
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms

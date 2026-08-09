@@ -15,6 +15,7 @@ import fray.iris_backend as iris_backend
 import pytest
 from fray.iris_backend import (
     FrayIrisClient,
+    IrisActorGroup,
     IrisActorHandle,
     IrisJobHandle,
     convert_constraints,
@@ -30,8 +31,9 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
+from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import ResourceSpec, gpu_device
+from iris.cluster.types import JobName, ResourceSpec, gpu_device
 
 
 class TestConvertConstraints:
@@ -126,29 +128,32 @@ class TestConvertConstraintsDeviceAlternatives:
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
-class TestIrisActorHandlePickle:
-    def test_pickle_roundtrip_preserves_name(self):
-        handle = IrisActorHandle("my-actor")
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._endpoint_name == "my-actor"
-        assert restored._client is None
+def test_pickled_actor_handle_resolves_and_calls_by_endpoint_name(monkeypatch):
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    def test_pickle_drops_client(self):
-        """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor", resolver=MagicMock())
-        # Manually set client to simulate resolved state
-        handle._client = "fake-client"
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._client is None
-        assert restored._resolver is None
+    class Actor:
+        def __init__(self, endpoint_name: str) -> None:
+            self.endpoint_name = endpoint_name
+
+        def ping(self, *args, **kwargs):
+            calls.append((self.endpoint_name, args, kwargs))
+            return "pong"
+
+    monkeypatch.setattr(iris_backend, "get_iris_ctx", lambda: SimpleNamespace(resolver=MagicMock()))
+    monkeypatch.setattr(iris_backend, "ActorClient", lambda _resolver, name: Actor(name))
+
+    restored = pickle.loads(pickle.dumps(IrisActorHandle("my-actor", resolver=MagicMock())))
+
+    assert restored.ping(1, label="ready") == "pong"
+    assert calls == [("my-actor", (1,), {"label": "ready"})]
 
 
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
     fake_iris = MagicMock()
     fake_iris.submit.return_value = MagicMock(job_id="/user/job")
-    fake_iris.list_endpoints.return_value = SimpleNamespace(items=(SimpleNamespace(name="/user/job/dummy-0"),))
+    fake_iris.list_endpoints.return_value = SimpleNamespace(
+        items=(SimpleNamespace(name="/user/job/dummy-0"),), next_page_token=None
+    )
     resolver = MagicMock()
     fake_iris.resolver_for_job.return_value = resolver
     fake_actor = MagicMock()
@@ -169,6 +174,29 @@ def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
     assert actor_clients == [(resolver, "/user/job/dummy-0")]
     group.discover_new()
     fake_iris.resolver_for_job.assert_called_once_with("/user/job")
+
+
+def test_actor_discovery_reads_all_bounded_endpoint_pages():
+    queries: list[EndpointQuery] = []
+
+    def list_endpoints(query: EndpointQuery):
+        queries.append(query)
+        if query.page_token is None:
+            return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-0"),), next_page_token="next")
+        return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-1"),), next_page_token=None)
+
+    client = MagicMock()
+    client.list_endpoints.side_effect = list_endpoints
+    group = IrisActorGroup("actor", 2, JobName.from_wire("/user/job"), client)
+
+    discovered = group.discover_new()
+
+    assert len(discovered) == 2
+    assert group.ready_count == 2
+    assert queries == [
+        EndpointQuery(name_prefix="/user/job/actor-", page_size=500),
+        EndpointQuery(name_prefix="/user/job/actor-", page_size=500, page_token="next"),
+    ]
 
 
 def test_iris_job_handle_returns_a_globally_bounded_tail():

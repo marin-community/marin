@@ -157,6 +157,11 @@ class EndpointServiceImpl:
             deletes=() if mapping is not None else (f"{SYSTEM_PROXY_ENDPOINT_PREFIX}{name}",),
         )
 
+    def system_endpoints(self) -> tuple[tuple[str, str], ...]:
+        """Return the controller-owned endpoints as a stable snapshot."""
+        with self._proxy_lock:
+            return tuple(sorted(self._system_endpoints.items()))
+
     def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
         """Subscribe to committed endpoint-registry transitions."""
         with self._proxy_lock:

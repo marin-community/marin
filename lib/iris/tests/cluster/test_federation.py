@@ -21,7 +21,7 @@ from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDis
 from iris.cluster.resources.endpoint import ExecRequest
 from iris.cluster.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
 from iris.managed_thread import get_thread_container, thread_container_scope
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 
@@ -215,10 +215,12 @@ class _RecordingStub:
 
     def __init__(self):
         self.exec_timeout_ms = 0
+        self.exec_request = None
 
-    def exec_in_container(self, request, timeout_ms):
+    def exec_attempt(self, request, timeout_ms):
         self.exec_timeout_ms = timeout_ms
-        return controller_pb2.Controller.ExecInContainerResponse()
+        self.exec_request = request
+        return resource_pb2.ExecAttemptResponse()
 
     def close(self):
         pass
@@ -232,12 +234,13 @@ def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
     the proxy margin; a positive timeout carries the caller's budget plus margin.
     """
     stub = _RecordingStub()
-    monkeypatch.setattr(peer_module, "ControllerServiceClientSync", lambda **kwargs: stub)
+    monkeypatch.setattr(peer_module, "ResourceServiceClientSync", lambda **kwargs: stub)
     connection = peer_module._PeerRpcConnection("http://peer:10000", [])
     attempt = AttemptIdentity(ResourceKey("parent", ResourceKind.TASK, "/u/j/0"), 0, "attempt-uid")
 
     connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(-1)))
     assert stub.exec_timeout_ms >= EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
+    assert stub.exec_request.attempt.attempt_uid == "attempt-uid"
 
     connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(30)))
     assert stub.exec_timeout_ms > 30 * 1000

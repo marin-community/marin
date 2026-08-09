@@ -7,7 +7,8 @@ up/down health checks and numeric gauges.
 
 Health checks (emit a `probe_up` 1/0 sample; the runner adds `probe_latency_ms`):
 
-- `controller-ping` — `list_workers()` on the Iris controller (cadence 60s).
+- `controller-ping` — a one-item Node resource query on the Iris controller
+  (cadence 60s).
 - `finelog-write` — write a nonce and read it back (60s).
 - `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED
   (cadence 30 min).
@@ -35,7 +36,7 @@ Gauges:
   `provision_*` count/latency/success-ratio gauges. See
   `iris.cluster.controller.autoscaler.provisioning` for the outcome vocabulary
   and `src/provisioning.py` for the emitted metrics.
-- `workers` — worker-fleet snapshot from `list_workers()` (60s). Rolls the
+- `workers` — worker-fleet snapshot from paginated Node resources (60s). Rolls the
   healthy workers into fleet resource totals (`worker_healthy`,
   `worker_cpu_millicores`, `worker_memory_bytes`, `worker_tpu_chips`, all
   labelled `scope=fleet`) plus a per-region healthy head count
@@ -56,10 +57,9 @@ Grafana evaluates the newest `probe_up` row from the last two scheduling
 cadences. A failed probe or an empty result becomes a warning in Grafana's home
 alert list; warning rules do not send notifications.
 
-Standalone package (own `pyproject.toml`/`uv.lock`): pulls `marin-iris`,
-`marin-finelog`, `marin-rigging` from PyPI as `0.2.x.dev` nightlies
-(`prerelease = "if-necessary"`). Bump to today's nightly with `uv lock -U`
-inside `infra/probes/`.
+The probe is a Marin workspace package. Its image installs the probe, Iris,
+Finelog, and Rigging from the same checkout so controller API changes cannot
+produce a locally green probe that imports an older Iris wheel when deployed.
 
 ## Run
 

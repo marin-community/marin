@@ -38,7 +38,9 @@ from iris.cluster.controller.dashboard import (
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from rigging.server_auth import (
@@ -90,6 +92,8 @@ def _make_service(db, log_client, auth=None):
     controller_mock.provider = Mock(capabilities=capabilities)
     controller_mock.capabilities = capabilities
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
     return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
@@ -126,6 +130,8 @@ def service(state, tmp_path, log_client):
     controller_mock.provider.name = "worker"
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
     return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

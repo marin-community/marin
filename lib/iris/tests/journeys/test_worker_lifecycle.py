@@ -86,7 +86,30 @@ def test_unreachable_worker_is_not_scheduled_but_recovers_through_reconcile(work
     task = journey.task(job).summary
     assert task.current_node is not None
     assert task.current_node.key.resource_id == "worker-b"
+    assert journey.node(task.current_node).summary.identity == task.current_node
     assert journey.worker("worker-a").summary.health is NodeHealth.READY
+
+
+def test_finished_attempt_appears_in_node_recent_history(worker_journey):
+    journey = worker_journey
+    daemon = journey.add_worker("worker-a", "worker-a:8080")
+    job = journey.submit("node-history")
+    journey.run_until_task_state(job, job_pb2.TASK_STATE_RUNNING)
+    running = journey.task(job).attempts[0]
+
+    daemon.queue_observation(running.identity.attempt_uid, job_pb2.TASK_STATE_SUCCEEDED)
+    journey.run_until_task_state(job, job_pb2.TASK_STATE_SUCCEEDED)
+
+    node = journey.worker("worker-a")
+    assert [
+        (
+            attempt.identity.task.resource_id,
+            attempt.identity.attempt_uid,
+            attempt.state,
+            attempt.finished_at is not None,
+        )
+        for attempt in node.recent_attempts
+    ] == [(job.task_id, running.identity.attempt_uid, job_pb2.TASK_STATE_SUCCEEDED, True)]
 
 
 def test_preempted_attempt_holds_capacity_until_worker_reports_exact_terminal_state(worker_journey):

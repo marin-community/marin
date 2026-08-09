@@ -142,9 +142,10 @@ def run_test_job() -> Callable[..., None]:
     ) -> None:
         job = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
         try:
-            task_id = JobName.from_string(job.job_id).task(0)
+            iris_job = client.current_job(JobName.from_string(job.job_id))
+            task = next(task for task in iris_job.tasks() if task.task_index == 0)
             wait_for_condition(
-                lambda: client.task_status(task_id).state
+                lambda: task.state
                 not in (
                     job_pb2.TASK_STATE_PENDING,
                     job_pb2.TASK_STATE_ASSIGNED,

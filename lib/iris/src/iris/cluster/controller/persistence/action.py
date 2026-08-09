@@ -8,7 +8,7 @@ from iris.cluster.controller.schema import action_receipts_table
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from rigging.timing import Timestamp
-from sqlalchemy import insert, or_, select
+from sqlalchemy import and_, insert, literal, or_, select
 
 
 def action_by_idempotency_key(
@@ -38,6 +38,7 @@ def actions_for_target(
     target: ResourceKey,
     *,
     after: Timestamp | None,
+    before: tuple[Timestamp, str] | None = None,
     limit: int,
 ) -> tuple[ActionReceipt, ...]:
     target_id = target.resource_id
@@ -59,6 +60,18 @@ def actions_for_target(
     )
     if after is not None:
         stmt = stmt.where(action_receipts_table.c.updated_at_ms > after.epoch_ms())
+    if before is not None:
+        before_time, before_entry_id = before
+        entry_id = literal("action:").concat(action_receipts_table.c.action_id)
+        stmt = stmt.where(
+            or_(
+                action_receipts_table.c.updated_at_ms < before_time.epoch_ms(),
+                and_(
+                    action_receipts_table.c.updated_at_ms == before_time.epoch_ms(),
+                    entry_id < before_entry_id,
+                ),
+            )
+        )
     rows = tx.execute(
         stmt.order_by(action_receipts_table.c.updated_at_ms.desc(), action_receipts_table.c.action_id.desc()).limit(
             limit

@@ -19,6 +19,7 @@ from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
     AutoscalerConfig,
+    BackendConfig,
     GcpPlatformConfig,
     GcpSliceConfig,
     ScaleGroupConfig,
@@ -222,6 +223,15 @@ class FakeProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        workers = self.health.all()
+        return controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(
+                healthy_worker_count=sum(status.healthy for status in workers.values()),
+                total_worker_count=len(workers),
+            )
+        )
+
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)
 
@@ -313,7 +323,6 @@ class MockController:
     def __init__(self):
         self.wake = Mock()
         self.request_worker_eviction = Mock()
-        self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.provider = Mock()
@@ -382,6 +391,17 @@ def make_controller_service(
         user_budget_defaults=user_budget_defaults or UserBudgetDefaults(),
         capability_url_config=resource_urls,
         backends=controller.backends,
+        backend_configs={
+            backend_id: BackendConfig(
+                kind="k8s" if BackendCapability.CLUSTER_VIEW in backend.capabilities else "worker_daemon",
+                scale_groups={
+                    scale_group: ScaleGroupConfig(name=scale_group)
+                    for scale_group, owner in controller.scale_group_to_backend.items()
+                    if owner == backend_id
+                },
+            )
+            for backend_id, backend in controller.backends.items()
+        },
         log_client=log_client,
     )
     return ControllerServiceImpl(

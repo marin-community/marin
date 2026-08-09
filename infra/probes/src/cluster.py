@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris cluster-state gauges: a worker-fleet snapshot (from ``ListWorkers``) and a
+"""Iris cluster-state gauges: a node-fleet snapshot and a
 root-job-state breakdown (from a raw SQL ``GROUP BY``), each run as its own
 collector on its own cadence. They give the controller's live worker and job
 counts a durable history in finelog/GCS.
@@ -13,10 +13,11 @@ so the labelling/windowing is unit-testable without a live controller.
 import json
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
-from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.rpc import controller_pb2, query_pb2
+from iris.cluster.resources.node import NodeHealth, NodeQuery, NodeSummary
+from iris.cluster.resources.source import Page
+from iris.rpc import query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from sample import Sample
 
@@ -25,8 +26,7 @@ FLEET = "fleet"
 
 # ---- workers --------------------------------------------------------------
 
-# Workers report their GCP region under this attribute; absent → UNKNOWN_REGION.
-WORKER_REGION_ATTRIBUTE = "region"
+# Nodes without a provider or worker region contribute to this stable label.
 UNKNOWN_REGION = "unknown"
 
 METRIC_WORKER_HEALTHY = "worker_healthy"
@@ -35,11 +35,15 @@ METRIC_WORKER_MEMORY_BYTES = "worker_memory_bytes"
 METRIC_WORKER_TPU_CHIPS = "worker_tpu_chips"
 
 
+class NodeResourceClient(Protocol):
+    def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]: ...
+
+
 class WorkerInfo(NamedTuple):
     """The fields of one worker the gauges roll up."""
 
     healthy: bool
-    cpu_count: int
+    cpu_millicores: int
     memory_bytes: int
     tpu_chips: int
     region: str
@@ -62,7 +66,7 @@ def aggregate_workers(workers: Sequence[WorkerInfo]) -> list[Sample]:
         if not w.healthy:
             continue
         healthy += 1
-        cpu_millicores += w.cpu_count * 1000
+        cpu_millicores += w.cpu_millicores
         memory_bytes += w.memory_bytes
         tpu_chips += w.tpu_chips
         by_region[w.region] += 1
@@ -78,23 +82,27 @@ def aggregate_workers(workers: Sequence[WorkerInfo]) -> list[Sample]:
     return samples
 
 
-def _worker_info(worker: controller_pb2.Controller.WorkerHealthStatus) -> WorkerInfo:
-    metadata = worker.metadata
-    attributes = metadata.attributes
-    region = attributes[WORKER_REGION_ATTRIBUTE].string_value if WORKER_REGION_ATTRIBUTE in attributes else ""
+def _worker_info(node: NodeSummary) -> WorkerInfo:
+    capacity = node.capacity
     return WorkerInfo(
-        healthy=worker.healthy,
-        cpu_count=metadata.cpu_count,
-        memory_bytes=metadata.memory_bytes,
-        # device is a oneof; .tpu.count reads 0 for cpu/gpu workers.
-        tpu_chips=metadata.device.tpu.count,
-        region=region or UNKNOWN_REGION,
+        healthy=node.health is NodeHealth.READY,
+        cpu_millicores=capacity.cpu_millicores,
+        memory_bytes=capacity.memory_bytes,
+        tpu_chips=capacity.accelerator_count if capacity.accelerator_kind == "tpu" else 0,
+        region=node.region or UNKNOWN_REGION,
     )
 
 
-def collect_workers(iris: RemoteClusterClient) -> list[Sample]:
-    """ListWorkers → fleet resource totals + per-region healthy worker gauges."""
-    return aggregate_workers([_worker_info(w) for w in iris.list_workers()])
+def collect_workers(iris: NodeResourceClient) -> list[Sample]:
+    """Roll the complete Node inventory into worker-fleet gauges."""
+    workers: list[WorkerInfo] = []
+    query = NodeQuery(page_size=500)
+    while True:
+        page = iris.list_nodes(query)
+        workers.extend(_worker_info(node) for node in page.items)
+        if page.next_page_token is None:
+            return aggregate_workers(workers)
+        query = NodeQuery(page_size=500, page_token=page.next_page_token)
 
 
 # ---- jobs -----------------------------------------------------------------

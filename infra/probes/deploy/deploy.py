@@ -113,7 +113,7 @@ def build(cfg: dict[str, str]) -> None:
             image_sha,
             "-t",
             image_latest,
-            str(PROBES_DIR),
+            str(PROBES_DIR.parent.parent),
         ]
     )
     logger.info("Pushing %s and :latest", image_sha)

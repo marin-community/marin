@@ -4,6 +4,7 @@
 """Typed Job specifications, queries, and read records."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rigging.timing import Duration, Timestamp
 
@@ -66,6 +67,41 @@ class JobSummary:
     finished_at: Timestamp | None
     error_message: str
     pending_reason: str
+
+
+class FederationPosture(StrEnum):
+    """A Job's durable handoff posture, independent of the legacy RPC enum."""
+
+    LOCAL = "local"
+    QUEUED = "queued"
+    PENDING_ACCEPTANCE = "pending_acceptance"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskStateCount:
+    state: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class JobTaskAggregate:
+    task_count: int
+    completed_count: int
+    failure_count: int
+    preemption_count: int
+    state_counts: tuple[TaskStateCount, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class JobObservation:
+    """A bounded persisted Job observation with its Task and child aggregates."""
+
+    summary: JobSummary
+    tasks: JobTaskAggregate
+    has_children: bool
+    federation_posture: FederationPosture
 
 
 @dataclass(frozen=True, slots=True)

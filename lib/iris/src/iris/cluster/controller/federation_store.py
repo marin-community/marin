@@ -289,6 +289,7 @@ class ControllerFederationStore:
             raise ValueError(f"federation delta for {local_job_id} has no summary")
         existing = reads.get_job_detail(cur, local_job_id)
         backend_id = _canonical_delta_backend(existing, summary, delta.changed_tasks)
+        first_backend_observation = existing is not None and not str(existing.backend_id or "") and bool(backend_id)
         # The root's mirror row is created at handoff; a child the peer spawned under
         # it has none until its first delta, so create it before mirroring state (and
         # before its tasks, which FK to the job row).
@@ -305,6 +306,8 @@ class ControllerFederationStore:
             num_tasks=summary.task_count,
             backend_id=backend_id,
         )
+        if first_backend_observation:
+            writes.adopt_federated_backend(cur, job_id=local_job_id, backend_id=backend_id)
         for task in delta.changed_tasks:
             peer_task_id = task.task_id
             index = peer_task_id.task_index

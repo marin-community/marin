@@ -224,7 +224,8 @@ def terminate_service(client: IrisClient, job_id: JobName, *, wait: float = TERM
     idempotent against out-of-band termination.
     """
     try:
-        state = client.job_state(job_id)
+        job = client.current_job(job_id)
+        state = job.state
     except ConnectError as exc:
         if exc.code == Code.NOT_FOUND:
             logger.info("job %s not found; nothing to terminate", job_id)
@@ -233,11 +234,11 @@ def terminate_service(client: IrisClient, job_id: JobName, *, wait: float = TERM
     if is_job_finished(state):
         logger.info("job %s already terminal (%s)", job_id, job_pb2.JobState.Name(state))
         return
-    client.terminate(job_id)
+    job.cancel(idempotency_key=f"iris-service-down:{job.identity.job_uid}")
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         try:
-            if is_job_finished(client.job_state(job_id)):
+            if is_job_finished(job.state):
                 logger.info("job %s terminated", job_id)
                 return
         except ConnectError as exc:

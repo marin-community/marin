@@ -45,7 +45,18 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
 # tasks or its controller. authorize_method admits these; the controller service's
 # _authorize_federated_debug_target enforces the per-target ownership.
-FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
+FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset(
+    {
+        "ProfileTask",
+        "ExecInContainer",
+        "GetProcessStatus",
+        "CancelJob",
+        "RetryTask",
+        "TerminateAttempt",
+        "ExecAttempt",
+        "ProfileAttempt",
+    }
+)
 
 
 class AuthzAction(StrEnum):
@@ -82,6 +93,7 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetProcessStatus",
         "DescribeJob",
         "DescribeTask",
+        "BatchDescribeTasks",
         "DescribeAttempt",
         "ListActivity",
         "FetchLogs",
@@ -99,6 +111,7 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "ListSlices",
         "DescribeSlice",
         "DescribeEndpoint",
+        "BatchDescribeEndpoints",
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)
@@ -131,8 +144,7 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,
-            f"Read-only dashboard access cannot call {method_name}; "
-            "this identity is not provisioned for write access",
+            f"Read-only dashboard access cannot call {method_name}; this identity is not provisioned for write access",
         )
     if (
         identity.role == FEDERATION_PEER_ROLE

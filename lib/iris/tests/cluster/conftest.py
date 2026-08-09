@@ -32,7 +32,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.conftest import make_controller_service, make_test_entrypoint
+from tests.cluster.controller.conftest import FakeProvider, make_controller_service, make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 # ---------------------------------------------------------------------------
@@ -120,12 +120,10 @@ class _HarnessController:
         self.wake = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
-        self.provider: object = Mock()
-        self.provider.autoscaler = None
+        self.provider: object = FakeProvider()
         # The backend owns its liveness tracker; the harness points this at the
         # same tracker its ControllerTestState exposes (see the harness factories).
-        self.provider.health = WorkerHealthTracker()
-        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+        self.capabilities = self.provider.capabilities
         self.scale_group_to_backend: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
         # Zero-peer federation: route_submit returns local, ListPeers is empty.

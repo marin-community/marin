@@ -122,10 +122,11 @@ its mutable, presence-sensitive protobuf messages into frozen Python records.
 The dashboard consumes the resource RPC responses rather than reconstructing
 resource state.
 
-The old Job and Task methods on `ControllerService` remain a temporary network
-boundary. `controller/resources/legacy_rpc.py` translates their requests and
-responses immediately. Internal controller code does not depend on the old
-protobuf shapes.
+The old Job and Task methods on `ControllerService` are a one-way network
+boundary, not a supported second product version. `ResourceService` is the
+default and only first-party resource API. `controller/resources/legacy_rpc.py`
+translates old requests and responses immediately, and internal controller code
+does not depend on those protobuf shapes.
 
 Federation retains its authenticated peer and handoff protocol. Received Jobs
 are decoded into resource `JobSpec` records before admission. This change does
@@ -164,7 +165,9 @@ reconciliation, restart, and federation boundaries. Resource journeys cover:
 - partial backend status and recovery;
 - Job cancellation, Task retry, and Attempt termination;
 - duplicate action requests across controller restart;
-- federation handoff, outage, and redelivery; and
+- scheduling and execution deadlines across controller restart;
+- federation handoff, outage, cached-read status, and redelivery;
+- stale Attempt rejection before an execution-provider call; and
 - Endpoint and activity/log reads through public boundaries.
 
 Narrow tests remain for migration ordering, fresh and upgraded database

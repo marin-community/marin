@@ -120,7 +120,7 @@ def iris_integration_client(iris_cluster):
         with iris_ctx_scope(ctx):
             yield client
     finally:
-        iris_client.terminate(parent_job.job_id)
+        parent_job.cancel(idempotency_key="zephyr-integration-cleanup")
         client.shutdown(wait=True)
 
 

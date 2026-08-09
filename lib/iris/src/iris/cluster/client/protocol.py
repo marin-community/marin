@@ -8,7 +8,6 @@ from typing import Protocol
 
 from rigging.timing import Duration
 
-from iris.cluster.client.endpoint_client import EndpointInstance
 from iris.cluster.resources.action import ActionReceipt
 from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
 from iris.cluster.resources.attempt import AttemptDetail
@@ -52,6 +51,8 @@ class ResourceClientProtocol(Protocol):
 
     def describe_task(self, key: ResourceKey) -> TaskDetail: ...
 
+    def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]: ...
+
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail: ...
 
     def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]: ...
@@ -65,6 +66,10 @@ class ResourceClientProtocol(Protocol):
     def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]: ...
 
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail: ...
+
+    def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]: ...
+
+    def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]: ...
 
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken: ...
 
@@ -112,7 +117,7 @@ class ResourceClientProtocol(Protocol):
 
     def exec_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         command: Sequence[str],
         timeout: Duration,
@@ -120,7 +125,7 @@ class ResourceClientProtocol(Protocol):
 
     def profile_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         profile: job_pb2.ProfileType,
         duration: Duration,
@@ -140,8 +145,6 @@ class ClusterClient(ResourceClientProtocol, Protocol):
     ) -> str: ...
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
-
-    def list_endpoint_instances(self, name: str) -> list[EndpointInstance]: ...
 
     def resolve_endpoint(self, endpoint_name: str) -> str: ...
 

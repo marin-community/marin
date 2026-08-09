@@ -58,12 +58,15 @@ contract. The implementation separates four responsibilities:
 - `controller/resources/jobs.py` admits typed Job specifications.
 - `controller/resources/facade.py` reads resources and performs exact actions.
 - `controller/resources/rpc.py` translates the public resource protobuf.
-- `controller/resources/legacy_rpc.py` translates the retained old network RPC
-  at entry and exit.
+- `controller/resources/legacy_rpc.py` translates the old network RPC at entry
+  and exit.
 
-The old Job and Task protobufs are not a second controller model. They survive
-only because external callers may still use the old RPC service during this
-forward rollout.
+`ResourceService` is the default and only first-party Job, Task, Attempt, Node,
+Slice, and Endpoint API. The old Job and Task protobufs are not a supported
+second version: the old RPC service is a one-way boundary wrapper that decodes
+into resources immediately. Worker and federation transports retain the wire
+messages required by those protocols, without exposing them inside the product
+model.
 
 The active persistence layer remains `controller/schema.py`, `reads.py`, and
 `writes.py`. Action receipts have one noun-specific persistence module because
@@ -106,7 +109,8 @@ after that checkpoint.
 4. Add durable cancel, retry, and terminate receipts.
 5. Move first-party callers and delete superseded internal paths.
 
-Each group has journey coverage before the corresponding old path is removed.
+Each group has journey coverage before the corresponding old internal path is
+removed.
 Mechanical protobuf generation stays separate from semantic review where
 possible.
 
@@ -118,7 +122,9 @@ possible.
   the explicit legacy RPC adapter.
 - A populated pre-0051 database retains public Job and Task reads and can create
   and reopen an idempotent action receipt after migration.
-- Public list operations retain fixed statement and SQLite bind budgets.
+- Resource list pages retain fixed statement and SQLite bind budgets. Retired
+  unpaged list RPCs drain those pages in bounded batches, so their work scales
+  with the collection they must return.
 - Partial provider failures remain visible without erasing healthy results.
 - Deterministic journeys cover restart, replacement, federation, and action
   behavior.

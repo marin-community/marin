@@ -12,6 +12,7 @@ import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from itertools import batched
 from typing import Any, Protocol, TypeVar
 
 from connectrpc.code import Code
@@ -39,16 +40,15 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
     worker_metadata_to_proto,
 )
-from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.reads import TaskJobSummary
-from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.resources.facade import ResourceController
 from iris.cluster.controller.resources.jobs import FederationSubmission
 from iris.cluster.controller.resources.legacy_rpc import (
     job_spec_from_legacy_request,
     job_spec_to_legacy_request,
     job_status_to_legacy,
+    redact_request_env_vars,
     task_detail_to_legacy,
 )
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
@@ -74,19 +74,17 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import (
     FederationJobDelta,
     FederationSyncBatch,
-    HandoffState,
     SyncedAttempt,
     SyncedEndpoint,
     SyncedJob,
     SyncedTask,
 )
 from iris.cluster.process_status import get_process_status
-from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.resources.endpoint import EndpointAccess as ResourceEndpointAccess
 from iris.cluster.resources.endpoint import EndpointQuery, ProfileRequest
 from iris.cluster.resources.errors import ResourceNotFound
-from iris.cluster.resources.identity import AttemptLocator, NodeLocator, ResourceKey
-from iris.cluster.resources.job import JobQuery, JobSummary
+from iris.cluster.resources.identity import AttemptLocator, ResourceKey
+from iris.cluster.resources.job import FederationPosture, JobObservation, JobQuery, JobSummary
 from iris.cluster.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
 from iris.cluster.resources.task import TaskQuery, TaskSummary
 from iris.cluster.runtime.profile import (
@@ -107,7 +105,6 @@ from iris.cluster.types import (
     TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
-    is_federated,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
@@ -205,13 +202,6 @@ USER_JOB_STATES = (
     job_pb2.JOB_STATE_WORKER_FAILED,
     job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
-
-# Terminal states KickTasks can force, mapped to the reconcile kernel's
-# terminal-transition kind. PREEMPTED retries if budget remains; FAILED does not.
-_KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
-    job_pb2.TASK_STATE_PREEMPTED: TerminalKind.PREEMPT,
-    job_pb2.TASK_STATE_FAILED: TerminalKind.TIMEOUT,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,98 +406,21 @@ MAX_LIST_JOBS_LIMIT = 500
 MAX_LIST_JOBS_OFFSET = 5000
 MAX_LIST_WORKERS_LIMIT = 1000
 
-# JobStatus carries int32 counter fields (failure_count, preemption_count,
-# task_count, completed_count, task_state_counts values). SQLite SUM aggregates
-# are 64-bit, so a runaway retry counter on a single task row would otherwise
-# blow up proto serialization for the whole page. Clamp at the boundary and
-# log so the underlying corruption surfaces in controller logs.
-_PROTO_INT32_MAX = (1 << 31) - 1
 
-# Substituted for a missing TaskJobSummary so the proto-construction paths can
-# read counter fields uniformly without an ``if summary else 0`` per field.
-# The ``job_id`` is a placeholder — callers feed the *enclosing* JobRow's
-# job_id into ``_clamp_int32`` for diagnostics, never this one.
-_EMPTY_TASK_SUMMARY = TaskJobSummary(job_id=JobName.from_wire("/_/_empty"))
-
-
-def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
-    if value > _PROTO_INT32_MAX:
-        logger.warning(
-            "JobStatus.%s for %s overflowed int32 (%d > %d); clamping. "
-            "Investigate the upstream counter — this usually means a task row "
-            "has a corrupted failure_count/preemption_count.",
-            field,
-            job_id.to_wire(),
-            value,
-            _PROTO_INT32_MAX,
-        )
-        return _PROTO_INT32_MAX
-    return value
-
-
-def _job_status_counts(
-    summary: TaskJobSummary | None, job_id: JobName, *, pre_sync_task_count: int = 0
-) -> dict[str, Any]:
-    """Return the clamped int32 counter fields for a ``JobStatus``.
-
-    Spread into ``JobStatus(...)`` as ``**_job_status_counts(summary, job_id)``.
-    A ``None`` summary collapses to all-zero counters (no log noise); a real
-    summary runs each field through ``_clamp_int32`` so 64-bit aggregates
-    never trip the proto encoder.
-
-    ``pre_sync_task_count`` is the requested replica count of a federated job
-    (``jobs.num_tasks``). A handed-off job has no local task rows until the first
-    FederationSync mirrors the peer's set, so with a ``None`` summary it is
-    surfaced as ``task_count`` — the job reads "N tasks, awaiting the peer"
-    instead of an unexplained empty table.
-    """
-    s = summary or _EMPTY_TASK_SUMMARY
-    task_count = s.task_count if summary is not None else pre_sync_task_count
-    return {
-        "failure_count": _clamp_int32(s.failure_count, job_id=job_id, field="failure_count"),
-        "preemption_count": _clamp_int32(s.preemption_count, job_id=job_id, field="preemption_count"),
-        "task_count": _clamp_int32(task_count, job_id=job_id, field="task_count"),
-        "completed_count": _clamp_int32(s.completed_count, job_id=job_id, field="completed_count"),
-        "task_state_counts": {
-            task_state_friendly(state): _clamp_int32(count, job_id=job_id, field=f"task_state_counts[{state}]")
-            for state, count in s.task_state_counts.items()
-        },
-    }
-
-
-def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> job_pb2.PeerStatus:
-    """The ``PeerStatus`` for a job, derived from its cluster coordinate, its
-    ``federated_jobs.handoff_state``, and whether the peer has mirrored any task
-    rows back yet.
-
-    Branch order matters: a peer that has reported tasks is ``SYNCED`` even if
-    the local handle still reads ``PENDING_HANDOFF``. The sync loop can mirror a
-    job's state before a transient RPC failure lets ``mark_handed_off`` run, so
-    the presence of mirrored task rows is the more current signal — checking it
-    before the handle avoids labelling a running, populated job "awaiting the
-    peer's acceptance". A rejected handoff never reports tasks, so ``REJECTED``
-    is checked first.
-
-    For a terminal job this is the last posture observed (e.g. a handoff
-    cancelled before delivery stays ``PENDING_SCHEDULING``). ``handoff_state`` is
-    ``None`` only if the SENT handle is gone; the handle and jobs row are created
-    and CASCADE-deleted together, so for a live federated job that is a
-    can't-happen fallback, treated as handed off.
-    """
-    if not is_federated(cluster):
+def _peer_status(posture: FederationPosture, has_reported_tasks: bool) -> job_pb2.PeerStatus:
+    """Translate a resource federation posture to the retired wire enum."""
+    if posture is FederationPosture.LOCAL:
         return job_pb2.PEER_STATUS_NONE
-    if handoff_state == int(HandoffState.HANDOFF_REJECTED):
+    if posture is FederationPosture.REJECTED:
         return job_pb2.PEER_STATUS_REJECTED
     if has_reported_tasks:
         return job_pb2.PEER_STATUS_SYNCED
-    # QUEUED (awaiting a peer with capacity) and PENDING (awaiting the peer's ack) are
-    # both pre-registration on the peer, so both read as PENDING_SCHEDULING.
-    if handoff_state in (int(HandoffState.PENDING_HANDOFF), int(HandoffState.QUEUED_HANDOFF)):
+    if posture in (FederationPosture.QUEUED, FederationPosture.PENDING_ACCEPTANCE):
         return job_pb2.PEER_STATUS_PENDING_SCHEDULING
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, posture: FederationPosture, peer_status: int) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
@@ -517,7 +430,7 @@ def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_stat
     awaiting its first status report, or pending on the peer once it has reported
     tasks. A queued job names a peer only when it is pinned to one.
     """
-    if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+    if posture is FederationPosture.QUEUED:
         if not cluster:
             return "Queued for a federation peer to report free capacity"
         return f"Queued for peer {cluster} to report free capacity"
@@ -759,28 +672,12 @@ def _attempts_for_worker(
     return out
 
 
-@dataclass(frozen=True, slots=True)
-class PendingKick:
-    """A queued administrative task kick.
-
-    ``attempt_id`` is the targeted attempt, or ``None`` to take whatever attempt
-    is current when the kick is applied.
-    """
-
-    task_id: JobName
-    attempt_id: int | None
-    kind: TerminalKind
-    reason: str
-
-
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
 
     def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
-
-    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -957,19 +854,9 @@ class ControllerServiceImpl:
             detail = self._resources.describe_job(key)
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found") from exc
-        tasks = self._resource_tasks_for_job(key)
-        children = self._resources.list_jobs(JobQuery(parent=key, page_size=1))
-        with self._db.read_snapshot() as tx:
-            handoff_state = reads.handoff_states(tx, [JobName.from_wire(request.job_id)]).get(
-                JobName.from_wire(request.job_id)
-            )
+        (observation,) = self._resources.observe_jobs((detail.summary,))
         return controller_pb2.Controller.GetJobStatusResponse(
-            job=self._legacy_job_status(
-                detail.summary,
-                tasks,
-                has_children=bool(children.items),
-                handoff_state=handoff_state,
-            ),
+            job=self._legacy_job_status(observation),
             request=redact_request_env_vars(job_spec_to_legacy_request(detail.spec)),
         )
 
@@ -1016,26 +903,23 @@ class ControllerServiceImpl:
             if page_token is None:
                 raise ResourceNotFound(wire_id)
 
-    def _legacy_job_status(
-        self,
-        summary: JobSummary,
-        tasks: tuple[TaskSummary, ...],
-        *,
-        has_children: bool,
-        handoff_state: int | None,
-    ) -> job_pb2.JobStatus:
+    def _legacy_job_status(self, observation: JobObservation) -> job_pb2.JobStatus:
+        summary = observation.summary
         status = job_status_to_legacy(
             summary,
-            tasks,
-            has_children=has_children,
+            observation.tasks,
+            has_children=observation.has_children,
             local_cluster_id=self._resources.cluster_id,
         )
-        has_handle = handoff_state is not None
-        if has_handle:
+        if observation.federation_posture is not FederationPosture.LOCAL:
             peer_id = "" if summary.execution_cluster_id == self._resources.cluster_id else summary.execution_cluster_id
-            status.peer_status = _peer_status(peer_id or "federated", handoff_state, bool(tasks))
+            status.peer_status = _peer_status(observation.federation_posture, observation.tasks.task_count > 0)
             if summary.state == job_pb2.JOB_STATE_PENDING:
-                status.pending_reason = _federated_pending_reason(peer_id, handoff_state, status.peer_status)
+                status.pending_reason = _federated_pending_reason(
+                    peer_id,
+                    observation.federation_posture,
+                    status.peer_status,
+                )
         return status
 
     def get_job_state(
@@ -1045,12 +929,10 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.GetJobStateResponse:
         """Return states for the requested Jobs that still exist."""
         del ctx
-        states = {}
-        for wire_id in request.job_ids:
-            try:
-                states[wire_id] = int(self._resource_job_summary(wire_id).state)
-            except ResourceNotFound:
-                continue
+        try:
+            states = self._resources.job_states(request.job_ids)
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         return controller_pb2.Controller.GetJobStateResponse(states=states)
 
     def terminate_job(
@@ -1129,24 +1011,8 @@ class ControllerServiceImpl:
             summaries.sort(key=lambda summary: summary.submitted_at.epoch_ms(), reverse=descending)
         total_count = len(summaries)
         selected = summaries[query.offset : query.offset + query.limit]
-        with self._db.read_snapshot() as tx:
-            handoff_states = reads.handoff_states(
-                tx,
-                [JobName.from_wire(summary.identity.key.resource_id) for summary in selected],
-            )
-        statuses = []
-        for summary in selected:
-            key = summary.identity.key
-            tasks = self._resource_tasks_for_job(key)
-            children = self._resources.list_jobs(JobQuery(parent=key, page_size=1))
-            statuses.append(
-                self._legacy_job_status(
-                    summary,
-                    tasks,
-                    has_children=bool(children.items),
-                    handoff_state=handoff_states.get(JobName.from_wire(summary.identity.key.resource_id)),
-                )
-            )
+        observations = self._resources.observe_jobs(selected)
+        statuses = [self._legacy_job_status(observation) for observation in observations]
         return controller_pb2.Controller.ListJobsResponse(
             jobs=statuses,
             total_count=total_count,
@@ -1167,7 +1033,10 @@ class ControllerServiceImpl:
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found") from exc
         return controller_pb2.Controller.GetTaskStatusResponse(
-            task=task_detail_to_legacy(detail, local_cluster_id=self._resources.cluster_id),
+            task=task_detail_to_legacy(
+                detail,
+                local_cluster_id=self._resources.cluster_id,
+            ),
             job_resources=job.spec.resources.to_exact_proto(),
             root_cause_highlights=detail.root_cause_highlights,
         )
@@ -1183,108 +1052,19 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
         key = self._resource_job_summary(request.job_id).identity.key
         summaries = self._resource_tasks_for_job(key)
+        details = tuple(
+            detail
+            for chunk in batched(summaries, _LEGACY_RESOURCE_PAGE_SIZE)
+            for detail in self._resources.describe_tasks(tuple(summary.identity.key for summary in chunk))
+        )
         tasks = [
             task_detail_to_legacy(
-                self._resources.describe_task(summary.identity.key),
+                detail,
                 local_cluster_id=self._resources.cluster_id,
             )
-            for summary in summaries
+            for detail in details
         ]
         return controller_pb2.Controller.ListTasksResponse(tasks=tasks)
-
-    def kick_tasks(
-        self,
-        request: controller_pb2.Controller.KickTasksRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.KickTasksResponse:
-        """Force task attempts into a terminal state out-of-band (emergency override).
-
-        Validates each target against the current snapshot and queues the accepted
-        ones on the controller for the next control tick to apply. Returns one
-        ``KickResult`` per resolved task reporting whether it was queued.
-        """
-        kind = _KICK_KIND_BY_STATE.get(request.desired_state)
-        if kind is None:
-            allowed = ", ".join(task_state_friendly(state) for state in _KICK_KIND_BY_STATE)
-            raise ConnectError(Code.INVALID_ARGUMENT, f"desired_state must be one of: {allowed}")
-        if not request.targets:
-            raise ConnectError(Code.INVALID_ARGUMENT, "at least one target is required")
-
-        reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
-
-        results: list[controller_pb2.Controller.KickResult] = []
-        kicks: list[PendingKick] = []
-        with self._db.read_snapshot() as tx:
-            for target in request.targets:
-                self._resolve_kick_target(tx, target, kind, reason, kicks, results)
-
-        self._controller.request_task_kicks(kicks)
-        return controller_pb2.Controller.KickTasksResponse(results=results)
-
-    def _resolve_kick_target(
-        self,
-        tx: Tx,
-        target: str,
-        kind: TerminalKind,
-        reason: str,
-        kicks: list[PendingKick],
-        results: list[controller_pb2.Controller.KickResult],
-    ) -> None:
-        """Validate one kick target, appending its queued kicks and result rows.
-
-        A task or task-attempt id targets a single task; a job id expands to the
-        job's active tasks. Only tasks running on a worker (ASSIGNED / BUILDING /
-        RUNNING) can be kicked; anything else is rejected with a reason.
-        """
-
-        def reject(detail: str, *, task_id: str = "") -> None:
-            results.append(
-                controller_pb2.Controller.KickResult(target=target, task_id=task_id, queued=False, detail=detail)
-            )
-
-        try:
-            task_attempt = TaskAttempt.from_wire(target)
-        except ValueError as exc:
-            reject(str(exc))
-            return
-
-        name = task_attempt.task_id
-        self._authorize_job_owner(name)
-
-        if name.is_task:
-            detail = reads.get_task_detail(tx, name)
-            if detail is None:
-                reject("task not found")
-                return
-            if task_attempt.attempt_id is not None and task_attempt.attempt_id != detail.current_attempt_id:
-                reject(
-                    f"attempt {task_attempt.attempt_id} is not current (current is {detail.current_attempt_id})",
-                    task_id=name.to_wire(),
-                )
-                return
-            if detail.state not in ACTIVE_TASK_STATES:
-                reject(f"task is {task_state_friendly(detail.state)}, not running on a worker", task_id=name.to_wire())
-                return
-            kicks.append(PendingKick(task_id=name, attempt_id=task_attempt.attempt_id, kind=kind, reason=reason))
-            results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
-            return
-
-        # Job target: expand to its active tasks.
-        if task_attempt.attempt_id is not None:
-            reject("a job target cannot carry an ':attempt' suffix")
-            return
-        if reads.get_job_state(tx, name) is None:
-            reject("job not found")
-            return
-        active = reads.list_active_tasks(tx, reads.TaskScope(job_id=name), states=ACTIVE_TASK_STATES)
-        if not active:
-            reject("job has no tasks running on a worker", task_id=name.to_wire())
-            return
-        for row in active:
-            kicks.append(PendingKick(task_id=row.task_id, attempt_id=None, kind=kind, reason=reason))
-            results.append(
-                controller_pb2.Controller.KickResult(target=target, task_id=row.task_id.to_wire(), queued=True)
-            )
 
     # --- Worker Management ---
 
@@ -1357,9 +1137,10 @@ class ControllerServiceImpl:
         del ctx
         query = request.query if request.HasField("query") else controller_pb2.Controller.WorkerQuery()
         nodes = []
+        details = {}
         page_token = None
         while True:
-            page = self._resources.list_nodes(
+            page, page_details = self._resources.list_nodes_with_details(
                 NodeQuery(
                     backend_id=query.backend_id or None,
                     contains=None,
@@ -1368,6 +1149,7 @@ class ControllerServiceImpl:
                 )
             )
             nodes.extend(page.items)
+            details.update(page_details)
             page_token = page.next_page_token
             if page_token is None:
                 break
@@ -1382,13 +1164,7 @@ class ControllerServiceImpl:
                 node
                 for node in nodes
                 if needle in node.identity.key.resource_id.casefold()
-                or needle
-                in (
-                    self._resources.describe_node(
-                        NodeLocator(node.identity.key, node.identity.backend_id, node.identity.node_uid)
-                    ).address
-                    or ""
-                ).casefold()
+                or needle in (details[(node.identity.backend_id, node.identity.node_uid)].address or "").casefold()
             ]
         descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
         nodes.sort(key=lambda node: node.identity.key.resource_id, reverse=descending)
@@ -1398,9 +1174,7 @@ class ControllerServiceImpl:
         selected = nodes[offset : offset + limit] if limit else nodes[offset:]
         workers = []
         for node in selected:
-            detail = self._resources.describe_node(
-                NodeLocator(node.identity.key, node.identity.backend_id, node.identity.node_uid)
-            )
+            detail = details[(node.identity.backend_id, node.identity.node_uid)]
             metadata = job_pb2.WorkerMetadata(
                 hostname=node.identity.key.resource_id,
                 ip_address=detail.address or "",
@@ -1662,11 +1436,14 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         self._authorize_federated_debug_target(target.task_id.root_job)
         try:
-            result = self._resources.profile_attempt(
+            attempt = self._resources.describe_attempt(
                 AttemptLocator(
                     self._resource_task_summary(target.task_id.to_wire()).identity.key,
                     target.attempt_id,
-                ),
+                )
+            )
+            result = self._resources.profile_attempt(
+                attempt.summary.identity,
                 profile_configuration_from_proto(request.profile_type),
                 Duration.from_seconds(request.duration_seconds) if request.duration_seconds else None,
             )
@@ -1896,8 +1673,11 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         self._authorize_federated_debug_target(task_id.root_job)
         try:
+            task = self._resource_task_summary(request.task_id)
+            if task.current_attempt is None:
+                raise ResourceNotFound(request.task_id)
             result = self._resources.exec_attempt(
-                AttemptLocator(self._resource_task_summary(request.task_id).identity.key, None),
+                task.current_attempt,
                 tuple(request.command),
                 Duration.from_seconds(request.timeout_seconds) if request.timeout_seconds else None,
             )
@@ -2294,7 +2074,7 @@ class ControllerServiceImpl:
             started_at=job.started_at_ms,
             finished_at=job.finished_at_ms,
             task_count=job.num_tasks,
-            backend_id=job.backend_id or "",
+            backend_id=self._federation_backend_id(str(job.backend_id or "")),
             resources=resource_spec_from_job_row(job),
         )
 
@@ -2344,7 +2124,7 @@ class ControllerServiceImpl:
             worker_address=task.current_worker_address or "",
             worker_label=str(worker_id or task.peer_worker_label),
             status_message=task.status_message or "",
-            backend_id=task.backend_id,
+            backend_id=self._federation_backend_id(task.backend_id),
             attempts=tuple(
                 SyncedAttempt(
                     attempt_id=attempt.attempt_id,
@@ -2358,6 +2138,14 @@ class ControllerServiceImpl:
                 for attempt in task.attempts
             ),
         )
+
+    def _federation_backend_id(self, stored: str) -> str:
+        """Canonical execution backend exposed through the legacy sync wrapper."""
+        if stored:
+            return stored
+        if len(self._controller.backends) == 1:
+            return next(iter(self._controller.backends))
+        return ""
 
     def _federation_endpoint_snapshot(self, q, requester_id: str, now: Timestamp) -> tuple[SyncedEndpoint, ...]:
         """The requester's full current endpoint set across its RECEIVED jobs.

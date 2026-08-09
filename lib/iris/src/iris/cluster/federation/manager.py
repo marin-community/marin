@@ -281,6 +281,10 @@ class FederationManager:
         if target is not None:
             self._deliver_cancel(target)
 
+    def deliver_cancel(self, target: CancelTarget) -> None:
+        """Deliver an already-persisted cancel intent to its execution peer."""
+        self._deliver_cancel(target)
+
     def _deliver_cancel(self, target: CancelTarget) -> None:
         """Route one ``TerminateJob`` to the peer.
 

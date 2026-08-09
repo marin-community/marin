@@ -17,6 +17,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
@@ -58,7 +59,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -233,9 +234,7 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
-        # Endpoint registry (register/list) is a separate service; the worker
-        # only reads it (log-server resolution), sharing the controller address.
-        self._endpoint_client: EndpointServiceClientSync | None = None
+        self._resource_client: ResourceClient | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -248,7 +247,7 @@ class Worker:
         #   2. iris.worker / iris.task tables must be registered before adoption
         #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
         #      which goes through the resolver (_resolve_log_service) — and the
-        #      resolver requires self._endpoint_client to be set. After the
+        #      resolver requires self._resource_client to be set. After the
         #      clients are built and the tables are registered once, the
         #      per-attempt get_table inside adoption is a cache hit.
         #   3. The uvicorn server must be up before we register with the
@@ -272,12 +271,10 @@ class Worker:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            self._endpoint_client = EndpointServiceClientSync(
-                address=self._config.controller_address,
+            self._resource_client = ResourceClient(
+                self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
-                accept_compression=IRIS_RPC_COMPRESSIONS,
-                send_compression=None,
             )
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.
@@ -438,8 +435,8 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
-        if self._endpoint_client:
-            self._endpoint_client.close()
+        if self._resource_client:
+            self._resource_client.close()
         self._detach_log_handler()
         if self._log_client is not None:
             self._log_client.close()
@@ -528,14 +525,12 @@ class Worker:
 
     def _resolve_log_service(self, server_url: str) -> str:
         """Look up ``server_url`` on the controller's endpoint registry."""
-        if self._endpoint_client is None:
-            raise ConnectionError("worker endpoint client not yet initialized")
-        resp = self._endpoint_client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
-        )
-        if not resp.endpoints:
+        if self._resource_client is None:
+            raise ConnectionError("worker resource client not yet initialized")
+        endpoints = self._resource_client.resolve_endpoints(server_url)
+        if not endpoints:
             raise ConnectionError(f"No {server_url!r} endpoint registered on controller")
-        return resp.endpoints[0].address
+        return endpoints[0].address
 
     def _attach_log_handler(self) -> None:
         """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""

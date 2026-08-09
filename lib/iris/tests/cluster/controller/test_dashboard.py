@@ -42,9 +42,11 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
+from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2, resource_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
@@ -270,6 +272,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.liveness_for_worker = lambda wid: state._health.liveness(wid)
     controller_mock.last_unroutable_jobs = {}
     controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
     return controller_mock
 
 
@@ -1885,7 +1888,7 @@ def test_list_jobs_filters_by_backend_id(client, state, job_request):
 def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_path, log_client, job_request):
     """ListWorkers stamps backend_id (resolved via backend_id_for_scale_group) and scale_group."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
+    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
     controller_mock.backends["gcp"] = _worker_backend(state, None, "gcp")
     svc = make_controller_service(
         controller=controller_mock,
@@ -1928,7 +1931,7 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
 def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_client):
     """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: {"tpu-v5e": "gcp", "h100": "cw"}.get(sg, DEFAULT_BACKEND_ID)
+    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp", "h100": "cw"}
     controller_mock.backends.update(
         {
             "gcp": _worker_backend(state, None, "gcp"),

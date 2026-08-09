@@ -120,8 +120,9 @@ class FakeTask:
         self.task_id = f"{JOB_ID}/{task_index}"
         self.task_index = task_index
 
-    def status(self):
-        return job_pb2.TaskStatus(state=job_pb2.TASK_STATE_RUNNING)
+    @property
+    def state(self):
+        return job_pb2.TASK_STATE_RUNNING
 
 
 class FakeJob:

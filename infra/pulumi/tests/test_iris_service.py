@@ -155,20 +155,34 @@ class TestSubmit:
 
 
 class _TerminatingClient:
-    """States plays back per job_state call; terminate() is recorded."""
+    """States play back through an exact resource Job handle."""
 
     def __init__(self, states):
         self._states = list(states)
         self.terminated = False
+        self.job = _TerminatingJob(self)
 
-    def job_state(self, job_id):
-        state = self._states.pop(0)
+    def current_job(self, job_id):
+        if self._states[0] is None:
+            self._states.pop(0)
+            raise ConnectError(Code.NOT_FOUND, "not found")
+        return self.job
+
+
+class _TerminatingJob:
+    def __init__(self, client):
+        self._client = client
+        self.identity = SimpleNamespace(job_uid="job-uid")
+
+    @property
+    def state(self):
+        state = self._client._states.pop(0)
         if state is None:
             raise ConnectError(Code.NOT_FOUND, "not found")
         return state
 
-    def terminate(self, job_id):
-        self.terminated = True
+    def cancel(self, *, idempotency_key):
+        self._client.terminated = True
 
 
 class TestTerminate:

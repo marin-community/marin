@@ -538,6 +538,7 @@ def insert_attempt(
     worker_id: WorkerId | None,
     state: int,
     created_at_ms: int,
+    backend_id: str | None = None,
 ) -> AttemptUid:
     """Insert one row into ``task_attempts``, minting its ``attempt_uid``.
 
@@ -562,6 +563,11 @@ def insert_attempt(
                     state=state,
                     created_at_ms=created_at_ms,
                     attempt_uid=attempt_uid,
+                    backend_id=(
+                        backend_id
+                        if backend_id is not None
+                        else select(tasks_table.c.backend_id).where(tasks_table.c.task_id == task_id).scalar_subquery()
+                    ),
                 )
             )
             return attempt_uid
@@ -658,6 +664,7 @@ def assign_to_worker(
         "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, now_ms),
         "current_worker_id": worker_id,
         "current_worker_address": worker_address,
+        "container_id": None,
     }
     if priority_band is not None:
         values["priority_band"] = priority_band
@@ -673,6 +680,7 @@ def promote_for_dispatch(
     now_ms: int,
     *,
     priority_band: int,
+    backend_id: str | None = None,
 ) -> None:
     """Insert a fresh ``task_attempts`` row and promote the task for direct-provider dispatch.
 
@@ -688,6 +696,7 @@ def promote_for_dispatch(
         worker_id=None,
         state=job_pb2.TASK_STATE_ASSIGNED,
         created_at_ms=now_ms,
+        backend_id=backend_id,
     )
     tx.execute(
         update(tasks_table)
@@ -697,6 +706,7 @@ def promote_for_dispatch(
             current_attempt_id=attempt_id,
             started_at_ms=func.coalesce(tasks_table.c.started_at_ms, now_ms),
             priority_band=priority_band,
+            container_id=None,
         )
     )
 
@@ -951,6 +961,22 @@ def mirror_federated_job(
             num_tasks=num_tasks,
             backend_id=backend_id,
         )
+    )
+
+
+@writes_to(tasks_table, task_attempts_table)
+def adopt_federated_backend(tx: Tx, *, job_id: JobName, backend_id: str) -> None:
+    """Fill blank Task and Attempt mirrors when a peer first reports placement."""
+    task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
+    tx.execute(
+        update(tasks_table)
+        .where(tasks_table.c.job_id == job_id, tasks_table.c.backend_id == "")
+        .values(backend_id=backend_id)
+    )
+    tx.execute(
+        update(task_attempts_table)
+        .where(task_attempts_table.c.task_id.in_(task_ids), task_attempts_table.c.backend_id == "")
+        .values(backend_id=backend_id)
     )
 
 

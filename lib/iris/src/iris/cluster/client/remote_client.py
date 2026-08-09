@@ -14,7 +14,7 @@ from rigging.connect import proxy_path
 from rigging.timing import Duration
 
 from iris.cluster.client.bundle import create_workspace_zip
-from iris.cluster.client.endpoint_client import EndpointClient, EndpointInstance
+from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.resources.action import ActionReceipt
@@ -115,6 +115,9 @@ class RemoteClusterClient:
     def describe_task(self, key: ResourceKey) -> TaskDetail:
         return self._resources.describe_task(key)
 
+    def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]:
+        return self._resources.describe_tasks(keys)
+
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         return self._resources.describe_attempt(locator)
 
@@ -135,6 +138,12 @@ class RemoteClusterClient:
 
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
         return self._resources.describe_endpoint(key)
+
+    def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
+        return self._resources.describe_endpoints(keys)
+
+    def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]:
+        return self._resources.resolve_endpoints(name)
 
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
         return self._resources.mint_endpoint_token(key, ttl=ttl)
@@ -199,21 +208,21 @@ class RemoteClusterClient:
 
     def exec_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         command: Sequence[str],
         timeout: Duration,
     ) -> ExecResult:
-        return self._resources.exec_attempt(locator, command=command, timeout=timeout)
+        return self._resources.exec_attempt(identity, command=command, timeout=timeout)
 
     def profile_attempt(
         self,
-        locator: AttemptLocator,
+        identity: AttemptIdentity,
         *,
         profile: job_pb2.ProfileType,
         duration: Duration,
     ) -> ProfileResult:
-        return self._resources.profile_attempt(locator, profile=profile, duration=duration)
+        return self._resources.profile_attempt(identity, profile=profile, duration=duration)
 
     def register_endpoint(
         self,
@@ -228,14 +237,10 @@ class RemoteClusterClient:
     def unregister_endpoint(self, endpoint_id: str) -> None:
         self._endpoint_client.unregister(endpoint_id)
 
-    def list_endpoint_instances(self, name: str) -> list[EndpointInstance]:
-        """Return leased endpoint instances for in-cluster actor resolution."""
-        return self._endpoint_client.list_endpoint_instances(name)
-
     def resolve_endpoint(self, endpoint_name: str) -> str:
         if self._use_controller_proxy:
             return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
-        endpoints = self._endpoint_client.list_endpoint_instances(endpoint_name)
+        endpoints = self._resources.resolve_endpoints(endpoint_name)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address

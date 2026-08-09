@@ -844,13 +844,13 @@ def test_start_publishes_worker_logs_before_controller_registration(
         def close(self) -> None:
             pass
 
-    class _EndpointBoundary:
+    class _ResourceBoundary:
         def close(self) -> None:
             pass
 
     controller = _ControllerBoundary()
     monkeypatch.setattr("iris.cluster.worker.worker.ControllerServiceClientSync", lambda **_kwargs: controller)
-    monkeypatch.setattr("iris.cluster.worker.worker.EndpointServiceClientSync", lambda **_kwargs: _EndpointBoundary())
+    monkeypatch.setattr("iris.cluster.worker.worker.ResourceClient", lambda *_args, **_kwargs: _ResourceBoundary())
     worker = Worker(
         WorkerConfig(
             port=0,

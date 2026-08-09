@@ -538,6 +538,18 @@ class DescribeTaskResponse(_message.Message):
     task: TaskDetail
     def __init__(self, task: _Optional[_Union[TaskDetail, _Mapping]] = ...) -> None: ...
 
+class BatchDescribeTasksRequest(_message.Message):
+    __slots__ = ("tasks",)
+    TASKS_FIELD_NUMBER: _ClassVar[int]
+    tasks: _containers.RepeatedCompositeFieldContainer[ResourceKey]
+    def __init__(self, tasks: _Optional[_Iterable[_Union[ResourceKey, _Mapping]]] = ...) -> None: ...
+
+class BatchDescribeTasksResponse(_message.Message):
+    __slots__ = ("tasks",)
+    TASKS_FIELD_NUMBER: _ClassVar[int]
+    tasks: _containers.RepeatedCompositeFieldContainer[TaskDetail]
+    def __init__(self, tasks: _Optional[_Iterable[_Union[TaskDetail, _Mapping]]] = ...) -> None: ...
+
 class DescribeAttemptRequest(_message.Message):
     __slots__ = ("attempt",)
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
@@ -579,7 +591,7 @@ class NodeCapacity(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., accelerator_kind: _Optional[str] = ..., accelerator_variant: _Optional[str] = ..., accelerator_count: _Optional[int] = ...) -> None: ...
 
 class NodeSummary(_message.Message):
-    __slots__ = ("identity", "health", "schedulable", "capacity", "scaling_group_id", "slice", "running_task_count", "observed_at")
+    __slots__ = ("identity", "health", "schedulable", "capacity", "scaling_group_id", "slice", "running_task_count", "observed_at", "region")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     HEALTH_FIELD_NUMBER: _ClassVar[int]
     SCHEDULABLE_FIELD_NUMBER: _ClassVar[int]
@@ -588,6 +600,7 @@ class NodeSummary(_message.Message):
     SLICE_FIELD_NUMBER: _ClassVar[int]
     RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
     OBSERVED_AT_FIELD_NUMBER: _ClassVar[int]
+    REGION_FIELD_NUMBER: _ClassVar[int]
     identity: NodeIdentity
     health: NodeHealth
     schedulable: bool
@@ -596,7 +609,8 @@ class NodeSummary(_message.Message):
     slice: SliceIdentity
     running_task_count: int
     observed_at: _time_pb2.Timestamp
-    def __init__(self, identity: _Optional[_Union[NodeIdentity, _Mapping]] = ..., health: _Optional[_Union[NodeHealth, str]] = ..., schedulable: _Optional[bool] = ..., capacity: _Optional[_Union[NodeCapacity, _Mapping]] = ..., scaling_group_id: _Optional[str] = ..., slice: _Optional[_Union[SliceIdentity, _Mapping]] = ..., running_task_count: _Optional[int] = ..., observed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    region: str
+    def __init__(self, identity: _Optional[_Union[NodeIdentity, _Mapping]] = ..., health: _Optional[_Union[NodeHealth, str]] = ..., schedulable: _Optional[bool] = ..., capacity: _Optional[_Union[NodeCapacity, _Mapping]] = ..., scaling_group_id: _Optional[str] = ..., slice: _Optional[_Union[SliceIdentity, _Mapping]] = ..., running_task_count: _Optional[int] = ..., observed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., region: _Optional[str] = ...) -> None: ...
 
 class NodeAttribute(_message.Message):
     __slots__ = ("key", "string_value", "integer_value", "float_value")
@@ -797,6 +811,18 @@ class DescribeEndpointResponse(_message.Message):
     endpoint: EndpointDetail
     def __init__(self, endpoint: _Optional[_Union[EndpointDetail, _Mapping]] = ...) -> None: ...
 
+class BatchDescribeEndpointsRequest(_message.Message):
+    __slots__ = ("endpoints",)
+    ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+    endpoints: _containers.RepeatedCompositeFieldContainer[ResourceKey]
+    def __init__(self, endpoints: _Optional[_Iterable[_Union[ResourceKey, _Mapping]]] = ...) -> None: ...
+
+class BatchDescribeEndpointsResponse(_message.Message):
+    __slots__ = ("endpoints",)
+    ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+    endpoints: _containers.RepeatedCompositeFieldContainer[EndpointDetail]
+    def __init__(self, endpoints: _Optional[_Iterable[_Union[EndpointDetail, _Mapping]]] = ...) -> None: ...
+
 class MintEndpointTokenRequest(_message.Message):
     __slots__ = ("endpoint", "ttl")
     ENDPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -985,10 +1011,10 @@ class ExecAttemptRequest(_message.Message):
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     COMMAND_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    attempt: AttemptLocator
+    attempt: AttemptIdentity
     command: _containers.RepeatedScalarFieldContainer[str]
     timeout: _time_pb2.Duration
-    def __init__(self, attempt: _Optional[_Union[AttemptLocator, _Mapping]] = ..., command: _Optional[_Iterable[str]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, attempt: _Optional[_Union[AttemptIdentity, _Mapping]] = ..., command: _Optional[_Iterable[str]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class ExecAttemptResponse(_message.Message):
     __slots__ = ("exit_code", "stdout", "stderr", "error_message")
@@ -1007,10 +1033,10 @@ class ProfileAttemptRequest(_message.Message):
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     PROFILE_FIELD_NUMBER: _ClassVar[int]
     DURATION_FIELD_NUMBER: _ClassVar[int]
-    attempt: AttemptLocator
+    attempt: AttemptIdentity
     profile: _job_pb2.ProfileType
     duration: _time_pb2.Duration
-    def __init__(self, attempt: _Optional[_Union[AttemptLocator, _Mapping]] = ..., profile: _Optional[_Union[_job_pb2.ProfileType, _Mapping]] = ..., duration: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    def __init__(self, attempt: _Optional[_Union[AttemptIdentity, _Mapping]] = ..., profile: _Optional[_Union[_job_pb2.ProfileType, _Mapping]] = ..., duration: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class ProfileAttemptResponse(_message.Message):
     __slots__ = ("profile_data", "error_message")

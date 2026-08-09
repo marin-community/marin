@@ -4,8 +4,9 @@
 
 Land the resource model in one forward-only pull request, using the original
 design stages as review groups. Resource records are the sole in-process Job and
-Task contract. The retained `ControllerService` Job and Task protobufs are a
-network adapter for callers that have not moved to the resource RPC.
+Task contract. `ResourceService` is the only first-party resource API. The
+retained `ControllerService` Job and Task protobufs form a one-way old-wire
+adapter that decodes into resources at the boundary.
 
 This branch does not carry forward the abandoned rollout machinery: no dual
 writes, repair-on-open, schema selector, parity telemetry, old-image reader, or
@@ -25,9 +26,10 @@ submit Job
   -> cancel Job | retry Task | terminate Attempt
 ```
 
-The typed Python client, CLI, dashboard, resource RPC, federation admission, and
-controller use the same resource records. Global provider-backed reads include
-source status, so unavailable data is distinguishable from an empty result.
+The typed Python client, CLI, dashboard, operational callers, resource RPC,
+federation admission, and controller use the same resource records. Global
+provider-backed reads include source status, so unavailable data is
+distinguishable from an empty result.
 
 ## Durable actions
 
@@ -97,11 +99,12 @@ writes accepted after the selected checkpoint.
 
 ## Evidence expected before merge
 
-- Resource journeys cover exact replacement, partial outage, restart,
-  federation, actions, activity, and endpoints.
+- Resource journeys cover exact replacement, timeout continuity, partial
+  outage, restart, federation, actions, activity, and endpoints.
 - A populated pre-0051 upgrade preserves Job and Task reads and action
   idempotency.
-- Public query and bind budgets remain bounded.
+- Resource pages have fixed query and bind budgets; retired unpaged adapters
+  consume them in bounded batches.
 - CLI, resource RPC, legacy RPC adapter, Python conversion, and dashboard
   behavior are covered at their public boundaries.
 - Full safe Iris tests, Pyrefly, precommit, dashboard typecheck, and deterministic

@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
+import pytest
 from iris.cluster.resources.attempt import AttemptSummary
+from iris.cluster.resources.endpoint import ProfileResult
 from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.cluster.resources.job import JobDetail, JobSpec, JobSummary
+from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskSummary
 from iris.cluster.types import ResourceSpec
 from iris.rpc import job_pb2
 from marin.mcp.babysitter import (
+    IrisBabysitter,
+    IrisConnectionConfig,
     _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
@@ -27,6 +32,49 @@ def _job_identity() -> JobIdentity:
 
 def _task_identity() -> TaskIdentity:
     return TaskIdentity(ResourceKey("prod", ResourceKind.TASK, "/alice/train/0"), "task-uid")
+
+
+def _attempt(attempt_number: int, attempt_uid: str) -> AttemptSummary:
+    return AttemptSummary(
+        identity=AttemptIdentity(_task_identity().key, attempt_number, attempt_uid),
+        state=job_pb2.TASK_STATE_RUNNING,
+        execution_cluster_id="prod",
+        backend_id="east",
+        node=None,
+        created_at=_NOW,
+        started_at=_NOW,
+        finished_at=None,
+        exit_code=None,
+        error_message="",
+        terminal_reason="",
+    )
+
+
+def _running_task_detail() -> TaskDetail:
+    first = _attempt(1, "attempt-one")
+    second = _attempt(2, "attempt-two")
+    return TaskDetail(
+        summary=TaskSummary(
+            identity=_task_identity(),
+            job=_job_identity(),
+            task_index=0,
+            state=job_pb2.TASK_STATE_RUNNING,
+            execution_cluster_id="prod",
+            backend_id="east",
+            current_attempt=second.identity,
+            current_node=None,
+            failure_count=1,
+            preemption_count=0,
+            submitted_at=_NOW,
+            started_at=_NOW,
+            finished_at=None,
+            status_message="running",
+            error_message="",
+        ),
+        attempts=(first, second),
+        source_statuses=(),
+        root_cause_highlights=(),
+    )
 
 
 def _job_detail() -> JobDetail:
@@ -151,6 +199,103 @@ def test_job_summary_payload_preserves_summary_task_fields():
     assert payload["tasks"][0]["task_uid"] == "task-uid"
     assert "resource_requests" in payload
     assert "resource_usage" not in payload
+
+
+def test_job_summary_describes_the_exact_resource_without_prefix_scanning(monkeypatch):
+    requested: list[ResourceKey] = []
+
+    class Resources:
+        def describe_job(self, key: ResourceKey) -> JobDetail:
+            requested.append(key)
+            return _job_detail()
+
+        def list_tasks(self, _query) -> Page[TaskSummary]:
+            return Page((), None, ())
+
+        def close(self) -> None:
+            pass
+
+    class Closeable:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: Closeable())
+    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
+    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+
+    payload = service.job_summary("/alice/train")
+
+    assert payload["data"]["job_id"] == "/alice/train"
+    assert requested == [ResourceKey("prod", ResourceKind.JOB, "/alice/train")]
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_text"),
+    [
+        ("/alice/train/0", "attempt-two"),
+        ("/alice/train/0:1", "attempt-one"),
+    ],
+)
+def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, expected_text):
+    class Resources:
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+            return _running_task_detail()
+
+        def profile_attempt(self, identity, *, profile, duration) -> ProfileResult:
+            return ProfileResult(identity.attempt_uid.encode(), "")
+
+        def close(self) -> None:
+            pass
+
+    class LegacyController:
+        def profile_task(self, _request):
+            return job_pb2.ProfileTaskResponse(profile_data=b"legacy-task-profile")
+
+        def close(self) -> None:
+            pass
+
+    class Closeable:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
+    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
+    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+
+    payload = service.profile_task(target=target)
+
+    assert payload["data"] == {"text": expected_text, "encoding": "utf-8"}
+
+
+def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
+    class Resources:
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+            raise AssertionError("system profiling must not resolve a Task")
+
+        def close(self) -> None:
+            pass
+
+    class LegacyController:
+        def profile_task(self, _request):
+            return job_pb2.ProfileTaskResponse(profile_data=b"controller-profile")
+
+        def close(self) -> None:
+            pass
+
+    class Closeable:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
+    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
+    service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+
+    payload = service.profile_task(target="/system/process")
+
+    assert payload["data"] == {"text": "controller-profile", "encoding": "utf-8"}
 
 
 def test_token_provider_uses_env_override(monkeypatch):

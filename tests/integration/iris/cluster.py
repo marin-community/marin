@@ -7,11 +7,15 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from finelog.rpc import logging_pb2
-from iris.client.client import IrisClient, Job
+from iris.client.client import IrisClient, Job, Task
 from iris.cluster.constraints import Constraint
+from iris.cluster.resources.identity import NodeLocator
+from iris.cluster.resources.job import JobSummary
+from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.node import NodeDetail, NodeHealth, NodeQuery
+from iris.cluster.resources.task import TaskSummary
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import iris_logging_pb2
 from rigging.timing import Duration
 
 
@@ -26,15 +30,6 @@ class IrisIntegrationCluster:
     url: str
     client: IrisClient
     job_timeout: float = 60.0
-
-    @property
-    def _cluster(self):
-        return self.client._cluster_client
-
-    @property
-    def controller_client(self):
-        """Raw controller stub for RPCs not yet on RemoteClusterClient (profile, exec)."""
-        return self._cluster._client
 
     def submit(
         self,
@@ -68,13 +63,19 @@ class IrisIntegrationCluster:
             constraints=constraints,
         )
 
-    def status(self, job: Job) -> job_pb2.JobStatus:
-        return self.client.status(job.job_id)
+    def status(self, job: Job) -> JobSummary:
+        return job.status()
 
-    def task_status(self, job: Job, task_index: int = 0) -> job_pb2.TaskStatus:
-        return self.client.task_status(job.job_id.task(task_index))
+    def task(self, job: Job, task_index: int = 0) -> Task:
+        match = next((task for task in job.tasks() if task.task_index == task_index), None)
+        if match is None:
+            raise LookupError(f"Job {job.job_id} has no Task {task_index}")
+        return match
 
-    def wait(self, job: Job, timeout: float = 60.0, poll_interval: float = 0.5) -> job_pb2.JobStatus:
+    def task_status(self, job: Job, task_index: int = 0) -> TaskSummary:
+        return self.task(job, task_index).status()
+
+    def wait(self, job: Job, timeout: float = 60.0, poll_interval: float = 0.5) -> JobSummary:
         """Poll until a job reaches a terminal state."""
         return job.wait(timeout=timeout, poll_interval=poll_interval, raise_on_failure=False)
 
@@ -84,7 +85,7 @@ class IrisIntegrationCluster:
         state: int,
         timeout: float = 10.0,
         poll_interval: float = 0.1,
-    ) -> job_pb2.JobStatus:
+    ) -> JobSummary:
         deadline = time.monotonic() + timeout
         status = self.status(job)
         while time.monotonic() < deadline:
@@ -101,7 +102,7 @@ class IrisIntegrationCluster:
         task_index: int = 0,
         timeout: float = 60.0,
         poll_interval: float = 0.5,
-    ) -> job_pb2.TaskStatus:
+    ) -> TaskSummary:
         deadline = time.monotonic() + timeout
         task = self.task_status(job, task_index)
         while time.monotonic() < deadline:
@@ -123,28 +124,47 @@ class IrisIntegrationCluster:
             self.kill(job)
 
     def kill(self, job: Job) -> None:
-        self.client.terminate(job.job_id)
+        job.cancel(idempotency_key=f"integration-cancel:{job.identity.job_uid}")
 
     def wait_for_workers(self, min_workers: int, timeout: float = 30.0) -> None:
         deadline = time.monotonic() + timeout
-        healthy = []
+        ready: list[NodeDetail] = []
         while time.monotonic() < deadline:
-            workers = self._cluster.list_workers()
-            healthy = [w for w in workers if w.healthy]
-            if len(healthy) >= min_workers:
+            ready = [node for node in self.list_nodes() if node.summary.health is NodeHealth.READY]
+            if len(ready) >= min_workers:
                 return
             time.sleep(0.5)
-        raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
+        raise TimeoutError(f"Only {len(ready)} of {min_workers} Nodes ready in {timeout}s")
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
-        """List workers with retry logic via RemoteClusterClient."""
-        return self._cluster.list_workers()
+    def list_nodes(self) -> list[NodeDetail]:
+        """List and describe the public Node inventory."""
+        summaries = []
+        query = NodeQuery(page_size=500)
+        while True:
+            page = self.client.list_nodes(query)
+            summaries.extend(page.items)
+            if page.next_page_token is None:
+                break
+            query = NodeQuery(page_size=500, page_token=page.next_page_token)
+        return [
+            self.client.describe_node(
+                NodeLocator(summary.identity.key, summary.identity.backend_id, summary.identity.node_uid)
+            )
+            for summary in summaries
+        ]
 
-    def fetch_logs(self, source: str, **kwargs) -> logging_pb2.FetchLogsResponse:
-        """Fetch logs with retry logic via RemoteClusterClient."""
-        return self._cluster.fetch_logs(source, **kwargs)
+    def task_logs(
+        self,
+        job: Job,
+        task_index: int = 0,
+        *,
+        minimum_level: iris_logging_pb2.LogLevel = iris_logging_pb2.LOG_LEVEL_UNKNOWN,
+    ) -> LogPage:
+        task = self.task(job, task_index)
+        return self.client.fetch_task_logs(
+            task.identity,
+            LogQuery(max_lines=1_000, minimum_level=minimum_level),
+        )
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
-        task_id = job.job_id.task(task_index).to_wire()
-        response = self._cluster.fetch_logs(f"{task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
-        return [f"{e.source}: {e.data}" for e in response.entries]
+        return [f"{entry.source}: {entry.data}" for entry in self.task_logs(job, task_index).entries]

@@ -66,7 +66,7 @@ def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> N
         job.wait(timeout=_SERVE_AND_EVAL_TIMEOUT_SECONDS, stream_logs=True)
     finally:
         if not is_job_finished(job.state):
-            job.terminate()
+            job.cancel()
 
     # Metrics are keyed by each task's upload dir (name_Nshot when un-aliased), not the bare task name.
     metrics = EvalchemyResult.raw_load(out_path).task_metrics()

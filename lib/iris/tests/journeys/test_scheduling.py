@@ -13,11 +13,17 @@ def test_job_waiting_for_capacity_becomes_unschedulable_at_deadline(journey_with
     journey.settle()
     assert journey.job(job).summary.state == job_pb2.JOB_STATE_PENDING
 
-    journey.clock.advance(6)
+    journey.clock.advance(3)
+    journey.restart()
+    journey.settle()
+    assert journey.job(job).summary.state == job_pb2.JOB_STATE_PENDING
+
+    journey.clock.advance(3)
     journey.settle()
 
     assert journey.job(job).summary.state == job_pb2.JOB_STATE_UNSCHEDULABLE
     assert journey.task(job[0]).summary.state == job_pb2.TASK_STATE_UNSCHEDULABLE
+    assert journey.backend_events(kind="launched") == []
 
 
 def test_sequential_jobs_reuse_one_backend_without_cross_job_state(journey):
@@ -46,11 +52,43 @@ def test_transient_backend_outage_redrives_one_attempt_without_duplicate_launch(
     ]
 
 
+def test_retry_staged_during_backend_outage_survives_restart_without_duplicate_launch(journey):
+    job = journey.submit("retry-outage-restart", failure_retries=1)
+    journey.settle()
+    journey.fail(job[0])
+    journey.step()
+
+    journey.backend_outage(ticks=1)
+    journey.wait_through_outage(ticks=1)
+    assert [(event.task_id, event.attempt_id) for event in journey.backend_events(kind="launched")] == [
+        (job[0].wire_id, 0)
+    ]
+
+    journey.restart()
+    journey.settle()
+    journey.succeed(job[0])
+    journey.settle()
+
+    assert [attempt.state for attempt in journey.task(job[0]).attempts] == [
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+    ]
+    assert [(event.task_id, event.attempt_id) for event in journey.backend_events(kind="launched")] == [
+        (job[0].wire_id, 0),
+        (job[0].wire_id, 1),
+    ]
+
+
 def test_running_task_crossing_execution_deadline_fails_and_stops(journey):
     job = journey.submit("execution-timeout", execution_timeout=5)
     journey.settle()
 
-    journey.clock.advance(6)
+    journey.clock.advance(3)
+    journey.restart()
+    journey.settle()
+    assert journey.task(job[0]).summary.state == job_pb2.TASK_STATE_RUNNING
+
+    journey.clock.advance(3)
     journey.settle()
 
     assert journey.job(job).summary.state == job_pb2.JOB_STATE_FAILED

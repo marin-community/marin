@@ -133,6 +133,7 @@ members = [
     "lib/zephyr",
     "lib/finestore",
     "infra/pulumi",
+    "infra/probes",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
 # owns its own build backend and package metadata. The path sources below build

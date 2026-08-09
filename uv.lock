@@ -117,6 +117,7 @@ members = [
     "marin-fray",
     "marin-haliax",
     "marin-iac",
+    "marin-infra-probes",
     "marin-iris",
     "marin-levanter",
     "marin-rigging",
@@ -4191,6 +4192,35 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["deploy"]
+
+[[package]]
+name = "marin-infra-probes"
+version = "0.1.0"
+source = { editable = "infra/probes" }
+dependencies = [
+    { name = "click" },
+    { name = "httpx" },
+    { name = "marin-finelog" },
+    { name = "marin-iris" },
+    { name = "marin-rigging" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.0" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "marin-finelog", editable = "lib/finelog" },
+    { name = "marin-iris", editable = "lib/iris" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.4" }]
 
 [[package]]
 name = "marin-iris"

@@ -41,6 +41,7 @@ from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
+    JobName,
     ResourceSpec,
     is_job_finished,
     tpu_device,
@@ -490,7 +491,7 @@ class _IrisActorMethod:
 class IrisActorGroup:
     """ActorGroup that polls the Iris resolver to discover actors as they start."""
 
-    def __init__(self, name: str, count: int, job_id: Any, client: IrisClientLib | None = None):
+    def __init__(self, name: str, count: int, job_id: JobName, client: IrisClientLib | None = None):
         """Args:
         name: Actor name prefix
         count: Number of actors to discover
@@ -551,28 +552,32 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client.list_endpoints(EndpointQuery(name_prefix=prefix, page_size=1_000)).items
-
         newly_discovered: list[ActorHandle] = []
         resolver = None
-        for ep in endpoints:
-            if target is not None and len(self._discovered_names) >= target:
+        query = EndpointQuery(name_prefix=prefix, page_size=500)
+        while True:
+            page = client.list_endpoints(query)
+            for endpoint in page.items:
+                if target is not None and len(self._discovered_names) >= target:
+                    return newly_discovered
+                if endpoint.name in self._discovered_names:
+                    continue
+                if resolver is None:
+                    resolver = client.resolver_for_job(self._job_id)
+                self._discovered_names.add(endpoint.name)
+                handle = IrisActorHandle(endpoint.name, resolver=resolver)
+                self._handles.append(handle)
+                newly_discovered.append(handle)
+                logger.info(
+                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                    endpoint.name,
+                    self._job_id,
+                    len(self._discovered_names),
+                    self._count,
+                )
+            if page.next_page_token is None:
                 break
-            if ep.name in self._discovered_names:
-                continue
-            if resolver is None:
-                resolver = client.resolver_for_job(self._job_id)
-            self._discovered_names.add(ep.name)
-            handle = IrisActorHandle(ep.name, resolver=resolver)
-            self._handles.append(handle)
-            newly_discovered.append(handle)
-            logger.info(
-                "discover_new: found actor=%s job_id=%s (%d/%d ready)",
-                ep.name,
-                self._job_id,
-                len(self._discovered_names),
-                self._count,
-            )
+            query = EndpointQuery(name_prefix=prefix, page_size=500, page_token=page.next_page_token)
 
         return newly_discovered
 
@@ -595,17 +600,15 @@ class IrisActorGroup:
 
             # Fail fast if the underlying job has terminated (e.g. crash, OOM,
             # missing interpreter). Without this check we'd spin for the full
-            # timeout waiting for endpoints that will never appear. Use the
-            # lightweight state-only RPC and fetch the full status only when we
-            # actually need the error message.
+            # timeout waiting for endpoints that will never appear.
             client = self._get_client()
-            state = client.job_state(self._job_id)
-            if is_job_finished(state):
-                error = client.status(self._job_id).error or "unknown error"
+            status = client.current_job(self._job_id).status()
+            if is_job_finished(status.state):
+                error = status.error_message or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "
-                    f"Job state={state}, error={error}"
+                    f"Job state={status.state}, error={error}"
                 )
 
             elapsed = time.monotonic() - start
@@ -617,12 +620,12 @@ class IrisActorGroup:
     def is_done(self) -> bool:
         """Return True if the Iris worker job has permanently terminated."""
         client = self._get_client()
-        return is_job_finished(client.job_state(self._job_id))
+        return is_job_finished(client.current_job(self._job_id).status().state)
 
     def shutdown(self) -> None:
         """Terminate the actor job."""
         client = self._get_client()
-        client.terminate(self._job_id)
+        client.current_job(self._job_id).cancel()
 
 
 class FrayIrisClient:

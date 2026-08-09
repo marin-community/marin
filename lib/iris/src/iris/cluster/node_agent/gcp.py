@@ -11,6 +11,7 @@ from rigging import telemetry
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.telemetry.probes import nvidia
 
+from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.config import WorkerConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
 from iris.cluster.node_agent import SERVICE_NAME
@@ -23,9 +24,6 @@ from iris.cluster.worker.env_probe import (
     infer_worker_id,
     probe_hardware,
 )
-from iris.rpc import controller_pb2
-from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import EndpointServiceClientSync
 
 DEFAULT_COLLECTION_INTERVAL = 30.0
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
@@ -40,22 +38,18 @@ def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
     interceptors: tuple[BearerTokenInjector, ...] = ()
     if config.auth_token:
         interceptors = (BearerTokenInjector(StaticTokenProvider(config.auth_token), "authorization"),)
-    client = EndpointServiceClientSync(
-        address=address,
+    client = ResourceClient(
+        address,
         timeout_ms=10_000,
         interceptors=interceptors,
-        accept_compression=IRIS_RPC_COMPRESSIONS,
-        send_compression=None,
     )
     try:
-        response = client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(prefix=LOG_SERVER_ENDPOINT_NAME, exact=True)
-        )
+        endpoints = client.resolve_endpoints(LOG_SERVER_ENDPOINT_NAME)
     finally:
         client.close()
-    if not response.endpoints:
+    if not endpoints:
         raise ConnectionError(f"controller has no {LOG_SERVER_ENDPOINT_NAME!r} endpoint")
-    return response.endpoints[0].address.rstrip("/") + TELEMETRY_ENDPOINT_PATH
+    return endpoints[0].address.rstrip("/") + TELEMETRY_ENDPOINT_PATH
 
 
 def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | None = None) -> None:

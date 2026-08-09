@@ -6,9 +6,11 @@ from contextlib import nullcontext
 from click.testing import CliRunner
 from iris.cli.attempt import attempt
 from iris.cli.job import job
+from iris.cli.process_status import process_group
 from iris.cli.task import task
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
+from iris.cluster.resources.endpoint import ProfileResult
 from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.cluster.resources.job import JobDetail, JobSpec, JobSummary
 from iris.cluster.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
@@ -88,6 +90,36 @@ def _receipt() -> ActionReceipt:
     )
 
 
+def _attempt_detail() -> AttemptDetail:
+    identity = AttemptIdentity(_task_identity(7).key, 2, "attempt-uid-2")
+    return AttemptDetail(
+        summary=AttemptSummary(
+            identity=identity,
+            state=job_pb2.TASK_STATE_FAILED,
+            execution_cluster_id="prod",
+            backend_id="east",
+            node=None,
+            created_at=_NOW,
+            started_at=_NOW,
+            finished_at=_NOW,
+            exit_code=1,
+            error_message="bundle unavailable",
+            terminal_reason="init container could not fetch bundle",
+        ),
+        runtime=AttemptRuntimeObject(
+            provider_kind="kubernetes",
+            namespace="iris",
+            name="iris-train-7-2",
+            provider_uid="pod-uid",
+            provider_node_id="node-a",
+            provider_node_uid="node-uid",
+            container_id="container-1",
+            observed_at=_NOW,
+        ),
+        source_statuses=(),
+    )
+
+
 def test_task_list_keeps_rows_and_reports_partial_backend_outage(monkeypatch) -> None:
     current = AttemptIdentity(_task_identity(7).key, 2, "attempt-uid")
     task_summary = TaskSummary(
@@ -158,37 +190,9 @@ def test_job_cancel_uses_described_exact_identity_and_prints_durable_receipt(mon
 
 
 def test_attempt_describe_surfaces_exact_runtime_and_terminal_reason(monkeypatch) -> None:
-    identity = AttemptIdentity(_task_identity(7).key, 2, "attempt-uid-2")
-    detail = AttemptDetail(
-        summary=AttemptSummary(
-            identity=identity,
-            state=job_pb2.TASK_STATE_FAILED,
-            execution_cluster_id="prod",
-            backend_id="east",
-            node=None,
-            created_at=_NOW,
-            started_at=_NOW,
-            finished_at=_NOW,
-            exit_code=1,
-            error_message="bundle unavailable",
-            terminal_reason="init container could not fetch bundle",
-        ),
-        runtime=AttemptRuntimeObject(
-            provider_kind="kubernetes",
-            namespace="iris",
-            name="iris-train-7-2",
-            provider_uid="pod-uid",
-            provider_node_id="node-a",
-            provider_node_uid="node-uid",
-            container_id="container-1",
-            observed_at=_NOW,
-        ),
-        source_statuses=(),
-    )
-
     class Client:
         def describe_attempt(self, _locator):
-            return detail
+            return _attempt_detail()
 
     monkeypatch.setattr("iris.cli.attempt.resource_client_for_ctx", lambda _ctx: nullcontext(Client()))
 
@@ -202,3 +206,27 @@ def test_attempt_describe_surfaces_exact_runtime_and_terminal_reason(monkeypatch
     assert "UID: attempt-uid-2" in result.output
     assert "Runtime: kubernetes:iris/iris-train-7-2" in result.output
     assert "Reason: init container could not fetch bundle" in result.output
+
+
+def test_process_profile_for_a_task_uses_the_exact_attempt_resource(monkeypatch) -> None:
+    class Client:
+        def describe_attempt(self, _locator):
+            return _attempt_detail()
+
+        def profile_attempt(self, identity, *, profile, duration):
+            return ProfileResult(f"profile for {identity.attempt_uid}".encode(), "")
+
+    monkeypatch.setattr("iris.cli.process_status.resource_client_for_ctx", lambda _ctx: nullcontext(Client()))
+    monkeypatch.setattr(
+        "iris.cli.process_status.rpc_client_for_ctx",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("task profile used legacy RPC")),
+    )
+
+    result = CliRunner().invoke(
+        process_group,
+        ["profile", "--target", "/alice/train/7:2", "threads"],
+        obj={"cluster_name": "prod", "controller_url": "unused"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "profile for attempt-uid-2" in result.output

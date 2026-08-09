@@ -54,6 +54,7 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     user_budgets_table,
+    worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import (
@@ -803,6 +804,7 @@ ATTEMPT_COLS = (
     task_attempts_table.c.exit_code,
     task_attempts_table.c.error,
     task_attempts_table.c.attempt_uid,
+    task_attempts_table.c.backend_id,
     task_attempts_table.c.pod_name,
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
@@ -813,6 +815,11 @@ _BULK_GET_CHUNK_SIZE = 450
 
 _BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
     tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
+)
+
+_RECENT_ATTEMPT_TIME = case(
+    (task_attempts_table.c.started_at_ms.is_not(None), task_attempts_table.c.started_at_ms),
+    else_=task_attempts_table.c.created_at_ms,
 )
 
 
@@ -836,6 +843,37 @@ def bulk_get_attempts(
         for row in rows:
             result[(row.task_id, row.attempt_id)] = row
     return result
+
+
+def recent_attempts_for_worker(tx: Tx, worker_id: WorkerId, *, limit: int) -> Sequence[Row]:
+    """Return the newest retained attempts for one worker-backed Node."""
+    return tx.execute(
+        select(*ATTEMPT_COLS)
+        .where(task_attempts_table.c.worker_id == bindparam("worker_id"))
+        .order_by(_RECENT_ATTEMPT_TIME.desc(), task_attempts_table.c.task_id, task_attempts_table.c.attempt_id.desc())
+        .limit(limit),
+        {"worker_id": worker_id},
+    ).all()
+
+
+def recent_attempts_for_provider_node(
+    tx: Tx,
+    backend_id: str,
+    provider_node_id: str,
+    *,
+    limit: int,
+) -> Sequence[Row]:
+    """Return the newest retained attempts observed on one direct-provider Node."""
+    return tx.execute(
+        select(*ATTEMPT_COLS)
+        .where(
+            task_attempts_table.c.backend_id == bindparam("backend_id"),
+            task_attempts_table.c.node_name == bindparam("provider_node_id"),
+        )
+        .order_by(_RECENT_ATTEMPT_TIME.desc(), task_attempts_table.c.task_id, task_attempts_table.c.attempt_id.desc())
+        .limit(limit),
+        {"backend_id": backend_id, "provider_node_id": provider_node_id},
+    ).all()
 
 
 def attempt_counts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
@@ -1306,6 +1344,72 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
         select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id == bindparam("worker_id")),
         {"worker_id": worker_id},
     ).first()
+
+
+def worker_detail_page_in_scale_groups(
+    tx: Tx,
+    scale_groups: Sequence[str],
+    *,
+    after_worker_id: WorkerId | None,
+    include_after: bool,
+    limit: int,
+) -> Sequence[Row]:
+    """Return one worker-id-keyset page owned by the listed scale groups."""
+    if not scale_groups:
+        return ()
+    stmt = select(*WORKER_DETAIL_COLS).where(workers_table.c.scale_group.in_(bindparam("scale_groups", expanding=True)))
+    params: dict[str, object] = {"scale_groups": list(scale_groups), "limit": limit}
+    if after_worker_id is not None:
+        comparison = (
+            workers_table.c.worker_id >= bindparam("after_worker_id")
+            if include_after
+            else workers_table.c.worker_id > bindparam("after_worker_id")
+        )
+        stmt = stmt.where(comparison)
+        params["after_worker_id"] = after_worker_id
+    return tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all()
+
+
+def worker_detail_page_outside_scale_groups(
+    tx: Tx,
+    excluded_scale_groups: Sequence[str],
+    *,
+    after_worker_id: WorkerId | None,
+    include_after: bool,
+    limit: int,
+) -> Sequence[Row]:
+    """Return one worker-id-keyset page outside scale groups owned by other backends."""
+    stmt = select(*WORKER_DETAIL_COLS)
+    params: dict[str, object] = {"limit": limit}
+    if excluded_scale_groups:
+        stmt = stmt.where(workers_table.c.scale_group.not_in(bindparam("scale_groups", expanding=True)))
+        params["scale_groups"] = list(excluded_scale_groups)
+    if after_worker_id is not None:
+        comparison = (
+            workers_table.c.worker_id >= bindparam("after_worker_id")
+            if include_after
+            else workers_table.c.worker_id > bindparam("after_worker_id")
+        )
+        stmt = stmt.where(comparison)
+        params["after_worker_id"] = after_worker_id
+    return tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all()
+
+
+def worker_attribute_rows(tx: Tx, worker_ids: Sequence[WorkerId]) -> Sequence[Row]:
+    """Return persisted attributes for one bounded worker page."""
+    if not worker_ids:
+        return ()
+    return tx.execute(
+        select(
+            worker_attributes_table.c.worker_id,
+            worker_attributes_table.c.key,
+            worker_attributes_table.c.value_type,
+            worker_attributes_table.c.str_value,
+            worker_attributes_table.c.int_value,
+            worker_attributes_table.c.float_value,
+        ).where(worker_attributes_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
+        {"worker_ids": list(worker_ids)},
+    ).all()
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:

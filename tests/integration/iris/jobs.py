@@ -9,9 +9,8 @@ serialized via cloudpickle (Entrypoint.from_callable).
 import logging
 import time
 
-from iris.cluster.client import get_job_info
-from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import EndpointServiceClientSync
+from iris.client import iris_ctx
+from iris.cluster.resources.endpoint import EndpointQuery
 
 
 def quick():
@@ -58,40 +57,20 @@ def log_verbose(num_lines: int = 200):
 
 
 def register_endpoint(prefix):
-    """Register an endpoint via RPC and verify it's listed."""
+    """Register an endpoint and verify it through the public resource inventory."""
 
-    info = get_job_info()
-    if info is None:
-        raise ValueError("JobInfo not available")
+    ctx = iris_ctx()
+    if ctx.client is None:
+        raise ValueError("Iris client not available")
 
-    client = EndpointServiceClientSync(address=info.controller_address, timeout_ms=5000)
+    endpoint_name = f"{prefix}/actor1"
+    endpoint_id = ctx.registry.register(endpoint_name, "localhost:5000", {"type": "actor"})
     try:
-        endpoint_name = f"{prefix}/actor1"
-        request = controller_pb2.Controller.RegisterEndpointRequest(
-            name=endpoint_name,
-            address="localhost:5000",
-            task_id=info.task_id.to_wire(),
-            metadata={"type": "actor"},
-        )
-        response = client.register_endpoint(request)
-        assert response.endpoint_id
-
-        list_request = controller_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
-        list_response = client.list_endpoints(list_request)
-        assert len(list_response.endpoints) == 1
-        names = [ep.name for ep in list_response.endpoints]
-        assert endpoint_name in names
+        listed = ctx.client.list_endpoints(
+            EndpointQuery(name_prefix=f"{ctx.namespace}/{endpoint_name}", page_size=100)
+        ).items
+        matches = [endpoint for endpoint in listed if endpoint.endpoint_id == endpoint_id]
+        assert len(matches) == 1
+        assert matches[0].name.endswith(f"/{endpoint_name}")
     finally:
-        client.close()
-
-
-def validate_ports():
-    """Validate that requested ports are allocated via JobInfo."""
-
-    info = get_job_info()
-    if info is None:
-        raise ValueError("JobInfo not available")
-    if "http" not in info.ports or "grpc" not in info.ports:
-        raise ValueError(f"Ports not set: {info.ports}")
-    assert info.ports["http"] > 0
-    assert info.ports["grpc"] > 0
+        ctx.registry.unregister(endpoint_id)

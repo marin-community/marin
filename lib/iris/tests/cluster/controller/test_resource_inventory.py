@@ -5,19 +5,26 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
+from iris.cluster.controller.schema import workers_table
+from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.resources.errors import ResourceNotFound
-from iris.cluster.resources.identity import NodeLocator, SliceLocator
+from iris.cluster.resources.identity import NodeLocator, ResourceKind, SliceLocator
 from iris.cluster.resources.node import NodeHealth, NodeQuery
 from iris.cluster.resources.slice import SliceLifecycle, SliceQuery
 from iris.cluster.resources.source import SourceState
-from iris.cluster.types import UserBudgetDefaults
+from iris.cluster.types import DEFAULT_BACKEND_ID, UserBudgetDefaults
 from iris.rpc import controller_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+from sqlalchemy import event
 
 NOW = Timestamp.from_ms(1_000)
 
@@ -127,14 +134,51 @@ def resources(tmp_path: Path):
             "k8s": _kubernetes_backend(),
             "rpc": _autoscaling_backend(),
         },
+        backend_configs={
+            "down": BackendConfig(kind="k8s"),
+            "k8s": BackendConfig(kind="k8s"),
+            "rpc": BackendConfig(kind="worker_daemon"),
+        },
     )
     yield facade
+    db.close()
+
+
+@pytest.fixture
+def worker_resources(tmp_path: Path):
+    db = ControllerDB(tmp_path / "worker-db")
+    runtime = Mock()
+    runtime.backend_id_for_scale_group.return_value = DEFAULT_BACKEND_ID
+    runtime.liveness_for_worker.return_value = WorkerLiveness(
+        healthy=True,
+        active=True,
+        last_heartbeat_ms=NOW.epoch_ms(),
+    )
+    backend = Mock()
+    backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON})
+    backend.status.return_value = controller_pb2.Controller.BackendStatus(
+        worker=controller_pb2.Controller.WorkerFleetDetail()
+    )
+    facade = ResourceController(
+        cluster_id="cluster-a",
+        db=db,
+        runtime=runtime,
+        bundle_store=Mock(),
+        endpoint_service=Mock(),
+        auth=ControllerAuth(),
+        user_budget_defaults=UserBudgetDefaults(),
+        capability_url_config=CapabilityUrlConfig(),
+        backends={DEFAULT_BACKEND_ID: backend},
+        backend_configs={DEFAULT_BACKEND_ID: BackendConfig(kind="worker_daemon")},
+    )
+    yield facade, db, backend
     db.close()
 
 
 def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: ResourceController) -> None:
     first = resources.list_nodes(NodeQuery(backend_id="k8s", page_size=1))
     assert [node.identity.key.resource_id for node in first.items] == ["node-alpha"]
+    assert first.items[0].region == "us-central1"
     assert first.next_page_token is not None
 
     second = resources.list_nodes(NodeQuery(backend_id="k8s", page_size=1, page_token=first.next_page_token))
@@ -163,6 +207,83 @@ def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: Resource
     }
 
 
+def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> None:
+    db = ControllerDB(tmp_path / "system-endpoint-db")
+    EndpointsProjection(db)
+    endpoint_service = EndpointServiceImpl(db=db)
+    endpoint_service.register_system_endpoint("/system/controller", "http://controller:8080")
+    endpoint_service.register_system_endpoint("/system/log-server", "http://logs:9000")
+    runtime = Mock()
+    runtime.federation.peer_summaries.return_value = []
+    resources = ResourceController(
+        cluster_id="cluster-a",
+        db=db,
+        runtime=runtime,
+        bundle_store=Mock(),
+        endpoint_service=endpoint_service,
+        auth=ControllerAuth(),
+        user_budget_defaults=UserBudgetDefaults(),
+        capability_url_config=CapabilityUrlConfig(),
+        backends={},
+        backend_configs={},
+    )
+
+    first = resources.list_endpoints(EndpointQuery(name_prefix="/system/", page_size=1))
+    second = resources.list_endpoints(
+        EndpointQuery(name_prefix="/system/", page_size=1, page_token=first.next_page_token)
+    )
+    listed = first.items + second.items
+    log_server = next(endpoint for endpoint in listed if endpoint.name == "/system/log-server")
+    detail = resources.describe_endpoint(log_server.key)
+
+    assert [endpoint.name for endpoint in listed] == ["/system/controller", "/system/log-server"]
+    assert first.next_page_token is not None
+    assert second.next_page_token is None
+    assert log_server.task is None
+    assert log_server.key.kind is ResourceKind.ENDPOINT
+    assert detail.address == "http://logs:9000"
+    assert detail.metadata == {}
+    db.close()
+
+
+def test_node_pages_are_bounded_at_the_sqlite_bind_ceiling(worker_resources) -> None:
+    resources, db, backend = worker_resources
+    worker_count = 32_767
+    with db.transaction() as tx:
+        tx.execute(
+            workers_table.insert(),
+            [
+                {"worker_id": f"worker-{index:05d}", "address": f"worker-{index:05d}:8080"}
+                for index in range(worker_count)
+            ],
+        )
+
+    selects: list[str] = []
+
+    def capture_select(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(db.sa_read_engine, "before_cursor_execute", capture_select)
+    try:
+        page_token = None
+        page_select_counts = []
+        observed = []
+        for _ in range(3):
+            before = len(selects)
+            page = resources.list_nodes(NodeQuery(page_size=1, page_token=page_token))
+            page_select_counts.append(len(selects) - before)
+            observed.append(page.items[0].identity.key.resource_id)
+            page_token = page.next_page_token
+    finally:
+        event.remove(db.sa_read_engine, "before_cursor_execute", capture_select)
+
+    assert observed == ["worker-00000", "worker-00001", "worker-00002"]
+    assert page_token is not None
+    assert page_select_counts == [3, 3, 3]
+    assert backend.status.call_count == 3
+
+
 def test_slices_filter_page_and_describe_observed_membership(resources: ResourceController) -> None:
     first = resources.list_slices(SliceQuery(backend_id="rpc", scaling_group_id="pool-a", page_size=1))
     assert [item.identity.key.resource_id for item in first.items] == ["slice-a"]
@@ -184,7 +305,7 @@ def test_slices_filter_page_and_describe_observed_membership(resources: Resource
     assert detail.summary.identity == identity
     assert [
         (member.provider_node_id, member.node.key.resource_id if member.node else None) for member in detail.members
-    ] == [("vm-a", "node-a")]
+    ] == [("vm-a", None)]
 
     with pytest.raises(ResourceNotFound):
         resources.describe_slice(SliceLocator(identity.key, identity.backend_id, "replacement-slice-uid"))

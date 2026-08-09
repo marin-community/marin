@@ -18,8 +18,10 @@ import humanfriendly
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.connect import proxy_path
+from rigging.timing import Duration
 
-from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cli.connect import require_controller_url, resource_client_for_ctx, rpc_client_for_ctx
+from iris.cli.resource_commands import attempt_locator
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
@@ -161,30 +163,43 @@ def profile(
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
-    with rpc_client_for_ctx(ctx, url=url) as client:
-        resp = client.profile_task(
-            job_pb2.ProfileTaskRequest(
-                target=rpc_target,
-                duration_seconds=duration,
-                profile_type=profile_type,
+    if rpc_target.startswith("/system/"):
+        with rpc_client_for_ctx(ctx, url=url) as client:
+            resp = client.profile_task(
+                job_pb2.ProfileTaskRequest(
+                    target=rpc_target,
+                    duration_seconds=duration,
+                    profile_type=profile_type,
+                )
             )
-        )
+        profile_data = resp.profile_data
+        error = resp.error
+    else:
+        with resource_client_for_ctx(ctx) as client:
+            attempt = client.describe_attempt(attempt_locator(ctx, rpc_target)).summary.identity
+            result = client.profile_attempt(
+                attempt,
+                profile=profile_type,
+                duration=Duration.from_seconds(duration),
+            )
+        profile_data = result.profile_data
+        error = result.error_message
 
-    if resp.error:
-        raise click.ClickException(f"Profiling failed: {resp.error}")
+    if error:
+        raise click.ClickException(f"Profiling failed: {error}")
 
     if output:
         with open(output, "wb") as f:
-            f.write(resp.profile_data)
+            f.write(profile_data)
         click.echo(f"Profile written to {output}")
     elif profiler == "threads":
-        click.echo(resp.profile_data.decode("utf-8"))
+        click.echo(profile_data.decode("utf-8"))
     else:
         ext = {"cpu": ".speedscope.json", "mem": ".html"}[profiler]
         safe_label = label.lower().replace(" ", "-").replace("/", "-").strip("-")
         default_name = f"profile-{profiler}-{safe_label}{ext}"
         with open(default_name, "wb") as f:
-            f.write(resp.profile_data)
+            f.write(profile_data)
         click.echo(f"Profile written to {default_name}")
 
 

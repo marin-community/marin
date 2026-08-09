@@ -223,8 +223,8 @@ message TaskStatus {
   string backend_id = 24;
 
   // Owning cluster, always set and orthogonal to backend_id: "local" == owned
-  // and run by this controller (backend_id then set), "<peer>" == handed off to
-  // that peer cluster (backend_id then "").
+  // and run by this controller; "<peer>" == handed off to that peer cluster.
+  // A peer-reported backend_id names the execution peer's actual placement.
   string cluster = 25;
 
   reserved 26;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)

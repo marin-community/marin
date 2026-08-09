@@ -5,7 +5,7 @@ import asyncio
 import json
 import socket
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +16,14 @@ import httpx
 import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
-from iris.cluster.types import EndpointAccess
+from iris.cluster.resources.endpoint import (
+    EndpointAccess as ResourceEndpointAccess,
+)
+from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery, EndpointSummary, EndpointToken
+from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.cluster.resources.job import JobSummary
+from iris.cluster.resources.source import Page
+from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
@@ -46,7 +53,7 @@ from marin.inference.types import (
     RunningModel,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
-from rigging.timing import ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from experiments.evals.federated_inference_proxy_demo import _redacted_url
 from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
@@ -57,6 +64,107 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+@dataclass(frozen=True)
+class _TaskHandle:
+    state: job_pb2.TaskState
+
+
+@dataclass(frozen=True)
+class _CurrentJob:
+    summary: JobSummary
+    task_states: tuple[job_pb2.TaskState, ...] | Callable[[], tuple[job_pb2.TaskState, ...]]
+
+    def status(self) -> JobSummary:
+        return self.summary
+
+    def tasks(self) -> list[_TaskHandle]:
+        states = self.task_states() if callable(self.task_states) else self.task_states
+        return [_TaskHandle(state) for state in states]
+
+
+class _InferenceResourceClient:
+    def __init__(
+        self,
+        *,
+        job_state: job_pb2.JobState = job_pb2.JOB_STATE_RUNNING,
+        task_states: tuple[job_pb2.TaskState, ...] | Callable[[], tuple[job_pb2.TaskState, ...]] = (
+            job_pb2.TASK_STATE_RUNNING,
+        ),
+        endpoint_count: int = 0,
+        token: str = "secret-token",
+        capability_url: str = "",
+        minted: list[tuple[str, ResourceKey, Duration]] | None = None,
+    ) -> None:
+        self.job_state = job_state
+        self.task_states = task_states
+        self.endpoint_count = endpoint_count
+        self.token = token
+        self.capability_url = capability_url
+        self.minted = minted
+        self.endpoints: dict[ResourceKey, EndpointDetail] = {}
+
+    def current_job(self, job_id: JobName) -> _CurrentJob:
+        identity = JobIdentity(
+            ResourceKey("test", ResourceKind.JOB, job_id.to_wire()),
+            "job-uid",
+        )
+        return _CurrentJob(
+            summary=JobSummary(
+                identity=identity,
+                owner_id="tester",
+                parent=None,
+                state=self.job_state,
+                execution_cluster_id="test",
+                backend_id="default",
+                num_tasks=1,
+                submitted_at=Timestamp.from_ms(1_000),
+                started_at=Timestamp.from_ms(1_001),
+                finished_at=None,
+                error_message="",
+                pending_reason="",
+            ),
+            task_states=self.task_states,
+        )
+
+    def list_endpoints(self, query: EndpointQuery) -> Page[EndpointSummary]:
+        if self.endpoint_count == 0:
+            return Page((), None, ())
+        name = query.name_prefix or "/serve/inference"
+        details = tuple(self._endpoint(name, index) for index in range(self.endpoint_count))
+        return Page(tuple(detail.summary for detail in details), None, ())
+
+    def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
+        return self.endpoints[key]
+
+    def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
+        detail = self.endpoints[key]
+        if self.minted is not None:
+            self.minted.append((detail.summary.name, key, ttl))
+        return EndpointToken(
+            token=self.token,
+            expires_at=Timestamp.from_ms(86_400_000),
+            capability_url=self.capability_url,
+        )
+
+    def _endpoint(self, name: str, index: int) -> EndpointDetail:
+        key = ResourceKey("test", ResourceKind.ENDPOINT, f"endpoint-{index}")
+        detail = EndpointDetail(
+            summary=EndpointSummary(
+                key=key,
+                endpoint_id=key.resource_id,
+                name=name,
+                task=None,
+                execution_cluster_id="test",
+                access=ResourceEndpointAccess.LINK,
+                lease_deadline=Timestamp.from_ms(86_400_000),
+            ),
+            address="http://10.0.0.1:8000",
+            metadata={},
+        )
+        self.endpoints[key] = detail
+        return detail
 
 
 @pytest.mark.parametrize(
@@ -114,15 +222,13 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
         def terminate(self) -> None:
             self.terminated = True
 
-    minted: list[tuple[str, object]] = []
+    minted: list[tuple[str, ResourceKey, Duration]] = []
     submitted = []
     job = _Job()
-    iris_client = SimpleNamespace(
-        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl))
-        or SimpleNamespace(
-            token="secret-token",
-            capability_url="https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference",
-        ),
+    iris_client = _InferenceResourceClient(
+        endpoint_count=1,
+        capability_url="https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference",
+        minted=minted,
     )
     monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
     monkeypatch.setattr(
@@ -162,6 +268,7 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     (service,) = request.entrypoint.callable_entrypoint.args
     assert service.controller_proxy_timeout_seconds > 1800
     assert service.endpoint_name == minted[0][0]
+    assert minted[0][1].kind is ResourceKind.ENDPOINT
     assert "physical-model" not in service.endpoint_name
     assert model.endpoint.base_url == (
         "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1"
@@ -195,7 +302,7 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [])),
+        lambda: SimpleNamespace(client=_InferenceResourceClient()),
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
@@ -256,11 +363,7 @@ def test_direct_inference_session_reports_backend_state(
         iris_module,
         "iris_ctx",
         lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                status=lambda _job_id: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
-                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
-                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
-            )
+            client=_InferenceResourceClient(task_states=(task_state,), endpoint_count=endpoint_count)
         ),
     )
     session = _remote_session()
@@ -273,11 +376,7 @@ def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                status=lambda *_args, **_kwargs: SimpleNamespace(state=job_pb2.JOB_STATE_FAILED, tasks=[])
-            )
-        ),
+        lambda: SimpleNamespace(client=_InferenceResourceClient(job_state=job_pb2.JOB_STATE_FAILED)),
     )
 
     with pytest.raises(RuntimeError):
@@ -288,11 +387,11 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
     task_pending = True
     probe_statuses: list[int] = []
 
-    def list_tasks(_job_id):
+    def task_states() -> tuple[job_pb2.TaskState, ...]:
         nonlocal task_pending
         state = job_pb2.TASK_STATE_PENDING if task_pending else job_pb2.TASK_STATE_RUNNING
         task_pending = False
-        return [SimpleNamespace(state=state)]
+        return (state,)
 
     def probe_endpoint(_url, timeout):
         del timeout
@@ -303,13 +402,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
-                list_tasks=list_tasks,
-                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
-            )
-        ),
+        lambda: SimpleNamespace(client=_InferenceResourceClient(task_states=task_states, endpoint_count=1)),
     )
     monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(iris_module.requests, "get", probe_endpoint)
@@ -338,13 +431,7 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
-                list_tasks=lambda _job_id: [SimpleNamespace(state=job_pb2.TASK_STATE_RUNNING)],
-                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
-            )
-        ),
+        lambda: SimpleNamespace(client=_InferenceResourceClient(endpoint_count=1)),
     )
     monkeypatch.setattr(
         iris_module.Deadline,
@@ -506,7 +593,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
     proxy_models: list[str] = []
     events = []
-    minted = []
+    minted: list[tuple[str, ResourceKey, Duration]] = []
 
     class _FakeJob:
         job_id = "worker-0"
@@ -553,10 +640,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
             events.append(("unregister", "endpoint-id"))
 
     registry = SimpleNamespace(registered=registered)
-    iris_client = SimpleNamespace(
-        mint_endpoint_token=lambda name, ttl: minted.append(name)
-        or SimpleNamespace(token="broker-token", capability_url=""),
-    )
+    iris_client = _InferenceResourceClient(endpoint_count=1, token="broker-token", minted=minted)
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
     monkeypatch.setattr(
         iris_module,
@@ -592,7 +676,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert proxy_models == ["public-model"]
     _, register_args, register_kwargs = events[0]
     endpoint_name, address, metadata = register_args
-    assert endpoint_name == minted[0]
+    assert endpoint_name == minted[0][0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK

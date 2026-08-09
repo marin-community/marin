@@ -126,7 +126,7 @@ def resource_key_to_proto(value: ResourceKey) -> resource_pb2.ResourceKey:
     )
 
 
-def resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
+def _resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
     try:
         kind = _RESOURCE_KIND_FROM_PROTO[value.kind]
     except KeyError as exc:
@@ -139,15 +139,15 @@ def job_identity_to_proto(value: JobIdentity) -> resource_pb2.JobIdentity:
 
 
 def job_identity_from_proto(value: resource_pb2.JobIdentity) -> JobIdentity:
-    return JobIdentity(resource_key_from_proto(value.key), value.job_uid)
+    return JobIdentity(_resource_key_from_proto(value.key), value.job_uid)
 
 
 def task_identity_to_proto(value: TaskIdentity) -> resource_pb2.TaskIdentity:
     return resource_pb2.TaskIdentity(key=resource_key_to_proto(value.key), task_uid=value.task_uid)
 
 
-def task_identity_from_proto(value: resource_pb2.TaskIdentity) -> TaskIdentity:
-    return TaskIdentity(resource_key_from_proto(value.key), value.task_uid)
+def _task_identity_from_proto(value: resource_pb2.TaskIdentity) -> TaskIdentity:
+    return TaskIdentity(_resource_key_from_proto(value.key), value.task_uid)
 
 
 def attempt_locator_to_proto(value: AttemptLocator) -> resource_pb2.AttemptLocator:
@@ -165,12 +165,12 @@ def attempt_identity_to_proto(value: AttemptIdentity) -> resource_pb2.AttemptIde
     )
 
 
-def attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> AttemptIdentity:
-    return AttemptIdentity(resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
+def _attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> AttemptIdentity:
+    return AttemptIdentity(_resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
 
 
-def node_identity_from_proto(value: resource_pb2.NodeIdentity) -> NodeIdentity:
-    return NodeIdentity(resource_key_from_proto(value.key), value.backend_id, value.node_uid)
+def _node_identity_from_proto(value: resource_pb2.NodeIdentity) -> NodeIdentity:
+    return NodeIdentity(_resource_key_from_proto(value.key), value.backend_id, value.node_uid)
 
 
 def node_locator_to_proto(value: NodeLocator) -> resource_pb2.NodeLocator:
@@ -180,8 +180,8 @@ def node_locator_to_proto(value: NodeLocator) -> resource_pb2.NodeLocator:
     return result
 
 
-def slice_identity_from_proto(value: resource_pb2.SliceIdentity) -> SliceIdentity:
-    return SliceIdentity(resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
+def _slice_identity_from_proto(value: resource_pb2.SliceIdentity) -> SliceIdentity:
+    return SliceIdentity(_resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
 
 
 def slice_locator_to_proto(value: SliceLocator) -> resource_pb2.SliceLocator:
@@ -191,7 +191,7 @@ def slice_locator_to_proto(value: SliceLocator) -> resource_pb2.SliceLocator:
     return result
 
 
-def source_status_from_proto(value: resource_pb2.ResourceSourceStatus) -> ResourceSourceStatus:
+def _source_status_from_proto(value: resource_pb2.ResourceSourceStatus) -> ResourceSourceStatus:
     try:
         state = _SOURCE_STATE_FROM_PROTO[value.state]
         freshness = _FRESHNESS_FROM_PROTO[value.freshness]
@@ -208,7 +208,7 @@ def source_status_from_proto(value: resource_pb2.ResourceSourceStatus) -> Resour
     )
 
 
-def page_request(page_size: int, page_token: str | None) -> resource_pb2.PageRequest:
+def _page_request(page_size: int, page_token: str | None) -> resource_pb2.PageRequest:
     return resource_pb2.PageRequest(page_size=page_size, page_token=page_token or "")
 
 
@@ -216,7 +216,7 @@ def _page[T](items: tuple[T, ...], value: resource_pb2.PageInfo) -> Page[T]:
     return Page(
         items=items,
         next_page_token=value.next_page_token or None,
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 
 
@@ -227,14 +227,14 @@ def job_query_to_proto(value: JobQuery) -> resource_pb2.JobQuery:
         states=value.states,
         backend_id=value.backend_id or "",
         execution_cluster_id=value.execution_cluster_id or "",
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
     if value.parent is not None:
         result.parent.CopyFrom(resource_key_to_proto(value.parent))
     return result
 
 
-def job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
+def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
     return JobSummary(
         identity=job_identity_from_proto(value.identity),
         owner_id=value.owner_id,
@@ -283,7 +283,7 @@ def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
     return result
 
 
-def job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
+def _job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
     return JobSpec(
         version=value.version,
         name=value.name,
@@ -321,11 +321,11 @@ def job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
 
 
 def job_detail_from_proto(value: resource_pb2.JobDetail) -> JobDetail:
-    return JobDetail(job_summary_from_proto(value.summary), job_spec_from_proto(value.spec))
+    return JobDetail(_job_summary_from_proto(value.summary), _job_spec_from_proto(value.spec))
 
 
 def job_page_from_proto(value: resource_pb2.ListJobsResponse) -> Page[JobSummary]:
-    return _page(tuple(job_summary_from_proto(item) for item in value.jobs), value.page)
+    return _page(tuple(_job_summary_from_proto(item) for item in value.jobs), value.page)
 
 
 def task_query_to_proto(value: TaskQuery) -> resource_pb2.TaskQuery:
@@ -335,25 +335,25 @@ def task_query_to_proto(value: TaskQuery) -> resource_pb2.TaskQuery:
         backend_id=value.backend_id or "",
         authority_cluster_id=value.authority_cluster_id or "",
         execution_cluster_id=value.execution_cluster_id or "",
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
     if value.job is not None:
         result.job.CopyFrom(resource_key_to_proto(value.job))
     return result
 
 
-def task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
+def _task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
     return TaskSummary(
-        identity=task_identity_from_proto(value.identity),
+        identity=_task_identity_from_proto(value.identity),
         job=job_identity_from_proto(value.job),
         task_index=value.task_index,
         state=value.state,
         execution_cluster_id=value.execution_cluster_id,
         backend_id=value.backend_id,
         current_attempt=(
-            attempt_identity_from_proto(value.current_attempt) if value.HasField("current_attempt") else None
+            _attempt_identity_from_proto(value.current_attempt) if value.HasField("current_attempt") else None
         ),
-        current_node=node_identity_from_proto(value.current_node) if value.HasField("current_node") else None,
+        current_node=_node_identity_from_proto(value.current_node) if value.HasField("current_node") else None,
         failure_count=value.failure_count,
         preemption_count=value.preemption_count,
         submitted_at=timestamp_from_proto(value.submitted_at),
@@ -364,13 +364,13 @@ def task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
     )
 
 
-def attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSummary:
+def _attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSummary:
     return AttemptSummary(
-        identity=attempt_identity_from_proto(value.identity),
+        identity=_attempt_identity_from_proto(value.identity),
         state=value.state,
         execution_cluster_id=value.execution_cluster_id,
         backend_id=value.backend_id,
-        node=node_identity_from_proto(value.node) if value.HasField("node") else None,
+        node=_node_identity_from_proto(value.node) if value.HasField("node") else None,
         created_at=timestamp_from_proto(value.created_at),
         started_at=timestamp_from_proto(value.started_at) if value.HasField("started_at") else None,
         finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
@@ -381,16 +381,20 @@ def attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSum
 
 
 def task_page_from_proto(value: resource_pb2.ListTasksResponse) -> Page[TaskSummary]:
-    return _page(tuple(task_summary_from_proto(item) for item in value.tasks), value.page)
+    return _page(tuple(_task_summary_from_proto(item) for item in value.tasks), value.page)
 
 
 def task_detail_from_proto(value: resource_pb2.TaskDetail) -> TaskDetail:
     return TaskDetail(
-        summary=task_summary_from_proto(value.summary),
-        attempts=tuple(attempt_summary_from_proto(item) for item in value.attempts),
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        summary=_task_summary_from_proto(value.summary),
+        attempts=tuple(_attempt_summary_from_proto(item) for item in value.attempts),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
         root_cause_highlights=tuple(value.root_cause_highlights),
     )
+
+
+def task_details_from_proto(value: resource_pb2.BatchDescribeTasksResponse) -> tuple[TaskDetail, ...]:
+    return tuple(task_detail_from_proto(item) for item in value.tasks)
 
 
 def attempt_detail_from_proto(value: resource_pb2.AttemptDetail) -> AttemptDetail:
@@ -407,9 +411,9 @@ def attempt_detail_from_proto(value: resource_pb2.AttemptDetail) -> AttemptDetai
             observed_at=timestamp_from_proto(value.runtime.observed_at),
         )
     return AttemptDetail(
-        summary=attempt_summary_from_proto(value.summary),
+        summary=_attempt_summary_from_proto(value.summary),
         runtime=runtime,
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 
 
@@ -418,18 +422,18 @@ def node_query_to_proto(value: NodeQuery) -> resource_pb2.NodeQuery:
         backend_id=value.backend_id or "",
         contains=value.contains or "",
         health=[_NODE_HEALTH_TO_PROTO[item] for item in value.health],
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
 
 
-def node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
+def _node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
     try:
         health = _NODE_HEALTH_FROM_PROTO[value.health]
     except KeyError as exc:
         raise ValueError("node response contains unspecified health") from exc
     capacity = value.capacity
     return NodeSummary(
-        identity=node_identity_from_proto(value.identity),
+        identity=_node_identity_from_proto(value.identity),
         health=health,
         schedulable=value.schedulable,
         capacity=NodeCapacity(
@@ -441,9 +445,10 @@ def node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
             accelerator_count=capacity.accelerator_count,
         ),
         scaling_group_id=value.scaling_group_id or None,
-        slice=slice_identity_from_proto(value.slice) if value.HasField("slice") else None,
+        slice=_slice_identity_from_proto(value.slice) if value.HasField("slice") else None,
         running_task_count=value.running_task_count,
         observed_at=timestamp_from_proto(value.observed_at),
+        region=value.region or None,
     )
 
 
@@ -459,17 +464,17 @@ def _node_attribute(value: resource_pb2.NodeAttribute) -> NodeAttribute:
 
 
 def node_page_from_proto(value: resource_pb2.ListNodesResponse) -> Page[NodeSummary]:
-    return _page(tuple(node_summary_from_proto(item) for item in value.nodes), value.page)
+    return _page(tuple(_node_summary_from_proto(item) for item in value.nodes), value.page)
 
 
 def node_detail_from_proto(value: resource_pb2.NodeDetail) -> NodeDetail:
     return NodeDetail(
-        summary=node_summary_from_proto(value.summary),
+        summary=_node_summary_from_proto(value.summary),
         address=value.address or None,
         attributes=tuple(_node_attribute(item) for item in value.attributes),
-        recent_attempts=tuple(attempt_summary_from_proto(item) for item in value.recent_attempts),
+        recent_attempts=tuple(_attempt_summary_from_proto(item) for item in value.recent_attempts),
         bootstrap_log_key=value.bootstrap_log_key or None,
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 
 
@@ -477,18 +482,18 @@ def slice_query_to_proto(value: SliceQuery) -> resource_pb2.SliceQuery:
     return resource_pb2.SliceQuery(
         backend_id=value.backend_id or "",
         scaling_group_id=value.scaling_group_id or "",
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
 
 
-def slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
+def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
     try:
         lifecycle = _SLICE_LIFECYCLE_FROM_PROTO[value.lifecycle]
         membership = _MEMBERSHIP_STATE_FROM_PROTO[value.membership_state]
     except KeyError as exc:
         raise ValueError("slice response contains an unspecified state") from exc
     return SliceSummary(
-        identity=slice_identity_from_proto(value.identity),
+        identity=_slice_identity_from_proto(value.identity),
         scaling_group_id=value.scaling_group_id,
         lifecycle=lifecycle,
         membership_state=membership,
@@ -499,44 +504,44 @@ def slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
 
 
 def slice_page_from_proto(value: resource_pb2.ListSlicesResponse) -> Page[SliceSummary]:
-    return _page(tuple(slice_summary_from_proto(item) for item in value.slices), value.page)
+    return _page(tuple(_slice_summary_from_proto(item) for item in value.slices), value.page)
 
 
 def slice_detail_from_proto(value: resource_pb2.SliceDetail) -> SliceDetail:
     return SliceDetail(
-        summary=slice_summary_from_proto(value.summary),
+        summary=_slice_summary_from_proto(value.summary),
         members=tuple(
             SliceMember(
                 provider_node_id=item.provider_node_id,
-                node=node_identity_from_proto(item.node) if item.HasField("node") else None,
+                node=_node_identity_from_proto(item.node) if item.HasField("node") else None,
                 observed_at=timestamp_from_proto(item.observed_at),
             )
             for item in value.members
         ),
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 
 
 def endpoint_query_to_proto(value: EndpointQuery) -> resource_pb2.EndpointQuery:
     result = resource_pb2.EndpointQuery(
         name_prefix=value.name_prefix or "",
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
     if value.task is not None:
         result.task.CopyFrom(resource_key_to_proto(value.task))
     return result
 
 
-def endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> EndpointSummary:
+def _endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> EndpointSummary:
     try:
         access = _ENDPOINT_ACCESS_FROM_PROTO[value.access]
     except KeyError as exc:
         raise ValueError("endpoint response contains unspecified access") from exc
     return EndpointSummary(
-        key=resource_key_from_proto(value.key),
+        key=_resource_key_from_proto(value.key),
         endpoint_id=value.endpoint_id,
         name=value.name,
-        task=resource_key_from_proto(value.task) if value.HasField("task") else None,
+        task=_resource_key_from_proto(value.task) if value.HasField("task") else None,
         execution_cluster_id=value.execution_cluster_id,
         access=access,
         lease_deadline=timestamp_from_proto(value.lease_deadline) if value.HasField("lease_deadline") else None,
@@ -544,11 +549,15 @@ def endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> Endpoint
 
 
 def endpoint_page_from_proto(value: resource_pb2.ListEndpointsResponse) -> Page[EndpointSummary]:
-    return _page(tuple(endpoint_summary_from_proto(item) for item in value.endpoints), value.page)
+    return _page(tuple(_endpoint_summary_from_proto(item) for item in value.endpoints), value.page)
 
 
 def endpoint_detail_from_proto(value: resource_pb2.EndpointDetail) -> EndpointDetail:
-    return EndpointDetail(endpoint_summary_from_proto(value.summary), value.address, dict(value.metadata))
+    return EndpointDetail(_endpoint_summary_from_proto(value.summary), value.address, dict(value.metadata))
+
+
+def endpoint_details_from_proto(value: resource_pb2.BatchDescribeEndpointsResponse) -> tuple[EndpointDetail, ...]:
+    return tuple(endpoint_detail_from_proto(endpoint) for endpoint in value.endpoints)
 
 
 def endpoint_token_from_proto(value: resource_pb2.MintEndpointTokenResponse) -> EndpointToken:
@@ -559,7 +568,7 @@ def activity_query_to_proto(value: ActivityQuery) -> resource_pb2.ActivityQuery:
     result = resource_pb2.ActivityQuery(
         target=resource_key_to_proto(value.target),
         attempt_uid=value.attempt_uid or "",
-        page=page_request(value.page_size, value.page_token),
+        page=_page_request(value.page_size, value.page_token),
     )
     if value.after is not None:
         result.after.CopyFrom(timestamp_to_proto(value.after))
@@ -576,7 +585,7 @@ def activity_page_from_proto(value: resource_pb2.ListActivityResponse) -> Page[A
                 severity=item.severity,
                 kind=item.kind,
                 message=item.message,
-                target=resource_key_from_proto(item.target),
+                target=_resource_key_from_proto(item.target),
                 attempt_uid=item.attempt_uid or None,
                 correlation_id=item.correlation_id or None,
                 attributes=dict(item.attributes),
@@ -604,7 +613,7 @@ def log_page_from_proto(value: resource_pb2.FetchLogsResponse) -> LogPage:
     return LogPage(
         entries=tuple(value.entries),
         next_cursor=value.next_cursor,
-        source_statuses=tuple(source_status_from_proto(status) for status in value.source_statuses),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 
 
@@ -618,7 +627,7 @@ def action_receipt_from_proto(value: resource_pb2.ActionReceipt) -> ActionReceip
     return ActionReceipt(
         action_id=value.action_id,
         kind=kind,
-        target=resource_key_from_proto(value.target),
+        target=_resource_key_from_proto(value.target),
         expected_target_uid=value.expected_target_uid,
         expected_attempt_uid=value.expected_attempt_uid or None,
         state=state,

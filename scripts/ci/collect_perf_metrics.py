@@ -28,11 +28,11 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
-from google.protobuf import json_format
 from iris.cli.connect import connect_controller, rpc_client
-from iris.cli.job import build_job_summary
 from iris.client import IrisClient
-from iris.cluster.types import JobName
+from iris.cluster.resources.job import JobQuery, JobSummary
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.cluster.types import JobName, is_task_finished
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.filesystem import StoragePath
@@ -170,17 +170,89 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
-    data = json_format.MessageToDict(job, preserving_proto_field_name=True)
-    data["has_children"] = bool(job.has_children)
-    return data
+def _list_jobs(client: IrisClient, prefix: str) -> list[JobSummary]:
+    jobs: list[JobSummary] = []
+    query = JobQuery(job_id_prefix=prefix)
+    while True:
+        page = client.list_jobs(query)
+        jobs.extend(page.items)
+        if page.next_page_token is None:
+            return jobs
+        query = JobQuery(job_id_prefix=prefix, page_token=page.next_page_token)
+
+
+def _list_tasks(client: IrisClient, job: JobSummary) -> list[TaskSummary]:
+    tasks: list[TaskSummary] = []
+    query = TaskQuery(job=job.identity.key)
+    while True:
+        page = client.list_tasks(query)
+        tasks.extend(page.items)
+        if page.next_page_token is None:
+            return tasks
+        query = TaskQuery(job=job.identity.key, page_token=page.next_page_token)
+
+
+def _task_state_name(state: int) -> str:
+    return job_pb2.TaskState.Name(state).removeprefix("TASK_STATE_").lower()
+
+
+def _task_summary_to_dict(task: TaskSummary, detail: TaskDetail) -> dict:
+    attempt = max(detail.attempts, key=lambda item: item.identity.attempt_number, default=None)
+    duration_ms = None
+    if task.started_at is not None and task.finished_at is not None:
+        duration_ms = task.finished_at.epoch_ms() - task.started_at.epoch_ms()
+    return {
+        "task_id": task.identity.key.resource_id,
+        "index": task.task_index,
+        "state": _task_state_name(task.state),
+        "exit_code": attempt.exit_code if attempt is not None and is_task_finished(task.state) else None,
+        "duration_ms": duration_ms,
+        "worker_id": task.current_node.key.resource_id if task.current_node is not None else "",
+        "status_message": task.status_message,
+        "error": task.error_message or (attempt.error_message if attempt is not None else ""),
+    }
+
+
+def _job_summary_to_dict(job: JobSummary, tasks: list[TaskSummary], *, has_children: bool) -> dict:
+    task_state_counts: dict[str, int] = {}
+    for task in tasks:
+        state = _task_state_name(task.state)
+        task_state_counts[state] = task_state_counts.get(state, 0) + 1
+    return {
+        "job_id": job.identity.key.resource_id,
+        "name": job.identity.key.resource_id.rsplit("/", 1)[-1],
+        "state": job_pb2.JobState.Name(job.state).removeprefix("JOB_STATE_").lower(),
+        "error": job.error_message,
+        "failure_count": sum(task.failure_count for task in tasks),
+        "preemption_count": sum(task.preemption_count for task in tasks),
+        "task_count": job.num_tasks,
+        "completed_count": sum(is_task_finished(task.state) for task in tasks),
+        "task_state_counts": task_state_counts,
+        "submitted_at": {"epoch_ms": job.submitted_at.epoch_ms()},
+        "started_at": {"epoch_ms": job.started_at.epoch_ms()} if job.started_at is not None else {},
+        "finished_at": {"epoch_ms": job.finished_at.epoch_ms()} if job.finished_at is not None else {},
+        "has_children": has_children,
+    }
 
 
 def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
     """Return a job summary, or None when the Iris RPC fails."""
     try:
-        job_name = JobName.from_wire(job_id)
-        return build_job_summary(client.status(job_name), client.list_tasks(job_name))
+        job = client.current_job(JobName.from_wire(job_id)).status()
+        tasks: list[TaskSummary] = []
+        details: list[TaskDetail] = []
+        query = TaskQuery(job=job.identity.key)
+        while True:
+            page = client.list_tasks(query)
+            tasks.extend(page.items)
+            if page.items:
+                details.extend(client.describe_tasks(tuple(task.identity.key for task in page.items)))
+            if page.next_page_token is None:
+                break
+            query = TaskQuery(job=job.identity.key, page_token=page.next_page_token)
+        summary = _job_summary_to_dict(job, tasks, has_children=False)
+        summary["tasks"] = [_task_summary_to_dict(task, detail) for task, detail in zip(tasks, details, strict=True)]
+        return summary
     except ConnectError as exc:
         logger.warning("iris client job summary failed for %s: %s", job_id, exc)
         return None
@@ -195,9 +267,17 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     actual fan-out workers live in child iris jobs (zephyr pipeline subjobs).
     """
     try:
-        jobs = client.list_jobs(prefix=job_id)
-        jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-        return [_job_status_to_dict(job) for job in jobs]
+        jobs = _list_jobs(client, job_id)
+        jobs.sort(key=lambda job: job.submitted_at.epoch_ms(), reverse=True)
+        parents = {job.parent.key.resource_id for job in jobs if job.parent is not None}
+        return [
+            _job_summary_to_dict(
+                job,
+                _list_tasks(client, job),
+                has_children=job.identity.key.resource_id in parents,
+            )
+            for job in jobs
+        ]
     except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None

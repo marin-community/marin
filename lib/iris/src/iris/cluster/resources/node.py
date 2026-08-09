@@ -84,6 +84,7 @@ class NodeSummary:
     slice: SliceIdentity | None
     running_task_count: int
     observed_at: Timestamp
+    region: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

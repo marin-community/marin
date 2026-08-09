@@ -4,8 +4,8 @@
 """Live Iris job status and finelog logs for evaldash.
 
 Cloud Run reaches the Iris controller and finelog hub through Direct VPC egress. Their internal IPs
-are resolved from GCE instance filters and cached briefly. RPCs use the generated Connect clients and
-protobuf messages; successful responses are serialized with protobuf's canonical JSON conversion.
+are resolved from GCE instance filters and cached briefly. Iris status reads use its typed resource
+client; finelog still uses its generated Connect client and canonical protobuf JSON conversion.
 
 Outside the VPC, discovery or RPC failures become reachable=False payloads so the dashboard can show
 recorded fallback data instead of failing the whole run-detail request.
@@ -26,8 +26,12 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
-from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.cluster.client.resource_client import ResourceClient
+from iris.cluster.resources.attempt import AttemptSummary
+from iris.cluster.resources.job import JobDetail, JobQuery
+from iris.cluster.resources.task import TaskDetail, TaskQuery
+from iris.rpc import job_pb2
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,7 @@ class _CachedIp:
 
 
 class ClusterGateway:
-    """Resolve internal service addresses and query them through generated Connect clients."""
+    """Resolve internal service addresses and query Iris and finelog."""
 
     def __init__(self, *, timeout: float = RPC_TIMEOUT, ip_ttl: float = IP_CACHE_TTL) -> None:
         self._timeout_ms = int(timeout * 1000)
@@ -101,14 +105,14 @@ class ClusterGateway:
         raise AssertionError("unreachable")
 
     def job_status(self, job_path: str) -> dict:
-        """Return canonical protobuf JSON for one Iris job and its tasks."""
+        """Return the dashboard's live status shape for one Iris Job resource."""
 
         def fetch(address: str):
-            client = ControllerServiceClientSync(address=address, timeout_ms=self._timeout_ms)
+            client = ResourceClient(address=address, timeout_ms=self._timeout_ms)
             try:
-                status = client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_path))
-                tasks = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_path))
-                return status.job, tasks.tasks
+                job = _find_job(client, job_path)
+                tasks = _job_tasks(client, job)
+                return job, tasks
             finally:
                 client.close()
 
@@ -125,8 +129,8 @@ class ClusterGateway:
         return {
             "reachable": True,
             "error": None,
-            "job": _message_dict(job),
-            "tasks": [_message_dict(task) for task in tasks],
+            "job": _job_dict(job),
+            "tasks": [_task_dict(task) for task in tasks],
         }
 
     def fetch_logs(self, job_path: str, *, max_lines: int, substring: str | None) -> dict:
@@ -163,3 +167,86 @@ class ClusterGateway:
             "source": source,
             "entries": [_message_dict(entry) for entry in response.entries],
         }
+
+
+def _find_job(client: ResourceClient, job_path: str) -> JobDetail:
+    page_token = None
+    while True:
+        page = client.list_jobs(JobQuery(job_id_prefix=job_path, page_size=500, page_token=page_token))
+        for summary in page.items:
+            if summary.identity.key.resource_id == job_path:
+                return client.describe_job(summary.identity.key)
+        if page.next_page_token is None:
+            raise LookupError(f"Iris job not found: {job_path}")
+        page_token = page.next_page_token
+
+
+def _job_tasks(client: ResourceClient, job: JobDetail) -> list[TaskDetail]:
+    tasks: list[TaskDetail] = []
+    page_token = None
+    while True:
+        page = client.list_tasks(TaskQuery(job=job.summary.identity.key, page_size=500, page_token=page_token))
+        if page.items:
+            tasks.extend(client.describe_tasks(tuple(summary.identity.key for summary in page.items)))
+        if page.next_page_token is None:
+            return tasks
+        page_token = page.next_page_token
+
+
+def _add_timestamps(result: dict, *, started_at: Timestamp | None, finished_at: Timestamp | None) -> dict:
+    if started_at is not None:
+        result["started_at"] = {"epoch_ms": started_at.epoch_ms()}
+    if finished_at is not None:
+        result["finished_at"] = {"epoch_ms": finished_at.epoch_ms()}
+    return result
+
+
+def _attempt_dict(attempt: AttemptSummary) -> dict:
+    return _add_timestamps(
+        {
+            "attempt_id": attempt.identity.attempt_number,
+            "state": job_pb2.TaskState.Name(attempt.state),
+            "worker_id": attempt.node.key.resource_id if attempt.node is not None else "",
+            "exit_code": attempt.exit_code or 0,
+            "error": attempt.error_message,
+            "is_worker_failure": attempt.state == job_pb2.TASK_STATE_WORKER_FAILED,
+            "attempt_uid": attempt.identity.attempt_uid,
+        },
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
+    )
+
+
+def _task_dict(task: TaskDetail) -> dict:
+    current_number = task.summary.current_attempt.attempt_number if task.summary.current_attempt is not None else -1
+    latest = next(
+        (attempt for attempt in task.attempts if attempt.identity.attempt_number == current_number),
+        task.attempts[-1] if task.attempts else None,
+    )
+    return _add_timestamps(
+        {
+            "task_id": task.summary.identity.key.resource_id,
+            "state": job_pb2.TaskState.Name(task.summary.state),
+            "worker_id": task.summary.current_node.key.resource_id if task.summary.current_node is not None else "",
+            "exit_code": (latest.exit_code or 0) if latest is not None else 0,
+            "error": task.summary.error_message,
+            "current_attempt_id": current_number,
+            "attempts": [_attempt_dict(attempt) for attempt in task.attempts],
+        },
+        started_at=task.summary.started_at,
+        finished_at=task.summary.finished_at,
+    )
+
+
+def _job_dict(job: JobDetail) -> dict:
+    return _add_timestamps(
+        {
+            "state": job_pb2.JobState.Name(job.summary.state),
+            "error": job.summary.error_message,
+            "exit_code": 0,
+            "name": job.spec.name,
+            "status_message": job.summary.pending_reason,
+        },
+        started_at=job.summary.started_at,
+        finished_at=job.summary.finished_at,
+    )

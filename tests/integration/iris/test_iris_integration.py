@@ -13,9 +13,8 @@ import time
 import uuid
 
 import pytest
-from finelog.rpc import logging_pb2
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import iris_logging_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
@@ -98,14 +97,10 @@ def verbose_job(integration_cluster):
 
 def test_log_levels_populated(integration_cluster, verbose_job):
     """Task logs have level field (INFO, WARNING, ERROR)."""
-    task_id = verbose_job.job_id.task(0).to_wire()
-
     deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
-    source = f"{task_id}:"
     while time.monotonic() < deadline:
-        response = integration_cluster.fetch_logs(source, match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
-        entries = list(response.entries)
+        entries = list(integration_cluster.task_logs(verbose_job).entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -117,18 +112,14 @@ def test_log_levels_populated(integration_cluster, verbose_job):
                 markers_found[marker] = entry.level
 
     assert "info-marker" in markers_found, f"info-marker not found. Got {len(entries)} entries"
-    assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
-    assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
-    assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
+    assert markers_found["info-marker"] == iris_logging_pb2.LOG_LEVEL_INFO
+    assert markers_found.get("warning-marker") == iris_logging_pb2.LOG_LEVEL_WARNING
+    assert markers_found.get("error-marker") == iris_logging_pb2.LOG_LEVEL_ERROR
 
 
 def test_log_level_filter(integration_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
-    task_id = verbose_job.job_id.task(0).to_wire()
-
-    response = integration_cluster.fetch_logs(
-        f"{task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX, min_level="WARNING"
-    )
+    response = integration_cluster.task_logs(verbose_job, minimum_level=iris_logging_pb2.LOG_LEVEL_WARNING)
     filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
@@ -145,12 +136,14 @@ def test_log_level_filter(integration_cluster, verbose_job):
 def test_region_constrained_routing(integration_cluster):
     """Job with region constraint lands on correct worker."""
     # Query workers to check for multi-region support
-    workers = integration_cluster.list_workers()
+    nodes = integration_cluster.list_nodes()
 
     regions = set()
-    for w in workers:
-        region_attr = w.metadata.attributes.get(WellKnownAttribute.REGION)
-        if region_attr and region_attr.HasField("string_value"):
+    for node in nodes:
+        region_attr = next(
+            (attribute for attribute in node.attributes if attribute.key == WellKnownAttribute.REGION), None
+        )
+        if region_attr is not None and region_attr.string_value is not None:
             regions.add(region_attr.string_value)
 
     if len(regions) < 2:
@@ -165,19 +158,16 @@ def test_region_constrained_routing(integration_cluster):
     integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
 
     task = integration_cluster.task_status(job, task_index=0)
-    assert task.worker_id
+    assert task.current_node is not None
 
-    # Re-fetch workers after job completes in case autoscaling added new nodes
+    # Re-fetch Nodes after job completes in case autoscaling added new capacity
     # to satisfy the region constraint.
-    post_workers = integration_cluster.list_workers()
-    worker = next(
-        (w for w in post_workers if w.worker_id == task.worker_id or w.address == task.worker_id),
-        None,
-    )
-    assert worker is not None, f"Worker {task.worker_id} not found in {[w.worker_id for w in post_workers]}"
-    region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
-    if region_attr and region_attr.HasField("string_value"):
-        assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
+    post_nodes = integration_cluster.list_nodes()
+    node = next((candidate for candidate in post_nodes if candidate.summary.identity == task.current_node), None)
+    assert node is not None, f"Node {task.current_node} not found in {[item.summary.identity for item in post_nodes]}"
+    region_attr = next((attribute for attribute in node.attributes if attribute.key == WellKnownAttribute.REGION), None)
+    assert region_attr is not None and region_attr.string_value is not None
+    assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
 
 
 # ============================================================================
@@ -203,16 +193,16 @@ def test_profile_running_task(integration_cluster):
         timeout=Duration.from_seconds(integration_cluster.job_timeout),
         error_message=f"Task did not reach RUNNING within {integration_cluster.job_timeout}s, last state: {last_state}",
     )
-    task_id = integration_cluster.task_status(job, task_index=0).task_id
+    task = integration_cluster.task_status(job, task_index=0)
+    assert task.current_attempt is not None
 
-    request = job_pb2.ProfileTaskRequest(
-        target=task_id,
-        duration_seconds=1,
-        profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
+    response = integration_cluster.client.profile_attempt(
+        task.current_attempt,
+        duration=Duration.from_seconds(1),
+        profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
     )
-    response = integration_cluster.controller_client.profile_task(request, timeout_ms=3000)
     assert len(response.profile_data) > 0
-    assert not response.error
+    assert not response.error_message
 
     integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
 
@@ -229,14 +219,14 @@ def test_exec_in_container(integration_cluster):
     task = integration_cluster.wait_for_task_state(
         job, job_pb2.TASK_STATE_RUNNING, timeout=integration_cluster.job_timeout
     )
-    task_id = task.task_id
+    assert task.current_attempt is not None
 
-    request = controller_pb2.Controller.ExecInContainerRequest(
-        task_id=task_id,
+    response = integration_cluster.client.exec_attempt(
+        task.current_attempt,
         command=["echo", "hello"],
+        timeout=Duration.from_seconds(30),
     )
-    response = integration_cluster.controller_client.exec_in_container(request)
-    assert not response.error, f"exec failed: {response.error}"
+    assert not response.error_message, f"exec failed: {response.error_message}"
     assert response.exit_code == 0
     assert "hello" in response.stdout
 

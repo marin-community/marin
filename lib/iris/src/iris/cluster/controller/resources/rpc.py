@@ -40,7 +40,7 @@ from iris.cluster.resources.source import Freshness, ResourceSourceStatus, Sourc
 from iris.cluster.resources.task import TaskQuery
 from iris.cluster.types import CoschedulingConfig, JobName, ResourceSpec
 from iris.rpc import resource_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, authorize_resource_owner
+from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
@@ -187,6 +187,7 @@ def _node_summary_to_proto(value) -> resource_pb2.NodeSummary:
         scaling_group_id=value.scaling_group_id or "",
         running_task_count=value.running_task_count,
         observed_at=timestamp_to_proto(value.observed_at),
+        region=value.region or "",
     )
     if value.slice is not None:
         result.slice.CopyFrom(_slice_identity_to_proto(value.slice))
@@ -316,6 +317,15 @@ def _attempt_summary_to_proto(value) -> resource_pb2.AttemptSummary:
     return result
 
 
+def _task_detail_to_proto(value) -> resource_pb2.TaskDetail:
+    return resource_pb2.TaskDetail(
+        summary=_task_summary_to_proto(value.summary),
+        attempts=[_attempt_summary_to_proto(item) for item in value.attempts],
+        source_statuses=[_source_status_to_proto(status) for status in value.source_statuses],
+        root_cause_highlights=value.root_cause_highlights,
+    )
+
+
 def _action_receipt_to_proto(value: ActionReceipt) -> resource_pb2.ActionReceipt:
     result = resource_pb2.ActionReceipt(
         action_id=value.action_id,
@@ -364,12 +374,30 @@ def _endpoint_summary_to_proto(value) -> resource_pb2.EndpointSummary:
     return result
 
 
+def _endpoint_detail_to_proto(value) -> resource_pb2.EndpointDetail:
+    return resource_pb2.EndpointDetail(
+        summary=_endpoint_summary_to_proto(value.summary),
+        address=value.address,
+        metadata=value.metadata,
+    )
+
+
 def _action_principal(resource_id: str) -> str:
     owner = JobName.from_wire(resource_id.rpartition(":")[0] or resource_id).user
     identity = get_verified_identity()
     if identity is None:
         return ANONYMOUS_ADMIN.user_id
     return authorize_resource_owner(owner).user_id
+
+
+def _resource_principal(resources: ResourceController, resource_id: str) -> str:
+    identity = get_verified_identity()
+    if identity is None or identity.role != FEDERATION_PEER_ROLE:
+        return _action_principal(resource_id)
+    root_job = JobName.from_wire(resource_id.rpartition(":")[0] or resource_id).root_job
+    if resources.received_job_from_peer(root_job, identity.user_id):
+        return root_job.user
+    raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
 
 
 def _authorized_owner(requested_owner: str | None = None) -> str | None:
@@ -557,14 +585,21 @@ class ResourceServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
-        return resource_pb2.DescribeTaskResponse(
-            task=resource_pb2.TaskDetail(
-                summary=_task_summary_to_proto(detail.summary),
-                attempts=[_attempt_summary_to_proto(item) for item in detail.attempts],
-                source_statuses=[_source_status_to_proto(status) for status in detail.source_statuses],
-                root_cause_highlights=detail.root_cause_highlights,
-            )
-        )
+        return resource_pb2.DescribeTaskResponse(task=_task_detail_to_proto(detail))
+
+    def batch_describe_tasks(
+        self, request: resource_pb2.BatchDescribeTasksRequest, _ctx: RequestContext
+    ) -> resource_pb2.BatchDescribeTasksResponse:
+        try:
+            keys = tuple(_resource_key_from_proto(item) for item in request.tasks)
+            for key in keys:
+                _authorize_key_owner(key)
+            details = self._resources.describe_tasks(keys)
+        except (InvalidResourceKey, ValueError) as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        except ResourceNotFound as exc:
+            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
+        return resource_pb2.BatchDescribeTasksResponse(tasks=[_task_detail_to_proto(item) for item in details])
 
     def describe_attempt(
         self, request: resource_pb2.DescribeAttemptRequest, _ctx: RequestContext
@@ -722,12 +757,23 @@ class ResourceServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
-        return resource_pb2.DescribeEndpointResponse(
-            endpoint=resource_pb2.EndpointDetail(
-                summary=_endpoint_summary_to_proto(detail.summary),
-                address=detail.address,
-                metadata=detail.metadata,
+        return resource_pb2.DescribeEndpointResponse(endpoint=_endpoint_detail_to_proto(detail))
+
+    def batch_describe_endpoints(
+        self,
+        request: resource_pb2.BatchDescribeEndpointsRequest,
+        _ctx: RequestContext,
+    ) -> resource_pb2.BatchDescribeEndpointsResponse:
+        try:
+            details = self._resources.describe_endpoints(
+                tuple(_resource_key_from_proto(key) for key in request.endpoints)
             )
+        except (InvalidResourceKey, ValueError) as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        except ResourceNotFound as exc:
+            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
+        return resource_pb2.BatchDescribeEndpointsResponse(
+            endpoints=[_endpoint_detail_to_proto(detail) for detail in details]
         )
 
     def mint_endpoint_token(
@@ -816,7 +862,7 @@ class ResourceServiceImpl:
             receipt = self._resources.cancel_job(
                 identity,
                 idempotency_key=request.idempotency_key,
-                principal_id=_action_principal(identity.key.resource_id),
+                principal_id=_resource_principal(self._resources, identity.key.resource_id),
             )
         except (InvalidResourceKey, ValueError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
@@ -835,7 +881,7 @@ class ResourceServiceImpl:
                 identity,
                 expected_attempt_uid=request.expected_attempt_uid,
                 idempotency_key=request.idempotency_key,
-                principal_id=_action_principal(identity.key.resource_id),
+                principal_id=_resource_principal(self._resources, identity.key.resource_id),
             )
         except (InvalidResourceKey, ValueError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
@@ -855,7 +901,7 @@ class ResourceServiceImpl:
             receipt = self._resources.terminate_attempt(
                 identity,
                 idempotency_key=request.idempotency_key,
-                principal_id=_action_principal(identity.task.resource_id),
+                principal_id=_resource_principal(self._resources, identity.task.resource_id),
             )
         except (InvalidResourceKey, ValueError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
@@ -881,13 +927,10 @@ class ResourceServiceImpl:
         self, request: resource_pb2.ExecAttemptRequest, _ctx: RequestContext
     ) -> resource_pb2.ExecAttemptResponse:
         try:
-            locator = AttemptLocator(
-                _resource_key_from_proto(request.attempt.task),
-                request.attempt.attempt_number if request.attempt.HasField("attempt_number") else None,
-            )
-            _action_principal(locator.task.resource_id)
+            identity = _attempt_identity_from_proto(request.attempt)
+            _resource_principal(self._resources, identity.task.resource_id)
             response = self._resources.exec_attempt(
-                locator,
+                identity,
                 tuple(request.command),
                 duration_from_proto(request.timeout) if request.HasField("timeout") else None,
             )
@@ -910,13 +953,10 @@ class ResourceServiceImpl:
         self, request: resource_pb2.ProfileAttemptRequest, _ctx: RequestContext
     ) -> resource_pb2.ProfileAttemptResponse:
         try:
-            locator = AttemptLocator(
-                _resource_key_from_proto(request.attempt.task),
-                request.attempt.attempt_number if request.attempt.HasField("attempt_number") else None,
-            )
-            _action_principal(locator.task.resource_id)
+            identity = _attempt_identity_from_proto(request.attempt)
+            _resource_principal(self._resources, identity.task.resource_id)
             response = self._resources.profile_attempt(
-                locator,
+                identity,
                 profile_configuration_from_proto(request.profile),
                 duration_from_proto(request.duration) if request.HasField("duration") else None,
             )

@@ -7,23 +7,45 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from iris.cluster.types import JobName
+from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.cluster.resources.job import JobQuery, JobSummary
+from iris.cluster.resources.source import Page
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
+from rigging.timing import Timestamp
 
 from scripts.ci import iris_monitor
 
 
 class FakeIrisClient:
-    def __init__(self, jobs: list[job_pb2.JobStatus]) -> None:
+    def __init__(self, jobs: list[JobSummary]) -> None:
         self.jobs = jobs
         self.terminated: list[str] = []
 
-    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]:
-        return [job for job in self.jobs if job.job_id.startswith(prefix)]
+    def list_jobs(self, query: JobQuery) -> Page[JobSummary]:
+        jobs = tuple(job for job in self.jobs if job.identity.key.resource_id.startswith(query.job_id_prefix or ""))
+        return Page(jobs, None, ())
 
-    def terminate(self, job_id: JobName) -> None:
-        self.terminated.append(job_id.to_wire())
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> None:
+        self.terminated.append(identity.key.resource_id)
+
+
+def _job(job_id: str, state: int, *, pending_reason: str = "") -> JobSummary:
+    key = ResourceKey("test", ResourceKind.JOB, job_id)
+    return JobSummary(
+        identity=JobIdentity(key, f"uid:{job_id}"),
+        owner_id="runner",
+        parent=None,
+        state=state,
+        execution_cluster_id="test",
+        backend_id="default",
+        num_tasks=1,
+        submitted_at=Timestamp.from_ms(1),
+        started_at=None,
+        finished_at=None,
+        error_message="",
+        pending_reason=pending_reason,
+    )
 
 
 def _pod(name: str, *, phase: str = "Running", ready: bool = True, deleting: bool = False) -> dict:
@@ -138,10 +160,10 @@ def test_wait_resource_exhaustion_shutdown_is_a_successful_warning(
     parent_job_id = "/runner/canary"
     client = FakeIrisClient(
         [
-            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
-            job_pb2.JobStatus(
-                job_id=f"{parent_job_id}/train",
-                state=job_pb2.JOB_STATE_PENDING,
+            _job(parent_job_id, job_pb2.JOB_STATE_RUNNING),
+            _job(
+                f"{parent_job_id}/train",
+                job_pb2.JOB_STATE_PENDING,
                 pending_reason=pending_reason,
             ),
         ]
@@ -200,10 +222,10 @@ def test_wait_non_silent_conditions_still_escalate(
     parent_job_id = "/runner/canary"
     client = FakeIrisClient(
         [
-            job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING, has_children=True),
-            job_pb2.JobStatus(
-                job_id=f"{parent_job_id}/train",
-                state=job_pb2.JOB_STATE_PENDING,
+            _job(parent_job_id, job_pb2.JOB_STATE_RUNNING),
+            _job(
+                f"{parent_job_id}/train",
+                job_pb2.JOB_STATE_PENDING,
                 pending_reason=pending_reason,
             ),
         ]

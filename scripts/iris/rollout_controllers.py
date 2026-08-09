@@ -30,6 +30,7 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_c
 from iris.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.provenance import provenance_from_proto
+from iris.cluster.resources.job import JobQuery, JobSummary
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
@@ -624,7 +625,8 @@ def take_snapshot(cluster: str) -> Snapshot:
                 provenance = provenance_from_proto(info.provenance)
             with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as iris:
                 jobs = {
-                    name: len(iris.list_jobs(state=state, limit=JOB_COUNT_LIMIT)) for name, state in WATCHED_JOB_STATES
+                    name: len(iris.list_jobs(JobQuery(states=frozenset({state}), page_size=JOB_COUNT_LIMIT)).items)
+                    for name, state in WATCHED_JOB_STATES
                 }
         return Snapshot(
             cluster=cluster,
@@ -641,7 +643,7 @@ def take_snapshot(cluster: str) -> Snapshot:
         return Snapshot(cluster=cluster, captured_at=_now(), reachable=False, error=f"{type(exc).__name__}: {exc}")
 
 
-def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.JobStatus:
+def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobSummary:
     """Submit one throwaway `echo hello world` job and wait for it to finish.
 
     ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
@@ -664,7 +666,7 @@ def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.J
             click.echo(f"Submitted {job.job_id}")
             click.echo(f"Waiting up to {timeout:.0f}s — a cluster at 0 workers must scale one up first.")
             status = job.wait(timeout=timeout, poll_interval=10, raise_on_failure=False)
-            for entry in job.logs(max_lines=20):
+            for entry in job.logs(max_lines=20).entries:
                 click.echo(f"  {entry.data.rstrip()}")
             return status
 
@@ -834,7 +836,7 @@ def smoke(cluster: str, timeout: int, workspace: Path) -> None:
     state = job_pb2.JobState.Name(status.state)
     click.echo(f"Smoke job finished: {state}")
     if status.state != job_pb2.JOB_STATE_SUCCEEDED:
-        raise click.ClickException(f"Smoke job ended {state}: {status.error or 'no error text'}")
+        raise click.ClickException(f"Smoke job ended {state}: {status.error_message or 'no error text'}")
 
 
 def main() -> None:

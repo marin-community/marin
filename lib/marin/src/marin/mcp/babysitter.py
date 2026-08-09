@@ -17,12 +17,12 @@ from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.resources.attempt import AttemptSummary
-from iris.cluster.resources.identity import ResourceKey
+from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSummary
 from iris.cluster.resources.node import NodeHealth, NodeQuery, NodeSummary
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.types import JobName, ResourceSpec
+from iris.cluster.types import JobName, ResourceSpec, TaskAttempt
 from iris.rpc import job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -31,7 +31,7 @@ from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
 from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 DEFAULT_LOG_LINES = 200
 DEFAULT_ZEPHYR_LOG_LINES = 5_000
@@ -486,18 +486,12 @@ class IrisBabysitter:
         return self.envelope(payload)
 
     def _job_detail(self, job_id: str) -> JobDetail:
-        page = self.resources.list_jobs(JobQuery(job_id_prefix=job_id, page_size=100))
-        summary = next((item for item in page.items if item.identity.key.resource_id == job_id), None)
-        if summary is None:
-            raise LookupError(f"Job {job_id!r} not found")
-        return self.resources.describe_job(summary.identity.key)
+        canonical_id = JobName.from_wire(job_id).to_wire()
+        return self.resources.describe_job(ResourceKey(self.config.cluster, ResourceKind.JOB, canonical_id))
 
     def _task_detail(self, task_id: str) -> TaskDetail:
-        page = self.resources.list_tasks(TaskQuery(job_id_prefix=task_id, page_size=100))
-        summary = next((item for item in page.items if item.identity.key.resource_id == task_id), None)
-        if summary is None:
-            raise LookupError(f"Task {task_id!r} not found")
-        return self.resources.describe_task(summary.identity.key)
+        canonical_id = JobName.from_wire(task_id).to_wire()
+        return self.resources.describe_task(ResourceKey(self.config.cluster, ResourceKind.TASK, canonical_id))
 
     def _tasks_for_job(self, job: ResourceKey) -> list[TaskSummary]:
         tasks: list[TaskSummary] = []
@@ -612,19 +606,45 @@ class IrisBabysitter:
         duration_seconds: int = DEFAULT_PROFILE_SECONDS,
         include_locals: bool = False,
     ) -> dict[str, Any]:
-        request = job_pb2.ProfileTaskRequest(
-            target=target,
-            duration_seconds=duration_seconds,
-            profile_type=_profile_type(profile_type, include_locals=include_locals),
-        )
-        response = self.controller.profile_task(request)
-        if response.error:
-            return self.envelope({"error": response.error}, warnings=[response.error], auth_ok=True)
+        profile = _profile_type(profile_type, include_locals=include_locals)
+        if target.startswith("/system/"):
+            response = self.controller.profile_task(
+                job_pb2.ProfileTaskRequest(
+                    target=target,
+                    duration_seconds=duration_seconds,
+                    profile_type=profile,
+                )
+            )
+            profile_data = response.profile_data
+            error = response.error
+        else:
+            requested = TaskAttempt.from_wire(target)
+            requested.task_id.require_task()
+            task = self._task_detail(requested.task_id.to_wire())
+            attempt = task.summary.current_attempt
+            if requested.attempt_id is not None:
+                attempt = next(
+                    (item.identity for item in task.attempts if item.identity.attempt_number == requested.attempt_id),
+                    None,
+                )
+            if attempt is None:
+                error = f"Task {requested.task_id} has no matching Attempt to profile"
+                profile_data = b""
+            else:
+                result = self.resources.profile_attempt(
+                    attempt,
+                    profile=profile,
+                    duration=Duration.from_seconds(duration_seconds),
+                )
+                profile_data = result.profile_data
+                error = result.error_message
+        if error:
+            return self.envelope({"error": error}, warnings=[error], auth_ok=True)
         if profile_type == "threads":
-            data = {"text": response.profile_data.decode("utf-8", errors="replace"), "encoding": "utf-8"}
+            data = {"text": profile_data.decode("utf-8", errors="replace"), "encoding": "utf-8"}
         else:
             data = {
-                "data_base64": base64.b64encode(response.profile_data).decode("ascii"),
+                "data_base64": base64.b64encode(profile_data).decode("ascii"),
                 "encoding": "base64",
                 "profile_type": profile_type,
             }

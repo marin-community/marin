@@ -11,7 +11,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.resources.identity import NodeLocator, ResourceKey, ResourceKind
+from iris.cluster.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
 from iris.cluster.resources.job import JobSpec
 from iris.cluster.resources.node import NodeDetail, NodeQuery
 from iris.cluster.resources.task import TaskDetail
@@ -287,6 +287,9 @@ class WorkerJourney:
         return self.controller.resources.describe_node(
             NodeLocator(summary.identity.key, summary.identity.backend_id, summary.identity.node_uid)
         )
+
+    def node(self, identity: NodeIdentity) -> NodeDetail:
+        return self.controller.resources.describe_node(NodeLocator(identity.key, identity.backend_id, identity.node_uid))
 
     def worker_ids(self) -> set[str]:
         return {

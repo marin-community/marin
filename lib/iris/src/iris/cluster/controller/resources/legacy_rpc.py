@@ -3,15 +3,30 @@
 
 """Adapters from resource records to the retired ControllerService wire shape."""
 
-from collections import Counter
+from rigging.redaction import redact_value
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.resources.job import JobSpec, JobSummary
-from iris.cluster.resources.task import TaskDetail, TaskSummary
+from iris.cluster.resources.job import JobSpec, JobSummary, JobTaskAggregate
+from iris.cluster.resources.task import TaskDetail
 from iris.cluster.types import LOCAL_CLUSTER, CoschedulingConfig, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
+
+
+def redact_request_env_vars(
+    request: controller_pb2.Controller.LaunchJobRequest,
+) -> controller_pb2.Controller.LaunchJobRequest:
+    """Copy an old-wire request and redact sensitive environment values."""
+    if not request.environment.env_vars:
+        return request
+    redacted = controller_pb2.Controller.LaunchJobRequest()
+    redacted.CopyFrom(request)
+    env_vars = redacted.environment.env_vars
+    values = redact_value(dict(env_vars))
+    env_vars.clear()
+    env_vars.update(values)
+    return redacted
 
 
 def job_spec_from_legacy_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobSpec:
@@ -87,12 +102,12 @@ def job_spec_to_legacy_request(spec: JobSpec) -> controller_pb2.Controller.Launc
 
 def job_status_to_legacy(
     summary: JobSummary,
-    tasks: tuple[TaskSummary, ...],
+    tasks: JobTaskAggregate,
     *,
     has_children: bool,
     local_cluster_id: str,
 ) -> job_pb2.JobStatus:
-    state_counts = Counter(task.state for task in tasks)
+    state_counts = {entry.state: entry.count for entry in tasks.state_counts}
     status = job_pb2.JobStatus(
         job_id=summary.identity.key.resource_id,
         state=summary.state,
@@ -103,10 +118,10 @@ def job_status_to_legacy(
         backend_id=summary.backend_id,
         cluster=(LOCAL_CLUSTER if summary.execution_cluster_id == local_cluster_id else summary.execution_cluster_id),
         pending_reason=summary.pending_reason,
-        task_count=len(tasks) if tasks else summary.num_tasks,
-        completed_count=sum(state_counts[state] for state in (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)),
-        failure_count=sum(task.failure_count for task in tasks),
-        preemption_count=sum(task.preemption_count for task in tasks),
+        task_count=tasks.task_count if tasks.task_count else summary.num_tasks,
+        completed_count=tasks.completed_count,
+        failure_count=tasks.failure_count,
+        preemption_count=tasks.preemption_count,
         task_state_counts={task_state_friendly(state): count for state, count in state_counts.items()},
     )
     status.submitted_at.CopyFrom(timestamp_to_proto(summary.submitted_at))
@@ -117,7 +132,11 @@ def job_status_to_legacy(
     return status
 
 
-def task_detail_to_legacy(detail: TaskDetail, *, local_cluster_id: str) -> job_pb2.TaskStatus:
+def task_detail_to_legacy(
+    detail: TaskDetail,
+    *,
+    local_cluster_id: str,
+) -> job_pb2.TaskStatus:
     summary = detail.summary
     attempts = []
     for attempt in detail.attempts:
@@ -149,10 +168,11 @@ def task_detail_to_legacy(detail: TaskDetail, *, local_cluster_id: str) -> job_p
         ),
         None,
     )
+    current_worker_label = summary.current_node.key.resource_id if summary.current_node is not None else ""
     result = job_pb2.TaskStatus(
         task_id=summary.identity.key.resource_id,
         state=summary.state,
-        worker_id=summary.current_node.key.resource_id if summary.current_node is not None else "",
+        worker_id=current_worker_label,
         exit_code=current.exit_code if current is not None and current.exit_code is not None else 0,
         error=summary.error_message,
         current_attempt_id=summary.current_attempt.attempt_number if summary.current_attempt is not None else 0,
