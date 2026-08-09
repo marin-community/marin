@@ -9,10 +9,10 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceASGIApplication
+from iris.rpc.worker_service import WorkerServiceImpl
 
 
 class WorkerDashboard:

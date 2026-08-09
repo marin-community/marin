@@ -10,6 +10,8 @@ import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.backends.protocol import BackendCapability
+from iris.backends.status import BackendStatus, WorkerFleetStatus
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, IapAuthConfig, PeerConfig
 from iris.cluster.controller.auth import (
@@ -30,7 +32,6 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
@@ -41,7 +42,7 @@ from iris.cluster.controller.persistence.projections.endpoints import EndpointsP
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -90,7 +91,7 @@ def _make_service(db, log_client, auth=None):
     controller_mock.autoscaler = None
     capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     controller_mock.provider = Mock(capabilities=capabilities)
-    controller_mock.provider.status.return_value = controller_pb2.Controller.BackendStatus()
+    controller_mock.provider.status.return_value = BackendStatus(worker=WorkerFleetStatus())
     controller_mock.capabilities = capabilities
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.scale_group_to_backend = {}
@@ -129,7 +130,7 @@ def service(state, tmp_path, log_client):
     worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
-    controller_mock.provider.status.return_value = controller_pb2.Controller.BackendStatus()
+    controller_mock.provider.status.return_value = BackendStatus(worker=WorkerFleetStatus())
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.scale_group_to_backend = {}

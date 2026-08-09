@@ -16,7 +16,13 @@ _TRANSPORT_FREE_PACKAGES = (
     "cluster/controller/reconcile",
     "cluster/controller/scheduling",
 )
-_TRANSPORT_FREE_MODULES = ("cluster/controller/controller.py",)
+_TRANSPORT_FREE_MODULES = (
+    "backends/protocol.py",
+    "backends/status.py",
+    "backends/k8s/tasks.py",
+    "backends/rpc/backend.py",
+    "cluster/controller/controller.py",
+)
 
 
 def _tracked_module(module: str) -> bool:
@@ -83,3 +89,39 @@ def test_controller_sqlalchemy_is_confined_to_persistence() -> None:
                 if not relative_path.startswith("persistence/"):
                     violations.append(relative_path)
     assert not violations, f"SQLAlchemy imports outside controller/persistence: {sorted(set(violations))}"
+
+
+def test_rpc_adapters_do_not_import_controller_persistence() -> None:
+    violations: list[tuple[str, str]] = []
+    for path in (_SOURCE_ROOT / "rpc").glob("*.py"):
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                modules = (node.module or "",)
+            else:
+                continue
+            violations.extend(
+                (path.name, module) for module in modules if module.startswith("iris.cluster.controller.persistence")
+            )
+    assert not violations, f"Controller persistence imports in RPC adapters: {sorted(violations)}"
+
+
+def test_control_runtime_does_not_construct_transport_adapters() -> None:
+    runtime_path = _SOURCE_ROOT / "cluster" / "controller" / "runtime.py"
+    imports = {
+        module
+        for node in ast.walk(ast.parse(runtime_path.read_bytes(), filename=str(runtime_path)))
+        for module in (
+            tuple(alias.name for alias in node.names)
+            if isinstance(node, ast.Import)
+            else ((node.module or "",) if isinstance(node, ast.ImportFrom) else ())
+        )
+    }
+    forbidden = {
+        "iris.cluster.controller.dashboard",
+        "iris.rpc.controller_service",
+        "iris.rpc.resource_service",
+    }
+    assert imports.isdisjoint(forbidden), f"Transport composition leaked into ControllerRuntime: {imports & forbidden}"

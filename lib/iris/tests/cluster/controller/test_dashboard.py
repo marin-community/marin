@@ -20,15 +20,21 @@ from iris.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
+from iris.backends.protocol import BackendCapability, DeviceCapacity
 from iris.backends.rpc.backend import RpcTaskBackend
+from iris.backends.status import BackendStatus, KubernetesStatus, WorkerFleetStatus
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
+from iris.cluster.controller.autoscaler.status import (
+    PendingHint,
+    autoscaler_status_from_proto,
+    overlay_worker_usability,
+)
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
 from iris.cluster.controller.persistence.json_codec import (
     constraints_from_json,
     device_counts_from_json,
@@ -173,16 +179,18 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
     overlay from its own state, groups tagged with its own ``backend_id`` — so the
     controller reads the result verbatim. The stub factory is unused by the status
     paths, so a bare ``Mock`` suffices."""
-    backend = RpcTaskBackend(stub_factory=Mock())
+    backend = RpcTaskBackend(worker_client=Mock())
     backend.health = state._health
     backend.autoscaler = autoscaler
-    backend.bind_runtime(
-        BackendRuntime(
-            backend_id=backend_id,
+    backend.attach_worker_store(
+        backend_id,
+        DbBackendWorkerStore(
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
+            health=backend.health,
+            defaults=UserBudgetDefaults(),
+            autoscale=backend.autoscale,
+        ),
     )
     return backend
 
@@ -1726,11 +1734,11 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
         backend.get_cluster_status.return_value = cluster_status
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(kubernetes=cluster_status)
+        backend.status.return_value = BackendStatus(kubernetes=cluster_status)
     else:
         autoscaler_status = autoscaler.get_status.return_value if autoscaler is not None else vm_pb2.AutoscalerStatus()
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
+        backend.status.return_value = BackendStatus(
+            worker=WorkerFleetStatus(autoscaler=autoscaler_status_from_proto(autoscaler_status))
         )
 
     # autoscaler_status() authors this backend's groups tagged with its own id (the
@@ -1739,7 +1747,7 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
         status = autoscaler.get_status() if autoscaler is not None else vm_pb2.AutoscalerStatus()
         for group in status.groups:
             group.backend_id = name
-        return status
+        return autoscaler_status_from_proto(status)
 
     backend.autoscaler_status.side_effect = _autoscaler_status
     return backend
@@ -1821,7 +1829,7 @@ def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, l
 
 def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus locates the CLUSTER_VIEW backend even when it is not the representative one."""
-    cluster_status = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
+    cluster_status = KubernetesStatus(namespace="eu", total_nodes=2)
     client = _multi_backend_client(
         state,
         scheduler,
@@ -2130,8 +2138,8 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
 
 def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus raises INVALID_ARGUMENT when >1 CLUSTER_VIEW backends and no backend_id."""
-    cluster_a = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
-    cluster_b = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="us", total_nodes=4)
+    cluster_a = KubernetesStatus(namespace="eu", total_nodes=2)
+    cluster_b = KubernetesStatus(namespace="us", total_nodes=4)
     client = _multi_backend_client(
         state,
         scheduler,

@@ -12,12 +12,11 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
 
 from rigging.timing import Timestamp
 
+from iris.backends.protocol import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.autoscaler.state import persist_autoscaler_state
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
@@ -26,7 +25,6 @@ from iris.cluster.controller.persistence.projections.run_templates import RunTem
 from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.persistence.reads import ControlSnapshot, ReconcileRow
 from iris.cluster.controller.persistence.transition_reader import load_transition_snapshot
-from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -57,47 +55,6 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
         if liveness.usability is WorkerUsability.DEAD and liveness.last_heartbeat_ms < before_ms:
             return worker_id
     return None
-
-
-class BackendWorkerStore(TransitionReader, Protocol):
-    """The worker-state operations a worker-daemon backend depends on."""
-
-    def owned_worker_ids(self) -> set[WorkerId]:
-        """The worker IDs this backend owns, by scale group."""
-        ...
-
-    def scheduling_inputs(self) -> BackendSchedulingInputs:
-        """This backend's live workers, their building counts, and preemptible running attempts."""
-        ...
-
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        """This backend's worker addresses, reconcile rows, and per-job run-task templates."""
-        ...
-
-    def worker_status(self) -> WorkerStatusMap:
-        """Each owned worker's idle/running status."""
-        ...
-
-    def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-        """The running-task ids on each of ``worker_ids``."""
-        ...
-
-    def worker_address(self, worker_id: WorkerId) -> str | None:
-        """The worker's address, or ``None`` if it has none."""
-        ...
-
-    def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
-        """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
-        them. Returns every worker removed (the failed workers plus reaped siblings)."""
-        ...
-
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """Delete this backend's DEAD workers whose last heartbeat predates ``cutoff_ms``.
-
-        Removes one worker (and its attributes) per transaction, sleeping ``pause``
-        between deletes so heartbeat and scheduling traffic interleave. Returns the
-        number of workers removed; stops early once ``stop_event`` is set."""
-        ...
 
 
 @dataclass(frozen=True)

@@ -6,7 +6,6 @@
 import shutil
 import tempfile
 import threading
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace as _replace
@@ -15,7 +14,24 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from finelog.client.log_client import Table
+from iris.backends.protocol import (
+    AutoscaleRequest,
+    AutoscaleResult,
+    BackendCapability,
+    BackendWorkerStore,
+    ProviderUnsupportedError,
+    ReconcileRequest,
+    ReconcileResult,
+    ScheduleInput,
+    ScheduleRequest,
+    ScheduleResult,
+    TaskTarget,
+    assemble_scheduling_context,
+    plans_from_snapshot,
+    run_scheduling_decision,
+)
 from iris.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
+from iris.backends.status import BackendStatus, WorkerFleetStatus
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
     AutoscalerConfig,
@@ -41,32 +57,18 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.controller.admin import ControllerAdmin
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.backend import (
-    AutoscaleRequest,
-    AutoscaleResult,
-    BackendCapability,
-    BackendRuntime,
-    ProviderUnsupportedError,
-    ReconcileRequest,
-    ReconcileResult,
-    ScheduleInput,
-    ScheduleRequest,
-    ScheduleResult,
-    TaskTarget,
-    assemble_scheduling_context,
-    plans_from_snapshot,
-    run_scheduling_decision,
-)
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
-from iris.cluster.controller.persistence.backends import BackendWorkerStore, DbBackendWorkerStore
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.federation import build_queued_candidates
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -183,23 +185,6 @@ def run_worker_daemon_reconcile(
     return ReconcileResult(effects=effects), dead
 
 
-def store_from_runtime(
-    runtime: BackendRuntime,
-    health: WorkerHealthTracker,
-    autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
-) -> DbBackendWorkerStore:
-    """Build a fake's worker store from the controller runtime + its own tracker
-    and ``autoscale`` — the worker-daemon fakes' shared mirror of
-    ``RpcTaskBackend.bind_runtime``."""
-    return DbBackendWorkerStore(
-        db=runtime.db,
-        owns_scale_group=runtime.owns_scale_group,
-        health=health,
-        defaults=runtime.budget_defaults,
-        autoscale=autoscale,
-    )
-
-
 class FakeProvider:
     """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
@@ -228,10 +213,10 @@ class FakeProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
+    def status(self) -> BackendStatus:
         workers = self.health.all()
-        return controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail(
+        return BackendStatus(
+            worker=WorkerFleetStatus(
                 healthy_worker_count=sum(status.healthy for status in workers.values()),
                 total_worker_count=len(workers),
             )
@@ -270,8 +255,8 @@ class FakeProvider:
         assert self._store is not None, "FakeProvider.prune_dead_workers called before worker store attached"
         return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None, "FakeProvider.seed_liveness called before worker store attached"
@@ -300,13 +285,15 @@ def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakePro
     ``db.caches``."""
     provider = FakeProvider()
     provider.health = state._health
-    provider.bind_runtime(
-        BackendRuntime(
-            backend_id=DEFAULT_BACKEND_ID,
+    provider.attach_worker_store(
+        DEFAULT_BACKEND_ID,
+        DbBackendWorkerStore(
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
+            health=provider.health,
+            defaults=UserBudgetDefaults(),
+            autoscale=provider.autoscale,
+        ),
     )
     return [provider]
 
@@ -330,9 +317,7 @@ class MockController:
         # A bare Mock would auto-create a truthy .autoscaler; the per-backend
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
         self.provider.autoscaler = None
-        self.provider.status.return_value = controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail()
-        )
+        self.provider.status.return_value = BackendStatus(worker=WorkerFleetStatus())
         self.provider.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         # The backend owns its liveness tracker; the service registers workers into
         # it and the controller's union reads back through it. Tests that inspect a
@@ -409,7 +394,7 @@ def make_controller_service(
         runtime=controller,
         bundle_store=bundle_store,
         log_client=log_client,
-        db=db,
+        admin=ControllerAdmin(db),
         endpoint_service=endpoint_service,
         controller=resources,
         auth=resolved_auth,
@@ -511,7 +496,7 @@ def make_controller(tmp_path):
         for backend in backends.values():
             if backend.health is not None:
                 backend.health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
-        controller = ControllerRuntime(
+        controller = compose_controller_runtime(
             config=config,
             backends=backends,
             log_stack=log_stack,

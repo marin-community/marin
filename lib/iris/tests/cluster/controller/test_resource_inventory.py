@@ -5,9 +5,19 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from iris.backends.protocol import BackendCapability
+from iris.backends.status import (
+    AutoscalerStatus,
+    BackendStatus,
+    KubernetesStatus,
+    NodeStatus,
+    ScaleGroupStatus,
+    SliceStatus,
+    VmStatus,
+    WorkerFleetStatus,
+)
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.persistence.database import ControllerDB
@@ -21,8 +31,6 @@ from iris.resources.identity import NodeLocator, ResourceKind, SliceLocator
 from iris.resources.node import NodeHealth, NodeQuery
 from iris.resources.slice import SliceLifecycle, SliceQuery
 from iris.resources.source import SourceState
-from iris.rpc import controller_pb2, vm_pb2
-from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import event
 
@@ -32,10 +40,10 @@ NOW = Timestamp.from_ms(1_000)
 def _kubernetes_backend() -> Mock:
     backend = Mock()
     backend.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
-    backend.status.return_value = controller_pb2.Controller.BackendStatus(
-        kubernetes=controller_pb2.Controller.GetKubernetesClusterStatusResponse(
-            nodes=[
-                controller_pb2.Controller.NodeStatus(
+    backend.status.return_value = BackendStatus(
+        kubernetes=KubernetesStatus(
+            nodes=(
+                NodeStatus(
                     name="node-alpha",
                     ready=True,
                     schedulable=True,
@@ -49,7 +57,7 @@ def _kubernetes_backend() -> Mock:
                     running_pods=2,
                     created="2026-01-01T00:00:00Z",
                 ),
-                controller_pb2.Controller.NodeStatus(
+                NodeStatus(
                     name="node-beta",
                     ready=False,
                     schedulable=False,
@@ -57,7 +65,7 @@ def _kubernetes_backend() -> Mock:
                     region="us-central1",
                     created="2026-01-02T00:00:00Z",
                 ),
-            ]
+            )
         )
     )
     return backend
@@ -66,43 +74,41 @@ def _kubernetes_backend() -> Mock:
 def _autoscaling_backend() -> Mock:
     backend = Mock()
     backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    backend.status.return_value = controller_pb2.Controller.BackendStatus(
-        worker=controller_pb2.Controller.WorkerFleetDetail()
-    )
-    backend.autoscaler_status.return_value = vm_pb2.AutoscalerStatus(
-        last_evaluation=timestamp_to_proto(NOW),
-        groups=[
-            vm_pb2.ScaleGroupStatus(
+    backend.status.return_value = BackendStatus(worker=WorkerFleetStatus())
+    backend.autoscaler_status.return_value = AutoscalerStatus(
+        last_evaluation=NOW,
+        groups=(
+            ScaleGroupStatus(
                 name="pool-a",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="slice-a",
                         scale_group="pool-a",
                         state="ready",
-                        created_at=timestamp_to_proto(Timestamp.from_ms(10)),
-                        vms=[vm_pb2.VmInfo(vm_id="vm-a", worker_id="node-a")],
+                        created_at=Timestamp.from_ms(10),
+                        vms=(VmStatus(vm_id="vm-a", worker_id="node-a"),),
                     ),
-                    vm_pb2.SliceInfo(
+                    SliceStatus(
                         slice_id="slice-b",
                         scale_group="pool-a",
                         state="booting",
-                        created_at=timestamp_to_proto(Timestamp.from_ms(20)),
+                        created_at=Timestamp.from_ms(20),
                     ),
-                ],
+                ),
             ),
-            vm_pb2.ScaleGroupStatus(
+            ScaleGroupStatus(
                 name="pool-b",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="slice-c",
                         scale_group="pool-b",
                         state="failed",
                         error_message="quota denied",
-                        created_at=timestamp_to_proto(Timestamp.from_ms(30)),
-                    )
-                ],
+                        created_at=Timestamp.from_ms(30),
+                    ),
+                ),
             ),
-        ],
+        ),
     )
     return backend
 
@@ -156,9 +162,7 @@ def worker_resources(tmp_path: Path):
     )
     backend = Mock()
     backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON})
-    backend.status.return_value = controller_pb2.Controller.BackendStatus(
-        worker=controller_pb2.Controller.WorkerFleetDetail()
-    )
+    backend.status.return_value = BackendStatus(worker=WorkerFleetStatus())
     facade = Controller(
         cluster_id="cluster-a",
         db=db,

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.client import IrisClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -31,6 +31,7 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.local_cluster import LocalCluster
@@ -47,6 +48,7 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
@@ -176,9 +178,9 @@ class E2ECluster:
             host="127.0.0.1",
             worker_token=None,
         )
-        self._controller = ControllerRuntime(
+        self._controller = compose_controller_runtime(
             config=controller_config,
-            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
+            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(worker_client=RpcWorkerClient(RpcWorkerStubFactory()))},
             log_stack=log_stack,
         )
         self._controller.start()

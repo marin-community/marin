@@ -17,6 +17,7 @@ from datetime import date
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
+from iris.cluster.controller.admin import ControllerAdmin
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -157,7 +158,7 @@ def _controller_boundaries(
         runtime=mock_controller,
         bundle_store=bundle_store,
         log_client=log_client,
-        db=db,
+        admin=ControllerAdmin(db),
         endpoint_service=endpoint_service,
         controller=resources,
     )

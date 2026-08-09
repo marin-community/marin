@@ -11,6 +11,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.checkpoint import CheckpointResult, download_checkpoint_to_local
 from iris.cluster.controller.persistence.database import ControllerDB
@@ -169,7 +170,7 @@ class JourneyWorld:
             worker_token=None,
         )
         self.log_stack = log_stack
-        controller = ControllerRuntime(
+        controller = compose_controller_runtime(
             config=config,
             backends=backends,
             log_stack=log_stack,

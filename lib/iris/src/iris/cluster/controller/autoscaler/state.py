@@ -8,7 +8,7 @@ capacity call the controller mirrors that in-memory state into the ``slices`` /
 ``scaling_groups`` DB tables so a restarted controller can recover. These
 dataclasses are the plain-data hand-off: the autoscaler produces an
 :class:`AutoscalerState`, the controller persists it. No DB types appear here,
-so :mod:`iris.cluster.controller.backend` can carry these in its result types
+so :mod:`iris.backends.protocol` can carry these in its result types
 without importing the autoscaler runtime (which would cycle through
 ``controller.persistence.database``).
 """

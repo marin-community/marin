@@ -25,7 +25,8 @@ from iris.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.protocol import TaskBackend
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.config import (
     BackendConfig,
     IrisClusterConfig,
@@ -36,7 +37,6 @@ from iris.cluster.config import (
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
@@ -47,6 +47,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
 from iris.resources.state import PriorityBand
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def make_task_backend(
         )
     if which == "worker_provider":
         return RpcTaskBackend(
-            stub_factory=RpcWorkerStubFactory(),
+            worker_client=RpcWorkerClient(RpcWorkerStubFactory()),
             unreachable_grace=unreachable_grace,
             autoscaler=autoscaler,
         )

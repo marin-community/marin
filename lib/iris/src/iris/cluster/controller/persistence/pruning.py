@@ -21,8 +21,8 @@ from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
 
+from iris.backends.protocol import TaskBackend
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection

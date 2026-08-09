@@ -74,6 +74,11 @@ class ControllerTestState:
         """The endpoints projection, looked up from the DB cache registry."""
         return self._db.caches[EndpointsProjection]
 
+    @property
+    def database(self) -> ControllerDB:
+        """Database owned by this test harness."""
+        return self._db
+
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:
     """Set worker health in the in-memory tracker."""

@@ -11,9 +11,9 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from iris.cluster.types import JobName
 from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.worker_service import WorkerServiceImpl
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 from starlette.testclient import TestClient

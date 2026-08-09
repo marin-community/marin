@@ -16,7 +16,6 @@ from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
 
-from iris.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.protocol import FederationSyncBatch
@@ -44,6 +43,7 @@ from iris.rpc.resource_client_codec import (
     task_identity_to_proto,
 )
 from iris.rpc.resource_connect import ResourceServiceClientSync
+from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.rpc.worker_codec import process_info_from_proto
 from iris.time_proto import duration_to_proto
 

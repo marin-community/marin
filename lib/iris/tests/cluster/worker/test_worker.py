@@ -34,7 +34,6 @@ from iris.cluster.runtime.types import (
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
@@ -50,6 +49,7 @@ from iris.resources.execution import (
 from iris.resources.job import ContainerProfile, PriorityBand
 from iris.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.worker_service import WorkerServiceImpl
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 from tests.cluster.worker.conftest import (

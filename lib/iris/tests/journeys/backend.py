@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from finelog.rpc import logging_pb2
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     DeviceCapacity,
     ProviderUnsupportedError,
     ReconcileRequest,
@@ -22,6 +22,7 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
 )
+from iris.backends.status import AutoscalerStatus, BackendStatus, KubernetesStatus
 from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -30,7 +31,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.system import ProcessInfo
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 
@@ -108,14 +109,14 @@ class ScriptedTaskBackend:
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         return None
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
+    def status(self) -> BackendStatus:
         if self._status_failures:
             self._status_failures -= 1
             raise ConnectionError(f"backend {self.backend_id} resource source is unavailable")
-        return controller_pb2.Controller.BackendStatus()
+        return BackendStatus(kubernetes=KubernetesStatus())
 
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        return vm_pb2.AutoscalerStatus()
+    def autoscaler_status(self) -> AutoscalerStatus:
+        return AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")
@@ -186,7 +187,7 @@ class ScriptedTaskBackend:
         self.calls.append("autoscale")
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
         return None
 
     def seed_liveness(self) -> None:
@@ -226,6 +227,10 @@ class UnavailableTaskBackend(ScriptedTaskBackend):
     """Worker-style backend that advertises a route but has no capacity."""
 
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.WORKER_DAEMON})
+
+    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = DEFAULT_BACKEND_ID) -> None:
+        super().__init__(transition_reader, backend_id=backend_id)
+        self.health = WorkerHealthTracker()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")

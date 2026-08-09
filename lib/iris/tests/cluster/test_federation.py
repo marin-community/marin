@@ -10,7 +10,6 @@ live backends, the ListPeers view, and the submit router's decision matrix
 
 import pydantic
 import pytest
-from iris.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.federation import peer as peer_module
@@ -22,6 +21,7 @@ from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.resources.endpoint import ExecRequest
 from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from rigging.timing import Duration, ExponentialBackoff
 
 

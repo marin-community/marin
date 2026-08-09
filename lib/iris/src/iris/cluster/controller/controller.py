@@ -20,6 +20,7 @@ from finelog.errors import StatsError
 from rigging.connect import capability_path, federated_capability_path
 from rigging.timing import Duration, Timestamp
 
+from iris.backends.protocol import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
@@ -28,7 +29,6 @@ from iris.cluster.controller.auth import (
     MAX_ENDPOINT_TOKEN_TTL_SECONDS,
     ControllerAuth,
 )
-from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.jobs import FederationSubmission, JobResources
 from iris.cluster.controller.persistence import action as action_persistence

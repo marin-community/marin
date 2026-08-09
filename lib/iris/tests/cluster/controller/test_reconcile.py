@@ -19,24 +19,24 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
-from iris.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
-    RpcTaskBackend,
-)
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     plans_from_snapshot,
 )
+from iris.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    RpcTaskBackend,
+)
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
-from iris.cluster.controller.persistence.backends import BackendWorkerStore
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
 from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.persistence.schema import task_attempts_table
@@ -70,6 +70,7 @@ from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpe
 from iris.resources.job import ContainerProfile, PriorityBand
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.worker_client import RpcWorkerClient
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -95,7 +96,6 @@ from .conftest import (
     register_worker,
     run_worker_daemon_reconcile,
     run_worker_daemon_schedule,
-    store_from_runtime,
     submit_job,
 )
 
@@ -641,17 +641,19 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
     if stub is None:
         stub = _FakeWorkerStub(address=_W1_ADDR)
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    return RpcTaskBackend(stub_factory=factory), stub
+    return RpcTaskBackend(worker_client=RpcWorkerClient(factory)), stub
 
 
 def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
-    provider.bind_runtime(
-        BackendRuntime(
-            backend_id=DEFAULT_BACKEND_ID,
+    provider.attach_worker_store(
+        DEFAULT_BACKEND_ID,
+        DbBackendWorkerStore(
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
+            health=provider.health,
+            defaults=UserBudgetDefaults(),
+            autoscale=provider.autoscale,
+        ),
     )
     provider.seed_liveness()
 
@@ -1319,8 +1321,8 @@ class _ScriptedProvider:
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1399,8 +1401,8 @@ class _UnreachableProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None

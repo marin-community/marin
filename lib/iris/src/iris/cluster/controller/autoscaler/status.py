@@ -8,12 +8,157 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from iris.backends.status import (
+    AutoscalerActionStatus,
+    AutoscalerStatus,
+    DemandEntryStatus,
+    GroupRoutingStatus,
+    ResourceStatus,
+    RoutingStatus,
+    ScaleGroupStatus,
+    SliceStatus,
+    UnmetDemandStatus,
+    VmStatus,
+)
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
 from iris.cluster.types import JobName, WorkerId, WorkerUsability
 from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
 from iris.rpc import vm_pb2
+from iris.time_proto import timestamp_from_proto
+
+
+def autoscaler_status_from_proto(status: vm_pb2.AutoscalerStatus) -> AutoscalerStatus:
+    """Decode the autoscaler's legacy wire-shaped cache into native backend status."""
+    return AutoscalerStatus(
+        groups=tuple(_scale_group_status_from_proto(group) for group in status.groups),
+        current_demand=dict(status.current_demand),
+        last_evaluation=(timestamp_from_proto(status.last_evaluation) if status.HasField("last_evaluation") else None),
+        recent_actions=tuple(
+            AutoscalerActionStatus(
+                timestamp=timestamp_from_proto(action.timestamp) if action.HasField("timestamp") else None,
+                action_type=action.action_type,
+                scale_group=action.scale_group,
+                slice_id=action.slice_id,
+                reason=action.reason,
+                status=action.status,
+            )
+            for action in status.recent_actions
+        ),
+        last_routing_decision=(
+            _routing_status_from_proto(status.last_routing_decision)
+            if status.HasField("last_routing_decision")
+            else None
+        ),
+    )
+
+
+def _scale_group_status_from_proto(group: vm_pb2.ScaleGroupStatus) -> ScaleGroupStatus:
+    return ScaleGroupStatus(
+        name=group.name,
+        backend_id=group.backend_id,
+        device_type=group.device_type,
+        device_variant=group.device_variant,
+        quota_pool=group.quota_pool,
+        allocation_tier=group.allocation_tier,
+        region=group.region,
+        current_demand=group.current_demand,
+        peak_demand=group.peak_demand,
+        backoff_until=timestamp_from_proto(group.backoff_until) if group.HasField("backoff_until") else None,
+        consecutive_failures=group.consecutive_failures,
+        last_scale_up=timestamp_from_proto(group.last_scale_up) if group.HasField("last_scale_up") else None,
+        last_scale_down=timestamp_from_proto(group.last_scale_down) if group.HasField("last_scale_down") else None,
+        slices=tuple(_slice_status_from_proto(item) for item in group.slices),
+        slice_state_counts=dict(group.slice_state_counts),
+        availability_status=group.availability_status,
+        availability_reason=group.availability_reason,
+        blocked_until=timestamp_from_proto(group.blocked_until) if group.HasField("blocked_until") else None,
+        scale_up_cooldown_until=(
+            timestamp_from_proto(group.scale_up_cooldown_until) if group.HasField("scale_up_cooldown_until") else None
+        ),
+        idle_threshold_ms=group.idle_threshold_ms,
+    )
+
+
+def _slice_status_from_proto(item: vm_pb2.SliceInfo) -> SliceStatus:
+    return SliceStatus(
+        slice_id=item.slice_id,
+        scale_group=item.scale_group,
+        created_at=timestamp_from_proto(item.created_at) if item.HasField("created_at") else None,
+        vms=tuple(_vm_status_from_proto(vm) for vm in item.vms),
+        error_message=item.error_message,
+        last_active=timestamp_from_proto(item.last_active) if item.HasField("last_active") else None,
+        idle=item.idle,
+        state=item.state,
+        degraded_slot_count=item.degraded_slot_count,
+        capacity_status=item.capacity_status,
+    )
+
+
+def _vm_status_from_proto(vm: vm_pb2.VmInfo) -> VmStatus:
+    return VmStatus(
+        vm_id=vm.vm_id,
+        slice_id=vm.slice_id,
+        scale_group=vm.scale_group,
+        state=vm.state,
+        address=vm.address,
+        zone=vm.zone,
+        created_at=timestamp_from_proto(vm.created_at) if vm.HasField("created_at") else None,
+        state_changed_at=(timestamp_from_proto(vm.state_changed_at) if vm.HasField("state_changed_at") else None),
+        worker_id=vm.worker_id,
+        worker_healthy=vm.worker_healthy,
+        usability=vm.usability,
+        init_phase=vm.init_phase,
+        init_log_tail=vm.init_log_tail,
+        init_error=vm.init_error,
+        running_task_count=vm.running_task_count,
+        labels=dict(vm.labels),
+    )
+
+
+def _demand_entry_status_from_proto(entry: vm_pb2.DemandEntryStatus) -> DemandEntryStatus:
+    resources = entry.resources
+    return DemandEntryStatus(
+        task_ids=tuple(entry.task_ids),
+        coschedule_group_id=entry.coschedule_group_id,
+        device_type=entry.device_type,
+        device_variant=entry.device_variant,
+        preemptible=entry.preemptible,
+        resources=ResourceStatus(
+            cpu_millicores=resources.cpu_millicores,
+            memory_bytes=resources.memory_bytes,
+            disk_bytes=resources.disk_bytes,
+            gpu_count=resources.gpu_count,
+            tpu_count=resources.tpu_count,
+        ),
+    )
+
+
+def _routing_status_from_proto(routing: vm_pb2.RoutingDecision) -> RoutingStatus:
+    return RoutingStatus(
+        group_to_launch=dict(routing.group_to_launch),
+        group_reasons=dict(routing.group_reasons),
+        routed_entries={
+            group: tuple(_demand_entry_status_from_proto(entry) for entry in entries.entries)
+            for group, entries in routing.routed_entries.items()
+        },
+        unmet_entries=tuple(
+            UnmetDemandStatus(entry=_demand_entry_status_from_proto(item.entry), reason=item.reason)
+            for item in routing.unmet_entries
+        ),
+        group_statuses=tuple(
+            GroupRoutingStatus(
+                group=item.group,
+                priority=item.priority,
+                assigned=item.assigned,
+                launch=item.launch,
+                decision=item.decision,
+                reason=item.reason,
+            )
+            for item in routing.group_statuses
+        ),
+    )
 
 
 @dataclass(frozen=True)

@@ -8,9 +8,9 @@ from unittest.mock import Mock
 import pytest
 from finelog.client import LogClient
 from iris.backends.k8s.tasks import K8sTaskProvider, PodConfig
+from iris.backends.protocol import BackendCapability
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence.database import ControllerDB

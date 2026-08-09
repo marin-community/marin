@@ -8,9 +8,10 @@ from pathlib import Path
 
 from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
-from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import ThreadContainer
 from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
@@ -26,6 +27,7 @@ from iris.resources.node import NodeDetail, NodeQuery
 from iris.resources.state import TaskState
 from iris.resources.task import TaskDetail
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc.worker_client import RpcWorkerClient
 from rigging.timing import Duration, Timestamp
 
 
@@ -158,7 +160,7 @@ class WorkerJourney:
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.fleet = WorkerFleet()
         self.backend = RpcTaskBackend(
-            stub_factory=self.fleet,
+            worker_client=RpcWorkerClient(self.fleet),
             unreachable_grace=Duration.from_ms(100),
         )
         state_dir = root / "controller"
@@ -167,7 +169,7 @@ class WorkerJourney:
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
         )
-        self.controller = ControllerRuntime(
+        self.controller = compose_controller_runtime(
             config=config,
             backends={DEFAULT_BACKEND_ID: self.backend},
             log_stack=build_log_stack(

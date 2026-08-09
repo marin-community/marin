@@ -50,18 +50,11 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
-    RpcTaskBackend,
-    RpcWorkerStubFactory,
-    _reconcile_request_to_proto,
-)
-from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
@@ -72,10 +65,16 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
     run_scheduling_decision,
 )
+from iris.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    RpcTaskBackend,
+)
+from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.admin import ControllerAdmin
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
-from iris.cluster.controller.persistence.backends import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -109,7 +108,6 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.runtime import (
     _CONTROLLER_KEEPALIVE,
     ControllerConfig,
-    ControllerRuntime,
 )
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
@@ -131,10 +129,8 @@ from iris.resources.worker import WorkerMetadata
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
-from iris.rpc.controller_service import (
-    USER_JOB_STATES,
-    _worker_roster,
-)
+from iris.rpc.controller_service import USER_JOB_STATES
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory, _reconcile_request_to_proto
 from iris.rpc.worker_codec import worker_metadata_to_proto
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
@@ -207,14 +203,8 @@ class _FakeProvider:
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = DbBackendWorkerStore(
-            db=runtime.db,
-            owns_scale_group=runtime.owns_scale_group,
-            health=self.health,
-            defaults=runtime.budget_defaults,
-            autoscale=self.autoscale,
-        )
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -931,7 +921,7 @@ def load_get_autoscaler_status(harness: RpcHarness, db: ControllerDB, rps: float
 
 
 def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    roster = _worker_roster(db)
+    roster = ControllerAdmin(db).worker_roster()
     if not roster:
         return None
     worker_id = str(next(iter(roster)))
@@ -1518,12 +1508,12 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     # Worker roster + running map drives ListWorkers.
     def _list_workers():
-        roster = _worker_roster(db)
+        roster = ControllerAdmin(db).worker_roster()
         if roster:
             with db.read_snapshot() as tx:
                 reads.running_tasks_by_worker(tx, {w[0].worker_id for w in roster})
 
-    bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
+    bench(f"RPC: ListWorkers (n={len(ControllerAdmin(db).worker_roster())})", _list_workers)
 
     # Sample job for ListTasks.
     with db.read_snapshot() as _tx:
@@ -2362,6 +2352,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         local_state_dir=state_dir / "local",
         dry_run=True,
         checkpoint_interval=None,
+        cluster_id="benchmark",
     )
     threads = ThreadContainer("bench-serve")
     log_stack = build_log_stack(
@@ -2370,7 +2361,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         host=config.host,
         worker_token=None,
     )
-    controller = ControllerRuntime(
+    controller = compose_controller_runtime(
         config=config,
         backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
         log_stack=log_stack,
@@ -2926,7 +2917,10 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(
+                worker_client=RpcWorkerClient(stub_factory),
+                parallelism=parallelism,
+            )
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))

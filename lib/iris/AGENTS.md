@@ -20,8 +20,8 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
 - `src/iris/resources/` — immutable native resource records used by clients and controller behavior
-- `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `backend.py` (the `TaskBackend` contract), `scheduling/`, and `autoscaler/`
-- `src/iris/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
+- `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `admin.py` (typed operational behavior), `composition.py` (process composition root), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `scheduling/`, and `autoscaler/`
+- `src/iris/backends/` — the native `TaskBackend` contract and status records plus implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
 - `src/iris/rpc/` — protobuf definitions/generated code plus RPC clients, codecs, and server adapters
@@ -127,7 +127,7 @@ https://github.com/marin-community/marin/issues/6595.
 
 ### The TaskBackend contract
 
-A `TaskBackend` (`controller/backend.py`) is the control-plane driver for ONE
+A `TaskBackend` (`backends/protocol.py`) is the control-plane driver for ONE
 cluster. It implements one uniform set of phase methods — `schedule` (pure
 placement decision), `reconcile` (backend I/O: task observations + per-worker
 health events), `autoscale` (provision, or tear down dead workers' slices +
@@ -135,10 +135,10 @@ healthy siblings) — plus the on-demand one-offs (`get_process_status`,
 `profile_task`, `exec_in_container`). Each phase returns its own frozen result
 type: `ScheduleResult`, `ReconcileResult`, `AutoscaleResult`. The controller is a
 thin dispatcher: it owns the database and the loop cadences, and each loop reads
-a DB snapshot → calls one backend method → commits the returned result
+typed state → calls one backend method → commits the returned result
 (dispatching within a method on which result field is non-empty, never by
-`isinstance`). **The contract is DB-less**: backends take plain data in and
-return plain data out; they never touch the controller DB.
+`isinstance`). A worker-daemon backend receives a typed `BackendWorkerStore`;
+it never receives `ControllerDB` or imports a persistence implementation.
 
 A backend declares `capabilities: frozenset[BackendCapability]` — metadata the
 dashboard and on-demand RPC routing key on. The controller calls all three
@@ -147,23 +147,20 @@ the controller drain the dispatch queue (a DB write it owns) into that backend's
 reconcile snapshot. The flags: `WORKER_DAEMON` (`"workers"`), `IRIS_AUTOSCALER`
 (`"autoscaler"`), `CLUSTER_VIEW` (`"cluster"`).
 
-Worker health is OBSERVED only by worker-daemon backends — REACHED / UNREACHABLE
-events on `ReconcileResult.health_events` — and OWNED by the controller, which
-folds them (together with BUILD_FAILED events it synthesizes from the reconcile
-kernel's effects) through the single `WorkerHealthTracker.apply` site; a worker
-over the failure threshold is reaped via `autoscale(dead_workers=...)`.
+Worker health is observed and owned by worker-daemon backends. Each backend
+folds REACHED / UNREACHABLE observations through its `WorkerHealthTracker`; a
+worker over the failure threshold is reaped through that backend.
 There is no ping loop and no separate liveness channel — the reconcile RPC
 outcome is the only liveness signal. Cluster-view backends (Kubernetes) have no
-Iris workers, so they emit no health events; pod status flows back as neutral
-task `updates`.
+Iris workers, so pod status flows back as task effects.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 `{WORKER_DAEMON, IRIS_AUTOSCALER}`, owns the `Scheduler` + `Autoscaler`) for
 GCP/TPU, CoreWeave bare-metal, manual, and local; and `K8sTaskProvider`
 (`backends/k8s/tasks.py`, `{CLUSTER_VIEW}`) for Kubernetes (Kueue schedules, the
 cluster autoscaler provisions, so its `schedule`/`autoscale` are no-ops). The
-contract type lives in `controller/backend.py`; see `docs/architecture.md` "The
-TaskBackend contract".
+worker Connect transport lives in `rpc/worker_client.py`, outside the backend;
+see `docs/architecture.md` "Execution boundaries".
 
 Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 

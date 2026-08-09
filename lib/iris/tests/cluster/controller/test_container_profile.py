@@ -13,9 +13,9 @@ profile is persisted on ``job_config`` and stamped onto each dispatched
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.backends.protocol import BackendCapability
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection

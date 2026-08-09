@@ -8,7 +8,6 @@ import atexit
 import enum
 import json
 import logging
-import secrets
 import socket
 import tempfile
 import threading
@@ -19,14 +18,25 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import uvicorn
-from finelog.client import RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler
 from rigging import telemetry
 from rigging.filesystem import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 
+from iris.backends.protocol import (
+    AutoscaleRequest,
+    AutoscaleResult,
+    BackendCapability,
+    ReconcileRequest,
+    ReconcileResult,
+    ScheduleRequest,
+    ScheduleResult,
+    TaskBackend,
+)
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, PeerConfig
+from iris.cluster.controller.application import ControllerApplication
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
@@ -41,25 +51,9 @@ from iris.cluster.controller.auth import (
     FederationTokenProvider,
     NativeProxyAuthConfig,
     NativeProxyAuthMode,
-    native_proxy_auth_policy,
-    request_auth_policy,
-)
-from iris.cluster.controller.backend import (
-    AutoscaleRequest,
-    AutoscaleResult,
-    BackendCapability,
-    BackendRuntime,
-    ReconcileRequest,
-    ReconcileResult,
-    ScheduleRequest,
-    ScheduleResult,
-    TaskBackend,
 )
 from iris.cluster.controller.budget import resource_value
-from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
-from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.endpoint_service import ProxyMappingDelta, ProxyRegistryReset
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
 from iris.cluster.controller.native_proxy_metrics import (
@@ -70,6 +64,7 @@ from iris.cluster.controller.native_proxy_metrics import (
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.autoscaler.state import persist_autoscaler_state
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
 from iris.cluster.controller.persistence.checkpoint import (
     CheckpointResult,
     backup_databases,
@@ -129,8 +124,6 @@ from iris.cluster.types import (
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.resources.state import PriorityBand
 from iris.rpc.auth import SESSION_COOKIE
-from iris.rpc.controller_service import ControllerServiceImpl
-from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -484,16 +477,12 @@ class ControllerRuntime:
         # starts the emitter thread, so it is built in start(), closed in stop().
         self._task_state_collector: TaskStateCollector | None = None
 
-        # Give each worker-daemon backend its own scale-group-scoped view of the DB
-        # so it sources its own workers (the controller never partitions a worker
-        # snapshot). Each such backend constructs and owns its liveness tracker, then
-        # builds its worker source from the runtime it is bound here; the controller
-        # reaches it through the backend, routed by scale group. A placement-owning
-        # backend (k8s) has no workers and reads its dispatch effects through the
-        # transition reader it received at construction.
+        # Compose each worker-daemon backend's scale-group-scoped persistence port.
+        # The backend owns liveness and provider I/O, but never receives ControllerDB
+        # or constructs a concrete persistence implementation.
         for backend_id, backend in self._backends.items():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.bind_runtime(self._build_runtime(backend_id))
+                backend.attach_worker_store(backend_id, self._build_worker_store(backend_id, backend))
 
         # Seed each backend's liveness from its persisted workers so the scheduler
         # sees them at startup, and reseed after a DB reopen (checkpoint restore).
@@ -501,68 +490,7 @@ class ControllerRuntime:
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
-        self._endpoint_service = EndpointServiceImpl(
-            db=self._db,
-            system_endpoints={},
-        )
-        capability_url_config = CapabilityUrlConfig(
-            cluster_name=config.cluster_id,
-            local_origin=config.dashboard_url,
-            parent_origin=config.federation_public_parent,
-        )
-        self._controller = Controller(
-            cluster_id=config.cluster_id,
-            db=self._db,
-            runtime=self,
-            bundle_store=self._bundle_store,
-            endpoint_service=self._endpoint_service,
-            auth=config.auth or ControllerAuth(),
-            user_budget_defaults=config.user_budget_defaults,
-            capability_url_config=capability_url_config,
-            backends=self._backends,
-            backend_configs=self._backend_configs,
-            log_client=self._log_client,
-        )
-        self._service = ControllerServiceImpl(
-            runtime=self,
-            bundle_store=self._bundle_store,
-            log_client=self._log_client,
-            db=self._db,
-            endpoint_service=self._endpoint_service,
-            controller=self._controller,
-            auth=config.auth,
-            user_budget_defaults=config.user_budget_defaults,
-        )
-        self._resource_service = ResourceServiceImpl(self._controller)
-        # Forwards a /proxy request for an endpoint that lives on a federated child
-        # to that peer's controller, presenting this cluster's federation bearer.
-        # Present only when this controller has peers and a signing key to mint with.
-        federated_handoff = (
-            FederatedEndpointHandoff(self._federation.peer_controller_address, federation_token_provider.get_token)
-            if federation_token_provider is not None
-            else None
-        )
-
-        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
-            with self._db.read_snapshot() as q:
-                return reads.has_received_job_from_peer(q, peer_id, root_job)
-
-        external_auth_policy = request_auth_policy(config.auth)
-        proxy_decision_secret = secrets.token_urlsafe(32)
-        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
-        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
-        self._dashboard = ControllerDashboard(
-            self._service,
-            resource_service=self._resource_service,
-            endpoint_service=self._endpoint_service,
-            auth_provider=config.auth_provider,
-            auth_policy=self._auth_policy,
-            reported_auth_policy=external_auth_policy,
-            jwt_manager=config.auth.jwt_manager if config.auth else None,
-            federated_handoff=federated_handoff,
-            federation_owner_check=_federation_owner_check,
-            proxy_decision_secret=proxy_decision_secret,
-        )
+        self._application: ControllerApplication | None = None
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
         # mini-tick so submit->assign latency is the schedule time, not gated on
@@ -578,7 +506,6 @@ class ControllerRuntime:
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
         self._native_proxy_metrics: NativeProxyTelemetry | None = None
-        self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
@@ -677,6 +604,21 @@ class ControllerRuntime:
         """
         return self.all_liveness().get(worker_id, WorkerLiveness())
 
+    def attach_application(self, application: ControllerApplication) -> None:
+        """Attach the externally composed resource and transport application."""
+        if self._application is not None:
+            raise RuntimeError("Controller application is already attached")
+        if self.started:
+            raise RuntimeError("Controller application must be attached before start")
+        self._application = application
+        application.endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
+
+    def _require_application(self) -> ControllerApplication:
+        application = self._application
+        if application is None:
+            raise RuntimeError("Controller application has not been composed")
+        return application
+
     @property
     def started(self) -> bool:
         """Whether the controller loops have been started."""
@@ -692,6 +634,7 @@ class ControllerRuntime:
         pods (cluster backends), folds the backend's observed health events, and
         tears down workers that cross the failure threshold.
         """
+        application = self._require_application()
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
@@ -710,7 +653,7 @@ class ControllerRuntime:
         # balancer's forwarded headers. Trust its loopback connection so
         # Starlette builds externally reachable absolute URLs.
         server_config = uvicorn.Config(
-            self._dashboard.app,
+            application.dashboard.app,
             host=_PRIVATE_CONTROLLER_HOST,
             port=0,
             log_level="warning",
@@ -730,9 +673,9 @@ class ControllerRuntime:
         # group enters backoff, and any task constrained to that group hangs until
         # the backoff expires.
         for name, url in self._config.endpoints.items():
-            self._endpoint_service.register_system_endpoint(name, url)
+            application.endpoint_service.register_system_endpoint(name, url)
             logger.info("Registered system endpoint %s -> %s", name, url)
-        self._endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
+        application.endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
 
         # One driver runs schedule -> reconcile -> autoscale as phases of a single
         # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint
@@ -764,7 +707,7 @@ class ControllerRuntime:
             self._config.host,
             self._config.port,
             f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
-            self._dashboard.proxy_decision_secret,
+            application.dashboard.proxy_decision_secret,
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
         telemetry.configure(
@@ -804,14 +747,14 @@ class ControllerRuntime:
         if self._native_proxy is None:
             return
         self._native_proxy.pause_registry()
-        snapshot = self._endpoint_service.proxy_registry_snapshot()
+        snapshot = self._require_application().endpoint_service.proxy_registry_snapshot()
         self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
 
     def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
         auth = self._config.auth
         if auth is None or auth.provider is None:
             mode = NativeProxyAuthMode.PERMISSIVE
-        elif self._external_auth_allows_anonymous:
+        elif self._require_application().external_auth_allows_anonymous:
             mode = NativeProxyAuthMode.OPTIONAL
         else:
             mode = NativeProxyAuthMode.ENFORCING
@@ -1148,23 +1091,21 @@ class ControllerRuntime:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
 
-    def _build_runtime(self, backend_id: str) -> BackendRuntime:
-        """Assemble the controller-owned deps a backend builds its worker source from.
-
-        The backend joins this with its own liveness tracker to build a worker source
-        scoped to its scale groups, covering exactly the workers that backend owns.
-        The default backend also owns workers whose scale group is unmapped, matching
-        the scale-group→backend resolution used everywhere else.
-        """
+    def _build_worker_store(self, backend_id: str, backend: TaskBackend) -> DbBackendWorkerStore:
+        """Compose one backend's scale-group-scoped worker persistence port."""
 
         def owns_scale_group(scale_group: str) -> bool:
             return self.backend_id_for_scale_group(scale_group) == backend_id
 
-        return BackendRuntime(
-            backend_id=backend_id,
+        health = backend.health
+        if health is None:
+            raise ValueError(f"Worker-daemon backend {backend_id!r} must expose a liveness tracker")
+        return DbBackendWorkerStore(
             db=self._db,
             owns_scale_group=owns_scale_group,
-            budget_defaults=self._config.user_budget_defaults,
+            health=health,
+            defaults=self._config.user_budget_defaults,
+            autoscale=backend.autoscale,
         )
 
     def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:
@@ -1738,14 +1679,14 @@ class ControllerRuntime:
         )
 
     @property
-    def controller(self) -> Controller:
+    def controller(self):
         """Return the canonical resource-oriented application controller."""
-        return self._controller
+        return self._require_application().controller
 
     @property
-    def controller_service(self) -> ControllerServiceImpl:
+    def controller_service(self):
         """The ControllerService transport adapter hosted by this controller."""
-        return self._service
+        return self._require_application().controller_service
 
     # Properties
 
@@ -1762,6 +1703,26 @@ class ControllerRuntime:
     def backends(self) -> dict[str, TaskBackend]:
         """The controller's ``{backend_id: TaskBackend}`` collection."""
         return self._backends
+
+    @property
+    def backend_configs(self) -> dict[str, BackendConfig]:
+        """Immutable backend routing configuration used by application composition."""
+        return self._backend_configs
+
+    @property
+    def database(self) -> ControllerDB:
+        """Controller persistence boundary used by the composition root."""
+        return self._db
+
+    @property
+    def bundle_store(self) -> BundleStore:
+        """Bundle storage boundary used by the composed application."""
+        return self._bundle_store
+
+    @property
+    def log_client(self) -> LogClient:
+        """Finelog client shared with the composed application."""
+        return self._log_client
 
     @property
     def federation(self) -> FederationManager:

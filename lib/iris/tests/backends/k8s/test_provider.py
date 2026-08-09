@@ -31,7 +31,7 @@ from iris.backends.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.controller.backend import ProviderError, TaskTarget
+from iris.backends.protocol import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage

@@ -7,11 +7,11 @@ import threading
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
@@ -81,7 +81,7 @@ class FakeDirectProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
         """No-op: a cluster-view backend tracks no Iris workers, so it builds no worker source."""
 
     def seed_liveness(self) -> None:

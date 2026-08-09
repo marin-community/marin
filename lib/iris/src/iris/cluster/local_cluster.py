@@ -24,7 +24,7 @@ from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration
 
-from iris.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.config import (
     GcpPlatformConfig,
     IrisClusterConfig,
@@ -41,6 +41,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.runtime import (
@@ -55,6 +56,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 
 
 def create_local_autoscaler(
@@ -250,12 +252,12 @@ class LocalCluster:
         # drives the autoscaler via backend.autoscale and persists the returned
         # state each tick.
         provider = RpcTaskBackend(
-            stub_factory=RpcWorkerStubFactory(),
+            worker_client=RpcWorkerClient(RpcWorkerStubFactory()),
             unreachable_grace=controller_config.worker_unreachable_grace,
             autoscaler=self._autoscaler,
         )
 
-        self._controller = ControllerRuntime(
+        self._controller = compose_controller_runtime(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,

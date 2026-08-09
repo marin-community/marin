@@ -39,12 +39,14 @@ flowchart LR
     Adapter --> Codec[iris.rpc.legacy_codec]
     Codec --> Controller[cluster.controller.Controller]
     Adapter --> Runtime[controller.runtime]
-    Adapter --> Persistence[controller.persistence]
+    Adapter --> Admin[controller.admin]
+    Admin --> Persistence[controller.persistence]
 ```
 
 Old Job and Task messages are decoded into `iris.resources` before calling
-`Controller`. Operational and administrative methods still read typed
-persistence/runtime surfaces from the adapter and encode their results there.
+`Controller`. Operational methods call the typed `ControllerAdmin` application
+service or `ControllerRuntime`; the RPC adapter does not import controller
+persistence.
 
 ## Packages
 
@@ -71,8 +73,15 @@ accept generated protobuf messages or issue SQL directly.
 
 `cluster/controller/runtime.py` owns control-loop state and coordinates
 scheduling, reconciliation, checkpointing, federation, and backend I/O.
-`cluster/controller/main.py` resolves configuration and constructs the live
-backends and runtime.
+`cluster/controller/composition.py` constructs the resource controller, legacy
+RPC adapter, resource RPC adapter, endpoint service, dashboard, and runtime.
+`cluster/controller/main.py` resolves configuration and calls that composition
+root. `cluster/controller/application.py` groups the composed surfaces hosted by
+the process runtime.
+
+`cluster/controller/admin.py` exposes typed operational reads and mutations for
+the retained `ControllerService` methods that are not resource operations. It is
+the persistence-facing application boundary for that RPC adapter.
 
 Persistence is confined to `cluster/controller/persistence`:
 
@@ -100,8 +109,15 @@ drives one backend and exposes the same phases:
 
 `iris.backends.rpc.RpcTaskBackend` uses worker daemons and the Iris autoscaler.
 `iris.backends.k8s.K8sTaskProvider` observes and controls Kubernetes directly.
-Backends receive plain snapshots and return plain results; they do not access
-the controller database.
+The contract and its native request/result records live in
+`iris.backends.protocol`; native backend status records live in
+`iris.backends.status`. Worker-daemon backends receive a typed
+`BackendWorkerStore` from the composition runtime. They do not receive a
+`ControllerDB` or import persistence implementations. The Connect worker client
+and worker service adapter live in `iris.rpc.worker_client` and
+`iris.rpc.worker_service`; backend implementations exchange native records with
+them. `iris.rpc.backend_status_codec` converts native status to the retained
+dashboard wire.
 
 Machine lifecycle is separate from task execution. Implementations under
 `cluster/platforms` start, stop, and inspect controller or worker machines.
@@ -119,13 +135,5 @@ They do not decide Job or Task state.
   `cluster.platforms`.
 - The retained old Job/Task wire is decoded and encoded in
   `iris.rpc.legacy_codec`.
-
-`TaskBackend` is still defined in `cluster/controller/backend.py`, so
-`iris.backends` imports its contract from the controller package. Moving that
-contract requires separating its scheduler and autoscaler request types; this
-branch does not hide that dependency behind forwarding modules.
-
-`iris.rpc.controller_service` still contains operational query assembly in
-addition to old-wire translation. The generated wire is contained in
-`iris.rpc`, but extracting those operations into typed controller collaborators
-is separate from the mechanical package move.
+- RPC adapters may depend on typed controller application services. They do not
+  import `cluster.controller.persistence`.

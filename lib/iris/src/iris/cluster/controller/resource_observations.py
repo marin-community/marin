@@ -8,13 +8,12 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.backend import TaskBackend
+from iris.backends.protocol import TaskBackend
 from iris.resources.node import (
     NodeAttribute,
     NodeAttributeKind,
     NodeCapacity,
 )
-from iris.time_proto import timestamp_from_proto
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +60,7 @@ class AutoscalerResourceObservation:
 def observe_backend_resources(backend: TaskBackend) -> BackendResourceObservation:
     """Read one backend status response into the native resource inventory."""
     status = backend.status()
-    if not status.HasField("kubernetes"):
+    if status.kubernetes is None:
         return BackendResourceObservation()
     return BackendResourceObservation(
         nodes=tuple(
@@ -116,7 +115,7 @@ def worker_node_metadata(
 def observe_autoscaler_resources(backend: TaskBackend) -> AutoscalerResourceObservation:
     """Read one autoscaler response into native Slice observations."""
     status = backend.autoscaler_status()
-    observed_at = timestamp_from_proto(status.last_evaluation) if status.HasField("last_evaluation") else Timestamp.now()
+    observed_at = status.last_evaluation or Timestamp.now()
     return AutoscalerResourceObservation(
         observed_at=observed_at,
         slices=tuple(
@@ -124,7 +123,7 @@ def observe_autoscaler_resources(backend: TaskBackend) -> AutoscalerResourceObse
                 slice_id=item.slice_id,
                 scaling_group_id=group.name,
                 lifecycle_state=item.state,
-                created_at=timestamp_from_proto(item.created_at) if item.HasField("created_at") else None,
+                created_at=item.created_at,
                 provider_node_ids=tuple(vm.vm_id for vm in item.vms),
                 error_message=item.error_message,
             )

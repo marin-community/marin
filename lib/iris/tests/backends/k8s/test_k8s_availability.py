@@ -6,7 +6,7 @@ free/total counting on :class:`ClusterState` and its attribution to a backend's
 advertised device variant in ``K8sTaskProvider.resource_capacity``."""
 
 from iris.backends.k8s.tasks import ClusterState, K8sTaskProvider, PodConfig
-from iris.cluster.controller.backend import DeviceCapacity
+from iris.backends.protocol import DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE, K8sResource
 from iris.cluster.types import WellKnownAttribute

@@ -26,6 +26,7 @@ from iris.cluster.composer import make_backends
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
+from iris.cluster.controller.composition import compose_controller_runtime
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.checkpoint import (
     download_checkpoint_to_local,
@@ -35,7 +36,7 @@ from iris.cluster.controller.persistence.checkpoint import (
 )
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
-from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 
@@ -293,7 +294,7 @@ def run_controller_serve(
     if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
-    controller = ControllerRuntime(
+    controller = compose_controller_runtime(
         config=config,
         backends=backends,
         log_stack=log_stack,

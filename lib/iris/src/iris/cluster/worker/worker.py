@@ -52,7 +52,6 @@ from iris.cluster.worker.env_probe import (
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE, PortAllocator
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -78,6 +77,7 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.resource_client import ResourceRpcClient
 from iris.rpc.worker_codec import worker_metadata_to_proto
+from iris.rpc.worker_service import WorkerServiceImpl
 
 logger = logging.getLogger(__name__)
 

@@ -217,7 +217,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         # The serving process the endpoint points at; the peer dials it directly.
         upstream = UpstreamObservation()

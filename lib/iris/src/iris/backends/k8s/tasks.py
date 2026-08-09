@@ -27,13 +27,11 @@ from finelog.client.log_client import Table
 from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.constraints import Constraint, ConstraintOp
-from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     DeviceCapacity,
     ProviderError,
     ReconcileRequest,
@@ -42,6 +40,16 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
 )
+from iris.backends.status import (
+    AutoscalerStatus,
+    BackendStatus,
+    KubernetesPodStatus,
+    KubernetesStatus,
+    NodePoolStatus,
+    NodeStatus,
+)
+from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -121,8 +129,6 @@ from iris.resources.job import ContainerProfile, PriorityBand
 from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.resources.worker import ResourceUsage
-from iris.rpc import controller_pb2, vm_pb2
-from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -1581,10 +1587,8 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity=severity)
 
 
-def _build_pod_statuses(
-    pods: list[dict], workloads: list[dict] | None = None
-) -> list[controller_pb2.Controller.KubernetesPodStatus]:
-    """Build pod status protos from raw kubectl pod objects."""
+def _build_pod_statuses(pods: list[dict], workloads: list[dict] | None = None) -> list[KubernetesPodStatus]:
+    """Build pod status records from raw kubectl pod objects."""
     statuses = []
     workload_index = _kueue_workload_index(workloads or [])
     for pod in pods:
@@ -1596,20 +1600,21 @@ def _build_pod_statuses(
         phase = pod.get("status", {}).get("phase", "Unknown")
         pr = _pod_reason_message(pod, _workload_for_pod(pod, workload_index))
 
-        ps = controller_pb2.Controller.KubernetesPodStatus(
-            pod_name=pod_name,
-            task_id=task_id,
-            phase=phase,
-            reason=pr.reason,
-            message=pr.message,
-            node_name=node_name,
+        statuses.append(
+            KubernetesPodStatus(
+                pod_name=pod_name,
+                task_id=task_id,
+                phase=phase,
+                reason=pr.reason,
+                message=pr.message,
+                last_transition=pr.last_transition,
+                node_name=node_name,
+            )
         )
-        ps.last_transition.CopyFrom(timestamp_to_proto(pr.last_transition))
-        statuses.append(ps)
     return statuses
 
 
-def _fetch_node_pools(kubectl: K8sService, managed_label: str) -> list[controller_pb2.Controller.NodePoolStatus]:
+def _fetch_node_pools(kubectl: K8sService, managed_label: str) -> list[NodePoolStatus]:
     """Fetch node pool statuses from the cluster."""
     try:
         np_labels = {managed_label: "true"} if managed_label else None
@@ -1630,7 +1635,7 @@ def _fetch_node_pools(kubectl: K8sService, managed_label: str) -> list[controlle
                 scale_group = lv
                 break
         result.append(
-            controller_pb2.Controller.NodePoolStatus(
+            NodePoolStatus(
                 name=meta.get("name", ""),
                 instance_type=spec.get("instanceType", ""),
                 scale_group=scale_group,
@@ -1706,15 +1711,15 @@ def _running_pods_by_node(pods: list[dict]) -> dict[str, int]:
     return counts
 
 
-def _node_status_proto(
+def _node_status(
     node: dict,
     *,
     running_pods: int,
     cpu_mc: int,
     mem_bytes: int,
-) -> controller_pb2.Controller.NodeStatus:
-    """Build a NodeStatus proto from Kubernetes identity and capacity."""
-    return controller_pb2.Controller.NodeStatus(
+) -> NodeStatus:
+    """Build a node status record from Kubernetes identity and capacity."""
+    return NodeStatus(
         name=node.get("metadata", {}).get("name", ""),
         ready=_node_ready(node),
         schedulable=not node.get("spec", {}).get("unschedulable", False),
@@ -1748,14 +1753,14 @@ class ClusterState:
         self._pods: list[dict] = []
         self._nodes: list[dict] = []
         self._workloads: list[dict] = []
-        self._node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
+        self._node_pools: list[NodePoolStatus] = []
 
     def update(
         self,
         pods: list[dict],
         nodes: list[dict],
         workloads: list[dict],
-        node_pools: list[controller_pb2.Controller.NodePoolStatus],
+        node_pools: list[NodePoolStatus],
     ) -> None:
         """Atomically replace all cluster state from a completed sync cycle."""
         new_pods = sorted(pods, key=lambda p: p.get("metadata", {}).get("name", ""))
@@ -1815,8 +1820,8 @@ class ClusterState:
                 held_by_band[band] = held_by_band.get(band, 0) + request
         return DeviceCapacity(free=max(0, allocatable - held), total=allocatable, held_by_band=held_by_band)
 
-    def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
-        """Build the dashboard RPC response from current state. No kubectl calls."""
+    def status(self, namespace: str) -> KubernetesStatus:
+        """Build the native dashboard status from current state. No kubectl calls."""
         with self._lock:
             pods = self._pods[:]
             nodes = self._nodes[:]
@@ -1828,7 +1833,7 @@ class ClusterState:
         total_cpu_mc = 0
         total_memory_bytes = 0
         running = _running_pods_by_node(pods)
-        node_statuses: list[controller_pb2.Controller.NodeStatus] = []
+        node_statuses: list[NodeStatus] = []
         for node in nodes:
             spec = node.get("spec", {})
             taints = spec.get("taints", [])
@@ -1840,7 +1845,7 @@ class ClusterState:
                 total_memory_bytes += mem_bytes
             name = node.get("metadata", {}).get("name", "")
             node_statuses.append(
-                _node_status_proto(
+                _node_status(
                     node,
                     running_pods=running.get(name, 0),
                     cpu_mc=cpu_mc,
@@ -1848,16 +1853,16 @@ class ClusterState:
                 )
             )
 
-        return controller_pb2.Controller.GetKubernetesClusterStatusResponse(
+        return KubernetesStatus(
             namespace=namespace,
             total_nodes=total_nodes,
             schedulable_nodes=schedulable_nodes,
             allocatable_cpu=f"{total_cpu_mc / 1000:.1f} cores" if total_cpu_mc else "0 cores",
             allocatable_memory=_format_bytes(total_memory_bytes),
-            pod_statuses=_build_pod_statuses(pods, workloads),
+            pod_statuses=tuple(_build_pod_statuses(pods, workloads)),
             provider_version="iris-kubernetes/v1",
-            node_pools=node_pools,
-            nodes=node_statuses,
+            node_pools=tuple(node_pools),
+            nodes=tuple(node_statuses),
         )
 
 
@@ -2264,7 +2269,7 @@ def _parse_pod_proc_status(output: str) -> ProcessInfo:
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
 
-    A cluster :class:`~iris.cluster.controller.backend.TaskBackend`: Kueue owns
+    A cluster :class:`~iris.backends.protocol.TaskBackend`: Kueue owns
     placement, so ``schedule`` and ``autoscale`` are no-ops; ``reconcile``
     consumes the dispatch drain (``tasks_to_run`` + ``running_tasks``) carried on
     the :class:`ReconcileRequest` and returns neutral task ``updates``. K8s pods
@@ -2407,8 +2412,9 @@ class K8sTaskProvider:
         Iris-managed slices to tear down."""
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """No-op: a cluster backend tracks no Iris workers, so it builds no worker source."""
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        """Reject worker-store attachment: Kubernetes has no Iris workers."""
+        raise RuntimeError(f"Kubernetes backend {backend_id!r} does not accept a worker store")
 
     def seed_liveness(self) -> None:
         """No-op: a cluster backend tracks no Iris worker liveness to seed."""
@@ -2664,17 +2670,17 @@ class K8sTaskProvider:
         if self._periodic_profiler is not None:
             self._periodic_profiler.close()
 
-    def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
+    def get_cluster_status(self) -> KubernetesStatus:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
-        return self._cluster_state.to_status_response(self.pods.namespace)
+        return self._cluster_state.status(self.pods.namespace)
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
+    def status(self) -> BackendStatus:
         """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
-        return controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status())
+        return BackendStatus(kubernetes=self.get_cluster_status())
 
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+    def autoscaler_status(self) -> AutoscalerStatus:
         """Empty: K8s provisions its own capacity and runs no Iris autoscaler."""
-        return vm_pb2.AutoscalerStatus()
+        return AutoscalerStatus()
 
     # -------------------------------------------------------------------------
     # Internal helpers

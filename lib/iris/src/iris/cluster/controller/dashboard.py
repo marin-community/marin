@@ -52,8 +52,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
+from iris.backends.protocol import backend_descriptor
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
-from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (

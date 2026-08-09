@@ -15,6 +15,7 @@ from connectrpc.errors import ConnectError
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
+from iris.backends.protocol import BackendCapability, TaskBackend
 from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
@@ -26,7 +27,6 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB, Tx

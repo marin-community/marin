@@ -28,23 +28,28 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 
 import logging
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
+from rigging.timing import Timestamp
+
+from iris.backends.status import AutoscalerStatus, BackendStatus
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
-from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
+from iris.cluster.controller.reconcile.reader import TransitionReader
+from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
@@ -68,11 +73,17 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    AttemptUid,
+    JobName,
+    PendingTask,
+    UserBudgetDefaults,
+    WorkerId,
+    WorkerStatusMap,
+)
 from iris.resources.attempt import AttemptLaunch
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.system import ProcessInfo
-from iris.rpc import controller_pb2, vm_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -451,24 +462,65 @@ def apply_placements(
     return all_assignments, context, gated.jobs
 
 
-@dataclass(frozen=True)
-class BackendRuntime:
-    """The controller-owned values a worker-daemon backend builds its
-    :class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` from.
+class BackendWorkerStore(TransitionReader, Protocol):
+    """Typed worker-state port supplied to a worker-daemon backend.
 
-    Passed to :meth:`TaskBackend.bind_runtime` at startup.
+    The controller persistence package implements this protocol. Backends can
+    schedule, reconcile, and reap workers without receiving ``ControllerDB`` or
+    importing a concrete persistence implementation.
     """
 
-    backend_id: str
-    """The id the controller assigned this backend. The backend stamps it onto the
-    autoscaler groups it authors, so the controller never has to tag them afterward."""
-    db: ControllerDB
-    """The controller database."""
-    owns_scale_group: Callable[[str], bool]
-    """Whether a scale group belongs to this backend (the default backend also claims
-    scale groups mapped to no backend)."""
-    budget_defaults: UserBudgetDefaults
-    """Per-user budget defaults."""
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot: ...
+
+    def owned_worker_ids(self) -> set[WorkerId]: ...
+
+    def scheduling_inputs(self) -> BackendSchedulingInputs: ...
+
+    def reconcile_snapshot(self) -> ControlSnapshot: ...
+
+    def worker_status(self) -> WorkerStatusMap: ...
+
+    def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]: ...
+
+    def worker_address(self, worker_id: WorkerId) -> str | None: ...
+
+    def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]: ...
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int: ...
+
+
+class WorkerClient(Protocol):
+    """Native port for communicating with Iris worker daemons.
+
+    The Connect implementation lives under :mod:`iris.rpc`; backends exchange
+    only resource and reconciliation records through this interface.
+    """
+
+    def reconcile(
+        self,
+        plans: list[WorkerReconcilePlan],
+        addresses: Mapping[WorkerId, str],
+        *,
+        parallelism: int,
+    ) -> list[WorkerReconcileResult]: ...
+
+    def evict(self, address: str) -> None: ...
+
+    def process_status(self, address: str) -> ProcessInfo: ...
+
+    def profile(self, address: str, request: ProfileRequest) -> ProfileResult: ...
+
+    def exec(self, address: str, request: ExecRequest) -> ExecResult: ...
+
+    def close(self) -> None: ...
 
 
 class TaskBackend(Protocol):
@@ -537,7 +589,7 @@ class TaskBackend(Protocol):
         "nothing free"."""
         ...
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
+    def status(self) -> BackendStatus:
         """Author this backend's expanded status for the dashboard Backends tab.
 
         Each backend authors its own ``BackendStatus`` variant uniformly,
@@ -550,7 +602,7 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+    def autoscaler_status(self) -> AutoscalerStatus:
         """This backend's autoscaler status, fully populated and self-contained.
 
         Every group is tagged with this backend's id and every VM carries its
@@ -629,13 +681,11 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """Build this backend's live-worker read surface from controller-owned deps.
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        """Attach the typed worker store for a worker-daemon backend.
 
-        Called once by the controller for worker-daemon backends. The backend joins
-        ``runtime`` with its own liveness tracker to build the scale-group-scoped
-        :class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` it reads
-        through; capacity-managing backends (k8s) track no Iris workers and no-op.
+        Called once by the controller composition root. Cluster-view backends do
+        not receive a store.
         """
         ...
 
