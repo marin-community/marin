@@ -2427,3 +2427,21 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_fold_alias_replay_h100_v1/`
   and
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_fold_state_replay_h100_v1/`.
+
+### 2026-08-09 - TLTC-XLA-027 natural attention-reverse HLO replacement
+
+- Hypothesis: the natural four-input/three-output JAX VJP can be replaced by
+  the generated recompute typed FFI using only physical Contract, Fold, and
+  DomainRestriction provenance, without parameter names or a model recognizer.
+- Commit Hash: `903bd9b35a` (integrated from `b4d2f9cc29`).
+- Result: a whole-entry replacement plan derives Q/K/V/output-cotangent and
+  Q/K/V-cotangent roles from physical dataflow, validates the score scale and
+  causal restriction, inserts canonical-layout copies around the FFI, and
+  preserves the entry result layouts. Saved-state substitution and ambiguous
+  or mismatched graphs fail closed.
+- Scope: this checkpoint uses live natural JAX frontend HLO on CPU. A CUDA
+  PRE_SCHEDULER callback smoke exists, but the minimal H100 allocation did not
+  schedule. There is no claim yet that optimized GPU post-SPMD HLO proves or
+  executes the same whole-entry replacement.
+- Verification: 15 focused recovery, rewrite, typed-FFI, and StableHLO tests
+  and all 392 tile-lifetime tests pass; scoped pre-commit checks pass.
