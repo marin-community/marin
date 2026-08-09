@@ -156,6 +156,7 @@ def build_dropless_eval_run(
     num_experts: int = 192,
     num_experts_per_token: int = 4,
     use_latent: bool = True,
+    intermediate_dim: int | None = None,
     checkpoint_dir: str | None = None,
     checkpoint_steps: tuple[int, ...] | None = None,
     source_version: str = "2026.08.08",
@@ -185,7 +186,7 @@ def build_dropless_eval_run(
         SEQ_LEN,
         num_experts,
         num_experts_per_token,
-        shape.hidden_dim if use_latent else None,
+        intermediate_dim if intermediate_dim is not None else (shape.hidden_dim if use_latent else None),
         shape.hidden_dim // 2 if use_latent else None,
     )
 
@@ -283,17 +284,31 @@ def build_dropless_eval_run(
 @click.option("--source-run-id", required=True, help="Trained run whose checkpoints to re-eval.")
 @click.option("--size", type=click.Choice(sorted(SMALL_SHAPES)), default="d768", show_default=True)
 @click.option("--num-experts", type=click.IntRange(min=1), default=192, show_default=True, help="Source expert count.")
+@click.option(
+    "--num-experts-per-token", type=click.IntRange(min=1), default=4, show_default=True, help="Source routed top-k."
+)
 @click.option("--latent/--no-latent", default=True, show_default=True, help="Whether the source used LatentMoE.")
+@click.option(
+    "--intermediate-dim", type=click.IntRange(min=1), default=None, help="Source expert width (else hidden/hidden-2)."
+)
 @click.option("--checkpoint-dir", default=None, help="Override the source checkpoint prefix (else derived).")
 @build_options
 def main(
-    source_run_id: str, size: str, num_experts: int, latent: bool, checkpoint_dir: str | None
+    source_run_id: str,
+    size: str,
+    num_experts: int,
+    num_experts_per_token: int,
+    latent: bool,
+    intermediate_dim: int | None,
+    checkpoint_dir: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_dropless_eval_run(
         source_run_id=source_run_id,
         size=size,
         num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
         use_latent=latent,
+        intermediate_dim=intermediate_dim,
         checkpoint_dir=checkpoint_dir,
     )
 
