@@ -52,6 +52,7 @@ def test_cuda_event_lowering_exposes_real_barrier_and_workload_independent_body(
     assert "event.wait(cuda::std::move(token))" in generated.source
     assert "__syncthreads()" in generated.source
     assert "shuttle_kernel_boundary_producer" in generated.source
+    assert "std::gcd(order_stride, kHostEventInitialCounts[event_index])" in generated.source
     assert not {"moe", "attention", "fold"} & set(generated.source.lower().split())
 
 

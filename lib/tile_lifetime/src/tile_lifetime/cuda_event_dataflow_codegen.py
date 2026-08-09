@@ -200,6 +200,7 @@ constexpr int kEventCount = {event_count};
 constexpr int kSourceCount = {source_count};
 constexpr int kConsumerCount = {consumer_count};
 constexpr int kThreads = {threads_per_block};
+constexpr int kHostEventInitialCounts[kEventCount] = {{{_cuda_array(event_initial_counts)}}};
 __device__ __constant__ int kEventInitialCounts[kEventCount] = {{{_cuda_array(event_initial_counts)}}};
 __device__ __constant__ int kEventSourceOffsets[kEventCount + 1] = {{{_cuda_array(event_source_offsets)}}};
 __device__ __constant__ int kEventSources[kSourceCount] = {{{_cuda_array(event_sources)}}};
@@ -323,7 +324,7 @@ void check_tensors(const torch::Tensor& input, const torch::Tensor& partials, co
 void check_order(int order_stride) {{
   TORCH_CHECK(order_stride > 0, "producer-order stride must be positive");
   for (int event_index = 0; event_index < kEventCount; ++event_index) {{
-    TORCH_CHECK(std::gcd(order_stride, kEventInitialCounts[event_index]) == 1,
+    TORCH_CHECK(std::gcd(order_stride, kHostEventInitialCounts[event_index]) == 1,
                 "producer-order stride must be coprime with every event count");
   }}
 }}
@@ -345,6 +346,7 @@ void run_counted_event_out(
     int delay_cycles) {{
   check_tensors(input, partials, output);
   check_order(order_stride);
+  TORCH_CHECK(order_offset >= 0, "producer-order offset must be non-negative");
   TORCH_CHECK(delay_cycles >= 0, "producer delay must be non-negative");
   const c10::cuda::CUDAGuard device_guard(input.device());
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -363,6 +365,7 @@ void run_block_barrier_control_out(
     int delay_cycles) {{
   check_tensors(input, partials, output);
   check_order(order_stride);
+  TORCH_CHECK(order_offset >= 0, "producer-order offset must be non-negative");
   TORCH_CHECK(delay_cycles >= 0, "producer delay must be non-negative");
   const c10::cuda::CUDAGuard device_guard(input.device());
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -381,6 +384,7 @@ void run_kernel_boundary_control_out(
     int delay_cycles) {{
   check_tensors(input, partials, output);
   check_order(order_stride);
+  TORCH_CHECK(order_offset >= 0, "producer-order offset must be non-negative");
   TORCH_CHECK(delay_cycles >= 0, "producer delay must be non-negative");
   const c10::cuda::CUDAGuard device_guard(input.device());
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
