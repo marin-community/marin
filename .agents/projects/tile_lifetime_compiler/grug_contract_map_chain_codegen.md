@@ -116,3 +116,49 @@ Appending `--preflight-only` performs source generation, NVCC compile/link,
 library load, symbol resolution, and zero-count verification without allocating
 or executing a GPU buffer. This local macOS host has no NVCC, so neither preflight
 nor H100 execution has been claimed yet.
+
+## Capture-safe physical candidate
+
+The generator exposes two physical host-dispatch candidates for the same
+Contract/Map semantic program. `launch_checked` performs an immediate CUDA
+launch-status query and remains useful for standalone debugging.
+`command_buffer_capture_safe` omits that host query and marks both typed-FFI
+handlers with `kCmdBufferCompatible`. The capture-safe source contains direct
+launches on the FFI-provided stream and no allocation, library handles,
+autotuning, synchronization, or CUDA status queries.
+
+The choice is represented as a physical-candidate enum rather than a semantic
+option. Consequently, both candidates have the same semantic digest but distinct
+source digests. The generic command-buffer audit owns the forbidden-operation
+policy and validates both handlers before traits are emitted. SiLU and tanh
+hidden Maps use the same capture-safe wrapper; only their generated scalar ASTs
+change.
+
+No GPU latency result is attached to this candidate yet.
+
+## Next bounded candidate: predicated BF16 MMA
+
+The next candidate should replace scalar Contract loops with one-CTA predicated
+BF16 MMA while retaining the existing generated preparation and finalization
+ASTs. This is a design target, not an implementation in the current checkpoint.
+
+The initial family remains bounded to the recovered rows=8, hidden=32, rank=128
+shape class. It pads the physical M dimension to an MMA-compatible tile, predicates
+all loads and stores back to the logical shape, and selects fixed N/K tiles from
+a small generic set. Forward and reverse continue to round every Contract result
+to BF16 round-to-nearest-even before a Map or subsequent Contract consumes it.
+Weight adjoints retain their recovered physical layouts rather than assuming
+logical row-major storage. The same scalar Map AST attachment accepts SiLU, tanh,
+and future mutations without changing the MMA mainloop.
+
+MMA changes reduction association relative to the current fixed left-to-right
+FP32 loops. It is therefore legal only under an explicit bounded-reassociation
+numerical contract. A source-ordered request must retain the scalar candidate;
+the planner must not silently upgrade it to MMA. Before GPU measurement, CPU and
+JAX tests should cover logical padding predicates, both weight-adjoint layouts,
+BF16 boundaries, scalar-Map mutation, rejection under source-order policy, and
+numerical error under the declared contract.
+
+The first implementation should remain one CTA per handler. Multi-CTA reduction,
+cluster scheduling, and EventTensor readiness are later physical candidates, not
+requirements for this bounded MMA experiment.

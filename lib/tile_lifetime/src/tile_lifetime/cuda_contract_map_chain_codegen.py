@@ -9,11 +9,28 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 from tile_lifetime.cast_scalar_program import generate_cuda_scalar_body
 from tile_lifetime.contract_map_chain import BoundCastScalarMap, TwoContractMapTrainingProgram
+from tile_lifetime.ffi_command_buffer import (
+    audit_ffi_command_buffer_eligibility,
+    finalize_ffi_handler_source,
+)
 
 _MAX_SHARED_BYTES = 48 * 1024
+
+
+class ContractMapChainFfiPhysicalCandidate(StrEnum):
+    """Host-dispatch policy for one generated Contract/Map physical family."""
+
+    LAUNCH_CHECKED = "launch_checked"
+    COMMAND_BUFFER_CAPTURE_SAFE = "command_buffer_capture_safe"
+
+    @property
+    def command_buffer_compatible(self) -> bool:
+        """Whether the handler can be replayed from an XLA command buffer."""
+        return self is ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE
 
 
 @dataclass(frozen=True)
@@ -27,6 +44,7 @@ class GeneratedCudaContractMapChainFfi:
     source: str
     semantic_digest: str
     source_digest: str
+    physical_candidate: ContractMapChainFfiPhysicalCandidate
     rows: int
     input_features: int
     rank: int
@@ -38,6 +56,11 @@ class GeneratedCudaContractMapChainFfi:
     kernel_count: int = 2
     external_dependencies: tuple[str, ...] = ("CUDA BF16/runtime primitives", "XLA typed FFI")
 
+    @property
+    def command_buffer_compatible(self) -> bool:
+        """Whether both generated handlers declare capture-safe replay."""
+        return self.physical_candidate.command_buffer_compatible
+
 
 @dataclass(frozen=True)
 class ContractMapChainSourceAudit:
@@ -48,6 +71,10 @@ class ContractMapChainSourceAudit:
     has_generated_forward_maps: bool
     has_generated_reverse_maps: bool
     has_handler_counters: bool
+    has_command_buffer_traits: bool
+    has_launch_status_query: bool
+    command_buffer_eligible: bool
+    forbidden_command_buffer_operations: tuple[str, ...]
     has_atomics: bool
     opaque_semantic_dependencies: tuple[str, ...]
 
@@ -58,6 +85,7 @@ def generate_cuda_contract_map_chain_ffi(
     forward_target: str,
     reverse_target: str,
     threads: int = 256,
+    physical_candidate: ContractMapChainFfiPhysicalCandidate = ContractMapChainFfiPhysicalCandidate.LAUNCH_CHECKED,
 ) -> GeneratedCudaContractMapChainFfi:
     """Generate source-ordered forward and JAX-owned reverse physical bodies."""
     if threads not in {128, 256, 512}:
@@ -117,7 +145,9 @@ def generate_cuda_contract_map_chain_ffi(
     second_weight_adjoint_dimension_zero_minor = json.dumps(program.second_weight_adjoint_minor_to_major == (0, 1))
     forward_symbol = _target_symbol(forward_target)
     reverse_symbol = _target_symbol(reverse_target)
-    source = f"""// Generated from generic Contract/Map forward and JAX-owned reverse semantics; do not edit.
+    forward_launch_status_check = _launch_status_check(physical_candidate, operation="forward")
+    reverse_launch_status_check = _launch_status_check(physical_candidate, operation="reverse")
+    source_template = f"""// Generated from generic Contract/Map forward and JAX-owned reverse semantics; do not edit.
 #include <cstdint>
 #include <string>
 
@@ -308,10 +338,7 @@ ffi::Error ShuttleContractMapChainForward(
       reinterpret_cast<__nv_bfloat16*>(first_contract_buffer->typed_data()),
       reinterpret_cast<__nv_bfloat16*>(hidden_buffer->typed_data()),
       reinterpret_cast<__nv_bfloat16*>(second_contract_buffer->typed_data()));
-  const cudaError_t status = cudaPeekAtLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal("Contract/Map forward launch failed: " + std::string(cudaGetErrorString(status)));
-  }}
+{forward_launch_status_check}
   ++forward_call_count;
   return ffi::Error::Success();
 }}
@@ -339,10 +366,7 @@ ffi::Error ShuttleContractMapChainReverse(
       reinterpret_cast<__nv_bfloat16*>(input_adjoint_buffer->typed_data()),
       reinterpret_cast<__nv_bfloat16*>(first_weight_adjoint_buffer->typed_data()),
       reinterpret_cast<__nv_bfloat16*>(second_weight_adjoint_buffer->typed_data()));
-  const cudaError_t status = cudaPeekAtLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal("Contract/Map reverse launch failed: " + std::string(cudaGetErrorString(status)));
-  }}
+{reverse_launch_status_check}
   ++reverse_call_count;
   return ffi::Error::Success();
 }}
@@ -378,11 +402,11 @@ auto ShuttleContractMapChainReverseBinding() {{
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {forward_symbol},
     ShuttleContractMapChainForward,
-    ShuttleContractMapChainForwardBinding());
+    ShuttleContractMapChainForwardBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {reverse_symbol},
     ShuttleContractMapChainReverse,
-    ShuttleContractMapChainReverseBinding());
+    ShuttleContractMapChainReverseBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" std::uint64_t shuttle_contract_map_chain_forward_call_count() {{
   return forward_call_count;
@@ -392,6 +416,11 @@ extern "C" std::uint64_t shuttle_contract_map_chain_reverse_call_count() {{
   return reverse_call_count;
 }}
 """
+    source = finalize_ffi_handler_source(
+        source_template,
+        command_buffer_compatible=physical_candidate.command_buffer_compatible,
+        expected_handler_count=2,
+    )
     return GeneratedCudaContractMapChainFfi(
         forward_target=forward_target,
         reverse_target=reverse_target,
@@ -400,6 +429,7 @@ extern "C" std::uint64_t shuttle_contract_map_chain_reverse_call_count() {{
         source=source,
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),
+        physical_candidate=physical_candidate,
         rows=rows,
         input_features=input_features,
         rank=rank,
@@ -416,6 +446,7 @@ def audit_cuda_contract_map_chain_source(
 ) -> ContractMapChainSourceAudit:
     """Report physical ownership without relying on workload names."""
     lowered = generated.source.lower()
+    command_buffer_audit = audit_ffi_command_buffer_eligibility(generated.source)
     opaque_tokens = (
         "flash_attention",
         "mok_forward",
@@ -437,9 +468,26 @@ def audit_cuda_contract_map_chain_source(
             "shuttle_contract_map_chain_forward_call_count" in generated.source
             and "shuttle_contract_map_chain_reverse_call_count" in generated.source
         ),
+        has_command_buffer_traits=(
+            generated.source.count("{ffi::Traits::kCmdBufferCompatible}") == generated.kernel_count
+        ),
+        has_launch_status_query=("cudaPeekAtLastError(" in generated.source or "cudaGetLastError(" in generated.source),
+        command_buffer_eligible=command_buffer_audit.eligible,
+        forbidden_command_buffer_operations=command_buffer_audit.forbidden_operations,
         has_atomics="atomic" in lowered,
         opaque_semantic_dependencies=tuple(token for token in opaque_tokens if token in lowered),
     )
+
+
+def _launch_status_check(physical_candidate: ContractMapChainFfiPhysicalCandidate, *, operation: str) -> str:
+    if physical_candidate is ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE:
+        return ""
+    if physical_candidate is ContractMapChainFfiPhysicalCandidate.LAUNCH_CHECKED:
+        return f"""  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {{
+    return ffi::Error::Internal(\"Contract/Map {operation} launch failed: \" + std::string(cudaGetErrorString(status)));
+  }}"""
+    raise ValueError(f"unsupported Contract/Map FFI physical candidate: {physical_candidate}")
 
 
 def _scalar_map_source_and_call(scalar_map: BoundCastScalarMap, *, symbol: str) -> tuple[str, str]:

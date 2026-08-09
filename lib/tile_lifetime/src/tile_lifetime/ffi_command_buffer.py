@@ -73,10 +73,19 @@ def audit_ffi_command_buffer_eligibility(source: str) -> FfiCommandBufferEligibi
     return FfiCommandBufferEligibility(not forbidden, tuple(forbidden))
 
 
-def finalize_ffi_handler_source(template: str, *, command_buffer_compatible: bool) -> str:
-    """Fill one FFI trait placeholder after validating the generated handler."""
-    if template.count(_HANDLER_TRAITS_PLACEHOLDER) != 1:
-        raise ValueError("generated FFI source must contain exactly one handler-traits placeholder")
+def finalize_ffi_handler_source(
+    template: str,
+    *,
+    command_buffer_compatible: bool,
+    expected_handler_count: int = 1,
+) -> str:
+    """Fill FFI trait placeholders after validating the generated handler source."""
+    if expected_handler_count <= 0:
+        raise ValueError("generated FFI source must contain at least one handler")
+    if template.count(_HANDLER_TRAITS_PLACEHOLDER) != expected_handler_count:
+        raise ValueError(
+            f"generated FFI source must contain exactly {expected_handler_count} handler-traits placeholders"
+        )
     source_without_traits = template.replace(_HANDLER_TRAITS_PLACEHOLDER, "")
     if not command_buffer_compatible:
         return source_without_traits

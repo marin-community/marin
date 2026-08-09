@@ -26,6 +26,19 @@ def test_capture_safe_handler_receives_command_buffer_trait() -> None:
     assert "Binding(),\n    {ffi::Traits::kCmdBufferCompatible}" in source
 
 
+def test_multiple_capture_safe_handlers_receive_command_buffer_traits() -> None:
+    template = _TEMPLATE + _TEMPLATE.replace("symbol", "second_symbol")
+
+    source = finalize_ffi_handler_source(
+        template,
+        command_buffer_compatible=True,
+        expected_handler_count=2,
+    )
+
+    assert audit_ffi_command_buffer_eligibility(source).eligible
+    assert source.count("{ffi::Traits::kCmdBufferCompatible}") == 2
+
+
 @pytest.mark.parametrize(
     ("operation", "fragment"),
     (
