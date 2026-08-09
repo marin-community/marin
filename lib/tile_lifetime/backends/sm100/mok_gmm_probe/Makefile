@@ -28,7 +28,7 @@ NVCCFLAGS += -diag-suppress 3189
 
 all: $(OUT)
 
-$(OUT): mok_gmm_probe.cu generated_map_fold.inc $(MOK_HEADERS) $(THUNDERKITTENS_HEADERS)
+$(OUT): mok_gmm_probe.cu generated_map_fold.inc generated_event_schedule.inc $(MOK_HEADERS) $(THUNDERKITTENS_HEADERS)
 	@test -f "$(MOK_ROOT)/csrc/mok_megakernel.cuh" || (echo "MOK_ROOT must name a Mixture-of-Kittens checkout" >&2; exit 1)
 	@test -f "$(THUNDERKITTENS_ROOT)/include/kittens.cuh" || (echo "ThunderKittens submodule is missing" >&2; exit 1)
 	@mkdir -p "$(dir $(OUT))"

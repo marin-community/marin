@@ -34,6 +34,10 @@ from tile_lifetime.cuda_map_fold_codegen import (  # noqa: E402
     shuttle_map_fold_program,
     verify_cuda_map_fold_include,
 )
+from tile_lifetime.sm100_grouped_contract_event_codegen import (  # noqa: E402
+    sm100_bf16_grouped_contract_event_schedule,
+    verify_sm100_grouped_contract_event_include,
+)
 
 MOK_COMMIT = "3e1cf43ab93ad040afed52a45ab03cb490ffe4be"
 THUNDERKITTENS_COMMIT = "1c3920d993404dd49a6d4c7267ea11d583bd5c68"
@@ -131,6 +135,10 @@ def _build_extension(mok_root: Path, build_dir: Path, nvcc: str) -> Path:
         _probe_root() / "generated_map_fold.inc",
         shuttle_map_fold_program(),
     )
+    verify_sm100_grouped_contract_event_include(
+        _probe_root() / "generated_event_schedule.inc",
+        sm100_bf16_grouped_contract_event_schedule(),
+    )
     output = _extension_path(build_dir)
     subprocess.run(
         [
@@ -145,6 +153,51 @@ def _build_extension(mok_root: Path, build_dir: Path, nvcc: str) -> Path:
         check=True,
     )
     return output
+
+
+def _event_schedule_result() -> dict[str, Any]:
+    schedule = sm100_bf16_grouped_contract_event_schedule()
+    return {
+        "fingerprint": schedule.fingerprint,
+        "cluster_ctas": schedule.descriptor.workers.cluster_ctas,
+        "load_pipeline_stages": schedule.descriptor.load_pipeline_stages,
+        "logical_event_counts": {
+            "operand_ready": schedule.operand_ready_count,
+            "operand_release": schedule.operand_release_count,
+            "output_ready": schedule.output_ready_count,
+            "output_release": schedule.output_release_count,
+        },
+        "operand_transaction_bytes": schedule.operand_transaction_bytes,
+        "transaction_completion_enabled": schedule.transaction_completion_enabled,
+        "operand_release_point": schedule.descriptor.operand_release_point.value,
+        "output_release_point": schedule.descriptor.output_release_point.value,
+    }
+
+
+def _verify_extension_event_schedule(module: ModuleType) -> None:
+    schedule = sm100_bf16_grouped_contract_event_schedule()
+    observed_fingerprint = str(module.generated_grouped_contract_event_sha256())
+    if observed_fingerprint != schedule.fingerprint:
+        raise RuntimeError(
+            f"grouped-Contract extension Event Tensor fingerprint {observed_fingerprint} "
+            f"does not match selected schedule {schedule.fingerprint}"
+        )
+    expected_attributes = [
+        schedule.descriptor.workers.cluster_ctas,
+        schedule.descriptor.load_pipeline_stages,
+        schedule.operand_ready_count,
+        schedule.operand_release_count,
+        schedule.output_ready_count,
+        schedule.output_release_count,
+        schedule.operand_transaction_bytes,
+        int(schedule.transaction_completion_enabled),
+    ]
+    observed_attributes = [int(value) for value in module.grouped_contract_event_attributes()]
+    if observed_attributes != expected_attributes:
+        raise RuntimeError(
+            f"grouped-Contract extension Event Tensor attributes {observed_attributes} "
+            f"do not match selected schedule {expected_attributes}"
+        )
 
 
 def _load_extension(path: Path) -> ModuleType:
@@ -362,6 +415,7 @@ def main() -> None:
             "nvcc": args.nvcc,
             "architecture": "sm100a",
         },
+        "event_tensor_schedule": _event_schedule_result(),
     }
     if args.build_only:
         _write_result(result, args.json_output)
@@ -372,6 +426,7 @@ def main() -> None:
     device = torch.device(args.device)
     torch.cuda.set_device(device)
     module = _load_extension(extension_path)
+    _verify_extension_event_schedule(module)
     properties = torch.cuda.get_device_properties(device)
     correctness = None
     if not args.skip_correctness:

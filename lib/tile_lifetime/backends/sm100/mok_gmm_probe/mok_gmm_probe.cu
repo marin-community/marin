@@ -11,9 +11,44 @@ using combiner = dispatch_mlp_swiglu_combiner<4, utils::RoutedPrecision::BF16>;
 using config = combiner::config;
 
 #include "generated_map_fold.inc"
+#include "generated_event_schedule.inc"
+
+static_assert(config::CLUSTER_SIZE == shuttle_grouped_contract_event::kClusterCtas);
+static_assert(config::MLP_LOAD_PIPE_DEPTH == shuttle_grouped_contract_event::kLoadPipelineStages);
+static_assert(
+    shuttle_grouped_contract_event::kOperandReadyLogicalCount
+    == config::CLUSTER_SIZE * config::NUM_PRODUCERS
+);
+static_assert(shuttle_grouped_contract_event::kOperandReleaseLogicalCount == config::NUM_CONSUMERS);
+static_assert(shuttle_grouped_contract_event::kOutputReadyLogicalCount == config::NUM_CONSUMERS);
+static_assert(
+    shuttle_grouped_contract_event::kOutputReleaseLogicalCount
+    == config::CLUSTER_SIZE * config::NUM_CONSUMERS
+);
+static_assert(
+    shuttle_grouped_contract_event::kOperandTransactionBytes
+    == config::CLUSTER_SIZE * 2 * sizeof(combiner::mlp_bf16_tile)
+);
 
 static const char *generated_map_fold_program_sha256() {
     return SHUTTLE_MAP_FOLD_PROGRAM_SHA256;
+}
+
+static const char *generated_grouped_contract_event_sha256() {
+    return SHUTTLE_GROUPED_CONTRACT_EVENT_SHA256;
+}
+
+static std::vector<int64_t> grouped_contract_event_attributes() {
+    return {
+        shuttle_grouped_contract_event::kClusterCtas,
+        shuttle_grouped_contract_event::kLoadPipelineStages,
+        shuttle_grouped_contract_event::kOperandReadyLogicalCount,
+        shuttle_grouped_contract_event::kOperandReleaseLogicalCount,
+        shuttle_grouped_contract_event::kOutputReadyLogicalCount,
+        shuttle_grouped_contract_event::kOutputReleaseLogicalCount,
+        shuttle_grouped_contract_event::kOperandTransactionBytes,
+        shuttle_grouped_contract_event::kTransactionCompletionEnabled,
+    };
 }
 
 struct globals {
@@ -49,13 +84,39 @@ static __device__ __forceinline__ void grouped_gemm_kernel(const globals &g) {
     if (threadIdx.x == 0) {
         #pragma unroll
         for (int stage = 0; stage < config::MLP_LOAD_PIPE_DEPTH; ++stage) {
-            init_semaphore(inputs_arrived[stage], 0, 1);
-            init_semaphore(scales_arrived[stage], 0, 1);
-            init_semaphore(inputs_finished[stage], 0, 1);
-            init_semaphore(scales_finished[stage], 0, 1);
+            // Transaction completion uses a byte expectation and is distinct
+            // from the two-owner logical operand-ready Event Tensor count.
+            init_semaphore(
+                inputs_arrived[stage],
+                0,
+                shuttle_grouped_contract_event::kTransactionCompletionEnabled
+            );
+            init_semaphore(
+                scales_arrived[stage],
+                0,
+                shuttle_grouped_contract_event::kTransactionCompletionEnabled
+            );
+            init_semaphore(
+                inputs_finished[stage],
+                0,
+                shuttle_grouped_contract_event::kOperandReleaseLogicalCount
+            );
+            init_semaphore(
+                scales_finished[stage],
+                0,
+                shuttle_grouped_contract_event::kOperandReleaseLogicalCount
+            );
         }
-        init_semaphore(outputs_arrived, 0, 1);
-        init_semaphore(outputs_finished, 0, config::CLUSTER_SIZE);
+        init_semaphore(
+            outputs_arrived,
+            0,
+            shuttle_grouped_contract_event::kTransactionCompletionEnabled
+        );
+        init_semaphore(
+            outputs_finished,
+            0,
+            shuttle_grouped_contract_event::kOutputReleaseLogicalCount
+        );
     }
 
     uint32_t bitfield = 0xFFFF0000;
@@ -754,6 +815,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def(
         "generated_map_fold_program_sha256",
         &tile_lifetime::mok_gmm_probe::generated_map_fold_program_sha256
+    );
+    module.def(
+        "generated_grouped_contract_event_sha256",
+        &tile_lifetime::mok_gmm_probe::generated_grouped_contract_event_sha256
+    );
+    module.def(
+        "grouped_contract_event_attributes",
+        &tile_lifetime::mok_gmm_probe::grouped_contract_event_attributes
     );
     module.def(
         "grouped_gemm_out",
