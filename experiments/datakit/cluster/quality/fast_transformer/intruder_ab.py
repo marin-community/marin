@@ -185,7 +185,13 @@ def main() -> None:
     print(f"  {result.lhs_name:14} {result.lhs_accuracy:.3f}  {np.round(result.lhs_interval, 3)}")
     print(f"  {result.rhs_name:14} {result.rhs_accuracy:.3f}  {np.round(result.rhs_interval, 3)}")
     print(f"  difference interval: {np.round(result.difference_interval, 3)}")
-    print(f"  trials/side: {result.n_trials_per_side}   abstained: {result.n_abstained}")
+    by_side = ", ".join(f"{side} {n}" for side, n in sorted(result.abstained_by_side.items())) or "none"
+    print(f"  trials/side: {result.n_trials_per_side}   abstained: {result.n_abstained} ({by_side})")
+    # A lopsided split means one side was scored on an easier, self-selected
+    # subset of its trials, which voids the comparison regardless of the intervals.
+    counts = sorted(result.abstained_by_side.values())
+    if len(counts) == 2 and counts[1] > 3 * max(counts[0], 1):
+        print("  WARNING: abstentions are lopsided — treat this comparison as void, not as evidence")
     print("\nPanel seats are the same model, so this measures self-consistency, not")
     print("agreement across independent judges.")
 

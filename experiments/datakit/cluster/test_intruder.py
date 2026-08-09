@@ -308,6 +308,38 @@ def test_run_intruder_test_picks_the_more_detectable_side():
     assert result.n_abstained == 0
 
 
+def test_abstentions_are_attributed_to_the_side_that_produced_them():
+    """A judge that only fails on one side must show that side's count, not just a total.
+
+    A bare total cannot distinguish harmless flakiness from a biased run. When a
+    judge fails disproportionately on one side, that side is scored on an easier,
+    self-selected subset of its trials and the comparison is void — a real run
+    abstained heavily on one side and not at all on the other, and its headline
+    total gave no sign of it.
+    """
+
+    class OneSidedFlakyPanelist:
+        name = "flaky"
+
+        def vote(self, trial: IntruderTrial, *, max_doc_chars: int) -> int:
+            if trial.side == "rhs":
+                raise RuntimeError("gateway unreachable")
+            return trial.intruder_index
+
+    result = run_intruder_test(
+        BucketPool("lhs", _labeled_buckets("A")),
+        BucketPool("rhs", _labeled_buckets("B")),
+        panel=[OneSidedFlakyPanelist()],
+        min_trials=16,
+        max_trials=64,
+        batch_size=8,
+        seed=3,
+    )
+    assert result.abstained_by_side.get("lhs", 0) == 0
+    assert result.abstained_by_side["rhs"] > 0
+    assert result.abstained_by_side["rhs"] == result.n_abstained
+
+
 def test_run_intruder_test_terminates_at_cap_when_panel_always_abstains():
     """A panel that fails every call must hit the attempt cap, not loop forever.
 
