@@ -184,6 +184,17 @@ from tile_lifetime.routed_attention_recovery import (
     compile_natural_routed_attention,
     recover_routed_attention_program,
 )
+from tile_lifetime.row_normalization_training import (
+    GeneratedContractSkeleton,
+    GeneratedFoldSkeleton,
+    GeneratedMapSkeleton,
+    RowNormalizationSavePolicy,
+    RowNormalizationTrainingPlan,
+    RowStatisticKind,
+    RowStatisticScalePlacement,
+    build_row_normalized_contract_program,
+    compile_row_normalization_training,
+)
 from tile_lifetime.runtime import (
     PlanRuntimeError,
     RuntimeBufferSpec,

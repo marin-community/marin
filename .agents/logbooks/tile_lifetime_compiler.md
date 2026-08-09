@@ -1540,3 +1540,20 @@ author: dlwh
   tests pass. CUDA compilation and GB200 combine-only/full-path timing remain
   pending; the candidate does not replace the accepted 1.198069-times result
   until measured.
+
+### 2026-08-08 - TLTC-TRAIN-003 generic row-normalization adjoint
+
+- Added ordinary Map/Fold/Contract source algebra and a generated compact
+  reverse program for row second-moment normalization followed by a Contract.
+  The generated plan exposes Maps, Folds, dX/dW Contracts, saved values, and
+  statistic recomputation rather than selecting a named normalization kernel.
+- Save-standardized, save-input-and-inverse, and recompute-statistic policies
+  are explicit candidates. Source-ordered Contract preparation and delayed
+  real-algebra-equivalent output scaling remain separate numerical choices.
+- A centered-second-moment mutation adds the mean Fold and the extra backward
+  mean-subtraction Fold through the same compiler path, demonstrating that the
+  algebra covers LayerNorm as well as RMSNorm. Nine independent NumPy tests
+  cover both statistics, all save policies, and a nondefault epsilon.
+- This is an inspectable generated physical plan, not yet an H100 performance
+  result. Generic executable Map/Fold emission and matched CODA backward timing
+  are the next boundary.
