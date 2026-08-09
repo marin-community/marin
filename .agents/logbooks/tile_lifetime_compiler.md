@@ -2773,3 +2773,22 @@ author: dlwh
   the consumer slice/index relation, not MoE identity.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_unaccepted_2732ef51_v0/`.
+
+### 2026-08-09 - TLTC-XLA-040 migration checkpoint
+
+- Commit `1ee45b825d` derives a rank-two Contract's demanded row domain from its
+  single-consumer contiguous slice/view chain. It moves the weighted reverse
+  custom-call site from `[512,32]` to `[16,32]` while retaining the full operand
+  ABI and a separate generated Fold.
+- The generic transformation rejects noncontiguous slices and competing
+  consumers, supports nonzero row offsets, and has no MoE, Grug, or instruction
+  name dispatch.
+- Static work falls from 4,194,304 to 131,072 Contract FLOPs and estimated ideal
+  BF16 traffic falls from 172,032 to 13,312 bytes. These estimates are not GPU
+  measurements.
+- Canonical verification passed 26 focused tests, Pyrefly, scoped pre-commit,
+  and `git diff --check`. No GPU replay was launched before migration and no GPU
+  allocation remains active.
+- Resume with one bounded physical-H100 replay of the twelve-call natural Grug
+  harness. If it remains above `1.20x`, evaluate generic Contract-plus-nested-
+  Fold composition rather than adding workload-specific reverse code.
