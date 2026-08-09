@@ -188,15 +188,14 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
         "custom_call_handler_executions": call_count,
         "numerical_contract": {
             "scalar_map": "source_ordered including recovered BF16 round trips",
-            "contracts": "ordered_fp with explicit serial FP32 reduction in the generated proof body",
+            "contracts": "ordered_fp using CUBLAS_COMPUTE_32F_PEDANTIC generic Contract primitives",
         },
         **comparison,
         "outputs_match": True,
         "ffi_api": "XLA typed FFI api_version=1 with CUDA platform stream",
         "explicit_warning": (
-            "Execution proof only: the generated CUDA body uses a serial per-output Contract reduction. "
-            "Competitive lowering must replace that loop with the generic Contract mainloop while retaining "
-            "the same AST."
+            "Execution proof only: two generic cuBLAS Contracts feed the generated source-ordered Map. "
+            "Competitive lowering still needs the reusable tiled Contract mainloop and fusion policy."
         ),
     }
 

@@ -150,7 +150,10 @@ def test_cuda_multi_output_ffi_uses_one_generic_thread_local_scalar_body() -> No
     source = generate_cuda_multi_output_ffi_handler(program)
 
     assert ".Ctx<ffi::PlatformStream<cudaStream_t>>()" in source
+    assert source.count("cublasGemmEx(") == 1
+    assert "CUBLAS_COMPUTE_32F_PEDANTIC" in source
     assert "left * shuttle_bf16_to_f32(cotangent[index])" in source
     assert "output1[index] = right;" in source
     assert "projection0[kRows" not in source
     assert "projection1[kRows" not in source
+    assert "for (int reduction" not in source

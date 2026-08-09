@@ -667,6 +667,7 @@ def generate_cuda_multi_output_ffi_handler(program: MultiOutputFixedShapeProgram
 #include <cstdint>
 #include <string>
 
+#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
 
 #include "xla/ffi/api/ffi.h"
@@ -678,6 +679,7 @@ constexpr int kRows = {program.rows};
 constexpr int kReduction = {program.reduction};
 constexpr int kFeatures = {program.features};
 std::atomic<int> call_count{{0}};
+thread_local cublasHandle_t contract_handle = nullptr;
 
 __device__ float shuttle_round_bf16(float value) {{
   std::uint32_t bits = __float_as_uint(value);
@@ -691,9 +693,8 @@ __device__ float shuttle_bf16_to_f32(std::uint16_t value) {{
 }}
 
 __global__ void ShuttlePairMapKernel(
-    const float* activation,
-    const float* left_weight,
-    const float* right_weight,
+    const float* projection0,
+    const float* projection1,
     const std::uint16_t* cotangent,
     {kernel_output_arguments}) {{
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -702,14 +703,55 @@ __global__ void ShuttlePairMapKernel(
   }}
   const int row = index / kFeatures;
   const int feature = index - row * kFeatures;
-  float left = 0.0f;
-  float right = 0.0f;
-  for (int reduction = 0; reduction < kReduction; ++reduction) {{
-    const float value = activation[row * kReduction + reduction];
-    left += value * left_weight[reduction * kFeatures + feature];
-    right += value * right_weight[reduction * kFeatures + feature];
-  }}
+  const float left = projection0[index];
+  const float right = projection1[index];
 {stores}
+}}
+
+ffi::Error Contract(
+    cudaStream_t stream,
+    const float* activation,
+    const float* weight,
+    float* output) {{
+  if (contract_handle == nullptr) {{
+    const cublasStatus_t create_status = cublasCreate(&contract_handle);
+    if (create_status != CUBLAS_STATUS_SUCCESS) {{
+      return ffi::Error::Internal(
+          "cublasCreate failed with status " + std::to_string(static_cast<int>(create_status)));
+    }}
+  }}
+  cublasStatus_t status = cublasSetStream(contract_handle, stream);
+  if (status != CUBLAS_STATUS_SUCCESS) {{
+    return ffi::Error::Internal(
+        "cublasSetStream failed with status " + std::to_string(static_cast<int>(status)));
+  }}
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+  status = cublasGemmEx(
+      contract_handle,
+      CUBLAS_OP_N,
+      CUBLAS_OP_N,
+      kFeatures,
+      kRows,
+      kReduction,
+      &alpha,
+      weight,
+      CUDA_R_32F,
+      kFeatures,
+      activation,
+      CUDA_R_32F,
+      kReduction,
+      &beta,
+      output,
+      CUDA_R_32F,
+      kFeatures,
+      CUBLAS_COMPUTE_32F_PEDANTIC,
+      CUBLAS_GEMM_DEFAULT);
+  if (status != CUBLAS_STATUS_SUCCESS) {{
+    return ffi::Error::Internal(
+        "cublasGemmEx failed with status " + std::to_string(static_cast<int>(status)));
+  }}
+  return ffi::Error::Success();
 }}
 
 ffi::Error ShuttlePairMapRegion(
@@ -720,12 +762,21 @@ ffi::Error ShuttlePairMapRegion(
     ffi::Buffer<ffi::BF16, 2> cotangent_buffer,
     {output_arguments}) {{
 {output_bindings}
+  ffi::Error contract0 = Contract(
+      stream, activation.typed_data(), left_weight.typed_data(), output0_data);
+  if (contract0.failure()) {{
+    return contract0;
+  }}
+  ffi::Error contract1 = Contract(
+      stream, activation.typed_data(), right_weight.typed_data(), output1_data);
+  if (contract1.failure()) {{
+    return contract1;
+  }}
   constexpr int kThreads = 256;
   constexpr int kBlocks = (kRows * kFeatures + kThreads - 1) / kThreads;
   ShuttlePairMapKernel<<<kBlocks, kThreads, 0, stream>>>(
-      activation.typed_data(),
-      left_weight.typed_data(),
-      right_weight.typed_data(),
+      output0_data,
+      output1_data,
       reinterpret_cast<const std::uint16_t*>(cotangent_buffer.typed_data()),
       {launch_outputs});
   const cudaError_t status = cudaGetLastError();
@@ -918,6 +969,7 @@ def _compile_ffi_handler(source: str, directory: Path) -> ctypes.CDLL:
             str(source_path),
             "-o",
             str(library_path),
+            "-lcublas",
         ],
         check=True,
     )
