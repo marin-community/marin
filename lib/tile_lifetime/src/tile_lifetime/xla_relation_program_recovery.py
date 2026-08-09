@@ -37,6 +37,7 @@ from tile_lifetime.cast_scalar_program import (
 from tile_lifetime.xla_hlo_recovery import (
     EntryRegionValue,
     HloComputation,
+    HloInstruction,
     HloModuleGraph,
     InlinedHloGraph,
     InlinedHloNode,
@@ -249,6 +250,26 @@ class RoutedForwardCodegenDisposition(StrEnum):
     MISSING_SEGMENTED_LAYOUT = "missing_segmented_layout"
 
 
+class RoutedForwardFfiOperandRole(StrEnum):
+    """Structural role of one runtime operand to the generated routed region."""
+
+    SECOND_CONTRACT_RHS = "second_contract_rhs"
+    FOLD_INITIAL = "fold_initial"
+    FOLD_INDICES = "fold_indices"
+    FOLD_CONTRIBUTION_INPUT = "fold_contribution_input"
+    SEGMENT_VALIDITY = "segment_validity"
+    FIRST_CONTRACT_LHS = "first_contract_lhs"
+    FIRST_CONTRACT_RHS = "first_contract_rhs"
+
+
+@dataclass(frozen=True)
+class RoutedForwardFfiOperand:
+    """One physical entry value bound to a generic routed-region role."""
+
+    role: RoutedForwardFfiOperandRole
+    value: EntryRegionValue
+
+
 class SegmentedLayoutRelation(StrEnum):
     """Index relations required to lower a logical routed Map physically."""
 
@@ -378,6 +399,7 @@ class RoutedForwardTypedFfiCodegenPlan:
     contracts: tuple[RoutedForwardContractStage, ...]
     map_stage: RoutedForwardMapStage
     fold_stage: RoutedForwardFoldStage
+    operands: tuple[RoutedForwardFfiOperand, ...]
     segmented_layout: SegmentedLayoutRecord | None
     disposition: RoutedForwardCodegenDisposition
     missing_segmented_layout: SegmentedLayoutRequirement | None
@@ -640,16 +662,100 @@ def plan_routed_forward_typed_ffi(hlo_text: str) -> RoutedForwardTypedFfiCodegen
     missing_segmented_layout = None if ready else region.map_stage.segmented_layout_requirement
     if not ready and missing_segmented_layout is None:
         raise ValueError("segmented layout recovery failed without a structured rejection")
+    operands = _recover_routed_forward_ffi_operands(hlo_text, region)
     return RoutedForwardTypedFfiCodegenPlan(
         region=region,
         api_version=1,
         contracts=region.contracts,
         map_stage=region.map_stage,
         fold_stage=region.fold_stage,
+        operands=operands,
         segmented_layout=segmented_layout,
         disposition=disposition,
         missing_segmented_layout=missing_segmented_layout,
     )
+
+
+def _recover_routed_forward_ffi_operands(
+    hlo_text: str,
+    region: RoutedForwardRegionRecord,
+) -> tuple[RoutedForwardFfiOperand, ...]:
+    """Bind entry operands using only Contract, Fold, and dataflow structure."""
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    boundary = {value.instruction: value for value in region.boundary.inputs}
+    internal = set(region.boundary.internal_instructions)
+
+    def entry_value(node_id: str) -> EntryRegionValue:
+        name = _entry_instruction_for_node(module, node_id)
+        if name not in boundary:
+            raise ValueError(f"physical operand %{name} is not a routed-region boundary input")
+        return boundary[name]
+
+    first_lhs = entry_value(region.contracts[0].lhs)
+    first_rhs = entry_value(region.contracts[0].rhs)
+    second_rhs = entry_value(region.contracts[1].rhs)
+
+    fold_instruction = instructions[_entry_instruction_for_node(module, region.fold_stage.fold)]
+    if len(fold_instruction.operands) != 3:
+        raise ValueError("generated source-keyed Fold requires init, indices, and updates")
+    fold_initial_name, fold_indices_name, fold_updates_name = fold_instruction.operands
+    if fold_initial_name not in boundary or fold_indices_name not in boundary:
+        raise ValueError("Fold init and indices are not direct routed-region boundary inputs")
+    fold_initial = boundary[fold_initial_name]
+    fold_indices = boundary[fold_indices_name]
+
+    contract_inputs = {first_lhs.instruction, first_rhs.instruction, second_rhs.instruction}
+    map_output = _entry_instruction_for_node(module, region.map_stage.physical_output)
+    map_external = _entry_external_ancestors(instructions, map_output, internal, set(boundary))
+    validity_candidates = map_external - contract_inputs
+    if len(validity_candidates) != 1:
+        raise ValueError(f"physical Map has {len(validity_candidates)} non-Contract boundary inputs")
+    validity = boundary[next(iter(validity_candidates))]
+
+    update_external = _entry_external_ancestors(instructions, fold_updates_name, internal, set(boundary))
+    contribution_candidates = update_external - contract_inputs - {validity.instruction}
+    if len(contribution_candidates) != 1:
+        raise ValueError(f"Fold update has {len(contribution_candidates)} external contribution inputs")
+    contribution = boundary[next(iter(contribution_candidates))]
+
+    values = (
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.SECOND_CONTRACT_RHS, second_rhs),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FOLD_INITIAL, fold_initial),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FOLD_INDICES, fold_indices),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FOLD_CONTRIBUTION_INPUT, contribution),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.SEGMENT_VALIDITY, validity),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FIRST_CONTRACT_LHS, first_lhs),
+        RoutedForwardFfiOperand(RoutedForwardFfiOperandRole.FIRST_CONTRACT_RHS, first_rhs),
+    )
+    if {operand.value.instruction for operand in values} != set(boundary):
+        raise ValueError("generic routed FFI roles do not cover the exact region boundary")
+    return values
+
+
+def _entry_external_ancestors(
+    instructions: dict[str, HloInstruction],
+    start: str,
+    internal: set[str],
+    boundary: set[str],
+) -> set[str]:
+    """Find boundary leaves for one physical entry value."""
+    pending = [start]
+    seen: set[str] = set()
+    result: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if current in boundary:
+            result.add(current)
+            continue
+        if current not in internal:
+            continue
+        pending.extend(instructions[current].operands)
+    return result
 
 
 @dataclass(frozen=True)

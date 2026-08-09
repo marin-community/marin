@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from tile_lifetime.cast_scalar_program import (
@@ -13,12 +14,19 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarKind,
     evaluate_cast_scalar_program,
 )
+from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     ContractChainRole,
     RoutedForwardCodegenDisposition,
+    RoutedForwardFfiOperandRole,
     SegmentedLayoutRelation,
     plan_routed_forward_typed_ffi,
     recover_relation_programs,
+)
+from tile_lifetime.xla_routed_forward_ffi import (
+    evaluate_routed_forward_plan,
+    generate_cuda_routed_forward_ffi,
+    replace_routed_forward_region_with_custom_call,
 )
 
 _ARTIFACT = (
@@ -256,6 +264,16 @@ def test_grug_hlo_forms_ready_convex_routed_forward_region_with_verified_segment
     assert all(contract.dimensions.rhs_output == (1,) for contract in plan.contracts)
     assert plan.api_version == 1
     assert plan.disposition is RoutedForwardCodegenDisposition.READY
+    assert tuple(operand.role for operand in plan.operands) == tuple(RoutedForwardFfiOperandRole)
+    assert tuple(operand.value.instruction for operand in plan.operands) == (
+        "copy_bitcast_fusion.13",
+        "copy.1575",
+        "select_bitcast_fusion.2",
+        "gather_convert_fusion.1",
+        "compare_and_fusion.1",
+        "copy_bitcast_fusion.24",
+        "copy_bitcast_fusion.23",
+    )
     assert plan.map_stage.logical_row_extent == 16
     assert plan.map_stage.logical_feature_extent == 32
     assert plan.map_stage.physical_output_shape == "f32[512,128]{1,0}"
@@ -381,6 +399,116 @@ def test_grug_hlo_segmented_layout_rejects_mismatched_weight_flattening() -> Non
     assert plan.missing_segmented_layout is not None
     assert plan.missing_segmented_layout.required_relations == (SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,)
     assert len(plan.missing_segmented_layout.reasons) == 1
+
+
+def test_routed_forward_reference_executes_generated_map_and_fold_semantics() -> None:
+    plan = plan_routed_forward_typed_ffi(_frozen_hlo())
+    operands = _routed_operands(plan)
+
+    observed = evaluate_routed_forward_plan(plan, operands)
+    expected = _direct_routed_forward(operands)
+
+    np.testing.assert_array_equal(observed, expected)
+
+
+def test_routed_forward_cuda_generation_tracks_map_and_fold_mutations() -> None:
+    baseline = plan_routed_forward_typed_ffi(_frozen_hlo())
+    map_mutation = plan_routed_forward_typed_ffi(
+        _frozen_hlo().replace(
+            "multiply(%convert.3758, %convert.3756)",
+            "add(%convert.3758, %convert.3756)",
+            1,
+        )
+    )
+    fold_mutation = plan_routed_forward_typed_ffi(
+        _frozen_hlo().replace(
+            "multiply(%convert.3742, %broadcast.964)",
+            "add(%convert.3742, %broadcast.964)",
+            1,
+        )
+    )
+    operands = _routed_operands(baseline)
+    generated = tuple(
+        generate_cuda_routed_forward_ffi(plan, target="shuttle.routed_forward.v1")
+        for plan in (baseline, map_mutation, fold_mutation)
+    )
+    outputs = tuple(evaluate_routed_forward_plan(plan, operands) for plan in (baseline, map_mutation, fold_mutation))
+
+    assert len({value.semantic_digest for value in generated}) == 3
+    assert len({value.source_digest for value in generated}) == 3
+    assert generated[0].source.count("cublasGemmEx(") == 1
+    assert "atomicAdd" not in generated[0].source
+    assert "for (int edge = 0; edge < kLogicalEdges; ++edge)" in generated[0].source
+    assert not np.array_equal(outputs[0], outputs[1])
+    assert not np.array_equal(outputs[0], outputs[2])
+
+
+def test_routed_forward_replacement_preserves_runtime_operand_order() -> None:
+    plan = plan_routed_forward_typed_ffi(_frozen_hlo())
+    transformed = replace_routed_forward_region_with_custom_call(
+        _frozen_hlo(),
+        plan,
+        target="shuttle.routed_forward.v1",
+    )
+    module = parse_hlo_module_text(transformed)
+    entry = module.computation(module.entry)
+    call = next(
+        instruction
+        for instruction in entry.instructions
+        if 'custom_call_target="shuttle.routed_forward.v1"' in instruction.attributes
+    )
+
+    assert call.operands == tuple(operand.value.instruction for operand in plan.operands)
+    assert entry.root.name == parse_hlo_module_text(_frozen_hlo()).computation(module.entry).root.name
+    assert transformed.count("shuttle.routed_forward.v1") == 1
+
+
+def _routed_operands(plan) -> tuple[np.ndarray, ...]:
+    rng = np.random.default_rng(11)
+    values = {
+        RoutedForwardFfiOperandRole.SECOND_CONTRACT_RHS: rng.normal(0.0, 0.05, (128, 32)).astype(np.float32),
+        RoutedForwardFfiOperandRole.FOLD_INITIAL: rng.normal(0.0, 0.05, (8, 32)).astype(np.float32),
+        RoutedForwardFfiOperandRole.FOLD_INDICES: (np.arange(16, dtype=np.int32) % 8).reshape(16, 1),
+        RoutedForwardFfiOperandRole.FOLD_CONTRIBUTION_INPUT: np.asarray(
+            rng.normal(0.0, 0.05, (16, 1)), dtype=jnp.bfloat16
+        ),
+        RoutedForwardFfiOperandRole.SEGMENT_VALIDITY: np.zeros((4, 512, 32), dtype=np.bool_),
+        RoutedForwardFfiOperandRole.FIRST_CONTRACT_LHS: rng.normal(0.0, 0.05, (512, 128)).astype(np.float32),
+        RoutedForwardFfiOperandRole.FIRST_CONTRACT_RHS: rng.normal(0.0, 0.05, (128, 64)).astype(np.float32),
+    }
+    for edge in range(16):
+        values[RoutedForwardFfiOperandRole.SEGMENT_VALIDITY][edge // 4, edge, :] = True
+    return tuple(values[operand.role] for operand in plan.operands)
+
+
+def _direct_routed_forward(operands: tuple[np.ndarray, ...]) -> np.ndarray:
+    second_weight, initial, source_indices, route_weights, validity, activation, first_weight = operands
+    projection = (activation @ first_weight).astype(np.float32)
+    mapped = np.zeros((512, 128), dtype=np.float32)
+    for edge in range(16):
+        for feature in range(32):
+            left = _bf16(_bf16(_bf16(projection[edge, feature])))
+            right = _bf16(_bf16(_bf16(projection[edge, feature + 32])))
+            denominator = _bf16(np.exp(_bf16(-left)))
+            denominator = _bf16(denominator + np.float32(1.0))
+            sigmoid = _bf16(np.float32(1.0) / denominator)
+            activated = _bf16(left * sigmoid)
+            value = _bf16(activated * right)
+            for segment in range(4):
+                if validity[segment, edge, feature]:
+                    mapped[edge, feature * 4 + segment] = value
+    routed = (mapped @ second_weight).astype(np.float32)
+    output = initial.copy()
+    for edge in range(16):
+        source = int(source_indices[edge, 0])
+        for feature in range(32):
+            contribution = _bf16(_bf16(_bf16(routed[edge, feature])) * np.float32(route_weights[edge, 0]))
+            output[source, feature] = _bf16(output[source, feature] + contribution)
+    return output.astype(np.float32)
+
+
+def _bf16(value):
+    return np.asarray(jnp.asarray(value, dtype=jnp.bfloat16), dtype=np.float32)
 
 
 def _count_kind(expression: CastScalarExpression, kind: CastScalarKind) -> int:
