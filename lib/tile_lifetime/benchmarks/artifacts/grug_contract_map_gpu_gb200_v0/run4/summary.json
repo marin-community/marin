@@ -1,0 +1,54 @@
+{
+  "bitwise_equal_leaf_count": 53,
+  "cuda_architecture": "sm_100a",
+  "custom_call_handler_executions": 1,
+  "custom_call_occurrences_in_transformed_hlo": 1,
+  "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
+  "device_kind": "NVIDIA GB200",
+  "explicit_warning": "Execution proof only: 1 generic cuBLAS Contract(s) feed the generated source-ordered Map. Competitive lowering still needs the reusable tiled Contract mainloop and fusion policy.",
+  "ffi_api": "XLA typed FFI api_version=1 with CUDA platform stream",
+  "generated_handler_sha256": "f7118924e8cb16e7a4520cd5c1afb242eeb2a1f84f57619d55923b2f8e37149a",
+  "generated_scalar_expressions": [
+    "projection_value",
+    "shuttle_round_bf16(((shuttle_bf16_to_f32(input0[index])) * (projection_value)))"
+  ],
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_pre_scheduler_grug_backward_multi_output_gpu_custom_call_smoke",
+  "maximum_absolute_error": 0.0,
+  "mean_absolute_error": 0.0,
+  "natural_frontend": "ordinary one-layer Grug train step",
+  "numerical_contract": {
+    "contracts": "ordered_fp using CUBLAS_COMPUTE_32F_PEDANTIC generic Contract primitives",
+    "scalar_map": "source_ordered including recovered BF16 round trips"
+  },
+  "outputs_match": true,
+  "platform": "cuda",
+  "region_inputs": [
+    [
+      "mul.73",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "reshape.227",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "remat2.66",
+      "bf16[32,32]{1,0}"
+    ]
+  ],
+  "region_outputs": [
+    [
+      "dot_general.226",
+      "bf16[8,32]{1,0}"
+    ],
+    [
+      "mul.963",
+      "bf16[8,32]{1,0}"
+    ]
+  ],
+  "result_leaf_count": 53,
+  "selection": "shared-input pair-Contract Map when available; otherwise the unique generic one-Contract/multi-output scalar-Map region",
+  "tuple_get_element_count": 2
+}

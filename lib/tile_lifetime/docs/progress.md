@@ -445,3 +445,26 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
   `benchmarks/artifacts/grug_moe_train_step_stablehlo_v0`; the recommended
   out-of-tree XLA integration sequence is in
   `.agents/projects/shuttle_grug_training_lowering.md`.
+
+## 2026-08-09: Natural Grug GPU region replacement
+
+- Replayed the ordinary one-layer Grug training step on one GB200 and recovered
+  a generic Contract plus source-ordered scalar Map directly from its
+  `PRE_SCHEDULER` HLO.
+- XLA compiled the transformed module, executed one typed-FFI custom call, and
+  returned all 53 result leaves bitwise equal to the initial natural baseline.
+  The recovered call consumes two BF16 row values and one BF16 Contract weight,
+  then returns both the raw Contract and its generated pairwise product Map.
+- Across 30 counterbalanced pairs, baseline and transformed whole-step medians
+  are 0.552480 and 0.563937 ms, respectively, or `1.020737x`. The handler
+  executed 35 times including correctness and warmups.
+- Repeated whole-step hashes have four variants on both paths, so this proves
+  correct replacement but not bitwise determinism for every operation in the
+  surrounding train step.
+- The successful environment required coherent CUDA compiler components at
+  13.0.88. Pip provided versioned-only cuBLAS/cuDART libraries; the compiler now
+  resolves their absolute paths and disables NVCC's implicit cuDART link rather
+  than relying on process-global symlinks.
+- Raw HLO, generated source, every timing/hash sample, toolchain failures, and
+  hardware provenance are under
+  `benchmarks/artifacts/grug_contract_map_gpu_gb200_v0`.

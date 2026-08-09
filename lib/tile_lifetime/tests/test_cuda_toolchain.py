@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from tile_lifetime.cuda_toolchain import cuda_toolkit_library_directories, cuda_toolkit_link_flags
+from tile_lifetime.cuda_toolchain import (
+    cuda_toolkit_library_directories,
+    cuda_toolkit_link_flags,
+    cuda_toolkit_shared_library,
+)
 
 
 def test_cuda_toolkit_link_flags_cover_pip_layout(tmp_path: Path) -> None:
@@ -31,3 +35,38 @@ def test_cuda_toolkit_link_flags_cover_pip_layout(tmp_path: Path) -> None:
 def test_cuda_toolkit_link_flags_reject_missing_compiler(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="CUDA compiler does not exist"):
         cuda_toolkit_link_flags(tmp_path / "bin" / "nvcc", runtime_search_path=False)
+
+
+def test_cuda_toolkit_shared_library_resolves_versioned_pip_library(tmp_path: Path) -> None:
+    toolkit = tmp_path / "nvidia" / "cu13"
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    versioned = toolkit / "lib" / "libcublas.so.13"
+    versioned.parent.mkdir()
+    versioned.touch()
+
+    assert cuda_toolkit_shared_library(nvcc, "cublas") == versioned
+
+
+def test_cuda_toolkit_shared_library_prefers_unversioned_library(tmp_path: Path) -> None:
+    toolkit = tmp_path / "cuda"
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    library = toolkit / "lib64" / "libcudart.so"
+    library.parent.mkdir()
+    library.touch()
+    (library.parent / "libcudart.so.13").touch()
+
+    assert cuda_toolkit_shared_library(nvcc, "cudart") == library
+
+
+def test_cuda_toolkit_shared_library_rejects_missing_library(tmp_path: Path) -> None:
+    nvcc = tmp_path / "cuda" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    (tmp_path / "cuda" / "lib").mkdir()
+
+    with pytest.raises(ValueError, match=r"libcublas\.so does not exist"):
+        cuda_toolkit_shared_library(nvcc, "cublas")

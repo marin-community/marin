@@ -1,0 +1,6 @@
+lrwxrwxrwx 1 root root        15 Aug  9 08:31 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcublas.so -> libcublas.so.13
+-rw-r--r-- 1 root root  62180552 Aug  9 08:26 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcublas.so.13
+-rw-r--r-- 1 root root 628174680 Aug  9 08:26 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcublasLt.so.13
+lrwxrwxrwx 1 root root        15 Aug  9 08:31 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so -> libcudart.so.13
+-rw-r--r-- 1 root root    707752 Aug  9 08:26 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13
+-rw-r--r-- 1 root root   1359902 Aug  9 08:26 /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart_static.a

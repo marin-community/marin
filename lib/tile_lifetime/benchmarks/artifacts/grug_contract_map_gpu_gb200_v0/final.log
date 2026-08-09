@@ -1,0 +1,122 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+cuBLAS < 13.2 (130002 found) has a known issue where many kernels free TMEM buffers multiple times. Executing a cuBLAS kernel concurrently with another kernel (e.g. on another stream) can lead to silent data corruption.
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^
+Traceback (most recent call last):
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 477, in <module>
+    main()
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 460, in main
+    result = run_smoke(
+             ^^^^^^^^^^
+  File "/tmp/shuttle-2ed4741e13/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 370, in run_smoke
+    raise RuntimeError("baseline output is not deterministic")
+RuntimeError: baseline output is not deterministic
