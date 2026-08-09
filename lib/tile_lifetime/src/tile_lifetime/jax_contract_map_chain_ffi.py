@@ -90,6 +90,11 @@ def call_cuda_contract_map_chain_reverse_ffi(
         generated.reverse_target,
         result_shapes,
         vmap_method="broadcast_all",
+        output_layouts=(
+            (1, 0),
+            generated.first_weight_adjoint_minor_to_major,
+            generated.second_weight_adjoint_minor_to_major,
+        ),
     )(
         activation,
         first_weight,

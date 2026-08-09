@@ -33,6 +33,8 @@ class GeneratedCudaContractMapChainFfi:
     threads: int
     forward_shared_bytes: int
     reverse_shared_bytes: int
+    first_weight_adjoint_minor_to_major: tuple[int, int]
+    second_weight_adjoint_minor_to_major: tuple[int, int]
     kernel_count: int = 2
     external_dependencies: tuple[str, ...] = ("CUDA BF16/runtime primitives", "XLA typed FFI")
 
@@ -101,12 +103,18 @@ def generate_cuda_contract_map_chain_ffi(
             "input_vjp": tuple(program.input_vjp_map.inputs),
         },
         "numerical_policy": program.numerical_policy,
+        "weight_adjoint_layouts": {
+            "first": program.first_weight_adjoint_minor_to_major,
+            "second": program.second_weight_adjoint_minor_to_major,
+        },
         "physical_family": "bounded_one_cta_two_contract_map_training",
         "threads": threads,
     }
     semantic_digest = hashlib.sha256(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    first_weight_adjoint_dimension_zero_minor = json.dumps(program.first_weight_adjoint_minor_to_major == (0, 1))
+    second_weight_adjoint_dimension_zero_minor = json.dumps(program.second_weight_adjoint_minor_to_major == (0, 1))
     forward_symbol = _target_symbol(forward_target)
     reverse_symbol = _target_symbol(reverse_target)
     source = f"""// Generated from generic Contract/Map forward and JAX-owned reverse semantics; do not edit.
@@ -131,6 +139,8 @@ constexpr int kRows = {rows};
 constexpr int kInputFeatures = {input_features};
 constexpr int kRank = {rank};
 constexpr int kThreads = {threads};
+constexpr bool kFirstWeightAdjointDimensionZeroMinor = {first_weight_adjoint_dimension_zero_minor};
+constexpr bool kSecondWeightAdjointDimensionZeroMinor = {second_weight_adjoint_dimension_zero_minor};
 std::uint64_t forward_call_count = 0;
 std::uint64_t reverse_call_count = 0;
 
@@ -257,7 +267,10 @@ __global__ void ShuttleContractMapChainReverseKernel(
               __bfloat162float(input[row * kInputFeatures + input_feature]),
               __bfloat162float(rank_adjoint[row * kRank + rank_feature])));
     }}
-    first_weight_adjoint[linear] = __float2bfloat16_rn(accumulator);
+    const int output_offset = kFirstWeightAdjointDimensionZeroMinor
+        ? rank_feature * kInputFeatures + input_feature
+        : input_feature * kRank + rank_feature;
+    first_weight_adjoint[output_offset] = __float2bfloat16_rn(accumulator);
   }}
 
   for (int linear = threadIdx.x; linear < kRank * kInputFeatures; linear += blockDim.x) {{
@@ -271,7 +284,10 @@ __global__ void ShuttleContractMapChainReverseKernel(
               __bfloat162float(saved_hidden[row * kRank + rank_feature]),
               __bfloat162float(second_output_adjoint[row * kInputFeatures + input_feature])));
     }}
-    second_weight_adjoint[linear] = __float2bfloat16_rn(accumulator);
+    const int output_offset = kSecondWeightAdjointDimensionZeroMinor
+        ? input_feature * kRank + rank_feature
+        : rank_feature * kInputFeatures + input_feature;
+    second_weight_adjoint[output_offset] = __float2bfloat16_rn(accumulator);
   }}
 }}
 
@@ -390,6 +406,8 @@ extern "C" std::uint64_t shuttle_contract_map_chain_reverse_call_count() {{
         threads=threads,
         forward_shared_bytes=forward_shared_bytes,
         reverse_shared_bytes=reverse_shared_bytes,
+        first_weight_adjoint_minor_to_major=program.first_weight_adjoint_minor_to_major,
+        second_weight_adjoint_minor_to_major=program.second_weight_adjoint_minor_to_major,
     )
 
 

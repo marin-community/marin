@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, replace
 
 from tile_lifetime.cast_scalar_program import CastScalarProgram
+from tile_lifetime.contract_map_chain import TwoContractMapTrainingProgram, form_two_contract_map_training_program
 from tile_lifetime.xla_hlo_recovery import (
     EntryRegionValue,
     HloComputation,
@@ -23,6 +24,7 @@ from tile_lifetime.xla_hlo_recovery import (
 from tile_lifetime.xla_low_rank_gated_product import (
     LowRankGatedProductForwardPlan,
     LowRankGatedProductReversePlan,
+    RankTwoContractPlan,
     recover_low_rank_gated_product_training,
 )
 from tile_lifetime.xla_scalar_map_import import import_hlo_scalar_map
@@ -32,6 +34,7 @@ _CONSTANT_DATAFLOW = frozenset({"bitcast", "broadcast", "copy", "convert", "resh
 _DOT_DIMENSION = re.compile(
     r"(?P<name>lhs_contracting_dims|rhs_contracting_dims|lhs_batch_dims|rhs_batch_dims)=" r"\{(?P<dims>[0-9,]*)\}"
 )
+_INSTRUCTION_DEFINITION = re.compile(r"^\s*(?:ROOT\s+)?%?(?P<name>[^ =]+) =")
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,64 @@ class LowRankContractMapTrainingHloReplacementAudit:
     live_old_arithmetic: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class GeneratedLowRankContractMapFamily:
+    """One shape/AST physical family shared by repeated logical boundaries."""
+
+    program: TwoContractMapTrainingProgram
+    forward_target: str
+    reverse_target: str
+    forward_call_names: tuple[str, ...]
+    reverse_call_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GeneratedLowRankContractMapTrainingPlan:
+    """Ten logical boundaries normalized onto generic rank-two physical ABIs."""
+
+    logical: LowRankContractMapTrainingHloReplacementPlan
+    families: tuple[GeneratedLowRankContractMapFamily, ...]
+
+    @property
+    def expected_target_occurrences(self) -> tuple[tuple[str, int], ...]:
+        """Return exact target multiplicities without requiring unique targets per call."""
+        return tuple(
+            occurrence
+            for family in self.families
+            for occurrence in (
+                (family.forward_target, len(family.forward_call_names)),
+                (family.reverse_target, len(family.reverse_call_names)),
+            )
+        )
+
+
+@dataclass(frozen=True)
+class GeneratedLowRankContractMapCallAudit:
+    """One normalized rank-two typed-FFI call and its surviving logical outputs."""
+
+    call_instruction: str
+    target: str
+    inputs: tuple[EntryRegionValue, ...]
+    outputs: tuple[EntryRegionValue, ...]
+    logical_outputs: tuple[EntryRegionValue, ...]
+    removed_dot_instructions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GeneratedLowRankContractMapTrainingAudit:
+    """Whole-composition proof for generated physical Contract/Map calls."""
+
+    forward: tuple[GeneratedLowRankContractMapCallAudit, ...]
+    reverse: tuple[GeneratedLowRankContractMapCallAudit, ...]
+    target_occurrences: tuple[tuple[str, int], ...]
+    generated_call_count: int
+    generated_target_count: int
+    removed_dot_count: int
+    removed_dot_flops: int
+    collective_instructions: tuple[str, ...]
+    live_old_arithmetic: tuple[str, ...]
+
+
 def plan_low_rank_contract_map_training_hlo_replacements(
     hlo_text: str,
 ) -> LowRankContractMapTrainingHloReplacementPlan:
@@ -158,6 +219,206 @@ def plan_low_rank_contract_map_training_hlo_replacements(
         original_live_dot_flops=report.live_contract_flops,
         replaced_dot_count=len(replaced_dots),
         replaced_dot_flops=sum(plan.dot_flops for plan in (*forward, *reverse)),
+    )
+
+
+def plan_generated_low_rank_contract_map_training(
+    hlo_text: str,
+    *,
+    forward_target_prefix: str,
+    reverse_target_prefix: str,
+) -> GeneratedLowRankContractMapTrainingPlan:
+    """Group ten recovered boundaries by their generic shape/AST program."""
+    logical = plan_low_rank_contract_map_training_hlo_replacements(hlo_text)
+    programs: list[TwoContractMapTrainingProgram] = []
+    reverse_program_indices: list[int] = []
+    for boundary in logical.reverse:
+        program = form_two_contract_map_training_program(boundary.semantics.primal, boundary.semantics)
+        try:
+            index = programs.index(program)
+        except ValueError:
+            index = len(programs)
+            programs.append(program)
+        reverse_program_indices.append(index)
+    if not programs:
+        raise ValueError("generated Contract/Map training requires at least one JAX-owned reverse family")
+
+    forward_program_indices: list[int] = []
+    for boundary in logical.forward:
+        key = _forward_physical_key(boundary.semantics)
+        matches = tuple(index for index, reverse in enumerate(programs) if key == _program_forward_physical_key(reverse))
+        if len(matches) != 1:
+            raise ValueError(
+                f"forward boundary %{boundary.call_name} matches {len(matches)} generated physical families"
+            )
+        forward_program_indices.append(matches[0])
+
+    families = tuple(
+        GeneratedLowRankContractMapFamily(
+            program=program,
+            forward_target=_family_target(forward_target_prefix, index, len(programs)),
+            reverse_target=_family_target(reverse_target_prefix, index, len(programs)),
+            forward_call_names=tuple(
+                boundary.call_name
+                for boundary, program_index in zip(logical.forward, forward_program_indices, strict=True)
+                if program_index == index
+            ),
+            reverse_call_names=tuple(
+                boundary.call_name
+                for boundary, program_index in zip(logical.reverse, reverse_program_indices, strict=True)
+                if program_index == index
+            ),
+        )
+        for index, program in enumerate(programs)
+    )
+    return GeneratedLowRankContractMapTrainingPlan(logical=logical, families=families)
+
+
+def replace_generated_low_rank_contract_map_training(
+    hlo_text: str,
+    plan: GeneratedLowRankContractMapTrainingPlan,
+) -> str:
+    """Replace all ten boundaries with normalized rank-two physical calls."""
+    entry = _entry(hlo_text)
+    users = _users(entry)
+    boundaries = (*plan.logical.forward, *plan.logical.reverse)
+    all_internal = set().union(*(set(boundary.internal_instructions) for boundary in boundaries))
+    expected_external_outputs = {
+        name for name in all_internal if any(user not in all_internal for user in users.get(name, ()))
+    }
+    expected_logical_outputs = {
+        *(boundary.semantics.output.instruction for boundary in plan.logical.forward),
+        *(boundary.semantics.input_adjoint.instruction for boundary in plan.logical.reverse),
+        *(boundary.semantics.down_weight_adjoint.output.instruction for boundary in plan.logical.reverse),
+        *(boundary.semantics.up_weight_adjoint.output.instruction for boundary in plan.logical.reverse),
+    }
+    if expected_external_outputs != expected_logical_outputs:
+        raise ValueError(
+            "normalized Contract/Map ABI does not cover every external logical result: "
+            f"expected {sorted(expected_external_outputs)}, generated {sorted(expected_logical_outputs)}"
+        )
+
+    family_by_call = {
+        call_name: family
+        for family in plan.families
+        for call_name in (*family.forward_call_names, *family.reverse_call_names)
+    }
+    forward_by_first_contract = {
+        boundary.semantics.down_contract.instruction: boundary for boundary in plan.logical.forward
+    }
+    replacement_blocks: dict[str, tuple[str, ...]] = {}
+    for boundary in plan.logical.forward:
+        family = family_by_call[boundary.call_name]
+        replacement_blocks[boundary.insertion_instruction] = _generated_forward_hlo_lines(boundary, family)
+    for boundary in plan.logical.reverse:
+        family = family_by_call[boundary.call_name]
+        forward = forward_by_first_contract[boundary.semantics.primal.down_contract.instruction]
+        replacement_blocks[boundary.insertion_instruction] = _generated_reverse_hlo_lines(boundary, forward, family)
+    if len(replacement_blocks) != len(boundaries):
+        raise ValueError("two generated Contract/Map boundaries selected the same insertion instruction")
+
+    emitted: set[str] = set()
+    rewritten_lines: list[str] = []
+    for line in hlo_text.splitlines(keepends=True):
+        match = _INSTRUCTION_DEFINITION.match(line)
+        name = match.group("name") if match is not None else None
+        if name not in all_internal:
+            rewritten_lines.append(line)
+            continue
+        block = replacement_blocks.get(name)
+        if block is None:
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        rewritten_lines.extend(f"{indent}{generated}\n" for generated in block)
+        emitted.add(name)
+    if emitted != set(replacement_blocks):
+        raise ValueError(f"failed to emit generated boundaries at {sorted(set(replacement_blocks) - emitted)}")
+    rewritten = "".join(rewritten_lines)
+    parse_hlo_module_text(rewritten)
+    return rewritten
+
+
+def audit_generated_low_rank_contract_map_training(
+    original_hlo: str,
+    transformed_hlo: str,
+    plan: GeneratedLowRankContractMapTrainingPlan,
+) -> GeneratedLowRankContractMapTrainingAudit:
+    """Verify multiplicities, physical ABIs, dead old work, and collectives."""
+    original_entry = _entry(original_hlo)
+    transformed_entry = _entry(transformed_hlo)
+    original_instructions = {instruction.name: instruction for instruction in original_entry.instructions}
+    transformed_instructions = {instruction.name: instruction for instruction in transformed_entry.instructions}
+    original_users = _users(original_entry)
+    transformed_users = _users(transformed_entry)
+    boundaries = (*plan.logical.forward, *plan.logical.reverse)
+    all_internal = set().union(*(set(boundary.internal_instructions) for boundary in boundaries))
+    family_by_call = {
+        call_name: family
+        for family in plan.families
+        for call_name in (*family.forward_call_names, *family.reverse_call_names)
+    }
+    forward_by_first_contract = {
+        boundary.semantics.down_contract.instruction: boundary for boundary in plan.logical.forward
+    }
+    forward = tuple(
+        _audit_generated_forward_call(
+            boundary,
+            family_by_call[boundary.call_name],
+            transformed_instructions,
+        )
+        for boundary in plan.logical.forward
+    )
+    reverse = tuple(
+        _audit_generated_reverse_call(
+            boundary,
+            forward_by_first_contract[boundary.semantics.primal.down_contract.instruction],
+            family_by_call[boundary.call_name],
+            transformed_instructions,
+        )
+        for boundary in plan.logical.reverse
+    )
+    logical_outputs = tuple(output for call in (*forward, *reverse) for output in call.logical_outputs)
+    for output in logical_outputs:
+        expected = tuple(user for user in original_users[output.instruction] if user not in all_internal)
+        if transformed_users[output.instruction] != expected:
+            raise ValueError(f"generated logical output %{output.instruction} changed its external users")
+
+    occurrences = tuple(
+        (target, _custom_call_target_occurrences(transformed_entry, target))
+        for target, _ in plan.expected_target_occurrences
+    )
+    if occurrences != plan.expected_target_occurrences:
+        raise ValueError(
+            "generated Contract/Map target occurrences changed: "
+            f"expected {plan.expected_target_occurrences}, found {occurrences}"
+        )
+    old_arithmetic = all_internal - {value.instruction for value in logical_outputs}
+    live_old = tuple(sorted(old_arithmetic & set(transformed_instructions)))
+    if live_old:
+        raise ValueError(f"old low-rank Contract/Map arithmetic remains live: {live_old}")
+    removed_dots = tuple(dot for boundary in boundaries for dot in boundary.dot_instructions)
+    if any(dot in transformed_instructions and transformed_instructions[dot].opcode == "dot" for dot in removed_dots):
+        raise ValueError("an old low-rank Contract remains after generated physical replacement")
+    original_collectives = tuple(
+        instruction.name for instruction in original_entry.instructions if instruction.opcode == "all-reduce"
+    )
+    transformed_collectives = tuple(
+        instruction.name for instruction in transformed_entry.instructions if instruction.opcode == "all-reduce"
+    )
+    if transformed_collectives != original_collectives:
+        raise ValueError("generated Contract/Map replacement changed placement all-reduces")
+    if any(original_instructions[name].opcode == "all-reduce" for name in all_internal):
+        raise ValueError("a placement all-reduce entered a generated Contract/Map boundary")
+    return GeneratedLowRankContractMapTrainingAudit(
+        forward=forward,
+        reverse=reverse,
+        target_occurrences=occurrences,
+        generated_call_count=len(forward) + len(reverse),
+        generated_target_count=len(occurrences),
+        removed_dot_count=len(removed_dots),
+        removed_dot_flops=sum(boundary.dot_flops for boundary in boundaries),
+        collective_instructions=original_collectives,
+        live_old_arithmetic=live_old,
     )
 
 
@@ -720,6 +981,267 @@ def _family_digest(
 def _semantic_digest(family_digest: str, scalar_programs: tuple[CastScalarProgram, ...]) -> str:
     record = {"family": family_digest, "scalar_programs": [program.digest for program in scalar_programs]}
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def _forward_physical_key(forward: LowRankGatedProductForwardPlan) -> tuple[object, ...]:
+    return (
+        _contract_physical_key(forward.down_contract),
+        forward.hidden_map.serialized,
+        _contract_physical_key(forward.up_contract),
+        forward.output_map.serialized,
+    )
+
+
+def _program_forward_physical_key(program: TwoContractMapTrainingProgram) -> tuple[object, ...]:
+    first = program.first_contract
+    second = program.second_contract
+    return (
+        (first.rows, first.reduction, first.features, 1, 0),
+        program.hidden_map.program.serialized,
+        (second.rows, second.reduction, second.features, 1, 0),
+        program.output_map.program.serialized,
+    )
+
+
+def _contract_physical_key(contract: RankTwoContractPlan) -> tuple[object, ...]:
+    lhs = contract.lhs
+    rhs = contract.rhs
+    output = contract.output
+    _, lhs_dimensions = _physical_shape(lhs.shape)
+    _, rhs_dimensions = _physical_shape(rhs.shape)
+    _, output_dimensions = _physical_shape(output.shape)
+    lhs_contracting = contract.lhs_contracting_dimension
+    rhs_contracting = contract.rhs_contracting_dimension
+    if lhs_contracting != 1 or rhs_contracting != 0:
+        raise ValueError("forward physical family requires row-major A@B Contracts")
+    if len(lhs_dimensions) != 2 or len(rhs_dimensions) != 2 or len(output_dimensions) != 2:
+        raise ValueError("forward physical family requires rank-two Contracts")
+    rows, reduction = lhs_dimensions
+    rhs_reduction, features = rhs_dimensions
+    if rhs_reduction != reduction or output_dimensions != (rows, features):
+        raise ValueError("forward physical Contract dimensions disagree")
+    return (rows, reduction, features, lhs_contracting, rhs_contracting)
+
+
+def _family_target(prefix: str, index: int, family_count: int) -> str:
+    return prefix if family_count == 1 else f"{prefix}.family{index}"
+
+
+def _generated_forward_hlo_lines(
+    boundary: LowRankContractMapForwardHloReplacementPlan,
+    family: GeneratedLowRankContractMapFamily,
+) -> tuple[str, ...]:
+    program = family.program
+    first = program.first_contract
+    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
+    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    activation = boundary.semantics.down_contract.lhs
+    first_weight = boundary.semantics.down_contract.rhs
+    second_weight = boundary.semantics.up_contract.rhs
+    inputs = (activation, first_weight, second_weight)
+    physical_outputs = (
+        EntryRegionValue(f"{boundary.call_name}.output_2d", output_shape),
+        EntryRegionValue(f"{boundary.call_name}.first_contract", rank_shape),
+        EntryRegionValue(f"{boundary.call_name}.hidden", rank_shape),
+        EntryRegionValue(f"{boundary.call_name}.second_contract", output_shape),
+    )
+    return (
+        _custom_call_line(boundary.call_name, inputs, physical_outputs, family.forward_target),
+        *(
+            f"%{output.instruction} = {output.shape} get-tuple-element(%{boundary.call_name}), index={index}"
+            for index, output in enumerate(physical_outputs)
+        ),
+        (
+            f"%{boundary.semantics.output.instruction} = {boundary.semantics.output.shape} "
+            f"reshape(%{physical_outputs[0].instruction})"
+        ),
+    )
+
+
+def _generated_reverse_hlo_lines(
+    boundary: LowRankContractMapReverseHloReplacementPlan,
+    forward: LowRankContractMapForwardHloReplacementPlan,
+    family: GeneratedLowRankContractMapFamily,
+) -> tuple[str, ...]:
+    program = family.program
+    first = program.first_contract
+    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
+    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    if len(boundary.cotangent_inputs) != 1:
+        raise ValueError("normalized Contract/Map reverse requires one logical output cotangent")
+    cotangent = EntryRegionValue(f"{boundary.call_name}.output_cotangent_2d", output_shape)
+    saved = (
+        EntryRegionValue(f"{forward.call_name}.first_contract", rank_shape),
+        EntryRegionValue(f"{forward.call_name}.hidden", rank_shape),
+        EntryRegionValue(f"{forward.call_name}.second_contract", output_shape),
+    )
+    inputs = (
+        boundary.semantics.primal.down_contract.lhs,
+        boundary.semantics.primal.down_contract.rhs,
+        boundary.semantics.primal.up_contract.rhs,
+        *saved,
+        cotangent,
+    )
+    physical_outputs = (
+        EntryRegionValue(f"{boundary.call_name}.input_adjoint_2d", output_shape),
+        boundary.semantics.down_weight_adjoint.output,
+        boundary.semantics.up_weight_adjoint.output,
+    )
+    return (
+        (f"%{cotangent.instruction} = {cotangent.shape} " f"reshape(%{boundary.cotangent_inputs[0].instruction})"),
+        _custom_call_line(boundary.call_name, inputs, physical_outputs, family.reverse_target),
+        f"%{physical_outputs[0].instruction} = {output_shape} get-tuple-element(%{boundary.call_name}), index=0",
+        (
+            f"%{boundary.semantics.input_adjoint.instruction} = {boundary.semantics.input_adjoint.shape} "
+            f"reshape(%{physical_outputs[0].instruction})"
+        ),
+        *(
+            f"%{output.instruction} = {output.shape} get-tuple-element(%{boundary.call_name}), index={index}"
+            for index, output in enumerate(physical_outputs[1:], start=1)
+        ),
+    )
+
+
+def _custom_call_line(
+    call_name: str,
+    inputs: tuple[EntryRegionValue, ...],
+    outputs: tuple[EntryRegionValue, ...],
+    target: str,
+) -> str:
+    operands = ", ".join(f"%{value.instruction}" for value in inputs)
+    constraints = ", ".join(value.shape for value in inputs)
+    output_shapes = ", ".join(value.shape for value in outputs)
+    return (
+        f"%{call_name} = ({output_shapes}) custom-call({operands}), "
+        f'custom_call_target="{target}", operand_layout_constraints={{{constraints}}}, '
+        "api_version=API_VERSION_TYPED_FFI, backend_config={}"
+    )
+
+
+def _audit_generated_forward_call(
+    boundary: LowRankContractMapForwardHloReplacementPlan,
+    family: GeneratedLowRankContractMapFamily,
+    instructions: dict[str, HloInstruction],
+) -> GeneratedLowRankContractMapCallAudit:
+    first = family.program.first_contract
+    inputs = (
+        boundary.semantics.down_contract.lhs,
+        boundary.semantics.down_contract.rhs,
+        boundary.semantics.up_contract.rhs,
+    )
+    outputs = (
+        EntryRegionValue(f"{boundary.call_name}.output_2d", _rank_two_bf16_shape(first.rows, first.reduction)),
+        EntryRegionValue(f"{boundary.call_name}.first_contract", _rank_two_bf16_shape(first.rows, first.features)),
+        EntryRegionValue(f"{boundary.call_name}.hidden", _rank_two_bf16_shape(first.rows, first.features)),
+        EntryRegionValue(f"{boundary.call_name}.second_contract", _rank_two_bf16_shape(first.rows, first.reduction)),
+    )
+    _audit_generated_call(boundary.call_name, family.forward_target, inputs, outputs, instructions)
+    output = boundary.semantics.output
+    generated_output = instructions.get(output.instruction)
+    if (
+        generated_output is None
+        or generated_output.opcode != "reshape"
+        or generated_output.operands != (outputs[0].instruction,)
+    ):
+        raise ValueError(f"generated forward %{boundary.call_name} did not restore its logical output view")
+    return GeneratedLowRankContractMapCallAudit(
+        call_instruction=boundary.call_name,
+        target=family.forward_target,
+        inputs=inputs,
+        outputs=outputs,
+        logical_outputs=(output,),
+        removed_dot_instructions=boundary.dot_instructions,
+    )
+
+
+def _audit_generated_reverse_call(
+    boundary: LowRankContractMapReverseHloReplacementPlan,
+    forward: LowRankContractMapForwardHloReplacementPlan,
+    family: GeneratedLowRankContractMapFamily,
+    instructions: dict[str, HloInstruction],
+) -> GeneratedLowRankContractMapCallAudit:
+    first = family.program.first_contract
+    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
+    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    cotangent = EntryRegionValue(f"{boundary.call_name}.output_cotangent_2d", output_shape)
+    inputs = (
+        boundary.semantics.primal.down_contract.lhs,
+        boundary.semantics.primal.down_contract.rhs,
+        boundary.semantics.primal.up_contract.rhs,
+        EntryRegionValue(f"{forward.call_name}.first_contract", rank_shape),
+        EntryRegionValue(f"{forward.call_name}.hidden", rank_shape),
+        EntryRegionValue(f"{forward.call_name}.second_contract", output_shape),
+        cotangent,
+    )
+    outputs = (
+        EntryRegionValue(f"{boundary.call_name}.input_adjoint_2d", output_shape),
+        boundary.semantics.down_weight_adjoint.output,
+        boundary.semantics.up_weight_adjoint.output,
+    )
+    _audit_generated_call(boundary.call_name, family.reverse_target, inputs, outputs, instructions)
+    cotangent_instruction = instructions.get(cotangent.instruction)
+    if cotangent_instruction is None or cotangent_instruction.opcode != "reshape":
+        raise ValueError(f"generated reverse %{boundary.call_name} did not normalize its cotangent view")
+    input_adjoint = boundary.semantics.input_adjoint
+    generated_adjoint = instructions.get(input_adjoint.instruction)
+    if (
+        generated_adjoint is None
+        or generated_adjoint.opcode != "reshape"
+        or generated_adjoint.operands != (outputs[0].instruction,)
+    ):
+        raise ValueError(f"generated reverse %{boundary.call_name} did not restore its logical input-adjoint view")
+    return GeneratedLowRankContractMapCallAudit(
+        call_instruction=boundary.call_name,
+        target=family.reverse_target,
+        inputs=inputs,
+        outputs=outputs,
+        logical_outputs=(
+            input_adjoint,
+            boundary.semantics.down_weight_adjoint.output,
+            boundary.semantics.up_weight_adjoint.output,
+        ),
+        removed_dot_instructions=boundary.dot_instructions,
+    )
+
+
+def _audit_generated_call(
+    call_name: str,
+    target: str,
+    inputs: tuple[EntryRegionValue, ...],
+    outputs: tuple[EntryRegionValue, ...],
+    instructions: dict[str, HloInstruction],
+) -> None:
+    call = instructions.get(call_name)
+    if call is None or call.opcode != "custom-call" or f'custom_call_target="{target}"' not in call.attributes:
+        raise ValueError(f"missing generated Contract/Map call %{call_name}")
+    if call.operands != tuple(value.instruction for value in inputs):
+        raise ValueError(f"generated Contract/Map call %{call_name} changed its physical input ABI")
+    if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
+        raise ValueError(f"generated Contract/Map call %{call_name} is not typed FFI API version 1")
+    for index, output in enumerate(outputs):
+        generated = instructions.get(output.instruction)
+        if generated is None or generated.opcode != "get-tuple-element" or generated.operands != (call_name,):
+            raise ValueError(f"generated Contract/Map output %{output.instruction} changed its tuple source")
+        if generated.shape != output.shape or f"index={index}" not in generated.attributes:
+            raise ValueError(f"generated Contract/Map output %{output.instruction} changed its physical ABI")
+
+
+def _custom_call_target_occurrences(entry: HloComputation, target: str) -> int:
+    return sum(
+        instruction.opcode == "custom-call" and f'custom_call_target="{target}"' in instruction.attributes
+        for instruction in entry.instructions
+    )
+
+
+def _rank_two_bf16_shape(rows: int, columns: int) -> str:
+    return f"bf16[{rows},{columns}]{{1,0}}"
+
+
+def _physical_shape(shape: str) -> tuple[str, tuple[int, ...]]:
+    match = re.match(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]", shape)
+    if match is None:
+        raise ValueError(f"expected a physical array shape, found {shape!r}")
+    return match.group("dtype"), tuple(int(value) for value in match.group("dims").split(",") if value)
 
 
 def _depends_on(name: str, source: str, instructions: dict[str, HloInstruction]) -> bool:
