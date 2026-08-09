@@ -1788,3 +1788,25 @@ author: dlwh
 - Next action: replay the exact commit on H100/GB200, then connect the recovered
   program to the JAX typed-FFI replacement boundary so the final execution path
   is Torch-free by default.
+
+### 2026-08-08 23:10 PDT - TLTC-XLA-007 generated routed Fold bodies
+
+- Hypothesis: the source-keyed scatter Folds in the natural Grug reverse HLO
+  can be recovered as generic scalar contribution and update programs rather
+  than retained as named MoE merge logic.
+- Commit Hash: `b5d4f81e6a`.
+- Command: `uv run --frozen --package marin-tile-lifetime --group test pytest
+  lib/tile_lifetime/tests/test_xla_relation_program_recovery.py -q`.
+- Result: six focused tests pass. The forward Fold imports the routed Contract
+  result plus a separately formed route-weight value; the input-adjoint Fold
+  imports only the routed cotangent. Both reducers import as FP32 add followed
+  by the original BF16/F32 round trip and generate standalone CUDA scalar
+  bodies. A multiply-to-add contribution mutation changes only the
+  contribution digest/source, leaving the reducer unchanged.
+- Interpretation: every scalar Map/Fold body in the recovered routed
+  forward/input-adjoint boundary is now compiler-owned. The remaining boundary
+  is physical: attach these bodies to generic segmented Contracts and a
+  deterministic source-ordered scatter executor.
+- Next action: use the recovered RelationPlan and generated Fold bodies to
+  replace the executed routed forward/input-adjoint region; retain the
+  all-reduce as an external placement transition for this checkpoint.
