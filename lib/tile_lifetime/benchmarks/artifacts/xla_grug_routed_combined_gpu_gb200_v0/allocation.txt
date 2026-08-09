@@ -1,0 +1,7 @@
+gpu variant: GB200
+nodes: 1
+gpus per node requested: 1
+CPU cores requested: 4
+memory requested: 64GB
+disk requested: 100GB
+priority: batch

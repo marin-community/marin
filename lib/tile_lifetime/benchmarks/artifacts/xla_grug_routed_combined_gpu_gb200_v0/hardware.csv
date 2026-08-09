@@ -1,0 +1,2 @@
+name, uuid, driver_version, pstate, power.limit [W], clocks.current.sm [MHz], clocks.current.memory [MHz], compute_cap
+NVIDIA GB200, GPU-f41bf5e5-cdb1-343a-fbd5-2ccde1b66b86, 595.71.05, P0, 1200.00 W, 120 MHz, 3996 MHz, 10.0

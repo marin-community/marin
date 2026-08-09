@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import hashlib
+import json
+import statistics
 from pathlib import Path
 
 import pytest
@@ -32,6 +35,7 @@ _TARGETS = RoutedTrainingFfiTargets(
         "shuttle.routed_training.weight_gradient.1.test",
     ),
 )
+_COMBINED_GPU_ARTIFACT = Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_routed_combined_gpu_gb200_v0"
 
 
 def _hlo() -> str:
@@ -152,3 +156,50 @@ def test_routed_training_rejects_bitwise_weight_reduction_claim() -> None:
             _hlo(),
             weight_gradient_numerical_policy=NumericalPolicy.BITWISE_EXACT,
         )
+
+
+def test_routed_training_gb200_artifact_preserves_acceptance_evidence() -> None:
+    checksums = (_COMBINED_GPU_ARTIFACT / "SHA256SUMS").read_text().splitlines()
+    assert len(checksums) == 21
+    for record in checksums:
+        expected, relative_path = record.split("  ", maxsplit=1)
+        payload = (_COMBINED_GPU_ARTIFACT / relative_path).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == expected
+
+    summary = json.loads((_COMBINED_GPU_ARTIFACT / "summary.json").read_text())
+    assert summary["device_kind"] == "NVIDIA GB200"
+    assert summary["architecture"] == "sm_100a"
+    assert summary["custom_call_occurrences_in_transformed_hlo"] == {
+        "forward": 1,
+        "input_adjoint": 1,
+        "weight_gradients": [1, 1],
+    }
+    assert summary["custom_call_handler_executions"] == {
+        "forward": 35,
+        "input_adjoint": 35,
+        "weight_gradients": [35, 35],
+    }
+    assert summary["external_collectives"] == ["psum.58", "psum.59"]
+    assert summary["input_adjoint_auxiliary"] == "select.7"
+    assert summary["copy_count"] == {"original": 0, "transformed": 0}
+    assert summary["transpose_count"] == {"original": 51, "transformed": 50}
+    assert not summary["uses_atomic_accumulation"]
+    assert summary["output_alias_operands"] == [None, None]
+    assert summary["static_operand_roles"] == ["fold_initial"]
+    assert summary["outputs_match"]
+    assert summary["maximum_absolute_error"] < 4e-9
+    assert summary["mean_absolute_error"] < 2e-12
+    assert summary["bitwise_equal_leaf_count"] == 49
+    assert summary["result_leaf_count"] == 53
+
+    samples = summary["raw_samples"]
+    assert len(samples) == 30
+    assert sum(sample["order"][0] == "baseline" for sample in samples) == 15
+    assert sum(sample["order"][0] == "transformed" for sample in samples) == 15
+    baseline_median = statistics.median(sample["baseline"]["latency_ms"] for sample in samples)
+    generated_median = statistics.median(sample["transformed"]["latency_ms"] for sample in samples)
+    assert baseline_median == summary["baseline_median_ms"]
+    assert generated_median == summary["generated_median_ms"]
+    assert generated_median / baseline_median == summary["generated_over_baseline"]
+    assert summary["generated_over_baseline"] < 1.2
+    assert len(summary["generated_unique_output_hashes"]) == 1
