@@ -106,8 +106,18 @@ CPU tests currently establish:
 - rejection when backend synchronization constants drift from the Event Tensor
   schedule.
 
-Before this becomes a performance-bearing checkpoint, replay the unchanged
-CuTe payload on an actual H100 and preserve the generated source, event-plan
-fingerprint, hardware identity, correctness, determinism, and latency. A B200
-run would be a separate portability result. A GB200 run would require an SM100
-backend attachment and must not be inferred from either result.
+An H100 replay was attempted with the pinned helper stack. Both the canonical
+comparison source and the Event Tensor branch fail at the same CuTe IR
+verification in the identical Shuttle-owned normalized-exponential helper:
+the row-sum register tensor does not dominate a generated layout use. The
+failure occurs before benchmark samples are emitted, so the structural
+checkpoint still has no performance claim. Commands, environment, source
+hashes, and sanitized stderr are preserved under
+`benchmarks/artifacts/event_tensor_sm90_compile_blocker_h100_v0/`.
+
+Before this becomes a performance-bearing checkpoint, repair and independently
+validate that canonical Fold helper, then replay the unchanged CuTe payload on
+an actual H100 and preserve generated source, event-plan fingerprint, hardware
+identity, correctness, determinism, and latency. A B200 run would be a separate
+portability result. A GB200 run would require an SM100 backend attachment and
+must not be inferred from either result.

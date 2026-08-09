@@ -1,0 +1,19 @@
+Canonical diagnostic preserved from the live terminal (the command was not
+redirected to a raw log):
+
+Verification failed:
+error: "self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))"("/tmp/shuttle-base/lib/tile_lifetime/backends/h100/cute_normalized_exp.py":106:36): operand #0 does not dominate this use
+ note: current operation: "cute.get_layout"
+ note: unknown: operand defined here (op in a child region)
+
+Call site:
+
+/tmp/shuttle-base/lib/tile_lifetime/benchmarks/h100_cute_generated_streaming_attention.py:177
+  -> compile_h100_streaming_program
+/tmp/shuttle-base/lib/tile_lifetime/backends/h100/cute_streaming_emitter.py:154
+  -> cute.compile(skeleton, *cute_arguments, options="--enable-tvm-ffi")
+
+Final exception:
+
+cutlass.base_dsl.common.DSLRuntimeError: DSLRuntimeError: ICE IR Verification Failed
+Caused exception: Verification failed: operand #0 does not dominate this use

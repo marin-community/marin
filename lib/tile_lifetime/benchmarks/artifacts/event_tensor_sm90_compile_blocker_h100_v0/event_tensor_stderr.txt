@@ -1,0 +1,26 @@
+Traceback (most recent call last):
+  File "/tmp/event-env/lib/python3.12/site-packages/nvidia_cutlass_dsl/python_packages/cutlass/base_dsl/dsl.py", line 1521, in build_module
+    module.operation.verify()
+cutlass._mlir._mlir_libs._site_initialize.<locals>.MLIRError: Verification failed:
+error: "self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))"("/tmp/shuttle/lib/tile_lifetime/backends/h100/cute_normalized_exp.py":106:36): operand #0 does not dominate this use
+ note: "self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))"("/tmp/shuttle/lib/tile_lifetime/backends/h100/cute_normalized_exp.py":106:36): see current operation: %1306 = "cute.get_layout"(%2886#2) : (!cute.memref<f32, rmem, align<32>, "2:1">) -> !cute.layout<"2:1">
+ note: unknown: operand defined here (op in a child region)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/shuttle/lib/tile_lifetime/benchmarks/h100_cute_generated_streaming_attention.py", line 263, in <module>
+    main()
+  File "/tmp/shuttle/lib/tile_lifetime/benchmarks/h100_cute_generated_streaming_attention.py", line 177, in main
+    compiled = compile_h100_streaming_program(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle/lib/tile_lifetime/backends/h100/cute_streaming_emitter.py", line 154, in compile_h100_streaming_program
+    executable = cute.compile(skeleton, *cute_arguments, options="--enable-tvm-ffi")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/event-env/lib/python3.12/site-packages/nvidia_cutlass_dsl/python_packages/cutlass/base_dsl/dsl.py", line 1523, in build_module
+    raise DSLRuntimeError("ICE IR Verification Failed", cause=e)
+cutlass.base_dsl.common.DSLRuntimeError: DSLRuntimeError: ICE IR Verification Failed
+Caused exception: Verification failed:
+error: "self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))"("/tmp/shuttle/lib/tile_lifetime/backends/h100/cute_normalized_exp.py":106:36): operand #0 does not dominate this use
+ note: "self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))"("/tmp/shuttle/lib/tile_lifetime/backends/h100/cute_normalized_exp.py":106:36): see current operation: %1306 = "cute.get_layout"(%2886#2) : (!cute.memref<f32, rmem, align<32>, "2:1">) -> !cute.layout<"2:1">
+ note: unknown: operand defined here (op in a child region)
