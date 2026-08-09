@@ -116,6 +116,66 @@ def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
     )
 
 
+def test_small_ep_ring_control_preserves_expert_sharding_without_ragged_all_to_all():
+    step = small_scale_abl_launch.build_small_run(
+        run_id="ring-gradient-control",
+        size="d768",
+        target="gb200-2node",
+        flavor="ep-ring",
+        tokens_per_step=524_288,
+        num_experts=96,
+        capacity_factor=1.33,
+        watch_interval=1,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.moe_implementation == "ring"
+    assert config.trainer.expert_axis_size == 8
+    assert config.processes_per_task == 4
+
+
+@pytest.mark.parametrize(
+    ("target", "tokens_per_step", "num_experts", "expected_nodes", "expected_expert_axis", "expected_batch"),
+    [
+        ("gb200-1node", 262_144, 12, 1, 4, 64),
+        ("gb200-2node", 524_288, 24, 2, 8, 128),
+        ("gb200-4node", 1_048_576, 48, 4, 16, 256),
+    ],
+)
+def test_small_ep_probes_preserve_per_rank_routing_geometry(
+    target: str,
+    tokens_per_step: int,
+    num_experts: int,
+    expected_nodes: int,
+    expected_expert_axis: int,
+    expected_batch: int,
+):
+    step = small_scale_abl_launch.build_small_run(
+        run_id=f"{target}-ragged-gradient-probe",
+        size="d768",
+        target=target,
+        flavor="ep-ragged",
+        seq_len=4096,
+        tokens_per_step=tokens_per_step,
+        num_experts=num_experts,
+        capacity_factor=1.33,
+        watch_interval=1,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert step.runtime_args["train_resources"].replicas == expected_nodes
+    assert config.processes_per_task == 4
+    assert config.trainer.expert_axis_size == expected_expert_axis
+    assert config.trainer.trainer.train_batch_size == expected_batch
+    assert config.model.num_experts // config.trainer.expert_axis_size == 3
+    assert (
+        config.trainer.trainer.train_batch_size * config.model.max_seq_len // config.trainer.expert_axis_size == 65_536
+    )
+    assert config.trainer.trainer.watch.interval == 1
+
+
 def test_jax_nightly_version_must_be_an_exact_dated_build():
     with pytest.raises(ValueError, match="must look like"):
         jax_runtime.jax_nightly_pip_packages("nightly")

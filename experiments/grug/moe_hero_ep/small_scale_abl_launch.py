@@ -10,9 +10,10 @@ budget (60 tokens per active parameter). The architecture, data (datakit two-pha
 runs are comparable to the FSDP sweep points; only the width/depth/head split and token budget
 shrink relative to the d6144 shape.
 
-Each ``--size`` submits one job on the fleet ``--target`` names: four GB200 nodes (EP16), a GB200
-rack (EP64), 8 H100 nodes (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it
-sets cell size, so the target is not just a hardware choice -- see the ``TARGETS`` comments.
+Each ``--size`` submits one job on the fleet ``--target`` names: one, two, or four GB200 nodes
+(EP4/EP8/EP16), a GB200 rack (EP64), 8 H100 nodes (EP64), or 2 H100 nodes (EP16). The expert axis
+spans the fleet, and it sets cell size, so the target is not just a hardware choice -- see the
+``TARGETS`` comments.
 """
 
 import dataclasses
@@ -106,6 +107,31 @@ class Target:
 # attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
+    # Correctness probe for process-per-GPU routing. Pair 262,144 tokens/step with 12 experts to
+    # preserve the EP16 E48 proxy's 65,536 tokens and three experts per rank while using one node.
+    "gb200-1node": Target(
+        "GB200",
+        HERO_GPUS_PER_NODE,
+        1,
+        FOUR_NODE_EP_WORKER_CPU,
+        GB200_FOUR_NODE_SCREEN_RAM,
+        "1t",
+        "gpu_fa4_cute",
+        True,
+    ),
+    # Cross-host correctness probe small enough to fit domains that cannot admit an EP16 gang.
+    # Pair 524,288 tokens/step with 24 experts for the same per-rank geometry as the EP4/E12 and
+    # EP16/E48 probes.
+    "gb200-2node": Target(
+        "GB200",
+        HERO_GPUS_PER_NODE,
+        2,
+        FOUR_NODE_EP_WORKER_CPU,
+        GB200_FOUR_NODE_SCREEN_RAM,
+        "1t",
+        "gpu_fa4_cute",
+        True,
+    ),
     # EP16 keeps cross-node P2P in the experiment while fitting capacity gaps too small for a rack.
     # At 1,048,576 tokens per step it has the d6144 hero's 65,536 tokens per sender shard, so E192
     # top-4 runs reproduce the hero's routing-cell load. It is a relative transport-knob screen:

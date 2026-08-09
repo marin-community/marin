@@ -69,6 +69,9 @@ class Flavor:
 
 FLAVORS: dict[str, Flavor] = {
     "ep": Flavor(None, "fixed_all_to_all"),
+    # Correctness control that preserves expert sharding and ragged grouped matmuls while replacing
+    # ragged all-to-all dispatch/combine with all-gather plus psum-scatter.
+    "ep-ring": Flavor(None, "ring"),
     # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
     # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists

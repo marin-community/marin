@@ -609,6 +609,8 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Run: `ra2a-s09c-ep16-oneshot-pgle-off-20260809`; initial training hosts `s2grxs64`, `s1zsxs64`, `s33xxs64`, and `s24qxs64`, all in `DH1-137-US-EAST-08A`. The coordinator ran separately on `s2rsxs64`; the GPU gang itself was not cross-rack. No production preemption affected the first attempt.
 - Compile boundary: a 05:58:47 UTC thread profile showed all four process-per-GPU worker mains on task 0 in `backend_compile_and_load` at `compiler.py:350`, confirming the earlier `pxla.py:420` samples represented later execution rather than compile.
 - Reachability result: with `JAX_ENABLE_PGLE=false`, every rank completed the first optimizer step. Logs report finite loss 11.8 and one displayed iteration at about 91.8 seconds including compilation. This is the first process-per-GPU ragged one-shot progress in the investigation and reverses the contaminated S01-S08 no-progress result.
+- Durable metric refinement: W&B recorded step 0 at 41.9956 seconds, 24,968.7 tokens/s, and 6.3880% MFU with loss 11.8062. The progress-line 91.8-second rate included surrounding first-iteration wall time. One sample is not a steady-state baseline, but the recorded MFU is close to the fixed-all-to-all d768 control's 6.5845% median and shows no order-of-magnitude ragged transport penalty at EP16.
+- Routing sanity: the same step dropped 9,689 assignments, `moe/drop_fraction=0.000288755` (0.0289%). Seven of eight layers had zero capacity overflow; layer 1 was 0.2310%. Ragged receiver pooling at capacity 1.33 therefore avoids the massive token-loss regime that forced the fixed-bucket backend toward 4,096 buckets.
 - Numerical result: the second attempted step produced `Non-finite loss (nan) at step 2` on all ranks, so the run cannot supply steady-state timing. The 52-step screen used `tokens_per_active_param=1`; the optimizer heuristic therefore hit its maximum MuonH rate on an intentionally abbreviated schedule.
 - Terminal state: stopped `/power/ra2a-s09c-ep16-oneshot-pgle-off-20260809-coord` at 06:00:01 UTC to prevent retries. No communication failure, OOM, CUDA illegal address, or NCCL error appeared.
 - Interpretation: pinned JAX 0.11's one-shot path is reachable on EP16/process-per-GPU when auto-PGLE is disabled. The immediate next baseline should keep communication identical and use the standard 60-token-per-active-parameter optimizer schedule, then stop manually after step 25.
@@ -628,3 +630,111 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Final small-screen profile: 16 CPU and 128 GiB per four-GPU node. Four CPU cores per JAX process matches the H100 screen's ratio; the d768 screen does not offload optimizer state. The full-rack hero remains at 120 CPU / 850 GiB.
 - Active run: `/power/ra2a-s10e-ep16-oneshot-pgle-off-standard-schedule-20260809-coord`. Kueue still reports 4 CPU, 195 memory, and 3 GPU exclusions across 202 nodes, so production reservations/topology now dominate even at the bounded small-screen profile. Leave the interactive-priority one-domain gang queued and wait; do not lower host resources further or permit cross-rack placement.
 - Verification: the focused suite passes 26 tests and asserts both the small-screen and exact-proxy resource profiles. Required changed-file checks pass.
+
+### 2026-08-09 12:24 UTC - Queue-only timeout and fresh baseline retry
+
+- S10e never received a quota reservation. Its four training tasks stayed `building` for the full wait with zero failures, zero preemptions, and no GPU allocation; Kueue consistently reported that production occupancy left no four-node `multinode-nvlink-ib` domain with the requested resources.
+- At 12:19 UTC the coordinator reached its 21,600-second execution timeout. Iris marked the coordinator failed with `Execution timeout exceeded` and killed the still-gated child with `Job exceeded max_task_failures`; neither terminal label represents a training, NCCL, or ragged-collective attempt.
+- Fresh retry: coordinator `/power/ra2a-s10f-ep16-oneshot-pgle-off-standard-schedule-20260809-coord`; child `/power/ra2a-s10f-ep16-oneshot-pgle-off-standard-schedule-20260809-coord/grug-train-ra2a-s10f-ep16-oneshot-pgle-off-standard-schedule-20260809`; workload `iris-pg-f9e9858a58dea817-0`.
+- Controlled change: extend only the coordinator lifetime from 6 to 12 hours. The training tuple remains d768/L8, E192, expert width 384, top-4, capacity 1.33, EP16, 1,048,576 tokens/step, 60 tokens/active parameter, process-per-GPU, pinned JAX 0.11 one-shot ragged, PGLE off, `NCCL_BUFFSIZE=1048576`, and watch interval zero.
+- Resource verification: Kueue records four pods at interactive priority, each requesting four GB200 GPUs, 16 CPU, 128 GiB RAM, 1 TiB ephemeral storage, and four RDMA devices. The fresh workload is again pending behind production with zero failures/preemptions and no allocated GPUs.
+- Next action: preserve the fresh queue position; after admission, verify all four training nodes share one NVLink domain, score steps 5-24, and stop the coordinator manually.
+
+### 2026-08-09 13:42 UTC - Stable schedules reproduce a deterministic step-2 NaN
+
+- S10f admitted at 13:28 UTC on `scspxs64`, `sjjvxs64`, `scssxs64`, and `s38vxs64`, all in `DH1-129-US-EAST-08A`. It retained the 60-token-per-active-parameter schedule, process-per-GPU, pinned JAX 0.11 one-shot ragged path, PGLE off, and the baseline NCCL/XLA controls.
+- S10f completed a finite first step and then every rank raised `Non-finite loss (nan) at step 2`. The parent was stopped before an identical retry.
+- S10g changed only the optimizer token budget to 750 tokens per active parameter. Its four workers `s7htxs64`, `s45sxs64`, `s5xvxs64`, and `s69vxs64` were also all in `DH1-129-US-EAST-08A`; the CPU coordinator was outside the domain and irrelevant to the GPU collective.
+- The effective S10g worker environment was `JAX_ENABLE_PGLE=false`, `NCCL_BUFFSIZE=1048576`, overlap limit 4, latency hiding enabled, command buffers disabled, and NCCL termination timeout 600 seconds.
+- S10g again completed only step 0: 41.3079 seconds, 25,384.4 tokens/s, 6.4944% MFU, loss 11.8062, and drop fraction 0.000288755. Every rank then raised the same step-2 NaN. The parent was stopped at 13:41:46 UTC before its retry consumed the same nodes.
+- The resolved S10g optimizer was MuonH LR 0.00696971 and Adam LR 0.00160840, down from the short probe; both actual step-0 rates were zero during warmup. This rules out the abbreviated schedule and high peak LR as the immediate cause.
+- Interpretation: a first backward can still create non-finite optimizer values because IEEE zero times NaN remains NaN. The current ragged tests compare forward values but do not compare gradients or reproduce the QB router-bias transition, which is the meaningful state change before the second forward. The next diagnostic should compare ragged gradients with a stable EP backend on the smallest useful process-per-GPU slice.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5231838613
+
+### 2026-08-09 14:09 UTC - One-node EP4 ragged gradients remain finite
+
+- Run: `ra2a-s10k-ep4-ragged-gradient-watch-20260809`; one GB200 node `s53txs64` in `DH1-122-US-EAST-08A`; four processes with one GPU each; pinned JAX 0.11.0 and NCCL 2.30.7.
+- Geometry: d768/L8, E12, top-4, capacity 1.33, 262,144 tokens per step, 4-way expert axis, 65,536 tokens and three resident experts per rank. This is the one-node control for the four-node E48 hero-routing proxy.
+- Result: the run remained finite through step 37. Loss moved from 11.8038 at step 0 to 11.7899 at step 37; total gradient norm stayed between 0.2056 and 0.3738. Expert `w_down`, `w_gate`, and `w_up` gradients and router gradients were finite on every watched step. Router-bias gradient was zero as designed. No assignment was dropped.
+- Timing: steps 5-24 averaged 2.6778 seconds and 97,898.6 tokens/s. W&B reported 99.54% mean MFU, but this tiny one-node proxy is not comparable with the EP16 hero timing gate; inline per-step watch statistics also make it a correctness run rather than a transport benchmark.
+- Terminal state: stopped coordinator `/power/ra2a-s10k-ep4-ragged-gradient-watch-20260809-coord` at 14:08:55 UTC after the requested measurement window, releasing four GPUs.
+- Interpretation: ragged autodiff is not generically corrupt on process-per-GPU, and the per-rank 65,536-token/three-expert routing geometry is stable within one host. The next controlled arm scales this exact geometry to four hosts and E48; it changes the global expert axis and crosses hosts without returning to E192.
+
+### 2026-08-09 14:38 UTC - Two-node EP8 cross-host ragged gradients remain finite
+
+- Queue refinement: the four-node E48 matched-family control `ra2a-s10l-ep16-e48-gradient-watch-20260809` could not fit any complete NVLink domain. It requested the validated 16 CPU/128 GiB/four-GPU node shape and consumed no GPUs. It was stopped before admission in favor of a useful two-node cross-host control.
+- Run: `ra2a-s10m-ep8-e24-gradient-watch-20260809`; nodes `sbxsxs64` and `sdgwxs64`, both in `DH1-126-US-EAST-08A`; eight one-device processes; pinned JAX 0.11.0 and NCCL 2.30.7.
+- Geometry: d768/L8, E24, top-4, capacity 1.33, 524,288 tokens per step, 8-way expert axis, 65,536 tokens and three resident experts per rank. This scales the stable EP4/E12 control by two and exercises inter-host ragged traffic.
+- Compile control: the 14:35:28 UTC thread profile placed a sampled rank at `train.py:681` waiting on the background data loader. At 14:36:25 UTC sampled rank mains had moved to `backend_compile_and_load` at `train.py:692`, confirming the first batch arrived and separating loader/compile time from collective execution.
+- Result: finite through step 38. Loss was 11.7510 at the last sampled step; total gradient norm stayed between 0.1986 and 0.2722; expert-weight and router gradients were finite; no assignment was dropped.
+- Timing: steps 5-24 averaged 1.5892 seconds and 329,957 tokens/s. W&B's 167.81% mean MFU is another small-model accounting artifact and is not a hero-performance result.
+- Terminal state: stopped coordinator `/power/ra2a-s10m-ep8-e24-gradient-watch-20260809-coord` at 14:38:02 UTC after the requested window, releasing eight GPUs.
+- Interpretation: process-per-GPU ragged gradients also remain correct across hosts at EP8. The next two-node arm should use E96: relative to failing EP16/E192, it preserves 65,536 tokens, 12 resident experts, and tokens per routed expert per rank while halving world size and peer count.
+
+### 2026-08-09 14:45 UTC - EP8 E96 reproduces first-backward corruption
+
+- Run: `ra2a-s10n-ep8-e96-gradient-watch-20260809`; reused `sbxsxs64` and `sdgwxs64` in `DH1-126-US-EAST-08A`, giving a same-host comparison with stable S10m. Eight one-device processes covered IDs 0-7 and used fresh coordinator `10.186.210.129:23189`; JAX 0.11.0 and NCCL 2.30.7.
+- Controlled geometry: E24 -> E96 while holding d768/L8, EP8, 524,288 tokens per step, 65,536 tokens per rank, top-4, capacity 1.33, optimizer schedule, runtime flags, and hardware fixed. E96 gives 12 resident experts per rank and the same routed-token/expert load as failing EP16/E192.
+- Step 0 had finite loss 11.8041, finite parameter norms, zero drops, and a 35.1001-second compile-inclusive duration. Its total gradient norm was NaN.
+- Gradient localization: final gated norm, final norm, and output-projection gradients were finite; router-bias gradient was zero as designed. Embeddings and every watched transformer-stack family were NaN, including attention, shared MLP, routed expert, router, and block normalization gradients. This places corruption below the final projection during the first backward rather than in parameter initialization.
+- Terminal signature: every rank raised `Non-finite loss (nan) at step 2` at 14:44:03 UTC. No CUDA illegal address, NCCL transport error, OOM, or preemption preceded the numerical failure. The later coordinator connection errors followed process termination and are consequences, not causes.
+- Terminal state: stopped coordinator `/power/ra2a-s10n-ep8-e96-gradient-watch-20260809-coord` at 14:44:36 UTC before a retry.
+- Interpretation: EP16 world size is not required. On identical EP8 hosts, E24 is stable and E96 corrupts the first backward, so the trigger follows expert/cell geometry. The next arm keeps EP8/E96 fixed and moves to the post-0.11 device-initiated ragged kernel with NCCL symmetric buffers.
+
+### 2026-08-09 14:52 UTC - The nightly device kernel is incompatible with process-per-GPU
+
+- Run: `ra2a-s11-ep8-e96-nightly-device-kernel-watch-20260809`; reused `sbxsxs64` and `sdgwxs64` in `DH1-126-US-EAST-08A`, preserving the failing EP8/E96 model, token geometry, and process-per-GPU topology.
+- Runtime verification: every worker installed `jax`, `jaxlib`, `jax-cuda13-plugin`, and `jax-cuda13-pjrt` at `0.11.1.dev20260808`. Effective flags enabled both the post-0.11 device kernel and NCCL symmetric buffers; `JAX_ENABLE_PGLE=false` and `NCCL_BUFFSIZE=1048576` remained fixed. NCCL was 2.30.7.
+- Result: all ranks aborted at the first ragged collective, before W&B recorded a training step, with `RET_CHECK failure ... ragged_all_to_all_thunk.cc:943 ... Peer access must be enabled`.
+- Source confirmation: the current OpenXLA `RaggedAllToAllThunk::RunCollective` enters the device path only with device communication, symmetric collective memory, and an LSA size, then requires `peer_access_enabled` before locating the symmetric input and output buffers. This is a hard precondition rather than a tunable NCCL transport warning.
+- Interpretation: one-device-per-process workers expose no local peer device to XLA, so the device kernel cannot satisfy its intra-host LSA peer-access requirement. This arm conflicts with the required process-per-GPU topology. It does not test the nightly default one-shot or private NCCL send/receive implementations and is not evidence that the nightly itself is numerically bad.
+- Terminal state: stopped coordinator `/power/ra2a-s11-ep8-e96-nightly-device-kernel-watch-20260809-coord` at 14:51:31 UTC before Iris retried the fatal abort, releasing eight GPUs.
+- Next arm: keep nightly `0.11.1.dev20260808` and EP8/E96 but remove the device-kernel and symmetric-buffer flags. This isolates post-0.11 default one-shot ragged value/gradient behavior under the long-term process-per-GPU topology.
+
+### 2026-08-09 15:01 UTC - The nightly default one-shot path reproduces the E96 gradient corruption
+
+- Run: `ra2a-s12-ep8-e96-nightly-default-watch-20260809`; the exact S10n EP8/E96 geometry ran again on `sbxsxs64` and `sdgwxs64` in `DH1-126-US-EAST-08A` with eight one-device processes. This was a same-host comparison with stable E24, failing stable E96, and the nightly device-kernel screen.
+- Controlled change from S10n: install the four JAX packages at `0.11.1.dev20260808`; do not enable the device kernel or symmetric buffers. NCCL 2.30.7, `NCCL_BUFFSIZE=1048576`, PGLE off, model, routing, optimizer, data, and watch interval remained fixed.
+- Initialization: all ranks used fresh coordinator `10.186.210.129:39535`. A 14:58 UTC thread profile placed the sampled worker mains at `train.py:681` waiting for their background loaders; it did not mistake the loader delay for a collective stall.
+- Result: step 0 had finite loss 11.8090, zero drops, 18,757 tokens/s, and a NaN total gradient norm. Final gated norm, final norm, and output-projection gradients were finite; embeddings and every watched transformer-stack family were NaN, matching S10n. Every rank then raised `Non-finite loss (nan) at step 2`.
+- Interpretation: post-0.11 default one-shot ragged reproduces the corruption exactly, while the new device kernel cannot run in process-per-GPU mode. The nightly is therefore not a correctness fix for this geometry. The error remains below the final projection on the first backward and follows the E96/12-local-expert geometry rather than EP8 transport placement.
+- Terminal state: stopped coordinator `/power/ra2a-s12-ep8-e96-nightly-default-watch-20260809-coord` at 15:00:48 UTC before its retry, releasing eight GPUs. Later coordinator connection failures followed rank 0's explicit non-finite-loss exception.
+- Next diagnostic: run E96 through the ring EP backend on the same two-node process-per-GPU shape. Ring shares the local `ragged_dot` expert computation but replaces ragged all-to-all dispatch/combine with all-gather plus psum-scatter, isolating the collective from the grouped matmul and model.
+
+### 2026-08-09 15:09 UTC - Ring isolates the corruption to ragged all-to-all
+
+- Run: `ra2a-s13-ep8-e96-ring-gradient-control-20260809`; reused `sbxsxs64` and `sdgwxs64` in `DH1-126-US-EAST-08A`, preserving the failing EP8/E96 process-per-GPU geometry, stable JAX 0.11.0 runtime, and NCCL controls.
+- Controlled change: set the EP implementation to `ring`. This retains 8-way expert sharding, 96 experts, 12 resident experts per rank, and the same local `haliax.nn.ragged_dot` grouped matmuls. It replaces only ragged all-to-all dispatch/combine with all-gather plus psum-scatter.
+- Result: gradients remained finite through the last recorded step 153. Total gradient norm moved from 0.2402 at step 0 to 0.6746 at step 153, loss fell from 11.8090 to 10.7428, and no assignment was dropped. The exact geometry that corrupted the first ragged backward is therefore stable when the collective is removed.
+- Timing: steps 5-24 averaged 0.4791 seconds, 1,094,494 tokens/s, and W&B's model-accounting MFU value 5.9965. Ring duplicates tokens through all-gather, and this d768 diagnostic is not a hero-performance candidate; its purpose is the value-and-gradient control.
+- Terminal state: stopped coordinator `/power/ra2a-s13-ep8-e96-ring-gradient-control-20260809-coord` at 15:08:34 UTC, releasing eight GPUs.
+- Interpretation: shared model math, optimizer, router, and `ragged_dot` are exonerated at EP8/E96. The numerical failure is specific to ragged all-to-all dispatch/combine or its reverse-mode transpose/metadata. The next arm forces XLA's dense ragged-all-to-all decomposer on the otherwise identical stable-runtime ragged run; a finite result would isolate the one-shot kernel, while another NaN would implicate shared primitive transpose/metadata.
+
+### 2026-08-09 15:20 UTC - Dense decomposition fixes the E96 ragged gradient
+
+- Run: `ra2a-s14-ep8-e96-dense-decomposer-watch-20260809`; corrected coordinator `/power/ra2a-s14-ep8-e96-dense-decomposer-watch-20260809-r1-coord`. An initial CPU-only coordinator rejected the non-calendar artifact version before dispatch and consumed no GPUs.
+- Placement: `sbxsxs64` and `sdgwxs64`, both in `DH1-126-US-EAST-08A`, exactly match S10m-S13. Eight one-device processes used stable JAX 0.11.0, PGLE off, `NCCL_BUFFSIZE=1048576`, latency hiding enabled, command buffers disabled, and watch-induced collective overlap limit 1.
+- Controlled change from failing S10n: add only `--xla_gpu_unsupported_enable_ragged_all_to_all_decomposer=true`. The pass rewrites ragged all-to-all instead of executing the default one-shot kernel.
+- Compile verification: a 15:17 UTC thread profile put all four sampled rank mains in `backend_compile_and_load` at `train.py:594`, distinguishing initialization compilation from collective execution.
+- Result: finite through the last recorded step 58. Total gradient norm stayed finite from 0.2402 at step 0 through 0.2874 at step 58, with a 0.1945-0.4096 range. Loss fell from 11.8090 to 11.6758, and no assignment was dropped.
+- Timing: steps 5-24 averaged 0.8686 seconds, 603,665 tokens/s, and W&B's small-model MFU value 3.3074. Inline gradient-watch work is included, so this is a correctness result rather than the clean transport baseline.
+- Terminal state: stopped the corrected coordinator at 15:19:10 UTC after the requested scoring window, releasing eight GPUs.
+- Interpretation: the routing metadata, JAX reverse-mode rule, and local MoE math are correct when XLA decomposes the primitive. The default one-shot lowering is the numerical fault at E96/12 local experts. Promote the decomposer to an EP16/E192 four-node no-watch baseline before tuning NCCL/XLA performance knobs.
+
+### 2026-08-09 15:29 UTC - The isolated lowering is XLA's zero-copy direct-P2P path
+
+- Pinned source: JAX 0.11.0 pins OpenXLA `131bf41acb4650e4391a640c3f1859c1c86ad74b` from 2026-07-16. The default multi-host one-shot path uses an NCCL barrier and a CUDA kernel that writes each sender's slices directly into peer symmetric output memory.
+- Relevant history: OpenXLA commit `c1fcf2507528eec72374aeb2eddd85d028939cc2` made the zero-copy symmetric-output implementation mandatory on 2026-06-17, removing the earlier double-copy scratch path. The pinned revision includes that change. Nightly S12 still reproduces the NaN, so no later fix through 2026-08-08 closes it.
+- Decomposer cost: the pinned dense pass pads every per-peer slice to the full ragged input length, exchanges the resulting dense tuple with ordinary all-to-all, and reconstructs the output with masks. Its full-size padding explains why S14 is a correctness oracle rather than the expected final EP64 performance path.
+- Inference: the failing surface is the one-shot symmetric-output kernel, its zero-copy buffer assignment, or its async lifetime/synchronization. It is not the JAX transpose algebra itself: the same transpose metadata is finite under dense decomposition, and ring matches the decomposed step-0 gradient norm (`0.240191` versus `0.240176`).
+- Diagnostic queue: after the four-node decomposer baseline, run the process-per-GPU private NCCL send/receive fallback with PGLE off and the 1 MiB FIFO. Then test synchronous one-shot (`--xla_gpu_disable_async_collectives=RAGGEDALLTOALL`) and optional VLOG-5 bounds checking to separate async buffer lifetime from offset bounds. Only finite paths qualify for performance tuning.
+
+### 2026-08-09 15:38 UTC - Four-node slot promoted to the exact hero proxy
+
+- Queue correction: stopped the unadmitted d768/E192 decomposer job `/power/ra2a-s15-ep16-e192-dense-decomposer-perf-20260809-coord`. It allocated no GPUs and had no task failure or preemption.
+- Rationale: E192 on EP16 has 12 resident experts per rank and deliberately reproduces the diagnostic geometry. The selected EP64 hero has three. S14 already established dense-decomposer correctness; another small-model window would not address the requested >20% hero MFU gate.
+- Active run: `/power/ra2a-s15b-exact-ep16-e48-oneshot-perf-20260809-coord`; child `/power/ra2a-s15b-exact-ep16-e48-oneshot-perf-20260809-coord/grug-train-ra2a-s15b-exact-ep16-e48-oneshot-perf-20260809`.
+- Exact geometry: d6144/L48, E48, expert width 6272, latent width 3072, top-4, capacity 1.33, batch 256 x sequence 4096, EP16, and four one-device-per-process GB200 nodes. This preserves 65,536 tokens and three resident experts per GPU from the E192/EP64 hero.
+- Optimizer/timing contract: `schedule_steps=17,652,512` represents approximately 750 tokens per 24.680B active parameters at 1,048,576 tokens/step, while `stop_after_steps=25` bounds the experiment. Watch, eval, profiler, checkpoint, and periodic metric work are disabled. Score steps 5-24.
+- Runtime: pinned JAX 0.11 default one-shot, PGLE off, `NCCL_BUFFSIZE=1048576`, latency hiding on, overlap limit 4, command buffers off. This is the ideal-kernel exact baseline before forcing fallback or decomposition.
+- Scheduling: four pods request four GB200s, 16 CPU, 256 GiB RAM, 1 TiB disk, and one NVLink domain. Kueue reports only three CPU and four GPU exclusions; production memory occupancy excludes 195 nodes. Leave the bounded shape queued rather than weakening placement.
