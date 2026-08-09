@@ -1557,3 +1557,21 @@ author: dlwh
 - This is an inspectable generated physical plan, not yet an H100 performance
   result. Generic executable Map/Fold emission and matched CODA backward timing
   are the next boundary.
+
+### 2026-08-08 - TLTC-XLA-002 post-SPMD Contract/Map recovery
+
+- Added a read-only parser for the frozen JAX 0.11 callback HLO, an ordinary
+  fusion-body inliner, and explicit convert/bitcast/copy boundary tracking.
+  The matcher uses only opcodes, shapes, and data dependencies.
+- The frozen Grug train step contains 569 computations and 2,913 inlined
+  logical nodes. The pass recovers 82 Contracts and two shared-input Contract
+  pairs feeding exp/divide/multiply scalar Maps and one downstream Contract
+  each, without reading metadata, stack frames, model names, or instruction
+  names.
+- The recovered Maps contain 16--18 BF16 round-trip conversion edges. This
+  makes the numerical blocker explicit: direct CODA-style fusion is not
+  source-order legal unless the cast graph is preserved or the compilation
+  policy allows rounding reorder.
+- A tanh-to-exponential mutation reuses the matcher. Reverse dX/dW Contracts
+  are visible, but post-SPMD structure alone does not assign cotangent and
+  saved-value roles; the analyzer reports that as open instead of guessing.

@@ -16,6 +16,12 @@ expert attention, MoE, or recurrent kernel.
 The callback returned `None`, so this run only proves the inspection/no-op
 insertion point. It does not rewrite the module.
 
+A subsequent metadata-independent structural pass inlines ordinary fusion
+bodies and recovers two shared-input Contract pairs feeding scalar Maps and a
+downstream Contract. The pass sees 82 Contracts across 2,913 inlined logical
+nodes. The recovered Maps retain every BF16 conversion boundary; this report
+does not claim that collapsing those conversions is source-order legal.
+
 ## Pinned environment
 
 - JAX: `0.11.0`
@@ -63,7 +69,19 @@ uv run --script lib/tile_lifetime/benchmarks/xla_pre_scheduler_probe.py \
 - `frontend-summary.json`: frontend operation and custom-call census.
 - `pre-scheduler-hlo.pb`: serialized callback input.
 - `pre-scheduler-hlo.txt.gz`: deterministic gzip of the callback input text.
+- `pair-map-recovery.json`: generic Contract/Map recovery report from the frozen
+  callback HLO.
 - `summary.json`: callback stage, versions, hashes, and HLO census.
+
+Regenerate the recovery report with:
+
+```bash
+uv run --frozen --package marin-tile-lifetime \
+  python lib/tile_lifetime/benchmarks/analyze_xla_pair_map_hlo.py \
+  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz \
+  --output \
+  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pair-map-recovery.json
+```
 
 ## Limits
 

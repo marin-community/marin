@@ -1,0 +1,457 @@
+{
+  "computation_count": 569,
+  "contract_count": 82,
+  "inlined_node_count": 2913,
+  "limitations": [
+    "This read-only pass proves structural recovery; it does not yet replace HLO instructions.",
+    "Convert boundaries are retained explicitly, so recovery does not imply source-ordered fusion legality.",
+    "Backward roles are represented as ordinary downstream Contracts; saved-value and cotangent role assignment remains open."
+  ],
+  "regions": [
+    {
+      "consumer_contracts": [
+        "main.149/ynn_fusion.61/dot_general.10"
+      ],
+      "left_contract": {
+        "lhs": {
+          "base": "main.149/multiply_convert_fusion.22/mul.383",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[2,4,32]{2,1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[2,4,32]{2,1,0}",
+              "source_shape": "bf16[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": false,
+              "opcode": "bitcast",
+              "result_shape": "f32[8,32]{1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            }
+          ]
+        },
+        "node": "main.149/ynn_fusion.62/dot_general.11",
+        "output_shape": "f32[8,32]{1,0}",
+        "rhs": {
+          "base": "main.149/state_params_blocks_0__shared_w_up.1",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[32,32]{1,0}",
+              "source_shape": "f32[32,32]{1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[32,32]{1,0}",
+              "source_shape": "bf16[32,32]{1,0}"
+            }
+          ]
+        }
+      },
+      "map_cast_boundaries": [
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        }
+      ],
+      "map_opcodes": [
+        "convert",
+        "convert",
+        "constant",
+        "broadcast",
+        "negate",
+        "convert",
+        "convert",
+        "exponential",
+        "convert",
+        "convert",
+        "add",
+        "convert",
+        "convert",
+        "divide",
+        "convert",
+        "convert",
+        "multiply",
+        "convert",
+        "convert",
+        "convert",
+        "convert",
+        "multiply",
+        "convert",
+        "convert"
+      ],
+      "map_root": "main.149/convert_convert_fusion.13/convert.3723",
+      "right_contract": {
+        "lhs": {
+          "base": "main.149/multiply_convert_fusion.22/mul.383",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[2,4,32]{2,1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[2,4,32]{2,1,0}",
+              "source_shape": "bf16[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": false,
+              "opcode": "bitcast",
+              "result_shape": "f32[8,32]{1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            }
+          ]
+        },
+        "node": "main.149/ynn_fusion.63/dot_general.12",
+        "output_shape": "f32[8,32]{1,0}",
+        "rhs": {
+          "base": "main.149/state_params_blocks_0__shared_w_gate.1",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[32,32]{1,0}",
+              "source_shape": "f32[32,32]{1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[32,32]{1,0}",
+              "source_shape": "bf16[32,32]{1,0}"
+            }
+          ]
+        }
+      },
+      "shared_input": "main.149/multiply_convert_fusion.22/mul.383"
+    },
+    {
+      "consumer_contracts": [
+        "main.149/dot_general.234"
+      ],
+      "left_contract": {
+        "lhs": {
+          "base": "main.149/multiply_convert_fusion.12/mul.311",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[2,4,32]{2,1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[2,4,32]{2,1,0}",
+              "source_shape": "bf16[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": false,
+              "opcode": "bitcast",
+              "result_shape": "f32[8,32]{1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            }
+          ]
+        },
+        "node": "main.149/ynn_fusion.40/dot_general.4",
+        "output_shape": "f32[8,32]{1,0}",
+        "rhs": {
+          "base": "main.149/state_params_blocks_0__shared_w_up.1",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[32,32]{1,0}",
+              "source_shape": "f32[32,32]{1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[32,32]{1,0}",
+              "source_shape": "bf16[32,32]{1,0}"
+            }
+          ]
+        }
+      },
+      "map_cast_boundaries": [
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "bf16[8,32]{1,0}",
+          "source_shape": "f32[8,32]{1,0}"
+        },
+        {
+          "changes_dtype": true,
+          "opcode": "convert",
+          "result_shape": "f32[8,32]{1,0}",
+          "source_shape": "bf16[8,32]{1,0}"
+        }
+      ],
+      "map_opcodes": [
+        "convert",
+        "convert",
+        "constant",
+        "broadcast",
+        "convert",
+        "negate",
+        "convert",
+        "convert",
+        "exponential",
+        "convert",
+        "convert",
+        "add",
+        "convert",
+        "convert",
+        "divide",
+        "convert",
+        "convert",
+        "multiply",
+        "convert",
+        "convert",
+        "convert",
+        "convert",
+        "multiply",
+        "convert",
+        "convert"
+      ],
+      "map_root": "main.149/convert_convert_fusion/convert.3118",
+      "right_contract": {
+        "lhs": {
+          "base": "main.149/multiply_convert_fusion.12/mul.311",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[2,4,32]{2,1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[2,4,32]{2,1,0}",
+              "source_shape": "bf16[2,4,32]{2,1,0}"
+            },
+            {
+              "changes_dtype": false,
+              "opcode": "bitcast",
+              "result_shape": "f32[8,32]{1,0}",
+              "source_shape": "f32[2,4,32]{2,1,0}"
+            }
+          ]
+        },
+        "node": "main.149/ynn_fusion.43/dot_general.7",
+        "output_shape": "f32[8,32]{1,0}",
+        "rhs": {
+          "base": "main.149/state_params_blocks_0__shared_w_gate.1",
+          "wrappers": [
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "bf16[32,32]{1,0}",
+              "source_shape": "f32[32,32]{1,0}"
+            },
+            {
+              "changes_dtype": true,
+              "opcode": "convert",
+              "result_shape": "f32[32,32]{1,0}",
+              "source_shape": "bf16[32,32]{1,0}"
+            }
+          ]
+        }
+      },
+      "shared_input": "main.149/multiply_convert_fusion.12/mul.311"
+    }
+  ]
+}
