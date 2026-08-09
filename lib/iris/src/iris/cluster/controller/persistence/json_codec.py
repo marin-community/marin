@@ -244,7 +244,7 @@ def device_to_json(device: CpuDevice | GpuDevice | TpuDevice) -> str:
     return json.dumps({"tpu": {"variant": device.variant, "topology": device.topology, "count": device.count}})
 
 
-def _device_from_json(value: str) -> CpuDevice | GpuDevice | TpuDevice:
+def _device_from_json(value: str) -> CpuDevice | GpuDevice | TpuDevice | None:
     item = json.loads(value)
     if "cpu" in item:
         return CpuDevice(variant=str(item["cpu"].get("variant", "")))
@@ -259,7 +259,7 @@ def _device_from_json(value: str) -> CpuDevice | GpuDevice | TpuDevice:
             topology=str(item["tpu"].get("topology", "")),
             count=int(item["tpu"].get("count", 0)),
         )
-    raise ValueError("device JSON has no selected kind")
+    return None
 
 
 class DeviceCounts(NamedTuple):
@@ -365,9 +365,7 @@ def worker_metadata_from_row(worker: WorkerMetadataRow, attributes: Mapping[str,
         gpu_memory_mb=worker.md_gpu_memory_mb,
         gce_instance_name=worker.md_gce_instance_name,
         gce_zone=worker.md_gce_zone,
-        device=(
-            _device_from_json(worker.md_device_json) if worker.md_device_json and worker.md_device_json != "{}" else None
-        ),
+        device=_device_from_json(worker.md_device_json) if worker.md_device_json else None,
         provenance=(
             Provenance.from_json(worker.md_provenance_json)
             if worker.md_provenance_json and worker.md_provenance_json != "{}"
