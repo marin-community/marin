@@ -111,3 +111,41 @@ uv run --package marin-iris --extra controller scripts/iris/dev_gpu.py \
 Phase 2 will replace one existing MoE readiness record with a plan derived from `RelationPlan` and task decomposition. DeepEP may remain only as transport. Runtime event counts and source/event offsets must be physical inputs derived from the current `RelationPlan`; compile-time constants do not establish this result. Zero-count segments become initially ready or are omitted by a generic empty-task policy. A GB200 run will compare the replaced edge against the current generic schedule with identical routing and compute.
 
 Phase 3 will replace one attention producer/consumer readiness edge. Candidate edges are routed-KV staging readiness or an exposed QK-to-state/PV stage edge. The selected proof must use generated task relations and generic attention bodies; calling a named attention kernel does not count. A one-shot edge is only an intermediate smoke. The final proof must exercise `phased` generation with circular-buffer reuse, or conclude explicitly that producer-event-consumer factorization lacks the structure needed to express the pipeline safely.
+
+## Bounded dynamic-device validation
+
+Before integrating either edge into a workload path, the generic device prototype
+compiles two generated CUDA modules:
+
+1. A runtime segmented-readiness module. Event counts, event/source offsets, and
+   source indices are device tensor inputs derived from the current
+   `RelationPlan`. One CTA realizes each segment. An empty segment follows the
+   generic initially-ready identity path and does not initialize a zero-count
+   barrier.
+2. A phased Contract/Fold/Contract module. Separate worker warps publish first-
+   Contract and Fold-state generations through CTA-visible semaphores. The
+   finalizer performs a source-ordered normalized weighted Fold and releases each
+   bounded slot for the next generation. Slot storage is reused while logical
+   identity remains `(slot, generation)`.
+
+These are validation templates, not production kernels. The runtime segmented
+module deliberately maps one event to one CTA rather than claiming cross-CTA
+dynamic scheduling. The phased module uses a conservative
+finalize-before-next-generation reuse edge, so it validates safe generations but
+does not claim an optimally overlapped attention pipeline.
+
+Run both with one bounded allocation:
+
+```bash
+export TORCH_CUDA_ARCH_LIST=<architecture accepted by installed Torch>
+timeout 20m uv run python \
+  lib/tile_lifetime/benchmarks/gpu_event_tensor_dynamic_validation.py \
+  --shuttle-revision <dynamic-device-commit> \
+  --holder-revision <iris-holder-commit> \
+  --json-output /tmp/event-tensor-dynamic-device.json
+```
+
+The runtime mutation changes relation counts and offsets while reusing the same
+compiled module. The phased mutation changes generation count and pipeline depth
+through the same compiled module. Both paths check correctness and repeat hashes
+before timing.
