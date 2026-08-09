@@ -345,3 +345,12 @@ def test_sm90_streaming_skeleton_owns_fold_map_and_domain_semantics() -> None:
         assert "DomainRestriction" in source
         assert "apply_score_map_inner" in source
         assert "finalize(output_scale=self.output_scale" in source
+
+
+def test_normalized_exp_finalize_binds_register_state_before_child_region() -> None:
+    source = (Path(__file__).parents[1] / "backends" / "h100" / "cute_normalized_exp.py").read_text()
+
+    assert "row_sum = self.row_sum" in source
+    assert "row_max = self.row_max" in source
+    assert "row_sum.store(utils.warp_reduce(row_sum.load()" in source
+    assert "self.row_sum.store(utils.warp_reduce(self.row_sum.load()" not in source

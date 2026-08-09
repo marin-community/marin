@@ -103,21 +103,26 @@ class NormalizedExpFoldState(ParamsBase):
         """Return the final weighted-accumulator scale and replace sum with LSE."""
         if cutlass.const_expr(extra_logit is not None and isinstance(extra_logit, cute.Tensor)):
             assert cute.size(extra_logit) == cute.size(self.row_sum)
-        self.row_sum.store(utils.warp_reduce(self.row_sum.load(), operator.add, width=4))
-        accumulator_scale = cute.make_fragment_like(self.row_max, Float32)
-        for row in cutlass.range(cute.size(self.row_sum), unroll_full=True):
+        # CuTe needs the register tensors to be bound outside the reduction's
+        # child region so their definitions dominate generated layout uses.
+        row_sum = self.row_sum
+        row_max = self.row_max
+        scale_log2 = self.scale_log2
+        row_sum.store(utils.warp_reduce(row_sum.load(), operator.add, width=4))
+        accumulator_scale = cute.make_fragment_like(row_max, Float32)
+        for row in cutlass.range(cute.size(row_sum), unroll_full=True):
             if cutlass.const_expr(extra_logit is not None):
                 value = extra_logit if not isinstance(extra_logit, cute.Tensor) else extra_logit[row]
-                self.row_sum[row] += cute.math.exp2(
-                    value * math.log2(math.e) - self.row_max[row] * self.scale_log2,
+                row_sum[row] += cute.math.exp2(
+                    value * math.log2(math.e) - row_max[row] * scale_log2,
                     fastmath=True,
                 )
-            invalid_sum = self.row_sum[row] == 0.0 or self.row_sum[row] != self.row_sum[row]
-            denominator = self.row_sum[row] if not invalid_sum else 1.0
+            invalid_sum = row_sum[row] == 0.0 or row_sum[row] != row_sum[row]
+            denominator = row_sum[row] if not invalid_sum else 1.0
             accumulator_scale[row] = cute.arch.rcp_approx(denominator) * output_scale
-            sum_value = self.row_sum[row]
-            self.row_sum[row] = (
-                (self.row_max[row] * self.scale_log2 + cute.math.log2(sum_value, fastmath=True)) * math.log(2.0)
+            sum_value = row_sum[row]
+            row_sum[row] = (
+                (row_max[row] * scale_log2 + cute.math.log2(sum_value, fastmath=True)) * math.log(2.0)
                 if not invalid_sum
                 else -Float32.inf
             )
