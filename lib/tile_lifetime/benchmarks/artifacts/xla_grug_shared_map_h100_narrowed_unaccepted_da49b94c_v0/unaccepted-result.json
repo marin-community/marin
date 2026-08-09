@@ -1,0 +1,20 @@
+{
+  "acceptance_ceiling": 1.2,
+  "baseline_median_ms": 0.5216190038481727,
+  "baseline_unique_output_hashes": [
+    "60dd729c6c5c907bd90e02325c5d6db69645059b281ad64cbfc0726a55bba59f"
+  ],
+  "bitwise_equal_leaf_count": 38,
+  "classification": "unaccepted",
+  "generated_median_ms": 0.647561999358004,
+  "generated_over_baseline": 1.2414463326311045,
+  "generated_unique_output_hashes": [
+    "aeada7662ac143e58d6eab5823820f2839a17b1174b64032db02d43fdb2a9ecf"
+  ],
+  "maximum_absolute_error": 9.760260581970215e-07,
+  "mean_absolute_error": 7.9775019351214e-11,
+  "reason": "All execution, correctness, and determinism guards passed, but generated_over_baseline exceeds 1.20.",
+  "result_leaf_count": 53,
+  "source_revision": "da49b94c359104690c2b8f98192300605cbd292e"
+}
+

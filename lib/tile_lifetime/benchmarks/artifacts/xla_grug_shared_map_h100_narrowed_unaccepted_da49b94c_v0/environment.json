@@ -1,0 +1,66 @@
+{
+  "allocation": {
+    "inactive_status_verified": true,
+    "job": "/dlwh/dev-gpu-codex-h100-narrowed-da49",
+    "name": "codex-h100-narrowed-da49",
+    "pod": "iris-dlwh-dev-gpu-codex-h100-narrow-b87e344b-0-83e5eb671efea28d",
+    "released": true
+  },
+  "device": {
+    "backend_architecture": "sm_90a",
+    "compute_capability": "9.0",
+    "driver": "595.71.05",
+    "model": "NVIDIA H100 80GB HBM3",
+    "power_limit_watts": 700,
+    "postrun_memory_clock_mhz": 2619,
+    "postrun_sm_clock_mhz": 345,
+    "prerun_memory_clock_mhz": 2619,
+    "prerun_sm_clock_mhz": 1830,
+    "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e"
+  },
+  "protocol": {
+    "composition_mode": "shared_map_xla_remainder",
+    "measurement_order": "counterbalanced alternating, 15 each",
+    "measured_repetitions": 30,
+    "normalized_cpu": 4,
+    "replay_retry_count": 0,
+    "requested_cpu": 1,
+    "warmup_repetitions": 4
+  },
+  "source": {
+    "allocator_iris_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+    "benchmark": "lib/tile_lifetime/benchmarks/xla_grug_routed_combined_gpu_custom_call.py",
+    "benchmark_sha256": "4517102d86ff16d852416470b84a93c700b43c06e45058374979c251dc121b02",
+    "demand_narrowing_revision": "1ee45b825d",
+    "in_pod_bundle_and_benchmark_hashes_verified": true,
+    "required_code_and_fixtures_present": true,
+    "revision": "da49b94c359104690c2b8f98192300605cbd292e",
+    "transfer_bundle_exclusions": [
+      ".git",
+      ".venv",
+      "lib/tile_lifetime/benchmarks/artifacts",
+      "__pycache__"
+    ],
+    "transfer_bundle_sha256": "9721501f90609c367fb90ab20aced1d5f3ea777bcb06a309ea9a42567d894956",
+    "transfer_bundle_size_bytes": 17099731,
+    "xla_rank_two_contract_ffi_sha256": "d36ab1469de92dd08b4163a3c6bf1a82be7a9e11aefb4c6c0a8b2edc384308cb",
+    "xla_weighted_relation_reverse_ffi_sha256": "b91f626161578e627e4e0987a3e74d624a2a16129a416841027b77124058ddc3"
+  },
+  "toolchain": {
+    "cuda_cccl_python_package": "13.3.3.4.1",
+    "cuda_nvcc": "13.2.78",
+    "flash_attn_4": "4.0.0b16",
+    "jax": "0.11.0",
+    "jax_cuda13_pjrt": "0.11.0",
+    "jax_cuda13_plugin": "0.11.0",
+    "jaxlib": "0.11.0",
+    "numpy": "2.3.5",
+    "nvidia_cublas": "13.4.1.1",
+    "nvidia_cutlass_dsl": "4.5.2",
+    "quack_kernels": "0.5.0",
+    "scipy": "1.17.0",
+    "torch": "2.11.0+cu128",
+    "triton": "3.6.0"
+  }
+}
+
