@@ -1,0 +1,55 @@
+Measured Shuttle source revision:
+
+2bfe5844388d4b73db0f532bbf81d78372cbace3
+
+Allocation-control revision:
+
+eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+
+The 468-byte holder project contained:
+
+[project]
+name = "shuttle-command-buffer-holder"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = []
+
+Allocation command:
+
+uv run --project /private/tmp/marin-iris-current.JoCV0V \
+  --package marin-iris --extra controller \
+  /private/tmp/marin-iris-current.JoCV0V/scripts/iris/dev_gpu.py \
+  --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-cmdbuf-2bfe allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 1 --memory 32GB --disk 50GB --timeout 1800 --pod-timeout 300
+
+Source transfer and verification:
+
+git archive --format=tar.gz \
+  --output=/tmp/shuttle-cmdbuf-2bfe584438.tar.gz 2bfe584438
+kubectl --kubeconfig=/Users/dlwh/.kube/coreweave-iris \
+  --context=marin-gpu_US-EAST-02A --namespace=iris cp \
+  /tmp/shuttle-cmdbuf-2bfe584438.tar.gz \
+  iris-dlwh-dev-gpu-dlwh-shuttle-cmdb-3250a0d2-0-fe20965c60eb2d1f:/tmp/shuttle-cmdbuf-2bfe584438.tar.gz \
+  -c task
+
+The only environment-resolution command was:
+
+kubectl --kubeconfig=/Users/dlwh/.kube/coreweave-iris \
+  --context=marin-gpu_US-EAST-02A --namespace=iris exec \
+  iris-dlwh-dev-gpu-dlwh-shuttle-cmdb-3250a0d2-0-fe20965c60eb2d1f \
+  -c task -- bash -lc \
+  'set -euo pipefail; cd /tmp/shuttle-2bfe584438; \
+   export UV_PROJECT_ENVIRONMENT=/app/.venv; \
+   uv sync \
+     --config-file lib/tile_lifetime/benchmarks/jax011_probe_uv.toml \
+     --package marin-core --extra gpu --no-group dev'
+
+It failed before `--dependency-preflight-only` because the broad `marin-core`
+environment pulled the unrelated serve/vLLM dependency. No benchmark command
+was invoked. Do not retry this invocation or use this artifact to authorize a
+future H100 run.
+

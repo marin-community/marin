@@ -1,0 +1,33 @@
+Controller query after explicit release:
+
+{
+  "jobs": [
+    {
+      "job_id": "/dlwh/dev-gpu-dlwh-shuttle-cmdbuf-2bfe",
+      "state": "JOB_STATE_KILLED",
+      "exit_code": 0,
+      "failure_count": 0,
+      "preemption_count": 1,
+      "task_state_counts": {"killed": 1},
+      "error": "Terminated by user"
+    }
+  ],
+  "active_jobs": []
+}
+
+Local session state:
+
+~/.cache/marin/dev_gpu_iris/dlwh-shuttle-cmdbuf-2bfe.json: absent
+
+Exact task-label query:
+
+kubectl --kubeconfig=/Users/dlwh/.kube/coreweave-iris \
+  --context=marin-gpu_US-EAST-02A --namespace=iris get pods \
+  -l iris.task_id=dlwh.dev-gpu-dlwh-shuttle-cmdbuf-2bfe.0 \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+
+Output: <empty>
+
+Release conclusion: no active controller job, no matching pod, and no local
+holder session state.
+
