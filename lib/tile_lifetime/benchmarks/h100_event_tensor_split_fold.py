@@ -17,9 +17,9 @@ from types import ModuleType
 from typing import Any
 
 import torch
+from benchmark_metadata import command_record, nvidia_smi_snapshot, toolchain_snapshot
 from torch.utils.cpp_extension import load
 
-from benchmark_metadata import command_record, nvidia_smi_snapshot, toolchain_snapshot
 from tile_lifetime.cuda_event_dataflow_codegen import (
     CudaEventCounterLowering,
     generate_cuda_event_counter_lowering,
