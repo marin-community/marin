@@ -76,6 +76,11 @@ from tile_lifetime.gated_delta_scan import (
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, GemmProgram, compile_gemm_program
 from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.jax_collective_transport import (
+    JaxCollectiveExecutionPlan,
+    build_jax_collective_execution_plan,
+    execute_jax_collective_completion,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     CompiledStreamingAttentionBackwardFfi,
     GeneratedStreamingAttentionBackwardFfi,

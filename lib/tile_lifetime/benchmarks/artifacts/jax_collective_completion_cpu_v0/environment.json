@@ -1,0 +1,8 @@
+{
+  "benchmark_source_sha256": "b98be0c0c655c2fae59f05bf3a186ec909db0ce36e515095de232e2fb2acbe6a",
+  "host_platform": "macOS-15.5-arm64-arm-64bit",
+  "jax": "0.10.1",
+  "jaxlib": "0.10.1",
+  "python": "3.12.11",
+  "shuttle_base_commit": "eba6ad3ebe"
+}
