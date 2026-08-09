@@ -1719,3 +1719,47 @@ author: dlwh
   then replace the recovered forward and backward regions with the generic GMM,
   generated Map/Fold, and RelationPlan runtime. Preserve the all-reduce as an
   external placement transition until Shuttle owns collectives.
+
+### 2026-08-08 - TLTC-TRAIN-007 corrected GB200 gradient schedules
+
+- The coalesced 32-column-group Fold closes both row-normalization backward
+  performance gaps at rows=2048 and hidden=4096 on one GB200. RMSNorm measures
+  0.039704 ms versus 0.051835 ms for the matched `torch.compile` algebra
+  (0.766x); centered LayerNorm measures 0.041109 versus 0.050499 ms (0.814x).
+  These are 2.20x and 2.14x faster than the original generated schedules.
+- Both paths are deterministic. Maximum dX error is 1.90735e-6 and maximum
+  feature-scale-gradient error is 7.62939e-5. The same generic Fold/Map/Contract
+  generator handles RMS and the centered LayerNorm mutation.
+- Correcting the causal forward-state tile to 32x32 also fixes streaming
+  backward numerics. At S=128, forward/dQ/dK/dV gates and deterministic hashes
+  pass and the generated path measures 0.080550 ms versus 0.143165 ms for SDPA.
+- At the primary S=2048 shape, correctness remains good but performance does
+  not: 2.200320 ms generated versus 0.155450 ms SDPA, or 14.155x slower. The
+  current generic Triton schedule repeatedly visits query heads and tiles in
+  the key-major dK/dV path and lacks an expert shared-memory/TMA/WGMMA pipeline.
+  This is now a physical-schedule problem, not a semantic-recovery problem.
+- Raw counterbalanced samples, errors, hashes, telemetry, commands, and failure
+  diagnostics are preserved under
+  `benchmarks/artifacts/generated_gradient_skeletons_gb200_v1`.
+
+### 2026-08-08 - TLTC-XLA-006 GPU FFI and routed scalar ownership
+
+- Commits `36e2a52aad` and `d7ad815f48` generate a CUDA typed-FFI handler for
+  the recovered Grug multi-output reverse Map. The latest body uses two generic
+  pedantic-FP32 cuBLAS Contracts followed by a generated source-ordered Map;
+  it contains no workload-specific semantic kernel.
+- The exact `36e2a52aad` GB200 execution attempt failed before CUDA compilation:
+  the GPU pre-scheduler module contained no region matching the CPU recovery
+  boundary. This invalidates the assumption that the frozen CPU HLO selector
+  transfers unchanged to GPU. The GPU HLO must be captured and the region
+  recovery generalized rather than patched by names.
+- Commits `d69753c2c1` and `fa2f707441` import both routed forward Maps and the
+  two concatenated input-adjoint Map outputs into one cast-aware scalar AST
+  family. The reports retain affine slice offsets and every BF16/F32 conversion
+  (30 converts forward; 86 and 30 for the adjoint outputs), generate generic
+  CUDA scalar functions, and pass mutations that alter only the affected
+  semantic digest/source.
+- The next routed execution boundary is now explicit: runtime `RelationPlan`,
+  generic segmented Contracts, generated scalar Maps, deterministic generated
+  scatter Folds, and group-batched weight-gradient Contracts, with all-reduce
+  left external. GPU execution and GMM attachment remain open.

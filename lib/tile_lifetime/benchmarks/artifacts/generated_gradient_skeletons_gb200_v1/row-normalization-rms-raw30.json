@@ -1,0 +1,269 @@
+{
+  "acceptance": {
+    "comparison": "generated generic axis Folds versus torch.compile of identical scalar/reduction algebra",
+    "passes": true,
+    "ratio": 0.765965971266498,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 10,
+    "repeats": 30,
+    "warmups": 10
+  },
+  "correctness": {
+    "deterministic_hashes": {
+      "feature_scale_cotangent": "497f17524ff862c17baf46204208852c386048e83cea0daf50ac81dced7445b5",
+      "input_cotangent": "af0ff0513196b72de07c39f7aa8314102dc60e2205ed6442c4e96ab72778a32a"
+    },
+    "feature_scale_cotangent": {
+      "maximum_absolute_error": 7.62939453125e-05,
+      "mean_absolute_error": 1.0982563253492117e-05
+    },
+    "input_cotangent": {
+      "maximum_absolute_error": 1.9073486328125e-06,
+      "mean_absolute_error": 1.0273931927429203e-08
+    }
+  },
+  "environment": {
+    "compute_capability": "10.0",
+    "cuda": "13.0",
+    "device": "NVIDIA GB200",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996",
+    "torch": "2.10.0+cu130"
+  },
+  "generated_source": {
+    "feature_scale": "/tmp/shuttle-row-norm-rms-14f-source/shuttle_axis_fold_scale_1c2793457cc366d0.cu",
+    "feature_scale_sha256": "1c2793457cc366d00e52947e2f70381e52b1a2fd7d3bc7f36cadc288ab645611",
+    "input": "/tmp/shuttle-row-norm-rms-14f-source/shuttle_axis_fold_input_f911070f71b953ad.cu",
+    "input_sha256": "f911070f71b953ad394d297b9471c195a6a8d08a771e614900aa064d8cfa05f7"
+  },
+  "measurements": {
+    "full": {
+      "execution_order": [
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ],
+        [
+          "generated",
+          "torch_compile"
+        ],
+        [
+          "torch_compile",
+          "generated"
+        ]
+      ],
+      "ratio_generated_to_torch_compile": 0.765965971266498,
+      "variants": {
+        "generated": {
+          "median_ms": 0.0397039994597435,
+          "minimum_ms": 0.038678398728370665,
+          "samples_ms": [
+            0.04004800021648407,
+            0.03996799886226654,
+            0.039043200016021726,
+            0.039919999241828916,
+            0.038966399431228635,
+            0.03996480107307434,
+            0.03914240002632141,
+            0.039904001355171206,
+            0.03886080086231232,
+            0.03985919952392578,
+            0.03901439905166626,
+            0.039740800857543945,
+            0.038678398728370665,
+            0.03995839953422546,
+            0.038841599225997926,
+            0.04006080031394958,
+            0.0390720009803772,
+            0.03973439931869507,
+            0.03894400000572205,
+            0.04012799859046936,
+            0.039401599764823915,
+            0.03988800048828125,
+            0.038889598846435544,
+            0.03999040126800537,
+            0.03895359933376312,
+            0.039952000975608824,
+            0.038915199041366574,
+            0.039955198764801025,
+            0.039024001359939574,
+            0.039673599600791934
+          ]
+        },
+        "torch_compile": {
+          "median_ms": 0.05183520019054413,
+          "minimum_ms": 0.042742401361465454,
+          "samples_ms": [
+            0.06187840104103089,
+            0.0557919979095459,
+            0.054476797580718994,
+            0.08434879779815674,
+            0.05766720175743103,
+            0.0536575973033905,
+            0.0537663996219635,
+            0.053337597846984865,
+            0.05083199739456177,
+            0.05043839812278748,
+            0.05168319940567016,
+            0.053071999549865724,
+            0.05094720125198364,
+            0.05344319939613342,
+            0.0540768027305603,
+            0.05424960255622864,
+            0.05144000053405762,
+            0.047712001204490664,
+            0.0502016007900238,
+            0.04465279877185822,
+            0.05383679866790771,
+            0.04285120069980621,
+            0.045875200629234315,
+            0.048188799619674684,
+            0.049065598845481874,
+            0.04444159865379334,
+            0.049327999353408813,
+            0.05198720097541809,
+            0.05248960256576538,
+            0.042742401361465454
+          ]
+        }
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "14f2bbc3f9871ab9ccf255f0b6b8b0983c2f9b83"
+  },
+  "schema_version": 1,
+  "semantic_lowering": {
+    "column_groups_per_block": 32,
+    "input_fold_fingerprint": "b4692655805765214e766b0cc5ef476d3666aa82ea561007a0f6d31a57681188",
+    "input_fold_state_count": 1,
+    "named_semantics_erased": true,
+    "reassociation": "deterministic_tree",
+    "scale_fold_fingerprint": "235d32f31cfbd5b18af407132dabddffd2196d29d5f114ee67a92b3dc7f0b80b"
+  },
+  "workload": {
+    "hidden": 4096,
+    "inputs": {
+      "feature_scale": "bfloat16",
+      "inverse_scale": "float32",
+      "projected": "float32",
+      "standardized": "bfloat16"
+    },
+    "outputs": {
+      "feature_scale_cotangent": "float32",
+      "input_cotangent": "float32"
+    },
+    "rows": 2048,
+    "statistic": "rms"
+  }
+}

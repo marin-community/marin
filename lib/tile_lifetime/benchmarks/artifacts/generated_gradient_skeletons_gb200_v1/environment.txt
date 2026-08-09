@@ -1,0 +1,22 @@
+benchmark_revision=14f2bbc3f9871ab9ccf255f0b6b8b0983c2f9b83
+xla_ffi_revision=36e2a52aad
+jax=0.11.0
+jaxlib=0.11.0
+torch=2.10.0+cu130
+torchvision=0.25.0+cu130
+triton=3.6.0
+torch_cuda=13.0
+nvidia-cuda-cccl             13.0.85
+nvidia-cuda-crt              13.0.88
+nvidia-cuda-nvcc             13.0.88
+nvidia-cuda-runtime          13.0.96
+nvidia-cuda-runtime-cu12     12.8.90
+nvidia-nvjitlink             13.0.88
+nvidia-nvjitlink-cu12        12.8.93
+nvidia-nvvm                  13.0.88
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Aug_20_01:57:39_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+NVIDIA GB200, GPU-5ff46cff-8821-0309-1dee-4175fcc532a3, 595.71.05, 1200.00, 120, 3996

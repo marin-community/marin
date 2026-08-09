@@ -1,0 +1,58 @@
+Traceback (most recent call last):
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2262, in __getattr__
+    module = self._get_module(self._class_to_module[name])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2496, in _get_module
+    raise e
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2494, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/models/auto/processing_auto.py", line 25, in <module>
+    from ...image_processing_utils import ImageProcessingMixin
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/image_processing_utils.py", line 24, in <module>
+    from .image_processing_base import BatchFeature, ImageProcessingMixin
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/image_processing_base.py", line 25, in <module>
+    from .image_utils import is_valid_image, load_image
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/image_utils.py", line 54, in <module>
+    from torchvision.io import ImageReadMode, decode_image
+  File "/app/marin/.venv/lib/python3.12/site-packages/torchvision/__init__.py", line 8, in <module>
+    from torchvision import _meta_registrations, datasets, io, models, ops, transforms, utils  # usort:skip
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/torchvision/_meta_registrations.py", line 163, in <module>
+    @torch.library.register_fake("torchvision::nms")
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/torch/library.py", line 1073, in register
+    use_lib._register_fake(
+  File "/app/marin/.venv/lib/python3.12/site-packages/torch/library.py", line 203, in _register_fake
+    handle = entry.fake_impl.register(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/torch/_library/fake_impl.py", line 50, in register
+    if torch._C._dispatch_has_kernel_for_dispatch_key(self.qualname, "Meta"):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: operator torchvision::nms does not exist
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 23, in <module>
+    from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_custom_call_smoke import (
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_custom_call_smoke.py", line 30, in <module>
+    from lib.tile_lifetime.benchmarks.xla_grug_pair_map_custom_call_smoke import (
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_pair_map_custom_call_smoke.py", line 43, in <module>
+    from experiments.grug.moe.model import GrugModelConfig
+  File "/app/marin36e/experiments/grug/moe/model.py", line 30, in <module>
+    from levanter.compat.hf_checkpoints import HFCheckpointConverter
+  File "/app/marin/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 64, in <module>
+    from transformers import (  # noqa: E402  # noqa: E402
+  File "/app/marin/.venv/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2350, in __getattr__
+    raise ModuleNotFoundError(
+ModuleNotFoundError: Could not import module 'AutoProcessor'. Are this object's requirements defined correctly?

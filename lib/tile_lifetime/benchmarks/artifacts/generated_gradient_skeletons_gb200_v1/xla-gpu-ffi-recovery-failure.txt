@@ -1,0 +1,47 @@
+cuBLAS < 13.2 (130100 found) has a known issue where many kernels free TMEM buffers multiple times. Executing a cuBLAS kernel concurrently with another kernel (e.g. on another stream) can lead to silent data corruption.
+Traceback (most recent call last):
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 222, in <module>
+    main()
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 211, in main
+    result = run_smoke(args.nvcc, args.cuda_architecture, args.artifact_directory)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 137, in run_smoke
+    transformed = train_step.lower(state, batch, compute_watch=False).compile()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+    return Compiled(self._lowering.compile(**kw), self._lowering.const_args,
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+    executable = UnloadedMeshExecutable.from_hlo(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+    xla_executable = _cached_compilation(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+    xla_executable = compiler.compile_or_get_cached(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+    return backend_compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 360, in backend_compile_and_load
+    raise e
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+    return backend.compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: INTERNAL: Traceback (most recent call last):
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 222, in <module>
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 211, in main
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 137, in run_smoke
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+  File "/app/marin/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 112, in replace
+  File "/app/marin36e/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_custom_call_smoke.py", line 56, in _multi_output_region_index
+ValueError: expected one multi-output pair-Map region, found ()

@@ -1,0 +1,165 @@
+{
+  "acceptance": {
+    "correctness_passes": true,
+    "maximum_absolute_error_threshold": 0.125,
+    "mean_absolute_error_threshold": 0.01,
+    "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
+    "passes": false,
+    "performance_passes": false,
+    "ratio": 14.154555447529452,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 5,
+    "repeats": 10,
+    "warmups": 5
+  },
+  "correctness": {
+    "deterministic_hash": "c2a154ec69c8fcbf9adbb6df2430354c494c20eb1edafc9e969995b949590f8e",
+    "forward_output": {
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 7.423697388730943e-05
+    },
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00015109506784938276
+    },
+    "query": {
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 2.8619208023883402e-05
+    },
+    "value": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.0001423241919837892
+    }
+  },
+  "environment": {
+    "cuda": "13.0",
+    "device": "NVIDIA GB200",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996",
+    "torch": "2.10.0+cu130",
+    "triton": "3.6.0"
+  },
+  "measurements": {
+    "execution_order": [
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ]
+    ],
+    "ratio_generated_to_oracle": 14.154555447529452,
+    "variants": {
+      "generated": {
+        "median_ms": 2.2003200531005858,
+        "minimum_ms": 2.1934272766113283,
+        "samples_ms": [
+          2.2038911819458007,
+          2.205414390563965,
+          2.1934272766113283,
+          2.200307273864746,
+          2.194585609436035,
+          2.2014400482177736,
+          2.1947904586791993,
+          2.201568031311035,
+          2.194528007507324,
+          2.200332832336426
+        ]
+      },
+      "oracle": {
+        "median_ms": 0.15544960498809812,
+        "minimum_ms": 0.1434048056602478,
+        "samples_ms": [
+          0.1655359983444214,
+          0.1484928011894226,
+          0.1660416007041931,
+          0.1434048056602478,
+          0.16075520515441893,
+          0.1491520047187805,
+          0.1614400029182434,
+          0.14803839921951295,
+          0.17004799842834473,
+          0.15014400482177734
+        ]
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "14f2bbc3f9871ab9ccf255f0b6b8b0983c2f9b83"
+  },
+  "schedule": {
+    "atomic_accumulation": false,
+    "block_m": 32,
+    "block_n": 32,
+    "key_value_gradient_orientation": "key_value_major",
+    "num_stages": 3,
+    "num_warps": 8,
+    "query_gradient_orientation": "query_major"
+  },
+  "schema_version": 1,
+  "semantic_generation": {
+    "materialized_values": [
+      "cotangent.query",
+      "cotangent.key",
+      "cotangent.value"
+    ],
+    "reassociation": "deterministic_tree",
+    "score_map_vjp": "{\"kind\":\"select\",\"operands\":[{\"kind\":\"less_equal\",\"operands\":[{\"input\":\"key.position\",\"kind\":\"input\"},{\"input\":\"query.position\",\"kind\":\"input\"}]},{\"constant\":0.08838834764831843,\"kind\":\"constant\"},{\"constant\":0.0,\"kind\":\"constant\"}]}",
+    "stages": [
+      "load_query_and_state",
+      "load_key_value",
+      "recompute_qk",
+      "recompute_probability",
+      "dv_contract",
+      "dp_contract",
+      "score_map_vjp",
+      "dq_contract",
+      "dk_contract"
+    ]
+  },
+  "source_sha256": "57ecec47be03b3ebf379bb22c4fc3d7865d4d82508c3d056d35473e623d80b41",
+  "workload": {
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "mutation": "causal",
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}
