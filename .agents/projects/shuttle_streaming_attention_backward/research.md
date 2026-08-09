@@ -118,11 +118,27 @@ unordered reduction behind the backend.
 - Cost/risk: medium/high; likely needs a CuTe/TMA/WGMMA skeleton rather than a local Triton edit.
 - Sources: official FlashAttention Hopper backward schedule.
 
+#### Structural result
+
+The generic owner-computes analysis rejects a local fused traversal for the
+primary dense causal relation. Each K/V-head component connects 64 query owners
+to 64 K/V owners through 2,080 valid tile pairs. The smaller deterministic
+source-major frontier is 2,195,456 bytes, 9.44x a 227 KiB local-capacity
+candidate. The proposed fusion would reduce physical Contracts from 116,480 to
+83,200, but realizing it requires an external partial Fold, ordered cross-task
+updates, atomics, or a different multi-owner communication skeleton.
+
+No physical kernel should be built for this candidate under the current
+no-atomic/no-large-partial constraint. The same generic planner accepts small
+or disconnected relations, so the transformation remains available for sparse
+programs whose connected components fit local state.
+
 ## Hypothesis Queue Update
 
 - Add: profile the residual packed reverse pipeline on H100.
-- Revise: move a fused reverse wavefront behind a profiler gate.
+- Revise: require an explicit multi-owner communication design before revisiting fused reverse edges.
 - Falsify / stop: query-domain partitioning as the primary fix.
+- Falsify / stop: single-task fused reverse traversal for the primary dense shape.
 - Promote: mapped-head packing and explicit Contract index-map reuse across both reverse orientations.
 
 ## Source Ledger

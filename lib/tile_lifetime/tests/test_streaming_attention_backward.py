@@ -10,6 +10,8 @@ import pytest
 
 from tile_lifetime import (
     DType,
+    OwnerComputeTraversal,
+    SharedReverseFusionDisposition,
     StreamingAttentionBackwardDomainTraversal,
     StreamingAttentionBackwardFoldOrder,
     StreamingAttentionBackwardProvenance,
@@ -19,6 +21,7 @@ from tile_lifetime import (
     build_attention_tensor_program,
     derive_streaming_attention,
     derive_streaming_attention_backward,
+    derive_streaming_attention_backward_fusion_plan,
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
@@ -35,6 +38,9 @@ def _program(
     output_scale: float = 1.0,
     query_heads: int = 4,
     key_value_heads: int = 2,
+    query_length: int = 5,
+    key_length: int = 5,
+    head_dimension: int = 3,
 ):
     score_map = scaled_score_map(0.7)
     if softcap is not None:
@@ -43,12 +49,12 @@ def _program(
         score_map = apply_causal_score_mask(score_map)
     source = build_attention_tensor_program(
         batch_size=1,
-        query_length=5,
-        key_length=5,
+        query_length=query_length,
+        key_length=key_length,
         query_heads=query_heads,
         key_value_heads=key_value_heads,
-        key_dimension=3,
-        value_dimension=3,
+        key_dimension=head_dimension,
+        value_dimension=head_dimension,
         score_map=score_map,
         input_dtype=DType.FP32,
     )
@@ -235,3 +241,108 @@ def test_score_map_mutation_changes_domain_work_without_changing_grouped_schedul
     assert softcap_work.fully_restricted_tile_pairs == 0
     assert causal.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
     assert softcap.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
+
+
+def test_fused_reverse_relation_tracks_causal_domain_restriction() -> None:
+    causal = derive_streaming_attention_backward(_program(causal=True))
+    unrestricted = derive_streaming_attention_backward(_program(causal=False))
+    causal_schedule = derive_streaming_attention_backward_tile_schedule(
+        causal,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    unrestricted_schedule = derive_streaming_attention_backward_tile_schedule(
+        unrestricted,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.FULL,
+    )
+
+    causal_fusion = derive_streaming_attention_backward_fusion_plan(
+        causal,
+        causal_schedule,
+        local_capacity_bytes=176,
+    )
+    unrestricted_fusion = derive_streaming_attention_backward_fusion_plan(
+        unrestricted,
+        unrestricted_schedule,
+        local_capacity_bytes=176,
+    )
+
+    assert causal_fusion.disposition is SharedReverseFusionDisposition.FUSED_LOCAL
+    assert unrestricted_fusion.disposition is SharedReverseFusionDisposition.FUSED_LOCAL
+    assert len(causal_fusion.relation.pairs) == 30
+    assert len(unrestricted_fusion.relation.pairs) == 50
+    assert causal_fusion.baseline_contract_invocations == 210
+    assert causal_fusion.fused_contract_invocations == 150
+    assert unrestricted_fusion.baseline_contract_invocations == 350
+    assert unrestricted_fusion.fused_contract_invocations == 250
+
+
+def test_fused_reverse_ownership_is_independent_of_score_map_vjp() -> None:
+    baseline = derive_streaming_attention_backward(_program(causal=True))
+    mutated = derive_streaming_attention_backward(_program(causal=True, softcap=1.3))
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        baseline,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    mutated_schedule = derive_streaming_attention_backward_tile_schedule(
+        mutated,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+
+    baseline_fusion = derive_streaming_attention_backward_fusion_plan(
+        baseline,
+        schedule,
+        local_capacity_bytes=176,
+    )
+    mutated_fusion = derive_streaming_attention_backward_fusion_plan(
+        mutated,
+        mutated_schedule,
+        local_capacity_bytes=176,
+    )
+
+    assert baseline.score_map_vjp.expression != mutated.score_map_vjp.expression
+    assert baseline_fusion.components == mutated_fusion.components
+    assert baseline_fusion.baseline_contract_invocations == mutated_fusion.baseline_contract_invocations
+    assert baseline_fusion.fused_contract_invocations == mutated_fusion.fused_contract_invocations
+
+
+def test_primary_fused_reverse_rejects_large_owner_compute_frontier() -> None:
+    backward = derive_streaming_attention_backward(
+        _program(
+            causal=True,
+            query_heads=32,
+            key_value_heads=8,
+            query_length=2048,
+            key_length=2048,
+            head_dimension=128,
+        )
+    )
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        backward,
+        query_tile_size=32,
+        key_value_tile_size=32,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    fusion = derive_streaming_attention_backward_fusion_plan(
+        backward,
+        schedule,
+        local_capacity_bytes=227 * 1024,
+    )
+
+    assert fusion.disposition is SharedReverseFusionDisposition.REJECTED_LOCAL_CAPACITY
+    assert len(fusion.components) == 8
+    assert all(component.selected_traversal is OwnerComputeTraversal.SOURCE_MAJOR for component in fusion.components)
+    assert fusion.required_local_bytes == 2_195_456
+    assert fusion.baseline_contract_invocations == 116_480
+    assert fusion.fused_contract_invocations == 83_200
+    assert fusion.physical_contract_reduction == 1.4
+    assert fusion.source_accumulator_elements == 16_384
+    assert fusion.target_accumulator_elements == 8_192
+    assert fusion.transient_edge_elements == 16_384

@@ -218,6 +218,13 @@ from tile_lifetime.semantic_erasure import (
     validate_erased_tensor_program,
     validate_plan_semantic_erasure,
 )
+from tile_lifetime.shared_reverse_fusion import (
+    OwnerComputeComponent,
+    OwnerComputeTraversal,
+    SharedReverseFusionDisposition,
+    SharedReverseFusionPlan,
+    plan_shared_producer_reverse_fusion,
+)
 from tile_lifetime.sm100_projected_routed_lowering import (
     LoweredAffineIndexDomain,
     SM100ProjectedRoutedCandidate,
@@ -325,6 +332,7 @@ from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardTileSchedule,
     StreamingAttentionBackwardWorkEstimate,
     derive_streaming_attention_backward,
+    derive_streaming_attention_backward_fusion_plan,
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
