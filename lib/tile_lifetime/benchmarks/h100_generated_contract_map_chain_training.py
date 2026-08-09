@@ -12,6 +12,7 @@ import hashlib
 import importlib.metadata
 import itertools
 import json
+import os
 import statistics
 import subprocess
 import time
@@ -31,11 +32,13 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
+    ContractMapChainFfiPhysicalCandidate,
     GeneratedCudaContractMapChainFfi,
     audit_cuda_contract_map_chain_source,
     generate_cuda_contract_map_chain_ffi,
 )
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
+from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
 from tile_lifetime.jax_contract_map_chain_ffi import (
     call_cuda_contract_map_chain_forward_ffi,
     call_cuda_contract_map_chain_reverse_ffi,
@@ -183,16 +186,22 @@ def _guard_errors(name: str, errors: dict[str, float]) -> None:
         raise AssertionError(f"{name} mean absolute error exceeds {_MAX_MEAN_ABSOLUTE_ERROR}: {errors}")
 
 
-def _measure(
+def _warm_up(
     variants: tuple[tuple[str, Any], ...],
     *,
     warmups: int,
-    repeats: int,
-    iterations: int,
-) -> tuple[dict[str, dict[str, Any]], list[list[str]]]:
+) -> None:
     for _ in range(warmups):
         for _, function in variants:
             jax.block_until_ready(function())
+
+
+def _measure(
+    variants: tuple[tuple[str, Any], ...],
+    *,
+    repeats: int,
+    iterations: int,
+) -> tuple[dict[str, dict[str, Any]], list[list[str]]]:
     samples: dict[str, list[float]] = {name: [] for name, _ in variants}
     orders: list[list[str]] = []
     orderings = tuple(itertools.permutations(variants))
@@ -267,14 +276,17 @@ def _preflight(args: argparse.Namespace, program: TwoContractMapTrainingProgram)
         forward_target=_FORWARD_TARGET,
         reverse_target=_REVERSE_TARGET,
         threads=args.threads,
+        physical_candidate=args.physical_candidate,
     )
     audit = audit_cuda_contract_map_chain_source(generated)
+    if generated.command_buffer_compatible and not audit.command_buffer_eligible:
+        raise AssertionError(f"capture-safe source failed command-buffer audit: {audit}")
     library, command = _compile_generated_source(generated, args.artifact_directory, args.nvcc, args.architecture)
     counts = _handler_call_counts(library)
     if counts != (0, 0):
         raise AssertionError(f"freshly loaded handlers have nonzero call counts: {counts}")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "compile_link_load_only",
         "gpu_execution": False,
         "shape": {
@@ -290,6 +302,8 @@ def _preflight(args: argparse.Namespace, program: TwoContractMapTrainingProgram)
             "semantic_digest": generated.semantic_digest,
             "source_digest": generated.source_digest,
             "source_audit": asdict(audit),
+            "physical_candidate": generated.physical_candidate.value,
+            "command_buffer_compatible": generated.command_buffer_compatible,
             "handler_counts_after_load": counts,
         },
         "compile_command": command,
@@ -300,13 +314,21 @@ def _preflight(args: argparse.Namespace, program: TwoContractMapTrainingProgram)
 
 def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -> dict[str, Any]:
     _require_toolchain(args, require_gpu=True)
+    command_buffer_flag_audit = (
+        require_custom_call_command_buffers_enabled(os.environ.get("XLA_FLAGS", ""))
+        if args.physical_candidate.command_buffer_compatible
+        else None
+    )
     generated = generate_cuda_contract_map_chain_ffi(
         program,
         forward_target=_FORWARD_TARGET,
         reverse_target=_REVERSE_TARGET,
         threads=args.threads,
+        physical_candidate=args.physical_candidate,
     )
     audit = audit_cuda_contract_map_chain_source(generated)
+    if generated.command_buffer_compatible and not audit.command_buffer_eligible:
+        raise AssertionError(f"capture-safe source failed command-buffer audit: {audit}")
     library, command = _compile_generated_source(generated, args.artifact_directory, args.nvcc, args.architecture)
     if _handler_call_counts(library) != (0, 0):
         raise AssertionError("generated handler counts must start at zero")
@@ -358,6 +380,7 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
     generated_outputs = execute_generated()
     natural_outputs = execute_natural()
     jax.block_until_ready((generated_outputs, natural_outputs))
+    handler_counts_after_correctness = _handler_call_counts(library)
 
     activation_numpy = np.asarray(activation, dtype=np.float32)
     first_weight_numpy = np.asarray(first_weight, dtype=np.float32)
@@ -411,16 +434,34 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         if hashes != first_hashes:
             raise AssertionError("generated Contract/Map training step is not bitwise deterministic")
         deterministic_hashes.append(hashes)
+    handler_counts_after_determinism = _handler_call_counts(library)
 
+    variants = (("generated_two_ffi_calls", execute_generated), ("matched_natural_jax_forward_vjp", execute_natural))
+    _warm_up(variants, warmups=args.warmups)
+    handler_counts_after_warmup = _handler_call_counts(library)
     measurements, execution_order = _measure(
-        (("generated_two_ffi_calls", execute_generated), ("matched_natural_jax_forward_vjp", execute_natural)),
-        warmups=args.warmups,
+        variants,
         repeats=args.repeats,
         iterations=args.iterations,
     )
     expected_handler_count = 3 + args.warmups + args.repeats * args.iterations
     handler_counts = _handler_call_counts(library)
-    if handler_counts != (expected_handler_count, expected_handler_count):
+    handler_count_checkpoints = {
+        "after_correctness": handler_counts_after_correctness,
+        "after_determinism": handler_counts_after_determinism,
+        "after_warmup": handler_counts_after_warmup,
+        "after_measurement": handler_counts,
+    }
+    if generated.command_buffer_compatible:
+        if min(handler_counts_after_warmup) < 1:
+            raise AssertionError(
+                f"capture-safe handlers did not execute during graph recording: {handler_count_checkpoints}"
+            )
+        if handler_counts != handler_counts_after_warmup:
+            raise AssertionError(
+                f"capture-only handler counts did not stabilize after warmup: {handler_count_checkpoints}"
+            )
+    elif handler_counts != (expected_handler_count, expected_handler_count):
         raise AssertionError(
             f"generated handler counts {handler_counts} do not match "
             f"{(expected_handler_count, expected_handler_count)}"
@@ -448,7 +489,7 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         text=True,
     ).strip()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "one_h100_contract_map_training_component",
         "shape": {
             "rows": generated.rows,
@@ -475,11 +516,25 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
             "semantic_digest": generated.semantic_digest,
             "source_digest": generated.source_digest,
             "source_audit": asdict(audit),
+            "physical_candidate": generated.physical_candidate.value,
+            "command_buffer_compatible": generated.command_buffer_compatible,
             "threads": generated.threads,
             "forward_shared_bytes": generated.forward_shared_bytes,
             "reverse_shared_bytes": generated.reverse_shared_bytes,
             "handler_counts": {"forward": handler_counts[0], "reverse": handler_counts[1]},
-            "expected_handler_count_each": expected_handler_count,
+            "handler_count_checkpoints": {
+                name: {"forward": counts[0], "reverse": counts[1]} for name, counts in handler_count_checkpoints.items()
+            },
+            "handler_count_contract": (
+                {
+                    "kind": "capture_only",
+                    "minimum_each": 1,
+                    "stable_after_warmup": True,
+                    "logical_execution_count_not_expected": expected_handler_count,
+                }
+                if generated.command_buffer_compatible
+                else {"kind": "logical_execution", "expected_each": expected_handler_count}
+            ),
             "runtime": "JAX CUDA typed FFI; no Torch dependency",
         },
         "numerical_contract": {
@@ -508,6 +563,17 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
             "generated_kernel_launches_per_step": 2,
             "timing": "host enqueue interval followed by jax.block_until_ready; compilation excluded",
         },
+        "command_buffer": (
+            {
+                "xla_flags": os.environ.get("XLA_FLAGS", ""),
+                "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
+                "selected_entries": command_buffer_flag_audit.selected_entries,
+                "evidence": "capture-only host handler counts remain fixed across timed graph replay",
+                "profiler_evidence": None,
+            }
+            if command_buffer_flag_audit is not None
+            else None
+        ),
         "compile_command": command,
         "environment": {
             **_environment_versions(),
@@ -528,6 +594,12 @@ def main() -> None:
     parser.add_argument("--shuttle-revision", required=True)
     parser.add_argument("--require-jax-version", default="0.11.0")
     parser.add_argument("--threads", type=int, default=256)
+    parser.add_argument(
+        "--physical-candidate",
+        type=ContractMapChainFfiPhysicalCandidate,
+        choices=tuple(ContractMapChainFfiPhysicalCandidate),
+        default=ContractMapChainFfiPhysicalCandidate.LAUNCH_CHECKED,
+    )
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
