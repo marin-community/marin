@@ -16,6 +16,12 @@ from tile_lifetime.xla_relation_program_recovery import (
     SharedContractMultiMapOperandRole,
     form_shared_contract_multi_map_region,
 )
+from tile_lifetime.xla_routed_shared_map_training_ffi import (
+    RoutedSharedMapTrainingFfiTargets,
+    audit_routed_shared_map_training_replacement,
+    plan_routed_shared_map_training_typed_ffi,
+    replace_routed_shared_map_training_regions_with_custom_calls,
+)
 from tile_lifetime.xla_shared_contract_multimap import (
     evaluate_shared_contract_multi_map_plan,
 )
@@ -29,6 +35,14 @@ _ARTIFACT = (
     / "benchmarks/artifacts/xla_grug_routed_forward_gpu_gb200_v0/original-gpu-pre-scheduler-hlo.txt.gz"
 )
 _TARGET = "shuttle.shared_contract_multi_map.test"
+_COMPOSED_TARGETS = RoutedSharedMapTrainingFfiTargets(
+    forward="shuttle.shared_map_training.forward.test",
+    shared_contract_multi_map="shuttle.shared_map_training.maps.test",
+    weight_gradients=(
+        "shuttle.shared_map_training.weight_gradient.0.test",
+        "shuttle.shared_map_training.weight_gradient.1.test",
+    ),
+)
 
 
 def _hlo() -> str:
@@ -74,6 +88,55 @@ def test_natural_hlo_recovers_one_shared_contract_with_two_live_scalar_maps() ->
     assert "dot.69" not in plan.boundary.internal_instructions
     assert plan.numerical_contract.scalar_policy.value == "source_ordered"
     assert plan.numerical_contract.numerical_policy is NumericalPolicy.ALLOW_ROUNDING_REORDER
+
+
+def test_routed_training_composition_defers_only_input_adjoint_work_outside_shared_maps() -> None:
+    plan = plan_routed_shared_map_training_typed_ffi(_hlo())
+
+    shared_internal = set(plan.shared_contract_multi_map.boundary.internal_instructions)
+    deferred_internal = set(plan.deferred_input_adjoint.region.boundary.internal_instructions)
+    assert shared_internal & deferred_internal
+    assert deferred_internal - shared_internal
+    assert {output.value.instruction for output in plan.shared_contract_multi_map.outputs} == {
+        "select.5",
+        "select.7",
+    }
+    assert "scatter-add.42" in deferred_internal - shared_internal
+    assert all(
+        not shared_internal & set(weight.region.boundary.internal_instructions) for weight in plan.weight_gradients
+    )
+
+
+def test_routed_training_composition_replaces_shared_maps_without_double_owning_adjoint() -> None:
+    hlo = _hlo()
+    plan = plan_routed_shared_map_training_typed_ffi(hlo)
+
+    rewritten = replace_routed_shared_map_training_regions_with_custom_calls(
+        hlo,
+        plan,
+        targets=_COMPOSED_TARGETS,
+    )
+    audit = audit_routed_shared_map_training_replacement(
+        hlo,
+        rewritten,
+        plan,
+        targets=_COMPOSED_TARGETS,
+    )
+
+    assert audit.target_instructions == (
+        "shuttle_generated_routed_forward_region",
+        "shuttle_generated_shared_contract_multi_map",
+        "dot.6",
+        "dot.7",
+    )
+    assert audit.weight_gradient_collectives == ("psum.52", "psum.53")
+    assert audit.shared_contract_multi_map.outputs == ("select.5", "select.7")
+    assert "dot.67" in audit.deferred_input_adjoint_instructions
+    assert "dot.68" in audit.deferred_input_adjoint_instructions
+    assert "scatter-add.42" in audit.deferred_input_adjoint_instructions
+    assert "shuttle_generated_routed_input_adjoint_region" not in rewritten
+    assert audit.copy_count[1] <= audit.copy_count[0]
+    assert audit.transpose_count[1] <= audit.transpose_count[0]
 
 
 def test_shared_contract_multi_map_cpu_reference_matches_source_ordered_formula() -> None:
