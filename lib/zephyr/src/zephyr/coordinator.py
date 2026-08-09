@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -23,13 +23,14 @@ from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from rigging import telemetry
 from rigging.filesystem import StoragePath
-from rigging.timing import ExponentialBackoff, RateLimiter, log_time
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
+    StageRunner,
     TaskResult,
     ZephyrTaskResources,
     ZephyrWorkerError,
@@ -362,7 +363,7 @@ class ZephyrCoordinator:
         self,
         worker_class: type,
         worker_count: int,
-        stage_runner_factory: Any,
+        stage_runner_factory: Callable[[], StageRunner],
         task_resources: ZephyrTaskResources,
         worker_resources: ResourceConfig,
         actor_config: ActorConfig,
@@ -391,11 +392,7 @@ class ZephyrCoordinator:
         )
 
     def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:
-        """Wait for ``count`` workers and return their handles, for driver-side calls.
-
-        The worker group lives here, so callers that address workers directly -- the
-        memory store loads one table shard per actor -- ask for the handles.
-        """
+        """Wait for ``count`` workers to come up and return their handles."""
         assert self._worker_group is not None, "worker group not started"
         return tuple(self._worker_group.wait_ready(count=count, timeout=timeout))
 
@@ -1449,7 +1446,7 @@ class ZephyrCoordinator:
             return
 
         group, self._worker_group = self._worker_group, None
-        with suppress(Exception):
+        try:
             if isinstance(current_client(), LocalClient):
                 # In-process actors: no job to terminate, so stop each one directly.
                 for worker in group.wait_ready():
@@ -1457,13 +1454,16 @@ class ZephyrCoordinator:
                 group.shutdown()
                 return
 
-            backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
-            deadline = time.monotonic() + drain_timeout
-            while time.monotonic() < deadline:
-                if group.is_done():
-                    return
-                time.sleep(backoff.next_interval())
+            drained = ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
+                group.is_done, timeout=Duration.from_seconds(drain_timeout)
+            )
+            if drained:
+                return
             logger.warning("Workers did not exit within %.1fs, terminating the group", drain_timeout)
+        except Exception:
+            logger.warning("Worker teardown failed, terminating the group", exc_info=True)
+
+        with suppress(Exception):
             group.shutdown()
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:

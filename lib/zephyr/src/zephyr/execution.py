@@ -190,7 +190,7 @@ class _OwnedPool:
     coordinator: ActorHandle
     worker_count: int
 
-    def shutdown(self, client: Client) -> None:
+    def shutdown(self) -> None:
         """Stop the workers, then the coordinator that owns them."""
         with suppress(Exception):
             self.coordinator.stop_workers.remote().result(timeout=30.0)
@@ -653,7 +653,7 @@ class ZephyrContext:
             finally:
                 if pool is not None:
                     assert self.client is not None
-                    pool.shutdown(self.client)
+                    pool.shutdown()
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         raise last_exception  # type: ignore[misc]
@@ -673,7 +673,7 @@ class ZephyrContext:
             self._state = _ContextState.CLOSED
 
         assert self.client is not None
-        pool.shutdown(self.client)
+        pool.shutdown()
 
     def __enter__(self) -> "ZephyrContext":
         return self.start()
