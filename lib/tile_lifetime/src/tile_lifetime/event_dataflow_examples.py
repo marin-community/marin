@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
+    EventGenerationPolicy,
     EventMemoryScope,
     EventSchedulingMode,
     MemoryVisibility,
@@ -45,11 +46,15 @@ def relation_segment_dependence(
     producer_name: str = "relation_edge_ready",
     consumer_name: str = "segment_consumer",
 ) -> TaskDependence:
-    """Map each valid runtime relation edge to its destination segment task."""
+    """Map each valid runtime relation edge to its physical segment task."""
     producer = TaskFamily(producer_name, (TaskAxis("edge", relation.route_count),))
-    consumer = TaskFamily(consumer_name, (TaskAxis("destination", relation.destination_count),))
-    grouped_routes = relation.grouped_route_indices
-    pairs = tuple(((edge,), (int(relation.destination_item[route]),)) for edge, route in enumerate(grouped_routes))
+    consumer = TaskFamily(consumer_name, (TaskAxis("segment", relation.destination_count),))
+    edge_offsets = relation.destination_edge_offsets
+    pairs = tuple(
+        ((edge,), (segment,))
+        for segment, count in enumerate(relation.group_count)
+        for edge in range(int(edge_offsets[segment]), int(edge_offsets[segment]) + int(count))
+    )
     return TaskDependence(
         TaskRelation.from_pairs(producer, consumer, pairs),
         MemoryVisibility(EventMemoryScope.DEVICE),
@@ -92,6 +97,76 @@ def tiled_collective_dependence(
     return TaskDependence(
         TaskRelation.from_pairs(producer, consumer, pairs),
         MemoryVisibility(EventMemoryScope.SYSTEM),
+    )
+
+
+def pipelined_contract_fold_program(
+    *,
+    generation_count: int,
+    pipeline_depth: int,
+) -> EventDataflowProgram:
+    """Derive a phased Contract-Fold-Contract graph with bounded slot reuse."""
+    if generation_count <= 0:
+        raise ValueError("pipeline generation count must be positive")
+    if pipeline_depth <= 0:
+        raise ValueError("pipeline depth must be positive")
+    phase_and_slot = (TaskAxis("generation", generation_count), TaskAxis("pipeline_slot", pipeline_depth))
+    first_contract = TaskFamily("first_contract", phase_and_slot, placement="matrix_workers")
+    fold_update = TaskFamily("fold_update", phase_and_slot, placement="reduction_workers")
+    second_contract = TaskFamily("second_contract", phase_and_slot, placement="matrix_workers")
+    fold_finalize = TaskFamily("fold_finalize", (TaskAxis("generation", generation_count),))
+    visibility = MemoryVisibility(EventMemoryScope.CTA)
+
+    pointwise_pairs = tuple(
+        ((generation, slot), (generation, slot))
+        for generation in range(generation_count)
+        for slot in range(pipeline_depth)
+    )
+    first_to_fold = TaskDependence(
+        TaskRelation.from_pairs(first_contract, fold_update, pointwise_pairs),
+        visibility,
+    )
+    fold_to_second = TaskDependence(
+        TaskRelation.from_pairs(fold_update, second_contract, pointwise_pairs),
+        visibility,
+    )
+    second_to_finalize = TaskDependence(
+        TaskRelation.from_pairs(
+            second_contract,
+            fold_finalize,
+            tuple(
+                ((generation, slot), (generation,))
+                for generation in range(generation_count)
+                for slot in range(pipeline_depth)
+            ),
+        ),
+        visibility,
+    )
+    reuse = TaskDependence(
+        TaskRelation.from_pairs(
+            fold_finalize,
+            first_contract,
+            tuple(
+                ((generation - 1,), (generation, slot))
+                for generation in range(1, generation_count)
+                for slot in range(pipeline_depth)
+            ),
+        ),
+        visibility,
+    )
+    dependences = (reuse, first_to_fold, fold_to_second, second_to_finalize)
+    plans = tuple(
+        derive_event_tensor_plan(
+            dependence,
+            name=f"{dependence.relation.source.name}_to_{dependence.relation.target.name}",
+            generation_policy=EventGenerationPolicy.PHASED,
+        )
+        for dependence in dependences
+    )
+    return EventDataflowProgram(
+        (first_contract, fold_update, second_contract, fold_finalize),
+        dependences,
+        plans,
     )
 
 

@@ -13,6 +13,7 @@ from tile_lifetime.event_dataflow import (
     EventDataflowError,
     EventDataflowProgram,
     EventDomain,
+    EventGenerationPolicy,
     EventMemoryScope,
     EventSchedulingMode,
     ImperativeEventOpKind,
@@ -25,12 +26,15 @@ from tile_lifetime.event_dataflow import (
     TraceKind,
     coarsen_event_tensor_plan,
     derive_event_tensor_plan,
+    event_tensor_runtime_inputs,
     execute_event_dataflow,
     lower_event_tensor_plan,
+    phased_event_storage_binding,
     verify_event_dataflow_program,
     verify_event_tensor_plan,
 )
 from tile_lifetime.event_dataflow_examples import (
+    pipelined_contract_fold_program,
     relation_segment_dependence,
     single_dependence_event_program,
     split_fold_dependence,
@@ -121,8 +125,8 @@ def _relation_fixture(destination_indices: np.ndarray, edge_valid: np.ndarray):
         destination_indices,
         np.ones(destination_indices.shape, dtype=np.float32),
         edge_valid=edge_valid,
-        destination_rank_by_item=np.asarray([0, 0, 1, 1, 1], dtype=np.int32),
-        destination_local_item_by_item=np.asarray([0, 1, 0, 1, 2], dtype=np.int32),
+        destination_rank_by_item=np.asarray([1, 0, 1, 0, 1], dtype=np.int32),
+        destination_local_item_by_item=np.asarray([1, 0, 0, 1, 2], dtype=np.int32),
         padding_quantum=2,
     )
 
@@ -155,15 +159,23 @@ def test_runtime_relation_mutation_changes_derived_counts_without_event_specific
         dtype=np.bool_,
     )
     relation = _relation_fixture(destinations, valid)
+    assert not np.array_equal(relation.group_destination_item, np.arange(relation.destination_count))
     dependence = relation_segment_dependence(relation)
     program = single_dependence_event_program(
         dependence,
         name="runtime_segments",
         scheduling_mode=EventSchedulingMode.DYNAMIC,
     )
-    expected = np.bincount(destinations[valid], minlength=5)
+    expected = relation.group_count
     assert tuple(program.event_plans[0].initial_count.as_mapping()[(index,)] for index in range(5)) == tuple(expected)
-    assert expected[2] == 0
+    empty_segments = tuple(int(index) for index in np.flatnonzero(expected == 0))
+    assert empty_segments
+    runtime_inputs = event_tensor_runtime_inputs(program.event_plans[0])
+    assert runtime_inputs.event_initial_counts == tuple(expected)
+    assert runtime_inputs.event_source_offsets == tuple(relation.destination_edge_offsets)
+    assert runtime_inputs.initially_ready_events == empty_segments
+    assert runtime_inputs.event_trigger_offsets == tuple(range(relation.destination_count + 1))
+    assert runtime_inputs.event_consumers == tuple(range(relation.destination_count))
 
     first = execute_event_dataflow(
         program,
@@ -191,8 +203,12 @@ def test_runtime_relation_mutation_changes_derived_counts_without_event_specific
         name="runtime_segments",
         scheduling_mode=EventSchedulingMode.DYNAMIC,
     )
-    mutated_expected = np.bincount(mutated_destinations[mutated_valid], minlength=5)
+    mutated_expected = mutated.group_count
     assert mutated_program.event_plans[0].initial_count.as_mapping() != program.event_plans[0].initial_count.as_mapping()
+    mutated_runtime_inputs = event_tensor_runtime_inputs(mutated_program.event_plans[0])
+    assert mutated_runtime_inputs.event_initial_counts == tuple(mutated_expected)
+    assert mutated_runtime_inputs.event_source_offsets == tuple(mutated.destination_edge_offsets)
+    assert mutated_runtime_inputs != runtime_inputs
     mutated_result = execute_event_dataflow(
         mutated_program,
         actions=_segment_actions(mutated_dependence),
@@ -200,6 +216,121 @@ def test_runtime_relation_mutation_changes_derived_counts_without_event_specific
         scheduling_mode=EventSchedulingMode.DYNAMIC,
     )
     np.testing.assert_array_equal(mutated_result.state["counts"], mutated_expected)
+
+
+def test_phased_contract_fold_pipeline_reuses_slots_after_finalize() -> None:
+    generation_count = 3
+    pipeline_depth = 2
+    program = pipelined_contract_fold_program(
+        generation_count=generation_count,
+        pipeline_depth=pipeline_depth,
+    )
+    inputs = np.arange(generation_count * pipeline_depth, dtype=np.float32).reshape(generation_count, pipeline_depth)
+    values = inputs + 1.0
+
+    def first_contract(coordinate: tuple[int, ...], state: MutableMapping[str, object]) -> None:
+        generation, slot = coordinate
+        first_slots = state["first_slots"]
+        assert isinstance(first_slots, np.ndarray)
+        first_slots[slot] = inputs[generation, slot] * 2.0
+
+    def fold_update(coordinate: tuple[int, ...], state: MutableMapping[str, object]) -> None:
+        _, slot = coordinate
+        first_slots = state["first_slots"]
+        fold_slots = state["fold_slots"]
+        assert isinstance(first_slots, np.ndarray)
+        assert isinstance(fold_slots, np.ndarray)
+        fold_slots[slot] = np.exp(first_slots[slot])
+
+    def second_contract(coordinate: tuple[int, ...], state: MutableMapping[str, object]) -> None:
+        generation, slot = coordinate
+        fold_slots = state["fold_slots"]
+        second_slots = state["second_slots"]
+        assert isinstance(fold_slots, np.ndarray)
+        assert isinstance(second_slots, np.ndarray)
+        second_slots[slot] = fold_slots[slot] * values[generation, slot]
+
+    def fold_finalize(coordinate: tuple[int, ...], state: MutableMapping[str, object]) -> None:
+        (generation,) = coordinate
+        second_slots = state["second_slots"]
+        output = state["output"]
+        assert isinstance(second_slots, np.ndarray)
+        assert isinstance(output, np.ndarray)
+        output[generation] = np.sum(second_slots, dtype=np.float32)
+
+    result = execute_event_dataflow(
+        program,
+        actions={
+            "first_contract": first_contract,
+            "fold_update": fold_update,
+            "second_contract": second_contract,
+            "fold_finalize": fold_finalize,
+        },
+        state={
+            "first_slots": np.zeros(pipeline_depth, dtype=np.float32),
+            "fold_slots": np.zeros(pipeline_depth, dtype=np.float32),
+            "second_slots": np.zeros(pipeline_depth, dtype=np.float32),
+            "output": np.zeros(generation_count, dtype=np.float32),
+        },
+        scheduling_mode=EventSchedulingMode.DYNAMIC,
+        random_seed=17,
+    )
+    expected = np.sum(np.exp(inputs * 2.0) * values, axis=1, dtype=np.float32)
+    np.testing.assert_allclose(result.state["output"], expected, rtol=1e-6)
+
+    execution_index = {task: index for index, task in enumerate(result.executed_tasks)}
+    for generation in range(1, generation_count):
+        finalize = next(
+            task
+            for task in result.executed_tasks
+            if task.family == "fold_finalize" and task.coordinate == (generation - 1,)
+        )
+        for slot in range(pipeline_depth):
+            next_contract = next(
+                task
+                for task in result.executed_tasks
+                if task.family == "first_contract" and task.coordinate == (generation, slot)
+            )
+            assert execution_index[finalize] < execution_index[next_contract]
+
+    for plan in program.event_plans:
+        assert plan.generation_policy is EventGenerationPolicy.PHASED
+        target_axis_names = tuple(axis.name for axis in plan.domain.axes)
+        generation_axis = target_axis_names.index("generation")
+        slot_axis = target_axis_names.index("pipeline_slot") if "pipeline_slot" in target_axis_names else None
+        binding = phased_event_storage_binding(
+            plan,
+            slot=(lambda coordinate, axis=slot_axis: coordinate[axis] if axis is not None else 0),
+            generation=lambda coordinate, axis=generation_axis: coordinate[axis],
+        )
+        runtime_inputs = event_tensor_runtime_inputs(plan, storage_binding=binding)
+        assert runtime_inputs.event_generations == tuple(
+            coordinate[generation_axis] for coordinate in plan.domain.coordinates
+        )
+        if slot_axis is not None:
+            assert len(set(runtime_inputs.event_storage_slots)) == pipeline_depth
+
+    reuse_plan = next(
+        plan
+        for plan in program.event_plans
+        if plan.notify_relation.source.name == "fold_finalize" and plan.trigger_relation.target.name == "first_contract"
+    )
+    reuse_binding = phased_event_storage_binding(
+        reuse_plan,
+        slot=lambda coordinate: coordinate[1],
+        generation=lambda coordinate: coordinate[0],
+    )
+    reuse_inputs = event_tensor_runtime_inputs(reuse_plan, storage_binding=reuse_binding)
+    assert reuse_inputs.event_initial_counts == (0, 0, 1, 1, 1, 1)
+    assert reuse_inputs.initially_ready_events == (0, 1)
+    assert reuse_inputs.event_storage_slots == (0, 1, 0, 1, 0, 1)
+    assert reuse_inputs.event_generations == (0, 0, 1, 1, 2, 2)
+
+
+def test_phased_runtime_inputs_require_explicit_storage_binding() -> None:
+    program = pipelined_contract_fold_program(generation_count=2, pipeline_depth=2)
+    with pytest.raises(ValueError, match="explicit physical storage binding"):
+        event_tensor_runtime_inputs(program.event_plans[0])
 
 
 @pytest.mark.parametrize("mode", list(EventSchedulingMode))

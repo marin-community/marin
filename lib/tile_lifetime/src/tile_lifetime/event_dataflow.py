@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from itertools import product
+from itertools import pairwise, product
 
 Coordinate = tuple[int, ...]
 
@@ -260,6 +260,172 @@ class EventTensorPlan:
         )
         required = self.required_dependence.relation
         return TaskRelation.from_pairs(required.source, required.target, tuple(pairs))
+
+
+@dataclass(frozen=True)
+class EventTensorRuntimeInputs:
+    """Flat runtime tables used to initialize and traverse one event plan.
+
+    Coordinates are linearized in their declared domain order. The CSR tables
+    are derived views of the generic notify and trigger relations; they are not
+    a second source of dependency truth. Backends may upload these tables,
+    generate them on device, or erase them when a static schedule makes them
+    unnecessary.
+    """
+
+    event_initial_counts: tuple[int, ...]
+    event_source_offsets: tuple[int, ...]
+    event_sources: tuple[int, ...]
+    source_event_offsets: tuple[int, ...]
+    source_events: tuple[int, ...]
+    event_trigger_offsets: tuple[int, ...]
+    event_consumers: tuple[int, ...]
+    initially_ready_events: tuple[int, ...]
+    event_storage_slots: tuple[int, ...]
+    event_generations: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        event_count = len(self.event_initial_counts)
+        _verify_csr_offsets(self.event_source_offsets, len(self.event_sources), event_count, "event-source")
+        _verify_csr_offsets(self.event_trigger_offsets, len(self.event_consumers), event_count, "event-trigger")
+        if not self.source_event_offsets:
+            raise ValueError("source-event offsets must contain at least the zero sentinel")
+        _verify_csr_offsets(
+            self.source_event_offsets,
+            len(self.source_events),
+            len(self.source_event_offsets) - 1,
+            "source-event",
+        )
+        if any(count < 0 for count in self.event_initial_counts):
+            raise ValueError("runtime event counts must be non-negative")
+        represented_counts = tuple(right - left for left, right in pairwise(self.event_source_offsets))
+        if represented_counts != self.event_initial_counts:
+            raise ValueError("runtime event counts must equal event-source CSR row lengths")
+        source_count = len(self.source_event_offsets) - 1
+        if any(source < 0 or source >= source_count for source in self.event_sources):
+            raise ValueError("event-source values must index the producer domain")
+        if any(event < 0 or event >= event_count for event in self.source_events):
+            raise ValueError("source-event values must index the event domain")
+        expected_ready = tuple(index for index, count in enumerate(self.event_initial_counts) if count == 0)
+        if self.initially_ready_events != expected_ready:
+            raise ValueError("initially-ready events must be exactly the zero-count event coordinates")
+        if len(self.event_storage_slots) != event_count or len(self.event_generations) != event_count:
+            raise ValueError("every logical event must have one physical slot and generation")
+        if any(slot < 0 for slot in self.event_storage_slots):
+            raise ValueError("physical event slots must be non-negative")
+        if any(generation < 0 for generation in self.event_generations):
+            raise ValueError("event generations must be non-negative")
+        if len(set(zip(self.event_storage_slots, self.event_generations, strict=True))) != event_count:
+            raise ValueError("a physical slot/generation pair may identify only one logical event")
+
+
+@dataclass(frozen=True)
+class EventStorageBinding:
+    """Physical slot and epoch selected for every logical event coordinate."""
+
+    domain: EventDomain
+    slots: tuple[int, ...]
+    generations: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        event_count = len(self.domain.coordinates)
+        if len(self.slots) != event_count or len(self.generations) != event_count:
+            raise ValueError("event storage binding must cover the complete event domain")
+
+
+def phased_event_storage_binding(
+    plan: EventTensorPlan,
+    *,
+    slot: Callable[[Coordinate], int],
+    generation: Callable[[Coordinate], int],
+) -> EventStorageBinding:
+    """Choose reusable physical event slots for a phased logical plan."""
+    if plan.generation_policy is not EventGenerationPolicy.PHASED:
+        raise ValueError("reusable event storage requires the phased generation policy")
+    coordinates = plan.domain.coordinates
+    return EventStorageBinding(
+        plan.domain,
+        tuple(slot(coordinate) for coordinate in coordinates),
+        tuple(generation(coordinate) for coordinate in coordinates),
+    )
+
+
+def _verify_csr_offsets(offsets: tuple[int, ...], value_count: int, row_count: int, name: str) -> None:
+    if len(offsets) != row_count + 1:
+        raise ValueError(f"{name} offsets must contain one sentinel per row plus one")
+    if offsets[0] != 0 or offsets[-1] != value_count:
+        raise ValueError(f"{name} offsets must span exactly all values")
+    if any(left > right for left, right in pairwise(offsets)):
+        raise ValueError(f"{name} offsets must be monotonically non-decreasing")
+
+
+def event_tensor_runtime_inputs(
+    plan: EventTensorPlan,
+    *,
+    storage_binding: EventStorageBinding | None = None,
+) -> EventTensorRuntimeInputs:
+    """Linearize a verified plan into runtime count and relation inputs."""
+    verify_event_tensor_plan(plan)
+    if storage_binding is None:
+        if plan.generation_policy is EventGenerationPolicy.PHASED:
+            raise ValueError("phased event plans require an explicit physical storage binding")
+        storage_binding = EventStorageBinding(
+            plan.domain,
+            tuple(range(len(plan.domain.coordinates))),
+            (0,) * len(plan.domain.coordinates),
+        )
+    elif storage_binding.domain != plan.domain:
+        raise ValueError("event storage binding domain does not match the event plan")
+    source = plan.notify_relation.source
+    consumer = plan.trigger_relation.target
+    source_linear = {coordinate: index for index, coordinate in enumerate(source.coordinates)}
+    event_linear = {coordinate: index for index, coordinate in enumerate(plan.domain.coordinates)}
+    consumer_linear = {coordinate: index for index, coordinate in enumerate(consumer.coordinates)}
+
+    event_sources_by_event: dict[int, list[int]] = defaultdict(list)
+    source_events_by_source: dict[int, list[int]] = defaultdict(list)
+    for pair in plan.notify_relation.pairs:
+        source_index = source_linear[pair.source]
+        event_index = event_linear[pair.target]
+        event_sources_by_event[event_index].append(source_index)
+        source_events_by_source[source_index].append(event_index)
+
+    consumers_by_event: dict[int, list[int]] = defaultdict(list)
+    for pair in plan.trigger_relation.pairs:
+        consumers_by_event[event_linear[pair.source]].append(consumer_linear[pair.target])
+
+    event_source_offsets, event_sources = _csr_rows(
+        tuple(tuple(sorted(event_sources_by_event[index])) for index in range(len(event_linear)))
+    )
+    source_event_offsets, source_events = _csr_rows(
+        tuple(tuple(sorted(source_events_by_source[index])) for index in range(len(source_linear)))
+    )
+    event_trigger_offsets, event_consumers = _csr_rows(
+        tuple(tuple(sorted(consumers_by_event[index])) for index in range(len(event_linear)))
+    )
+    count_by_coordinate = plan.initial_count.as_mapping()
+    counts = tuple(count_by_coordinate[coordinate] for coordinate in plan.domain.coordinates)
+    return EventTensorRuntimeInputs(
+        event_initial_counts=counts,
+        event_source_offsets=event_source_offsets,
+        event_sources=event_sources,
+        source_event_offsets=source_event_offsets,
+        source_events=source_events,
+        event_trigger_offsets=event_trigger_offsets,
+        event_consumers=event_consumers,
+        initially_ready_events=tuple(index for index, count in enumerate(counts) if count == 0),
+        event_storage_slots=storage_binding.slots,
+        event_generations=storage_binding.generations,
+    )
+
+
+def _csr_rows(rows: tuple[tuple[int, ...], ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    offsets = [0]
+    values: list[int] = []
+    for row in rows:
+        values.extend(row)
+        offsets.append(len(values))
+    return tuple(offsets), tuple(values)
 
 
 @dataclass(frozen=True)
