@@ -145,13 +145,15 @@ Each case retained 30 samples after 10 warmups:
 
 | Case | Median | Maximum absolute error | Deterministic |
 | --- | ---: | ---: | --- |
-| Segmented Contract | 0.112208 ms | 0 | yes |
-| Relation mutation | 0.121696 ms | 0 | yes |
-| Streaming Contract/Fold | 0.122144 ms | 2.384e-7 | yes |
-| Pipeline-depth/partition mutation | 0.121584 ms | 1.192e-7 | yes |
+| Segmented Contract | 0.073328 ms | 0 | yes |
+| Relation mutation | 0.072800 ms | 0 | yes |
+| Streaming Contract/Fold | 0.074672 ms | 2.384e-7 | yes |
+| Pipeline-depth/partition mutation | 0.074224 ms | 1.192e-7 | yes |
 
 The purpose of these measurements is proof of physical execution and mutation,
-not kernel throughput. The bodies are deliberately small FP32 reference
-implementations. Raw distributions, generated CUDA, HLO records, hashes, the
+not kernel throughput. The bodies are deliberately small FP32 generated payload
+kernels. They validate real tensor/CSR consumption and physical event
+realization, not expert grouped-GEMM or tensor-core attention throughput. Raw
+distributions, generated CUDA, HLO records, hashes, the
 event-realization audit, and exact environment are preserved in
 `benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
