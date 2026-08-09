@@ -1,0 +1,11 @@
+{
+  "compiler_ir_module_type": "jaxlib._jax.HloModule",
+  "compiler_ir_proto_roundtrip": true,
+  "jax_version": "0.10.1",
+  "jaxlib_version": "0.10.1",
+  "text_parser_backend": "jaxlib._jax.hlo_module_from_text",
+  "transformation_api": null,
+  "unavailable_reasons": [
+    "transformation_api: jax.extend.xla is unavailable; pre-scheduler HLO transformation registration requires a JAX/JAXLIB build that provides register_hlo_module_transformation"
+  ]
+}

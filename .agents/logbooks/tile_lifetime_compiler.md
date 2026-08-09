@@ -2911,3 +2911,23 @@ author: dlwh
   pod lookup verified it inactive.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_fused_weighted_reverse_bootstrap_failure_68c777_v0/`.
+
+### 2026-08-09 - TLTC-XLA-043 JAX HLO rewrite compatibility boundary
+
+- Commit `274e1b9238` removes the combined Grug harness's direct import of
+  `jaxlib._hlo`. Serialized callback protos now roundtrip through the HLO module
+  type obtained from public `lower(...).compiler_ir(dialect="hlo")`.
+- JAX exposes no public HLO text parser. The remaining parser dependency is
+  isolated behind one runtime adapter that prefers
+  `jaxlib._jax.hlo_module_from_text` and retains `jaxlib._hlo` only as a
+  compatibility fallback. Rewritten text cannot be returned to the
+  pre-scheduler callback without this parser or a future public equivalent.
+- A CPU preflight on the repository-pinned JAX/JAXLIB 0.10.1 proves the public
+  proto roundtrip and `_jax` text parser work, then rejects the runtime because
+  `jax.extend.xla` and its HLO transformation registry are absent. This now
+  fails before GPU inspection or allocation rather than inside a physical run.
+- The next physical replay requires a matched JAX/JAXLIB build with the public
+  compiler-IR proto path, a compatible text parser, and
+  `jax.extend.xla.register_hlo_module_transformation` plus its clear operation.
+  The prior successful Grug replay used JAX/JAXLIB 0.11.0. No GPU was launched
+  for this compatibility fix.
