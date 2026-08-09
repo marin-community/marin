@@ -1,0 +1,558 @@
+{
+  "acceptance": {
+    "correctness_passes": true,
+    "maximum_absolute_error_threshold": 0.125,
+    "mean_absolute_error_threshold": 0.01,
+    "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
+    "passes": true,
+    "performance_passes": true,
+    "ratio": 1.116244360707315,
+    "threshold": 1.2
+  },
+  "benchmark": {
+    "counterbalanced_order": true,
+    "iterations_per_sample": 5,
+    "repeats": 30,
+    "warmups": 5
+  },
+  "component_measurements": {
+    "execution_order": [
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ],
+      [
+        "query_cotangent_with_output_dot",
+        "key_value_cotangents"
+      ],
+      [
+        "key_value_cotangents",
+        "query_cotangent_with_output_dot"
+      ]
+    ],
+    "variants": {
+      "key_value_cotangents": {
+        "median_ms": 0.31404800415039064,
+        "minimum_ms": 0.31297280788421633,
+        "samples_ms": [
+          0.3135871887207031,
+          0.3147648096084595,
+          0.31422719955444334,
+          0.31369600296020506,
+          0.3140352010726929,
+          0.3142143964767456,
+          0.31436800956726074,
+          0.31434240341186526,
+          0.31360640525817873,
+          0.31347839832305907,
+          0.3137792110443115,
+          0.3133375883102417,
+          0.31297280788421633,
+          0.3143359899520874,
+          0.3151999950408936,
+          0.31407999992370605,
+          0.3133311986923218,
+          0.31392641067504884,
+          0.3134912014007568,
+          0.3140608072280884,
+          0.3136447906494141,
+          0.31519360542297364,
+          0.3135871887207031,
+          0.31327359676361083,
+          0.3140671968460083,
+          0.31409919261932373,
+          0.31417601108551024,
+          0.31320960521698,
+          0.31571838855743406,
+          0.31423358917236327
+        ]
+      },
+      "query_cotangent_with_output_dot": {
+        "median_ms": 0.14049599766731263,
+        "minimum_ms": 0.13950719833374023,
+        "samples_ms": [
+          0.14250880479812622,
+          0.14134399890899657,
+          0.13974399566650392,
+          0.14054399728775024,
+          0.140339195728302,
+          0.14111360311508178,
+          0.13995519876480103,
+          0.141484797000885,
+          0.13950719833374023,
+          0.14087040424346925,
+          0.14032000303268433,
+          0.14045439958572387,
+          0.14072959423065184,
+          0.14218879938125611,
+          0.14042240381240845,
+          0.1407807946205139,
+          0.1397503972053528,
+          0.14026880264282227,
+          0.1395840048789978,
+          0.140774405002594,
+          0.1401087999343872,
+          0.14067840576171875,
+          0.13998719453811645,
+          0.1408128023147583,
+          0.13999359607696532,
+          0.1405311942100525,
+          0.14021120071411133,
+          0.14099199771881105,
+          0.14046080112457277,
+          0.1413632035255432
+        ]
+      }
+    }
+  },
+  "correctness": {
+    "deterministic_hash": "38cef00445e9738c1a14675e6a3f62db0709bd04c7ab12c11789a86924985bf3",
+    "forward_output": {
+      "maximum_absolute_error": 0.00390625,
+      "mean_absolute_error": 8.995547977974638e-05
+    },
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.000243108588620089
+    },
+    "query": {
+      "maximum_absolute_error": 0.015625,
+      "mean_absolute_error": 0.00012222627992741764
+    },
+    "value": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.00014201727753970772
+    }
+  },
+  "environment": {
+    "cuda": "12.8",
+    "device": "NVIDIA GB200",
+    "jax": "0.11.0",
+    "jax_semantic_export_platform": "cpu",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996",
+    "torch": "2.11.0+cu128",
+    "triton": "3.6.0"
+  },
+  "measurements": {
+    "execution_order": [
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "oracle"
+      ],
+      [
+        "oracle",
+        "generated"
+      ]
+    ],
+    "ratio_generated_to_oracle": 1.116244360707315,
+    "variants": {
+      "generated": {
+        "median_ms": 0.45523838996887206,
+        "minimum_ms": 0.4503935813903809,
+        "samples_ms": [
+          0.45713281631469727,
+          0.4583871841430664,
+          0.4518144130706787,
+          0.4570047855377197,
+          0.4516736030578613,
+          0.45697917938232424,
+          0.45240321159362795,
+          0.45723519325256345,
+          0.45089921951293943,
+          0.4561920166015625,
+          0.45174398422241213,
+          0.45671682357788085,
+          0.4518400192260742,
+          0.45703678131103515,
+          0.45173120498657227,
+          0.4562687873840332,
+          0.45092477798461916,
+          0.4568960189819336,
+          0.451039981842041,
+          0.45594239234924316,
+          0.451039981842041,
+          0.45615358352661134,
+          0.45041279792785643,
+          0.4562431812286377,
+          0.45068798065185545,
+          0.4558271884918213,
+          0.4506688117980957,
+          0.4551487922668457,
+          0.4503935813903809,
+          0.45532798767089844
+        ]
+      },
+      "oracle": {
+        "median_ms": 0.40783040523529057,
+        "minimum_ms": 0.40536961555480955,
+        "samples_ms": [
+          0.41023998260498046,
+          0.408735990524292,
+          0.4082304000854492,
+          0.40728321075439455,
+          0.41068158149719236,
+          0.40716800689697263,
+          0.4089983940124512,
+          0.4072319984436035,
+          0.40883841514587405,
+          0.40712318420410154,
+          0.4086400032043457,
+          0.40772480964660646,
+          0.4084799766540527,
+          0.4068607807159424,
+          0.4072512149810791,
+          0.40764799118041994,
+          0.40793600082397463,
+          0.4072000026702881,
+          0.4087423801422119,
+          0.40867838859558103,
+          0.4082304000854492,
+          0.40589442253112795,
+          0.40816640853881836,
+          0.40718722343444824,
+          0.409881591796875,
+          0.4056575775146484,
+          0.40826239585876467,
+          0.40536961555480955,
+          0.40767359733581543,
+          0.405452823638916
+        ]
+      }
+    }
+  },
+  "revisions": {
+    "shuttle": "72397500a24ae788215ca17f365cb7a3e063401c"
+  },
+  "schedule": {
+    "atomic_accumulation": false,
+    "block_m": 32,
+    "block_n": 32,
+    "domain_traversal": "lower_triangular",
+    "key_value_fold_order": "query_row_major_mapped_head_minor_tree",
+    "key_value_gradient_orientation": "key_value_major_grouped_query_rows",
+    "num_stages": 3,
+    "num_warps": 8,
+    "query_gradient_orientation": "query_major_grouped_query_rows",
+    "query_heads_per_key_value_tile": 4,
+    "query_owner_fold_attachments": [
+      {
+        "fold": "fold output feature products",
+        "input_availability": [
+          {
+            "complete_axes": [
+              {
+                "extent": 128,
+                "id": 6,
+                "label": "value_feature"
+              }
+            ],
+            "value": "attention.output"
+          },
+          {
+            "complete_axes": [
+              {
+                "extent": 128,
+                "id": 6,
+                "label": "value_feature"
+              }
+            ],
+            "value": "cotangent.streaming_output"
+          }
+        ],
+        "producer": "multiply output by output cotangent",
+        "result_disposition": "materialize_for_consumers",
+        "site": "owner_preparation"
+      }
+    ],
+    "standalone_output_dot_launch": false,
+    "static_work": {
+      "full_domain_query_gradient_contract_invocations": 98304,
+      "full_domain_scalar_head_key_value_contract_invocations": 524288,
+      "full_domain_scalar_head_query_gradient_contract_invocations": 393216,
+      "fully_restricted_tile_pairs": 64512,
+      "key_value_contract_invocation_reduction": 4.0,
+      "key_value_contract_invocation_reduction_from_full_scalar": 7.876923076923077,
+      "key_value_gradient_accumulator_elements": 8192,
+      "key_value_gradient_contract_invocations": 66560,
+      "logical_query_key_tile_pairs": 66560,
+      "packed_query_rows": 128,
+      "peak_query_tile_elements": 16384,
+      "peak_score_tile_elements": 4096,
+      "query_gradient_contract_invocation_reduction": 4.0,
+      "query_gradient_contract_invocation_reduction_from_full_scalar": 7.876923076923077,
+      "query_gradient_contract_invocations": 49920,
+      "scalar_head_key_value_contract_invocations": 266240,
+      "scalar_head_query_gradient_contract_invocations": 199680
+    }
+  },
+  "schema_version": 1,
+  "semantic_generation": {
+    "accepted_frontend_boundary": "ordinary JAX causal GQA differentiated by jax.vjp and recovered from StableHLO",
+    "materialized_values": [
+      "cotangent.query",
+      "cotangent.key",
+      "cotangent.value",
+      "streaming_output_dot_cotangent"
+    ],
+    "maximum_vjp_rewrite": {
+      "finite_precision_effect": "eliminates JAX's explicit equal-split maximum cotangent and changes operation order",
+      "numerical_policy": "allow_rounding_reorder",
+      "property": "normalized exponential is invariant to an additive row constant"
+    },
+    "physical_maximum_vjp": "normalized_exp_invariant",
+    "provenance": "jax_vjp_hlo_recovery",
+    "reassociation": "deterministic_tree",
+    "recovered_operation_counts": {
+      "broadcast_vjp_folds": 2,
+      "contracts": 5,
+      "domain_restrictions": 2,
+      "maximum_vjp_tie_folds": 1,
+      "normalized_exponential_folds": 2
+    },
+    "score_map_vjp": "{\"kind\":\"select\",\"operands\":[{\"kind\":\"less_equal\",\"operands\":[{\"input\":\"key.position\",\"kind\":\"input\"},{\"input\":\"query.position\",\"kind\":\"input\"}]},{\"constant\":0.0883883461,\"kind\":\"constant\"},{\"constant\":0.0,\"kind\":\"constant\"}]}",
+    "semantic_source": "jax_vjp_hlo_recovery",
+    "source_maximum_vjp": "jax_equal_split",
+    "stages": [
+      "load_query_and_state",
+      "load_key_value",
+      "recompute_qk",
+      "recompute_probability",
+      "dv_contract",
+      "dp_contract",
+      "score_map_vjp",
+      "dq_contract",
+      "dk_contract"
+    ]
+  },
+  "source_sha256": "87f60280f551f32b1d87c90e4a338915dc0598e11676e430328f24639cc26444",
+  "workload": {
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "mutation": "causal",
+    "query_heads": 32,
+    "requested_score_scale": 0.08838834764831843,
+    "semantic_score_scale": 0.0883883461,
+    "sequence": 2048
+  }
+}

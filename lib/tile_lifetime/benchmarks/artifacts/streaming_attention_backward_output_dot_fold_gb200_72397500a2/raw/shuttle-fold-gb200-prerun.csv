@@ -1,0 +1,2 @@
+timestamp, name, uuid, driver_version, pstate, clocks.current.sm [MHz], clocks.current.memory [MHz], power.limit [W], power.draw [W], temperature.gpu
+2026/08/09 11:16:07.285, NVIDIA GB200, GPU-78bf2ae1-552e-d7f3-cccd-3e522bcb9887, 595.71.05, P0, 120 MHz, 3996 MHz, 1200.00 W, 153.50 W, 35
