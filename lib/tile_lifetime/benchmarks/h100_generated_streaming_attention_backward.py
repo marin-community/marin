@@ -197,8 +197,6 @@ def _streaming_dkdv_kernel(
     output_dot,
     key_cotangent,
     value_cotangent,
-    key_cotangent_partials,
-    value_cotangent_partials,
     sequence_length,
     query_heads,
     key_value_heads,
@@ -230,27 +228,15 @@ def _streaming_dkdv_kernel(
     stride_dvs: tl.constexpr,
     stride_dvh: tl.constexpr,
     stride_dvd: tl.constexpr,
-    stride_dkpp: tl.constexpr,
-    stride_dkpb: tl.constexpr,
-    stride_dkps: tl.constexpr,
-    stride_dkph: tl.constexpr,
-    stride_dkpd: tl.constexpr,
-    stride_dvpp: tl.constexpr,
-    stride_dvpb: tl.constexpr,
-    stride_dvps: tl.constexpr,
-    stride_dvph: tl.constexpr,
-    stride_dvpd: tl.constexpr,
     block_m: tl.constexpr,
     block_n: tl.constexpr,
     head_dimension: tl.constexpr,
     head_group_size: tl.constexpr,
-    query_partitions: tl.constexpr,
     causal: tl.constexpr,
     has_softcap: tl.constexpr,
 ):
     key_block_index = tl.program_id(0)
     batch_key_value_head = tl.program_id(1)
-    query_partition = tl.program_id(2)
     batch_index = batch_key_value_head // key_value_heads
     key_value_head = batch_key_value_head % key_value_heads
     key_start = key_block_index * block_n
@@ -281,14 +267,10 @@ def _streaming_dkdv_kernel(
     query_head_offsets = packed_rows % head_group_size
     query_heads_for_rows = key_value_head * head_group_size + query_head_offsets
     features = tl.arange(0, head_dimension)
-    query_tile_count = tl.cdiv(sequence_length, block_m)
-    tiles_per_partition = tl.cdiv(query_tile_count, query_partitions)
-    partition_query_start = query_partition * tiles_per_partition * block_m
-    partition_query_stop = tl.minimum(sequence_length, partition_query_start + tiles_per_partition * block_m)
-    first_query_start = partition_query_start
+    first_query_start = 0
     if causal:
-        first_query_start = tl.maximum(first_query_start, (key_start // block_m) * block_m)
-    for query_start in tl.range(first_query_start, partition_query_stop, block_m):
+        first_query_start = (key_start // block_m) * block_m
+    for query_start in tl.range(first_query_start, sequence_length, block_m):
         query_start = tl.multiple_of(query_start, block_m)
         query_tokens = query_start + query_offsets_in_block
         query_offsets = (
@@ -328,108 +310,6 @@ def _streaming_dkdv_kernel(
         mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
         raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
         key_gradient += tl.dot(tl.trans(raw_score_cotangent.to(tl.bfloat16)), query_tile)
-    if query_partitions == 1:
-        key_cotangent_block = tl.make_block_ptr(
-            base=key_cotangent + batch_index * stride_dkb + key_value_head * stride_dkh,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_dks, stride_dkd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        value_cotangent_block = tl.make_block_ptr(
-            base=value_cotangent + batch_index * stride_dvb + key_value_head * stride_dvh,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_dvs, stride_dvd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        tl.store(key_cotangent_block, key_gradient.to(tl.bfloat16))
-        tl.store(value_cotangent_block, value_gradient.to(tl.bfloat16))
-    else:
-        key_partial_block = tl.make_block_ptr(
-            base=key_cotangent_partials
-            + query_partition * stride_dkpp
-            + batch_index * stride_dkpb
-            + key_value_head * stride_dkph,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_dkps, stride_dkpd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        value_partial_block = tl.make_block_ptr(
-            base=value_cotangent_partials
-            + query_partition * stride_dvpp
-            + batch_index * stride_dvpb
-            + key_value_head * stride_dvph,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_dvps, stride_dvpd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        tl.store(key_partial_block, key_gradient)
-        tl.store(value_partial_block, value_gradient)
-
-
-@triton.jit
-def _finalize_dkdv_partials_kernel(
-    key_partials,
-    value_partials,
-    key_cotangent,
-    value_cotangent,
-    sequence_length,
-    key_value_heads,
-    stride_kpp: tl.constexpr,
-    stride_kpb: tl.constexpr,
-    stride_kps: tl.constexpr,
-    stride_kph: tl.constexpr,
-    stride_kpd: tl.constexpr,
-    stride_vpp: tl.constexpr,
-    stride_vpb: tl.constexpr,
-    stride_vps: tl.constexpr,
-    stride_vph: tl.constexpr,
-    stride_vpd: tl.constexpr,
-    stride_dkb: tl.constexpr,
-    stride_dks: tl.constexpr,
-    stride_dkh: tl.constexpr,
-    stride_dkd: tl.constexpr,
-    stride_dvb: tl.constexpr,
-    stride_dvs: tl.constexpr,
-    stride_dvh: tl.constexpr,
-    stride_dvd: tl.constexpr,
-    block_n: tl.constexpr,
-    head_dimension: tl.constexpr,
-    query_partitions: tl.constexpr,
-):
-    key_block_index = tl.program_id(0)
-    batch_key_value_head = tl.program_id(1)
-    batch_index = batch_key_value_head // key_value_heads
-    key_value_head = batch_key_value_head % key_value_heads
-    key_start = key_block_index * block_n
-    key_gradient = tl.zeros((block_n, head_dimension), tl.float32)
-    value_gradient = tl.zeros((block_n, head_dimension), tl.float32)
-    for query_partition in tl.static_range(query_partitions):
-        key_partial_block = tl.make_block_ptr(
-            base=key_partials + query_partition * stride_kpp + batch_index * stride_kpb + key_value_head * stride_kph,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_kps, stride_kpd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        value_partial_block = tl.make_block_ptr(
-            base=value_partials + query_partition * stride_vpp + batch_index * stride_vpb + key_value_head * stride_vph,
-            shape=(sequence_length, head_dimension),
-            strides=(stride_vps, stride_vpd),
-            offsets=(key_start, 0),
-            block_shape=(block_n, head_dimension),
-            order=(1, 0),
-        )
-        key_gradient += tl.load(key_partial_block)
-        value_gradient += tl.load(value_partial_block)
     key_cotangent_block = tl.make_block_ptr(
         base=key_cotangent + batch_index * stride_dkb + key_value_head * stride_dkh,
         shape=(sequence_length, head_dimension),
@@ -461,8 +341,6 @@ def emit_streaming_attention_backward(
     value_cotangent: torch.Tensor,
     output_dot: torch.Tensor,
     *,
-    key_cotangent_partials: torch.Tensor | None = None,
-    value_cotangent_partials: torch.Tensor | None = None,
     schedule: StreamingAttentionBackwardTileSchedule,
     num_warps: int,
     num_stages: int,
@@ -513,28 +391,6 @@ def emit_streaming_attention_backward(
         raise ValueError("saved Fold state and output-dot buffer shapes must be [batch, head, query]")
     if log_sum_exp.dtype is not torch.float32 or output_dot.dtype is not torch.float32:
         raise ValueError("saved Fold state and output-dot buffer must be FP32")
-    query_partitions = schedule.key_value_query_partitions
-    if query_partitions == 1:
-        if key_cotangent_partials is not None or value_cotangent_partials is not None:
-            raise ValueError("partial cotangent buffers are only valid for a partitioned key/value Fold")
-        key_partials = key_cotangent
-        value_partials = value_cotangent
-        key_partial_strides = (0, 0, 0, 0, 0)
-        value_partial_strides = (0, 0, 0, 0, 0)
-    else:
-        expected_partial_shape = (query_partitions, *key.shape)
-        if key_cotangent_partials is None or value_cotangent_partials is None:
-            raise ValueError("partitioned key/value Fold requires explicit partial cotangent buffers")
-        if key_cotangent_partials.shape != expected_partial_shape:
-            raise ValueError(f"key partials must have shape {expected_partial_shape}")
-        if value_cotangent_partials.shape != expected_partial_shape:
-            raise ValueError(f"value partials must have shape {expected_partial_shape}")
-        if key_cotangent_partials.dtype is not torch.float32 or value_cotangent_partials.dtype is not torch.float32:
-            raise ValueError("partitioned key/value Fold partials must be FP32")
-        key_partials = key_cotangent_partials
-        value_partials = value_cotangent_partials
-        key_partial_strides = key_partials.stride()
-        value_partial_strides = value_partials.stride()
 
     _output_dot_kernel[(output_dot.numel(),)](
         output,
@@ -579,45 +435,23 @@ def emit_streaming_attention_backward(
         num_warps=num_warps,
         num_stages=num_stages,
     )
-    _streaming_dkdv_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2], query_partitions)](
+    _streaming_dkdv_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2])](
         *common,
         key_cotangent,
         value_cotangent,
-        key_partials,
-        value_partials,
         *scalar_arguments,
         *common_strides,
         *key_cotangent.stride(),
         *value_cotangent.stride(),
-        *key_partial_strides,
-        *value_partial_strides,
         block_m,
         block_n,
         query.shape[-1],
         head_group_size,
-        query_partitions,
         lowered.causal,
         lowered.softcap is not None,
         num_warps=num_warps,
         num_stages=num_stages,
     )
-    if query_partitions > 1:
-        _finalize_dkdv_partials_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2])](
-            key_partials,
-            value_partials,
-            key_cotangent,
-            value_cotangent,
-            key.shape[1],
-            key.shape[2],
-            *key_partial_strides,
-            *value_partial_strides,
-            *key_cotangent.stride(),
-            *value_cotangent.stride(),
-            block_n,
-            key.shape[-1],
-            query_partitions,
-            num_warps=num_warps,
-        )
     return query_cotangent, key_cotangent, value_cotangent
 
 
@@ -680,7 +514,6 @@ def main() -> None:
     parser.add_argument("--block-n", type=int, choices=(16, 32, 64), default=32)
     parser.add_argument("--num-warps", type=int, choices=(4, 8), default=8)
     parser.add_argument("--num-stages", type=int, choices=(2, 3, 4), default=3)
-    parser.add_argument("--key-value-query-partitions", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=5)
@@ -705,7 +538,6 @@ def main() -> None:
             if args.mutation == "causal"
             else StreamingAttentionBackwardDomainTraversal.FULL
         ),
-        key_value_query_partitions=args.key_value_query_partitions,
     )
     work_estimate = estimate_streaming_attention_backward_work(backward, backward_schedule)
     inputs = _inputs(forward, mutation=args.mutation)
@@ -732,12 +564,6 @@ def main() -> None:
     key_cotangent = torch.empty_like(inputs["key"])
     value_cotangent = torch.empty_like(inputs["value"])
     output_dot = torch.empty_like(log_sum_exp)
-    key_cotangent_partials = None
-    value_cotangent_partials = None
-    if args.key_value_query_partitions > 1:
-        partial_shape = (args.key_value_query_partitions, *inputs["key"].shape)
-        key_cotangent_partials = torch.empty(partial_shape, dtype=torch.float32, device="cuda")
-        value_cotangent_partials = torch.empty(partial_shape, dtype=torch.float32, device="cuda")
 
     def generated_call() -> None:
         emit_streaming_attention_backward(
@@ -750,8 +576,6 @@ def main() -> None:
             key_cotangent,
             value_cotangent,
             output_dot,
-            key_cotangent_partials=key_cotangent_partials,
-            value_cotangent_partials=value_cotangent_partials,
             schedule=backward_schedule,
             num_warps=args.num_warps,
             num_stages=args.num_stages,
@@ -861,7 +685,6 @@ def main() -> None:
             "query_heads_per_key_value_tile": backward_schedule.query_heads_per_key_value_tile,
             "domain_traversal": backward_schedule.domain_traversal.value,
             "key_value_fold_order": backward_schedule.key_value_fold_order.value,
-            "key_value_query_partitions": backward_schedule.key_value_query_partitions,
             "atomic_accumulation": False,
             "static_work": {
                 "logical_query_key_tile_pairs": work_estimate.logical_query_key_tile_pairs,
@@ -883,10 +706,6 @@ def main() -> None:
                 "peak_score_tile_elements": work_estimate.peak_score_tile_elements,
                 "peak_query_tile_elements": work_estimate.peak_query_tile_elements,
                 "key_value_gradient_accumulator_elements": work_estimate.key_value_gradient_accumulator_elements,
-                "key_value_task_invocations": work_estimate.key_value_task_invocations,
-                "key_value_finalize_invocations": work_estimate.key_value_finalize_invocations,
-                "key_value_partial_elements": work_estimate.key_value_partial_elements,
-                "key_value_partial_bytes": 4 * work_estimate.key_value_partial_elements,
             },
         },
         "correctness": correctness,
