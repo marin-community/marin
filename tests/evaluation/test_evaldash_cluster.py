@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +16,6 @@ discovery = ModuleType("discovery")
 discovery.resolve_internal_ip = lambda *_args, **_kwargs: "127.0.0.1"
 sys.modules["discovery"] = discovery
 
-import cluster  # noqa: E402
 from iris.cluster.resources.attempt import AttemptSummary  # noqa: E402
 from iris.cluster.resources.identity import (  # noqa: E402
     AttemptIdentity,
@@ -30,6 +30,12 @@ from iris.cluster.resources.source import Page  # noqa: E402
 from iris.cluster.resources.task import TaskDetail, TaskSummary  # noqa: E402
 from iris.rpc import job_pb2  # noqa: E402
 from rigging.timing import Timestamp  # noqa: E402
+
+_CLUSTER_SPEC = importlib.util.spec_from_file_location("evaldash_cluster", _EVALDASH_SRC / "cluster.py")
+assert _CLUSTER_SPEC is not None and _CLUSTER_SPEC.loader is not None
+cluster = importlib.util.module_from_spec(_CLUSTER_SPEC)
+sys.modules[_CLUSTER_SPEC.name] = cluster
+_CLUSTER_SPEC.loader.exec_module(cluster)
 
 
 def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:

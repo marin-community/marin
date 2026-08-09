@@ -11,6 +11,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 import logging
 import os
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -823,7 +824,10 @@ OFFLOAD_FILE_SIZE = 32 * 1024  # 32KB — exceeds the 10KB offload threshold
 def test_workdir_file_offload(smoke_cluster):
     """A job with a workdir file above the offload threshold succeeds after blob-store offloading."""
     entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
-    entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
+    entrypoint = replace(
+        entrypoint,
+        workdir_files={**entrypoint.workdir_files, "large_payload.bin": b"\xab" * OFFLOAD_FILE_SIZE},
+    )
     job = smoke_cluster.client.submit(
         entrypoint=entrypoint,
         name=f"smoke-offload-{uuid.uuid4().hex[:8]}",

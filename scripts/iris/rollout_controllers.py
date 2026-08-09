@@ -29,10 +29,10 @@ from iris.cli.build import get_git_sha
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
 from iris.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.provenance import provenance_from_proto
 from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.resources.job import JobQuery, JobSummary
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.worker_codec import provenance_from_proto
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.provenance import Provenance
