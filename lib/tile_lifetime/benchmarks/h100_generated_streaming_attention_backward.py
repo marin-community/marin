@@ -644,6 +644,7 @@ def main() -> None:
         backward = source_backward
         recovered = None
     forward = backward.forward
+    semantic_scale = lower_score_map(forward).scale
     backward_schedule = derive_streaming_attention_backward_tile_schedule(
         backward,
         query_tile_size=args.block_m,
@@ -714,7 +715,7 @@ def main() -> None:
         k_oracle,
         v_oracle,
         is_causal=args.mutation == "causal",
-        scale=args.scale,
+        scale=semantic_scale,
         enable_gqa=q_oracle.shape[1] != k_oracle.shape[1],
     )
     oracle_cotangent = output_cotangent.transpose(1, 2)
@@ -792,6 +793,8 @@ def main() -> None:
             "key_value_heads": inputs["key"].shape[2],
             "head_dimension": inputs["query"].shape[-1],
             "mutation": args.mutation,
+            "requested_score_scale": args.scale,
+            "semantic_score_scale": semantic_scale,
             "dtype": "bfloat16",
         },
         "semantic_generation": {
