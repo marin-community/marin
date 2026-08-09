@@ -23,6 +23,10 @@ from tile_lifetime.autodiff import (
     scalar_expression_vjp,
 )
 from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
+from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
+    GeneratedCudaNormalizedExpContractForwardFfi,
+    generate_cuda_normalized_exp_contract_forward_ffi,
+)
 from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
     GeneratedCudaNormalizedExpContractReverseFfi,
     generate_cuda_normalized_exp_contract_reverse_ffi,
@@ -84,6 +88,10 @@ from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
     build_jax_collective_execution_plan,
     execute_jax_collective_completion,
+)
+from tile_lifetime.jax_normalized_exp_contract_forward_ffi import (
+    call_cuda_normalized_exp_contract_forward_ffi,
+    register_cuda_normalized_exp_contract_forward_ffi,
 )
 from tile_lifetime.jax_normalized_exp_contract_reverse_ffi import (
     call_cuda_normalized_exp_contract_reverse_ffi,
@@ -439,6 +447,15 @@ from tile_lifetime.xla_axis_fold_pipeline_ffi import (
     audit_axis_fold_pipeline_hlo_replacement,
     plan_axis_fold_pipeline_hlo_replacement,
     replace_axis_fold_pipeline_hlo_with_custom_call,
+)
+from tile_lifetime.xla_normalized_exp_contract_forward import (
+    NormalizedExpContractForwardHloRegion,
+    NormalizedExpContractForwardHloReplacementAudit,
+    NormalizedExpContractForwardHloReplacementPlan,
+    audit_normalized_exp_contract_forward_hlo_replacement,
+    plan_normalized_exp_contract_forward_hlo_replacement,
+    recover_normalized_exp_contract_forward_hlo_region,
+    replace_normalized_exp_contract_forward_hlo_region_with_custom_call,
 )
 from tile_lifetime.xla_normalized_exp_contract_reverse import (
     NormalizedExpContractReverseHloRegion,
