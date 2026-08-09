@@ -1,0 +1,378 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "generated_kernel_launches_per_step": 2,
+    "iterations_per_sample": 1000,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready; compilation excluded",
+    "warmups": 10
+  },
+  "compile_command": [
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+    "-std=c++17",
+    "-O3",
+    "-arch=sm_90a",
+    "-shared",
+    "-Xcompiler",
+    "-fPIC",
+    "-I",
+    "/app/.venv/lib/python3.12/site-packages/jaxlib/include",
+    "/tmp/shuttle-contract-map-chain-h100-239/run/generated/generated_contract_map_chain.cu",
+    "-o",
+    "/tmp/shuttle-contract-map-chain-h100-239/run/generated/generated_contract_map_chain.so",
+    "-cudart=none",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
+    "-L",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nvshmem/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/nvshmem/lib",
+    "-Xlinker",
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13"
+  ],
+  "correctness": {
+    "matched_natural_jax_forward_vjp": {
+      "first_weight_adjoint": {
+        "maximum_absolute_error": 0.0001220703125,
+        "mean_absolute_error": 1.3518314517568797e-05
+      },
+      "input_adjoint": {
+        "maximum_absolute_error": 0.0009765625,
+        "mean_absolute_error": 6.943941116333008e-05
+      },
+      "output": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "second_weight_adjoint": {
+        "maximum_absolute_error": 0.00018310546875,
+        "mean_absolute_error": 9.366252015752252e-06
+      }
+    },
+    "ordered_cpu": {
+      "first_weight_adjoint": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "input_adjoint": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "output": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "second_weight_adjoint": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      }
+    }
+  },
+  "determinism": {
+    "output_hashes": [
+      [
+        "496afdc28473e0116fdd4d792d377e3f47e768a0acfe80b76c2a8c2a2dc1cee5",
+        "0a1449d36f9ec9e5be8c2652ecb57a7c05b0d978e38f3bbd11b19e4b8a8ea31e",
+        "b82381c8cf27164c492f1a49282d6fb874eef8f8b7713d78ee8061caf4f8dd37",
+        "2255cfcee070bbc9fe2bf77740f5b96bae915a65e4c44d33ae0637e8ff63c956"
+      ],
+      [
+        "496afdc28473e0116fdd4d792d377e3f47e768a0acfe80b76c2a8c2a2dc1cee5",
+        "0a1449d36f9ec9e5be8c2652ecb57a7c05b0d978e38f3bbd11b19e4b8a8ea31e",
+        "b82381c8cf27164c492f1a49282d6fb874eef8f8b7713d78ee8061caf4f8dd37",
+        "2255cfcee070bbc9fe2bf77740f5b96bae915a65e4c44d33ae0637e8ff63c956"
+      ],
+      [
+        "496afdc28473e0116fdd4d792d377e3f47e768a0acfe80b76c2a8c2a2dc1cee5",
+        "0a1449d36f9ec9e5be8c2652ecb57a7c05b0d978e38f3bbd11b19e4b8a8ea31e",
+        "b82381c8cf27164c492f1a49282d6fb874eef8f8b7713d78ee8061caf4f8dd37",
+        "2255cfcee070bbc9fe2bf77740f5b96bae915a65e4c44d33ae0637e8ff63c956"
+      ]
+    ],
+    "output_names": [
+      "output",
+      "input_adjoint",
+      "first_weight_adjoint",
+      "second_weight_adjoint"
+    ],
+    "trials": 3
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jaxlib": "0.11.0",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ],
+    [
+      "generated_two_ffi_calls",
+      "matched_natural_jax_forward_vjp"
+    ],
+    [
+      "matched_natural_jax_forward_vjp",
+      "generated_two_ffi_calls"
+    ]
+  ],
+  "fixture": {
+    "input_hashes": {
+      "activation": "ab6a52863aebf98c5576b7c7453aa72ac58830aa114c91ff85d6a5618b52f49f",
+      "first_weight": "e19f3d46bef0c5c33ba6aafce80e77a809a64e1b5c16d278ad1f590bada0fb75",
+      "output_cotangent": "7846ffce0f45e249627626c53a22339de2cf902ae6bff4f833a8df016874168c",
+      "second_weight": "aeeab15534feffa009e54a29460b96ec9e969ce155683f917c91113206da16bd"
+    },
+    "seed": 20260809
+  },
+  "frontend": {
+    "jax_owns_ad": true,
+    "reference": "ordinary JAX two-Contract scalar-Map forward differentiated by jax.vjp",
+    "stablehlo_sha256": "e48affcb2d2c3d620e9753666399a91f28547af023f0c3fef7b6034278f70d2b"
+  },
+  "generated": {
+    "expected_handler_count_each": 30013,
+    "forward_shared_bytes": 4096,
+    "forward_target": "shuttle.generic.contract_map_chain.forward.h100",
+    "handler_counts": {
+      "forward": 30013,
+      "reverse": 30013
+    },
+    "reverse_shared_bytes": 2560,
+    "reverse_target": "shuttle.generic.contract_map_chain.reverse.h100",
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_digest": "7bf1bafa3966278fdc46de0e149a2a9fff050105f7f3474fa56319c44a31380a",
+    "source_audit": {
+      "has_atomics": false,
+      "has_explicit_bf16_contract_boundaries": true,
+      "has_generated_forward_maps": true,
+      "has_generated_reverse_maps": true,
+      "has_handler_counters": true,
+      "kernel_count": 2,
+      "opaque_semantic_dependencies": []
+    },
+    "source_digest": "3e679b2aa5cc3b1fbeb6347d66aa5ea23bb7b393bb9c465beea3fc21f6122f6c",
+    "threads": 256
+  },
+  "measurements": {
+    "generated_two_ffi_calls": {
+      "median_ms": 0.058898869501717854,
+      "minimum_ms": 0.058848887005297,
+      "samples_ms": [
+        0.05884975199296605,
+        0.05889678100356832,
+        0.058979979003197514,
+        0.058866475003014784,
+        0.0589769090001937,
+        0.05887245600024471,
+        0.05894551900564693,
+        0.058858648997556884,
+        0.05894463499862468,
+        0.0588712349999696,
+        0.05894611099938629,
+        0.05884974399668863,
+        0.058958107998478226,
+        0.058848887005297,
+        0.058925425000779796,
+        0.05889181399834342,
+        0.058966233002138324,
+        0.05886036599986255,
+        0.058959922003850807,
+        0.0588706810012809,
+        0.05894594200071879,
+        0.05887766600062605,
+        0.05893288399965968,
+        0.05890095799986739,
+        0.058956562003004365,
+        0.05888809099997161,
+        0.05898071300180163,
+        0.05886464799550595,
+        0.05894764300319366,
+        0.05888266699912492
+      ]
+    },
+    "matched_natural_jax_forward_vjp": {
+      "median_ms": 0.03779946099894005,
+      "minimum_ms": 0.03641078100190498,
+      "samples_ms": [
+        0.03641078100190498,
+        0.037517174998356495,
+        0.03741923099732958,
+        0.037263733000145294,
+        0.03777551800158108,
+        0.037681545996747445,
+        0.037886026002524886,
+        0.03783519400167279,
+        0.03772429499804275,
+        0.03928480299509829,
+        0.03782340399629902,
+        0.03818558100465452,
+        0.03807716599840205,
+        0.038062983003328554,
+        0.03815471500274725,
+        0.03829215899895644,
+        0.039521705999504775,
+        0.03821427899674745,
+        0.03952329300227575,
+        0.03697068000474246,
+        0.03719796699442668,
+        0.0370977659986238,
+        0.03755487700254889,
+        0.03743433500494575,
+        0.03766095500031952,
+        0.037662163995264564,
+        0.03797418599424418,
+        0.038036338002712,
+        0.037739398001576774,
+        0.03792924099980155
+      ]
+    }
+  },
+  "mode": "one_h100_contract_map_training_component",
+  "numerical_contract": {
+    "Contracts": "fixed ordered FP32 multiply/add; BF16 RNE output",
+    "Maps": "JAX-recovered source-ordered BF16 scalar ASTs",
+    "error_guard": {
+      "maximum_absolute_error": 0.0078125,
+      "mean_absolute_error": 0.0005
+    },
+    "weight_adjoints": "BF16 RNE before the surrounding FP32 optimizer conversion"
+  },
+  "ratio_generated_to_natural_jax": 1.5581933695660228,
+  "revision": "239372d31dc8e52b63c42c0321f38483e6d66034",
+  "schema_version": 1,
+  "shape": {
+    "input_features": 32,
+    "rank": 128,
+    "rows": 8
+  }
+}

@@ -1,0 +1,28 @@
+Holder job:
+
+/dlwh/dev-gpu-dlwh-shuttle-contract-map-chain-h100-239
+
+Controller lifecycle:
+
+submitted_at: 2026-08-09T23:38:29.763Z
+started_at: 2026-08-09T23:38:36.071Z
+finished_at: 2026-08-09T23:41:15.966Z
+state: JOB_STATE_KILLED
+error: Terminated by user
+failure_count: 0
+active_jobs: []
+
+Local holder state:
+
+session-state-absent
+
+Exact pod query after release:
+
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-gpu_US-EAST-02A --namespace iris get pods \
+  -l iris.task_id=dlwh.dev-gpu-dlwh-shuttle-contract-map-chain-h100-239.0 \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.status.phase}{"\\n"}{end}'
+
+Output: <empty>
+
+No controller job, pod, or local holder session remains active.

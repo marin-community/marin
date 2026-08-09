@@ -1,0 +1,49 @@
+Measured Shuttle revision:
+
+239372d31dc8e52b63c42c0321f38483e6d66034
+
+Source archive:
+
+d63b9afff367c0345d99fc6d4a68f787cddbd7f07a0619e62a5a4e30c7f2c9ed  shuttle-contract-map-239372d31d.tar.gz
+
+Allocation-control revision:
+
+eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+
+Holder request:
+
+uv run --project /private/tmp/marin-iris-current.JoCV0V \
+  --package marin-iris --extra controller \
+  /private/tmp/marin-iris-current.JoCV0V/scripts/iris/dev_gpu.py \
+  --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-contract-map-chain-h100-239 allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 1 --memory 32GB --disk 50GB --timeout 1800 --pod-timeout 300
+
+In-pod environment:
+
+uv pip install --python /app/.venv/bin/python \
+  'jax==0.11.0' 'jaxlib==0.11.0' \
+  'jax-cuda13-plugin==0.11.0' 'jax-cuda13-pjrt==0.11.0' \
+  nvidia-cuda-cccl
+uv pip install --python /app/.venv/bin/python 'jax[cuda13]==0.11.0'
+
+Compile/link/load preflight appended `--preflight-only` to the benchmark
+invocation below and wrote `preflight.json`.
+
+Single benchmark invocation:
+
+PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD" /app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py \
+  --hlo-fixture \
+    lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/transformed-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-contract-map-chain-h100-239/run/generated \
+  --json-output /tmp/shuttle-contract-map-chain-h100-239/run/result.json \
+  --shuttle-revision 239372d31dc8e52b63c42c0321f38483e6d66034 \
+  --require-jax-version 0.11.0 --threads 256 --seed 20260809 \
+  --warmups 10 --repeats 30 --iterations 1000
+
+No second benchmark invocation was made.
+

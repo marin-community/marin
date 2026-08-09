@@ -3290,3 +3290,28 @@ author: dlwh
 - The local macOS environment correctly fails the new preflight because its JAX
   build lacks `jax.extend.xla`. A future H100 submission must pass the same CLI
   preflight in its exact task environment before allocation or execution.
+
+### 2026-08-09 - TLTC-XLA-061 fixed-layout Contract/Map H100 component
+
+- Revision `239372d31d` converts recovered minor-to-major output layouts to the
+  major-to-minor order expected by JAX typed FFI. Eighteen focused tests and
+  changed-files pre-commit passed before allocation, and the transferred source
+  archive contains the conversion for dX, dW0, and dW1.
+- One fixed-protocol batch-priority H100 replay used JAX, JAXLIB, CUDA plugin,
+  and PJRT 0.11.0 with NVCC 13.3.73. Compile/link/load preflight passed with
+  fresh handler counts at zero, two generated kernels, no atomics, explicit
+  BF16 Contract boundaries, and no opaque semantic dependency.
+- All ordered-CPU outputs are bitwise equal. Natural-JAX maximum errors are
+  `0.0009765625` for dX, `0.0001220703` for dW0, and `0.0001831055` for dW1;
+  output is bitwise equal. Three repeated generated executions have identical
+  hashes. Forward and reverse handler counts are both exactly `30,013`.
+- Thirty counterbalanced samples with 1,000 iterations each measure
+  `0.05889887 ms` for the generated two-call path and `0.03779946 ms` for
+  matched natural JAX forward plus VJP, a `1.558193x` ratio. The standalone
+  component is correct but misses the 1.20 performance target and remains
+  unaccepted. It is a one-CTA scalar implementation, not a whole-Grug result.
+- No tuning, retry, or profiler invocation followed. The holder was explicitly
+  terminated; the controller has no active matching job, the task-label pod is
+  absent, and the local session state is absent. Raw samples, generated source,
+  StableHLO, optimized HLO, environment, invocation, and release proof are under
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.

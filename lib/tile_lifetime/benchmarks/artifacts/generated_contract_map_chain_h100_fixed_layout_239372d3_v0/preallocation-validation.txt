@@ -1,0 +1,21 @@
+Exact source revision:
+
+239372d31dc8e52b63c42c0321f38483e6d66034
+
+Focused CPU/static tests before allocation:
+
+PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD" python -m pytest -q \
+  lib/tile_lifetime/tests/test_jax_contract_map_chain_ffi.py \
+  lib/tile_lifetime/tests/test_contract_map_chain.py \
+  lib/tile_lifetime/tests/test_xla_low_rank_gated_product.py
+
+Result: 18 passed.
+
+Changed-files pre-commit result: pass, including Pyrefly.
+
+The source archive was inspected before allocation. It contains
+`to_jax_ffi_layout` and applies it to dX, dW0, and dW1 output layouts.
+
+The current-Iris holder project defined `[dependency-groups] dev = []`, passed
+`uv sync --group dev`, and produced a 465-byte compressed controller bundle.
+
