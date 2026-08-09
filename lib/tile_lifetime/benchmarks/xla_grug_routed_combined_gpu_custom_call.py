@@ -11,6 +11,7 @@ import ctypes
 import hashlib
 import importlib
 import json
+import re
 import statistics
 import subprocess
 import tempfile
@@ -52,6 +53,7 @@ from tile_lifetime.streaming_attention_backward_reference import (
     export_debug_streaming_attention_backward,
 )
 from tile_lifetime.xla_axis_fold_ffi import recover_axis_fold_hlo_region_candidates
+from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import RoutedInputAdjointFfiOperandRole
 from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ffi
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
@@ -90,6 +92,29 @@ _TARGETS = RoutedTrainingAttentionAndAxisFoldFfiTargets(
         "shuttle.routed_training.axis_fold.1.v1",
     ),
 )
+_CUSTOM_CALL_TARGET_ATTRIBUTE = re.compile(r'(?:^|,\s*)custom_call_target="(?P<target>[^"]+)"(?=,|$)')
+
+
+def _single_custom_call_target_occurrences(hlo_text: str, targets: tuple[str, ...]) -> dict[str, int]:
+    """Count exact target attributes and require one call for every selected target."""
+    module = parse_hlo_module_text(hlo_text)
+    counts = dict.fromkeys(targets, 0)
+    for computation in module.computations:
+        for instruction in computation.instructions:
+            if instruction.opcode != "custom-call":
+                continue
+            attributes = _CUSTOM_CALL_TARGET_ATTRIBUTE.findall(instruction.attributes)
+            if len(attributes) != 1:
+                raise RuntimeError(
+                    f"custom-call %{instruction.name} has {len(attributes)} exact custom_call_target attributes"
+                )
+            target = attributes[0]
+            if target in counts:
+                counts[target] += 1
+    invalid = {target: count for target, count in counts.items() if count != 1}
+    if invalid:
+        raise RuntimeError(f"expected one exact custom-call target attribute per selected target, found {invalid}")
+    return counts
 
 
 def _attention_reverse_program() -> tuple[Any, Any, bytes]:
@@ -210,6 +235,14 @@ def run_smoke(
     libraries: dict[str, ctypes.CDLL] = {}
     runtime_dependencies: dict[str, tuple[str, ...]] = {}
     attention_library_path: Path | None = None
+    selected_targets = (
+        _TARGETS.routed_attention.routed.forward,
+        _TARGETS.routed_attention.routed.input_adjoint,
+        *_TARGETS.routed_attention.routed.weight_gradients,
+        _TARGETS.routed_attention.attention_backward,
+        *_TARGETS.axis_folds,
+    )
+    exact_target_occurrences: dict[str, int] | None = None
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
@@ -365,6 +398,17 @@ def run_smoke(
                     stage=xla.PipelineStage.PRE_SCHEDULER,
                     platforms="cuda",
                 )
+            if len(transformed_modules) != 1:
+                raise RuntimeError("expected one transformed HLO module before execution")
+            if artifact_directory is not None:
+                write_gzip_text(
+                    directory / "transformed-gpu-pre-scheduler-hlo.txt.gz",
+                    transformed_modules[0],
+                )
+            exact_target_occurrences = _single_custom_call_target_occurrences(
+                transformed_modules[0],
+                selected_targets,
+            )
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
             comparison = _compare_under_ordered_fp(expected, actual)
@@ -450,19 +494,20 @@ def run_smoke(
     ):
         raise RuntimeError("expected one combined routed-plus-attention-plus-Fold replacement pass")
     original = original_modules[0]
-    transformed_hlo = transformed_modules[0]
     plan = recovered_plans[0]
     replacement_audit = replacement_audits[0]
     attention_liveness = attention_liveness_audits[0]
     forward, input_adjoint, weights, compiled_attention, generated_axis_folds = generated_programs[0]
+    if exact_target_occurrences is None:
+        raise RuntimeError("exact custom-call target validation did not run before execution")
     target_occurrences = {
-        "forward": transformed_hlo.count(_TARGETS.routed_attention.routed.forward),
-        "input_adjoint": transformed_hlo.count(_TARGETS.routed_attention.routed.input_adjoint),
+        "forward": exact_target_occurrences[_TARGETS.routed_attention.routed.forward],
+        "input_adjoint": exact_target_occurrences[_TARGETS.routed_attention.routed.input_adjoint],
         "weight_gradients": [
-            transformed_hlo.count(target) for target in _TARGETS.routed_attention.routed.weight_gradients
+            exact_target_occurrences[target] for target in _TARGETS.routed_attention.routed.weight_gradients
         ],
-        "attention_backward": transformed_hlo.count(_TARGETS.routed_attention.attention_backward),
-        "axis_folds": [transformed_hlo.count(target) for target in _TARGETS.axis_folds],
+        "attention_backward": exact_target_occurrences[_TARGETS.routed_attention.attention_backward],
+        "axis_folds": [exact_target_occurrences[target] for target in _TARGETS.axis_folds],
     }
     minimum_calls = repeats + warmup + 1
     observed_calls = [
@@ -472,15 +517,29 @@ def run_smoke(
         call_counts["attention_backward"],
         *call_counts["axis_folds"],
     ]
-    observed_occurrences = [
-        target_occurrences["forward"],
-        target_occurrences["input_adjoint"],
-        *target_occurrences["weight_gradients"],
-        target_occurrences["attention_backward"],
-        *target_occurrences["axis_folds"],
-    ]
-    if observed_occurrences != [1, 1, 1, 1, 1, 1, 1] or any(count < minimum_calls for count in observed_calls):
-        raise RuntimeError(f"custom-call evidence mismatch: occurrences={observed_occurrences}, calls={observed_calls}")
+
+    def fail_after_execution(message: str) -> None:
+        if artifact_directory is not None:
+            evidence = {
+                "status": "unaccepted",
+                "reason": message,
+                "minimum_custom_call_handler_executions": minimum_calls,
+                "custom_call_occurrences_in_transformed_hlo": target_occurrences,
+                "custom_call_handler_executions": call_counts,
+                "baseline_samples_ms": baseline_samples,
+                "generated_samples_ms": transformed_samples,
+                "baseline_output_hashes": baseline_hashes,
+                "generated_output_hashes": transformed_hashes,
+                "raw_samples": raw_samples,
+                "comparison": comparison,
+            }
+            (directory / "unaccepted-execution-result.json").write_text(
+                json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+            )
+        raise RuntimeError(message)
+
+    if any(count < minimum_calls for count in observed_calls):
+        fail_after_execution(f"custom-call handler evidence mismatch: minimum={minimum_calls}, calls={observed_calls}")
     all_operands = tuple(
         dict.fromkeys(
             (
@@ -503,13 +562,11 @@ def run_smoke(
         if not parameter_ancestors[operand.value.instruction]
     )
     if static_roles != (RoutedInputAdjointFfiOperandRole.FOLD_INITIAL.value,):
-        raise RuntimeError(f"unexpected routed training static operands: {static_roles}")
+        fail_after_execution(f"unexpected routed training static operands: {static_roles}")
     baseline_median = statistics.median(baseline_samples)
     transformed_median = statistics.median(transformed_samples)
     if len(set(transformed_hashes)) != 1:
-        raise RuntimeError("generated seven-call result is not bitwise deterministic")
-    if artifact_directory is not None:
-        write_gzip_text(directory / "transformed-gpu-pre-scheduler-hlo.txt.gz", transformed_hlo)
+        fail_after_execution("generated seven-call result is not bitwise deterministic")
     return {
         "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
         "jax_version": jax.__version__,
