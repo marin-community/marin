@@ -8,6 +8,12 @@ The first lowering accepts a verified, exact, CTA-scope plan with one consumer a
 
 The first checkpoint does not support phased persistent reuse, device-wide semaphores, coarsened events, or multiple consumers per event. Unsupported plans are rejected before source generation.
 
+The benchmark currently uses a Torch C++ extension only as a rapid CUDA
+compile/load harness. Torch is not part of the intended compiler contract. A
+promoted lowering should expose the same generated body through Shuttle's JAX
+typed-FFI registration path, with JAX owning model-level autodiff and Shuttle
+recovering task dependencies from the differentiated program.
+
 ## Pre-hardware validation
 
 ```bash
