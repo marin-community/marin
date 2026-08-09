@@ -1,0 +1,55 @@
+Revision: 0cfc5d2e81
+Branch: research/shuttle-normalized-exp-forward-h100
+
+Allocation:
+
+uv run --package marin-iris --extra controller scripts/iris/dev_gpu.py \
+  --config lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-normalized-exp-forward-h100 allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 4 --memory 64GB --disk 100GB --timeout 1800 --pod-timeout 300
+
+The task image was synchronized with the branch's tile-lifetime source, the
+benchmark harness, and the preserved natural-Grug HLO fixture. GPU JAX was
+installed with `uv sync --all-packages --extra=gpu`. The pip CUDA compiler
+required the CCCL headers, installed with:
+
+uv pip install --python /app/.venv/bin/python nvidia-cuda-cccl
+
+Compile/link/load-only preflight, run before the generated GPU invocation:
+
+PYTHONPATH=/app/lib/tile_lifetime/src /app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/jax_generated_normalized_exp_contract_forward.py \
+  --hlo-fixture lib/tile_lifetime/benchmarks/artifacts/\
+xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/\
+original-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-normalized-exp-forward/preflight/generated \
+  --json-output /tmp/shuttle-normalized-exp-forward/preflight/preflight.json \
+  --shuttle-revision 0cfc5d2e81 --preflight-only
+
+Single generated H100 invocation:
+
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/app/lib/tile_lifetime/src \
+  /app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/jax_generated_normalized_exp_contract_forward.py \
+  --hlo-fixture lib/tile_lifetime/benchmarks/artifacts/\
+xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/\
+original-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-normalized-exp-forward/h100/generated \
+  --json-output /tmp/shuttle-normalized-exp-forward/h100/result.json \
+  --shuttle-revision 0cfc5d2e81 --threads 256 --seed 20260809 \
+  --warmups 10 --repeats 30 --iterations 1000
+
+Release and absence check:
+
+uv run --package marin-iris --extra controller scripts/iris/dev_gpu.py \
+  --config lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-normalized-exp-forward-h100 release
+
+uv run --package marin-iris --extra controller scripts/iris/dev_gpu.py \
+  --config lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-normalized-exp-forward-h100 status

@@ -1,0 +1,327 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "iterations_per_sample": 1000,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready; compilation excluded",
+    "warmups": 10
+  },
+  "correctness": {
+    "independent_natural_jax_forward": {
+      "loss": {
+        "maximum_absolute_error": 4.76837158203125e-07,
+        "mean_absolute_error": 1.1920928955078125e-07
+      },
+      "saved_state": {
+        "maximum_absolute_error": 4.76837158203125e-07,
+        "mean_absolute_error": 1.1920928955078125e-07
+      }
+    },
+    "matched_explicit_jax_forward": {
+      "loss": {
+        "maximum_absolute_error": 4.76837158203125e-07,
+        "mean_absolute_error": 1.1920928955078125e-07
+      },
+      "saved_state": {
+        "maximum_absolute_error": 4.76837158203125e-07,
+        "mean_absolute_error": 1.1920928955078125e-07
+      }
+    }
+  },
+  "determinism": {
+    "output_hashes": [
+      [
+        "c73adaf0cd2b63d8f15b8ba02dc707f7baf25aeda67100030ff38ac5563fbab6",
+        "1c6d3f42785bf8073918ba686dee998f7c0ae208b39f88d08ca780a3e624efa6"
+      ],
+      [
+        "c73adaf0cd2b63d8f15b8ba02dc707f7baf25aeda67100030ff38ac5563fbab6",
+        "1c6d3f42785bf8073918ba686dee998f7c0ae208b39f88d08ca780a3e624efa6"
+      ],
+      [
+        "c73adaf0cd2b63d8f15b8ba02dc707f7baf25aeda67100030ff38ac5563fbab6",
+        "1c6d3f42785bf8073918ba686dee998f7c0ae208b39f88d08ca780a3e624efa6"
+      ]
+    ],
+    "trials": 3
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_natural_jax_forward"
+    ],
+    [
+      "matched_natural_jax_forward",
+      "generated_ffi"
+    ]
+  ],
+  "fixture": {
+    "fold_invalid_count": 29,
+    "fold_valid_count": 99,
+    "input_hashes": {
+      "fold_validity": "281b29f1c9438b44eebe65c54a00a960b4e46860dda14d046f90b9331063062a",
+      "lhs": "032fbb06bb77edc2a59e49d928d61e772475a51b6f54f15feac3e6215e76eeea",
+      "rhs": "949f413eb76cdf0199d637d1241d37f7749578f5113bbbd6d9eff4eb04114159",
+      "selected_indices": "336c2c356dc8756a2b74deecc6cc572c3e08e44917508523a34fb8faee68d0a9"
+    },
+    "invalid_row_count": 2,
+    "row_validity": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ],
+    "seed": 20260809,
+    "selected_indices": [
+      1,
+      -1,
+      31,
+      47,
+      0,
+      79,
+      101,
+      127
+    ]
+  },
+  "frontend": {
+    "jax_owns_ad": true,
+    "reference": "ordinary JAX BF16 Contract and normalized-exponential indexed objective",
+    "stablehlo_sha256": "5c4a7d7a238fa4369b95033f9a3ef734547bb863bd35761332b19a71e598c545"
+  },
+  "generated": {
+    "expected_handler_count": 30013,
+    "handler_count": 30013,
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_forward_h100_identity",
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_digest": "00ca09d957969c8782a1d56ad2345d20bb1240c2d16ed3cd3a90c537472d290a",
+    "shared_bytes": 2048,
+    "source_digest": "48b5b8bcf49f72f3071efbfcf98a7a3e691a63d0ab1069494f9092f62397b673",
+    "target": "shuttle.generic.normalized_exp_contract_forward.h100_identity",
+    "threads": 256
+  },
+  "measurements": {
+    "generated_ffi": {
+      "median_ms": 0.05500352949820808,
+      "minimum_ms": 0.03689711000333773,
+      "samples_ms": [
+        0.054865361998963635,
+        0.05519157899834681,
+        0.05499776599754114,
+        0.05532371300068917,
+        0.05517364700062899,
+        0.05512779900163878,
+        0.056439182997564785,
+        0.055323997999948915,
+        0.055020334002620075,
+        0.05507684400072321,
+        0.055009292998875026,
+        0.05578422100370517,
+        0.05583948500134284,
+        0.055094103001465555,
+        0.055211477003467735,
+        0.055363681000017095,
+        0.055299683001067024,
+        0.038676317999488674,
+        0.038682248996337876,
+        0.038806955999461934,
+        0.03839678499934962,
+        0.03898343299806584,
+        0.03901162400143221,
+        0.0406648460048018,
+        0.038791927996499,
+        0.03821190699818544,
+        0.0384012279973831,
+        0.03892734900000505,
+        0.038805304997367784,
+        0.03689711000333773
+      ]
+    },
+    "matched_natural_jax_forward": {
+      "median_ms": 0.0580333644975326,
+      "minimum_ms": 0.04318929700093577,
+      "samples_ms": [
+        0.06255881799734198,
+        0.059605194997857325,
+        0.06058794500131626,
+        0.06020767899462953,
+        0.0568541459942935,
+        0.06079663200216601,
+        0.059757256000011694,
+        0.05867817299440503,
+        0.06021730799693614,
+        0.06019530199409928,
+        0.05981511199934175,
+        0.06080529500468401,
+        0.06072351399780018,
+        0.061956538003869355,
+        0.06028832899755798,
+        0.0615617570001632,
+        0.057388556000660174,
+        0.04354058799799532,
+        0.044910507000167854,
+        0.04318929700093577,
+        0.0447303320033825,
+        0.044889980999869294,
+        0.044690642003843095,
+        0.045080117000907194,
+        0.04621291699731955,
+        0.04604923100123415,
+        0.046606823001638986,
+        0.04443979300413048,
+        0.044097445002989843,
+        0.043259243000647984
+      ]
+    }
+  },
+  "mode": "one_h100_proof_of_execution",
+  "numerical_contract": {
+    "error_guard": {
+      "maximum_absolute_error": 2e-05,
+      "mean_absolute_error": 2e-06
+    },
+    "fold_order": "generated ordered FP32 loops; XLA may choose another FP32 reduction tree",
+    "invalid_row_output": "zero loss and zero saved state",
+    "matched_vs_natural_error": {
+      "loss": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      },
+      "saved_state": {
+        "maximum_absolute_error": 0.0,
+        "mean_absolute_error": 0.0
+      }
+    },
+    "relaxed_boundary_hashes_differ": true,
+    "score_contract_output": "FP32 accumulation rounded to BF16 RNE before normalized-exp Map/Fold"
+  },
+  "ratio_generated_to_matched_jax": 0.9477914984671733,
+  "revision": "0cfc5d2e81",
+  "schema_version": 1,
+  "shape": {
+    "fold_extent": 128,
+    "reduction": 32,
+    "rows": 8
+  }
+}

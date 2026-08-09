@@ -3039,3 +3039,26 @@ author: dlwh
     --warmup 4 \
     --repeats 30
   ```
+
+### 2026-08-09 - TLTC-XLA-051 normalized-exp forward physical proof
+
+- A compile/link/load-only preflight built both identity and tanh-softcap score
+  Maps for the generated compact normalized-exp forward. Both `sm_90a` typed-FFI
+  symbols resolved before the generated GPU invocation. The mutation retained
+  the same generic physical extents and was not run on the GPU.
+- The single authorized H100 invocation executed `[8,32] @ [32,128]` through
+  Torch-free JAX typed FFI. The fixture contains 29 restricted Fold positions,
+  two invalid rows, and nontrivial selected indices including an out-of-range
+  sentinel and a restricted coordinate.
+- Maximum error versus matched explicit JAX and an independent natural JAX
+  formulation is `4.76837158203125e-07` for both loss and saved state. Three
+  generated executions have identical hashes, and the handler count is exactly
+  `30,013`. Removing the explicit BF16 score boundary changes output hashes.
+- Thirty counterbalanced samples measured `0.055004 ms` for generated FFI and
+  `0.058033 ms` for matched JAX, or `0.947791x`. The raw samples cross two clock
+  regimes; the median paired ratio is `0.900688x`. No tuning or second physical
+  invocation was run.
+- This is a bounded component result, not a full-Grug or attention-forward
+  acceptance result. The batch-priority one-H100/four-CPU allocation was
+  released, and both session status and pod lookup verified it absent. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_normalized_exp_contract_forward_h100_v0/`.
