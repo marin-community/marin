@@ -55,7 +55,13 @@ class NormalizedExpContractForwardHloReplacementAudit:
     """Post-replacement liveness evidence for the compact forward call."""
 
     call_instruction: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
     rewired_external_users: tuple[tuple[str, tuple[str, ...]], ...]
+    dead_instructions: tuple[str, ...]
+    retained_boundary_instructions: tuple[str, ...]
+    output_users: tuple[tuple[str, tuple[str, ...]], ...]
+    api_version: int
 
 
 def recover_normalized_exp_contract_forward_hlo_region(hlo_text: str) -> NormalizedExpContractForwardHloRegion:
@@ -208,12 +214,16 @@ def replace_normalized_exp_contract_forward_hlo_region_with_custom_call(
 
 
 def audit_normalized_exp_contract_forward_hlo_replacement(
+    original_hlo: str,
     transformed_hlo: str,
     plan: NormalizedExpContractForwardHloReplacementPlan,
     *,
     target: str,
+    expected_output_users: tuple[tuple[str, ...], ...] | None = None,
 ) -> NormalizedExpContractForwardHloReplacementAudit:
-    """Verify one generated call and no surviving external old-output edge."""
+    """Verify one exact generated boundary and removal of old forward work."""
+    original_module = parse_hlo_module_text(original_hlo)
+    original_entry = original_module.computation(original_module.entry)
     module = parse_hlo_module_text(transformed_hlo)
     entry = module.computation(module.entry)
     instructions = {instruction.name: instruction for instruction in entry.instructions}
@@ -224,11 +234,61 @@ def audit_normalized_exp_contract_forward_hlo_replacement(
     )
     if len(calls) != 1:
         raise ValueError(f"expected one generated forward call for {target!r}, found {len(calls)}")
+    call = calls[0]
+    expected_inputs = tuple(value.instruction for value in plan.inputs)
+    if call.operands != expected_inputs:
+        raise ValueError("normalized-exponential forward call changed its input boundary")
+    if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
+        raise ValueError("normalized-exponential forward call is not typed FFI API version 1")
+    call_outputs = tuple(f"{call.name}.output.{index}" for index in range(len(plan.outputs)))
+    for index, (name, expected) in enumerate(zip(call_outputs, plan.outputs, strict=True)):
+        output = instructions.get(name)
+        if output is None or output.opcode != "get-tuple-element" or output.operands != (call.name,):
+            raise ValueError(f"normalized-exponential forward output {index} changed its tuple boundary")
+        if output.shape != expected.shape or f"index={index}" not in output.attributes:
+            raise ValueError(f"normalized-exponential forward output {index} changed its result ABI")
     for output, users in plan.external_users:
         for user in users:
             if output in instructions[user].operands:
                 raise ValueError(f"external user %{user} still consumes old forward output %{output}")
-    return NormalizedExpContractForwardHloReplacementAudit(calls[0].name, plan.external_users)
+    live = _live_entry_instructions(entry)
+    transformed_users = _entry_users(entry)
+    actual_output_users = tuple(
+        (name, tuple(user for user in transformed_users[name] if user in live)) for name in call_outputs
+    )
+    required_output_users = expected_output_users or tuple(users for _, users in plan.external_users)
+    if len(required_output_users) != len(call_outputs):
+        raise ValueError("normalized-exponential forward audit has the wrong output-user arity")
+    for (name, actual), expected in zip(actual_output_users, required_output_users, strict=True):
+        if actual != expected:
+            raise ValueError(f"normalized-exponential forward output %{name} changed its consumers")
+    internal = frozenset(plan.region.internal_instructions)
+    replaced_outputs = frozenset(value.instruction for value in plan.outputs)
+    original_users = _entry_users(original_entry)
+    shared_roots = tuple(
+        instruction
+        for instruction in internal
+        if instruction not in replaced_outputs and any(user not in internal for user in original_users[instruction])
+    )
+    retained_boundary = _ancestor_closure(original_entry, (*expected_inputs, *shared_roots))
+    dead = tuple(
+        instruction for instruction in plan.region.internal_instructions if instruction not in retained_boundary
+    )
+    still_live = tuple(instruction for instruction in dead if instruction in live)
+    if still_live:
+        raise ValueError(f"replaced normalized-exponential forward arithmetic remains live: {still_live}")
+    return NormalizedExpContractForwardHloReplacementAudit(
+        call_instruction=call.name,
+        inputs=expected_inputs,
+        outputs=call_outputs,
+        rewired_external_users=plan.external_users,
+        dead_instructions=dead,
+        retained_boundary_instructions=tuple(
+            instruction for instruction in plan.region.internal_instructions if instruction in retained_boundary
+        ),
+        output_users=actual_output_users,
+        api_version=plan.api_version,
+    )
 
 
 def _contract(instructions: dict[str, HloInstruction], instruction: HloInstruction) -> NormalizedExpReverseContract:
@@ -333,6 +393,23 @@ def _entry_users(entry: HloComputation) -> dict[str, tuple[str, ...]]:
         for operand in instruction.operands:
             mutable.setdefault(operand, []).append(instruction.name)
     return {name: tuple(values) for name, values in mutable.items()}
+
+
+def _ancestor_closure(entry: HloComputation, roots: tuple[str, ...]) -> frozenset[str]:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    ancestors: set[str] = set()
+    stack = list(roots)
+    while stack:
+        name = stack.pop()
+        if name in ancestors:
+            continue
+        ancestors.add(name)
+        stack.extend(instructions[name].operands)
+    return frozenset(ancestors)
+
+
+def _live_entry_instructions(entry: HloComputation) -> frozenset[str]:
+    return _ancestor_closure(entry, (entry.root.name,))
 
 
 def _shape(shape: str) -> tuple[int, ...]:

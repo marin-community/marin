@@ -98,7 +98,17 @@ def test_natural_grug_normalized_exp_reverse_region_roundtrips_through_typed_ffi
         "bf16[32,128]{1,0}",
     )
     assert audit.call_instruction == "shuttle.generated.normalized_exp_contract_reverse"
+    assert audit.inputs == tuple(value.instruction for value in plan.inputs)
+    assert audit.outputs == (
+        "shuttle.generated.normalized_exp_contract_reverse.output.0",
+        "shuttle.generated.normalized_exp_contract_reverse.output.1",
+    )
     assert audit.rewired_external_users == plan.external_users
+    assert audit.dead_instructions == plan.region.internal_instructions
+    assert audit.placement_paths == (
+        ("shuttle.generated.normalized_exp_contract_reverse.output.0", ("reshape.198",), "psum.48"),
+        ("shuttle.generated.normalized_exp_contract_reverse.output.1", ("slice.87",), "psum.49"),
+    )
     assert (
         "%reshape.198 = bf16[2,4,32]{2,1,0} reshape(%shuttle.generated.normalized_exp_contract_reverse.output.0)"
         in transformed

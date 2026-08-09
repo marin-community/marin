@@ -12,6 +12,8 @@ import pytest
 
 from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call_smoke import _tree_hash_evidence
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
+    _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+    _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
     _ROUTED_ATTENTION_TARGETS,
     _SHARED_ROUTED_TARGETS,
     _WEIGHTED_RELATION_CONTRACT_TARGET,
@@ -26,8 +28,15 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _single_custom_call_target_occurrences,
     _target_occurrence,
 )
+from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
+    generate_cuda_normalized_exp_contract_forward_ffi,
+)
+from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
+    generate_cuda_normalized_exp_contract_reverse_ffi,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import generate_streaming_attention_backward_ffi
 from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input, scalar_unary
 from tile_lifetime.xla_contract_relation_fold_ffi import ContractRelationFoldReplacementAudit
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
@@ -190,8 +199,15 @@ def test_routed_training_composition_replaces_all_input_adjoint_arithmetic_once(
     assert audit.transpose_count[1] <= audit.transpose_count[0]
 
 
-@pytest.mark.parametrize("fuse_weighted_reverse", (False, True))
-def test_shared_map_harness_composes_generated_input_adjoint_calls(fuse_weighted_reverse: bool) -> None:
+@pytest.mark.parametrize(
+    ("fuse_weighted_reverse", "generate_normalized_exp_pair", "expected_call_count"),
+    ((False, False, 12), (True, False, 11), (True, True, 13)),
+)
+def test_shared_map_harness_composes_generated_input_adjoint_calls(
+    fuse_weighted_reverse: bool,
+    generate_normalized_exp_pair: bool,
+    expected_call_count: int,
+) -> None:
     hlo = _hlo()
     attention_program, attention_schedule, _ = _attention_reverse_program()
     default_attention = generate_streaming_attention_backward_ffi(
@@ -219,12 +235,14 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls(fuse_weighted
         hlo,
         plan,
         fuse_weighted_reverse=fuse_weighted_reverse,
+        generate_normalized_exp_pair=generate_normalized_exp_pair,
     )
     audit = _audit_shared_map_composition(
         hlo,
         transformed,
         plan,
         fuse_weighted_reverse=fuse_weighted_reverse,
+        generate_normalized_exp_pair=generate_normalized_exp_pair,
     )
 
     targets = (
@@ -238,11 +256,16 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls(fuse_weighted
             if fuse_weighted_reverse
             else (_WEIGHTED_RELATION_CONTRACT_TARGET, _WEIGHTED_RELATION_FOLD_TARGET)
         ),
+        *(
+            (_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET, _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET)
+            if generate_normalized_exp_pair
+            else ()
+        ),
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
     selected_targets = (*targets, *(generated.target_name for generated in axis_folds))
     exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
-    assert len(exact_occurrences) == (11 if fuse_weighted_reverse else 12)
+    assert len(exact_occurrences) == expected_call_count
     assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
     assert audit.routed.retained_input_adjoint_wrappers == plan.routed.retained_input_adjoint_wrappers
@@ -271,6 +294,129 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls(fuse_weighted
             "reshape.409",
         )
     assert audit.weighted_relation_reverse.placement_collective == "psum.51"
+    if generate_normalized_exp_pair:
+        normalized_exp_forward_audit = audit.normalized_exp_contract_forward
+        normalized_exp_audit = audit.normalized_exp_contract_reverse
+        assert normalized_exp_forward_audit is not None
+        assert normalized_exp_audit is not None
+        assert normalized_exp_forward_audit.inputs == (
+            "reshape.195",
+            "pad.31",
+            "lt.63",
+            "reshape.196",
+        )
+        assert normalized_exp_forward_audit.outputs == (
+            "shuttle.generated.normalized_exp_contract_forward.output.0",
+            "shuttle.generated.normalized_exp_contract_forward.output.1",
+        )
+        assert normalized_exp_forward_audit.output_users == (
+            ("shuttle.generated.normalized_exp_contract_forward.output.0", ("mul.808",)),
+            (
+                "shuttle.generated.normalized_exp_contract_forward.output.1",
+                ("shuttle.generated.normalized_exp_contract_reverse",),
+            ),
+        )
+        assert normalized_exp_forward_audit.dead_instructions
+        assert set(normalized_exp_forward_audit.dead_instructions).isdisjoint(
+            normalized_exp_forward_audit.retained_boundary_instructions
+        )
+        assert normalized_exp_audit.inputs == (
+            "reshape.195",
+            "pad.31",
+            "shuttle.generated.normalized_exp_contract_forward.output.1",
+            "lt.63",
+            "mul.821",
+            "clamp.4",
+            "and.41",
+        )
+        assert plan.normalized_exp_contract_reverse.region.saved_state.instruction == (
+            "shuttle.generated.normalized_exp_contract_forward.output.1"
+        )
+        transformed_module = parse_hlo_module_text(transformed)
+        transformed_entry = transformed_module.computation(transformed_module.entry)
+        instruction_order = {instruction.name: index for index, instruction in enumerate(transformed_entry.instructions)}
+        assert (
+            instruction_order[normalized_exp_forward_audit.call_instruction]
+            < instruction_order[normalized_exp_audit.call_instruction]
+        )
+        assert normalized_exp_audit.outputs == (
+            "shuttle.generated.normalized_exp_contract_reverse.output.0",
+            "shuttle.generated.normalized_exp_contract_reverse.output.1",
+        )
+        assert (
+            normalized_exp_audit.dead_instructions == plan.normalized_exp_contract_reverse.region.internal_instructions
+        )
+        assert normalized_exp_audit.placement_paths == (
+            ("shuttle.generated.normalized_exp_contract_reverse.output.0", ("reshape.198",), "psum.48"),
+            ("shuttle.generated.normalized_exp_contract_reverse.output.1", ("slice.87",), "psum.49"),
+        )
+    else:
+        assert audit.normalized_exp_contract_forward is None
+        assert audit.normalized_exp_contract_reverse is None
+
+
+def test_combined_normalized_exp_reverse_target_is_generated_from_mutated_score_map() -> None:
+    hlo = _hlo()
+    attention_program, attention_schedule, _ = _attention_reverse_program()
+    default_attention = generate_streaming_attention_backward_ffi(
+        attention_program,
+        attention_schedule,
+        target_name=_ROUTED_ATTENTION_TARGETS.attention_backward,
+    )
+    attention_plan = plan_streaming_attention_backward_hlo_region_replacement(
+        hlo,
+        attention_program,
+        default_attention,
+    )
+    attention = generate_streaming_attention_backward_ffi(
+        attention_program,
+        attention_schedule,
+        target_name=_ROUTED_ATTENTION_TARGETS.attention_backward,
+        output_layouts=derive_streaming_attention_backward_ffi_output_layouts(attention_plan),
+    )
+    plan = _plan_shared_map_composition(hlo, attention_program, attention, _generate_axis_fold_programs(hlo))
+    raw_score = scalar_input("raw_score")
+    cap = scalar_constant(6.0)
+    soft_cap = scalar_binary(
+        ScalarExpressionKind.MULTIPLY,
+        cap,
+        scalar_unary(
+            ScalarExpressionKind.TANH,
+            scalar_binary(ScalarExpressionKind.DIVIDE, raw_score, cap),
+        ),
+    )
+    baseline_forward = generate_cuda_normalized_exp_contract_forward_ffi(
+        plan.normalized_exp_contract_forward,
+        target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+    )
+    mutated_forward = generate_cuda_normalized_exp_contract_forward_ffi(
+        plan.normalized_exp_contract_forward,
+        target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+        score_expression=soft_cap,
+    )
+    baseline_reverse = generate_cuda_normalized_exp_contract_reverse_ffi(
+        plan.normalized_exp_contract_reverse,
+        target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+    )
+    mutated_reverse = generate_cuda_normalized_exp_contract_reverse_ffi(
+        plan.normalized_exp_contract_reverse,
+        target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+        score_expression=soft_cap,
+    )
+
+    assert baseline_forward.target == mutated_forward.target == _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET
+    assert baseline_forward.handler_symbol == mutated_forward.handler_symbol
+    assert baseline_reverse.target == mutated_reverse.target == _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET
+    assert baseline_reverse.handler_symbol == mutated_reverse.handler_symbol
+    assert baseline_forward.semantic_digest != mutated_forward.semantic_digest
+    assert baseline_reverse.semantic_digest != mutated_reverse.semantic_digest
+    assert baseline_forward.source_digest != mutated_forward.source_digest
+    assert baseline_reverse.source_digest != mutated_reverse.source_digest
+    assert "tanhf" in mutated_forward.source
+    assert "tanhf" in mutated_reverse.source
+    for source in (mutated_forward.source, mutated_reverse.source):
+        assert "torch" not in source.lower()
+        assert "triton" not in source.lower()
 
 
 def test_shared_contract_multi_map_cpu_reference_matches_source_ordered_formula() -> None:
