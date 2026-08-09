@@ -8,11 +8,10 @@ The first lowering accepts a verified, exact, CTA-scope plan with one consumer a
 
 The bounded phased proof supports generation-tagged CTA-local slot reuse. It does not support device-wide semaphores, a concurrent ready queue, cross-CTA persistent scheduling, or multiple consumers per event. Unsupported plans are rejected before source generation.
 
-The benchmark currently uses a Torch C++ extension only as a rapid CUDA
-compile/load harness. Torch is not part of the intended compiler contract. A
-promoted lowering should expose the same generated body through Shuttle's JAX
-typed-FFI registration path, with JAX owning model-level autodiff and Shuttle
-recovering task dependencies from the differentiated program.
+The first benchmark used a Torch C++ extension as a rapid CUDA compile/load
+harness. The current replay exposes the same generated bodies through Shuttle's
+JAX typed-FFI registration path. JAX owns input buffers and stream execution;
+Torch is absent from the replay environment.
 
 ## Pre-hardware validation
 
@@ -190,3 +189,33 @@ run completed. Raw samples, generated source, hashes, and failure logs are in
 The Torch C++ extension is a prototype compilation harness. It is not a runtime
 dependency target. Production Shuttle should register generated kernels with JAX
 and remain Torch-free by default.
+
+## JAX typed-FFI GB200 replay
+
+Revision `1a04930ecd4008588e215703688a390042e1b9d4` executed both generated
+modules through JAX typed FFI on one NVIDIA GB200. The batch holder requested one
+GPU, one CPU, 32 GB host memory, and 50 GB ephemeral disk. The observed stack was
+driver 595.71.05, JAX 0.10.1 with CUDA 13, and NVCC 13.3.73 targeting `sm_100a`.
+
+| Case | Primary median | Mutation median | Correctness |
+|---|---:|---:|---|
+| Runtime RelationPlan readiness | 0.061314 ms | 0.061152 ms | both bitwise source-order matches |
+| Phased Contract/Fold/Contract | 0.169697 ms | 0.146477 ms | max errors `8.9407e-8` / `1.1921e-7` |
+
+Every path is bitwise deterministic over five repeated executions. Each timing
+distribution has 30 counterbalanced samples and 100 calls per sample. The four
+optimized HLO dumps retain 4/4 runtime-relation parameters and 3/3 phased inputs,
+contain one typed-FFI target, and contain no constant or copy lines. The generated
+libraries link the exact versioned CUDA 13 runtime from the JAX environment.
+
+The phased physical payload is a scalar reference pipeline, not a tensor-core
+attention kernel. `StreamingAttentionProgram` reaches Event Tensor task algebra
+through a structural adapter, but buffer-slot assignment and reuse dependences
+are not yet connected to this CUDA payload. The replay validates readiness,
+generation-safe reuse, runtime inputs, and the SM100 attachment boundary only.
+
+Raw samples, generated CUDA, optimized HLO, and hashes are preserved in
+`lib/tile_lifetime/benchmarks/artifacts/event_tensor_jax_ffi_gb200_v0/`. The
+holder was released after copying the artifact; a status check found no active
+session. The preceding one-hour H100 request never admitted and consumed no GPU
+time.

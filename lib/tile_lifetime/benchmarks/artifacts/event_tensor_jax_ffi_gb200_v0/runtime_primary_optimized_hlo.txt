@@ -1,0 +1,36 @@
+HloModule jit_call, is_scheduled=true, entry_computation_layout={(f32[4096]{0}, s32[64]{0}, s32[65]{0}, s32[4096]{0})->(f32[4096]{0}, f32[64]{0})}, allow_spmd_sharding_propagation_to_parameters={true,true,true,true}, allow_spmd_sharding_propagation_to_output={true,true}, frontend_attributes={fingerprint_before_lhs="ec9612c8c0d264551c160c27d5470b91"}
+
+FileNames
+1 "/tmp/shuttle-event-jax-run/lib/tile_lifetime/benchmarks/h100_jax_event_tensor_ffi.py"
+2 "/tmp/shuttle-event-jax-run/lib/tile_lifetime/src/tile_lifetime/jax_event_dataflow_ffi.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "_runtime_callable.<locals>.call"
+5 "call_cuda_runtime_event_ffi"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=521 end_line=521 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=517 end_line=517 column=21 end_column=38}
+3 {file_name_id=1 function_name_id=3 line=296 end_line=296 column=31 end_column=78}
+4 {file_name_id=1 function_name_id=4 line=131 end_line=134 column=15 end_column=9}
+5 {file_name_id=2 function_name_id=5 line=96 end_line=104 column=14 end_column=5}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+
+
+ENTRY %main.1 (payload.1: f32[4096], counts.1: s32[64], offsets.1: s32[65], sources.1: s32[4096]) -> (f32[4096], f32[64]) {
+  %sources.1 = s32[4096]{0} parameter(3), metadata={op_name="sources" scheduling_name="sources.1"}
+  %offsets.1 = s32[65]{0} parameter(2), metadata={op_name="offsets" scheduling_name="offsets.1"}
+  %counts.1 = s32[64]{0} parameter(1), metadata={op_name="counts" scheduling_name="counts.1"}
+  %payload.1 = f32[4096]{0} parameter(0), metadata={op_name="payload" scheduling_name="payload.1"}
+  ROOT %ffi_call.3 = (f32[4096]{0}, f32[64]{0}) custom-call(%payload.1, %counts.1, %offsets.1, %sources.1), custom_call_target="shuttle.event_tensor.runtime_gpu_replay_v1", operand_layout_constraints={f32[4096]{0}, s32[64]{0}, s32[65]{0}, s32[4096]{0}}, api_version=API_VERSION_TYPED_FFI, metadata={op_name="jit(call)/ffi_call" scheduling_name="ffi_call.3" stack_frame_id=5}, backend_config={event_count = 64 : i64, maximum_count = 108 : i64}
+}
+
