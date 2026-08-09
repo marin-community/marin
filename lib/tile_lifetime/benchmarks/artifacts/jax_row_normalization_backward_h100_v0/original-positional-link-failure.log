@@ -1,0 +1,15 @@
+nvcc fatal   : Don't know what to do with '/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13'
+Traceback (most recent call last):
+  File "/tmp/shuttle-9e1a556477/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py", line 290, in <module>
+    main()
+  File "/tmp/shuttle-9e1a556477/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py", line 283, in main
+    result = run(args)
+             ^^^^^^^^^
+  File "/tmp/shuttle-9e1a556477/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py", line 149, in run
+    library = _compile_generated_source(generated.source, args.artifact_directory, args.nvcc, args.architecture)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-9e1a556477/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py", line 56, in _compile_generated_source
+    subprocess.run(
+  File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '('/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc', '-std=c++17', '-O3', '-arch=sm_90a', '-shared', '-Xcompiler', '-fPIC', '-I', '/app/.venv/lib/python3.12/site-packages/jaxlib/include', '/tmp/shuttle-rms-h100-replay/final/generated_axis_fold_ffi.cu', '-o', '/tmp/shuttle-rms-h100-replay/final/generated_axis_fold_ffi.so', '-cudart=none', '-L', '/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib', '/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13')' returned non-zero exit status 1.

@@ -1,0 +1,2 @@
+timestamp, name, uuid, driver_version, pstate, power.draw [W], power.limit [W], clocks.current.sm [MHz], clocks.current.memory [MHz], temperature.gpu, memory.total [MiB], memory.used [MiB]
+2026/08/09 08:54:32.121, NVIDIA H100 80GB HBM3, GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e, 595.71.05, P0, 73.11 W, 700.00 W, 345 MHz, 2619 MHz, 24, 81559 MiB, 0 MiB

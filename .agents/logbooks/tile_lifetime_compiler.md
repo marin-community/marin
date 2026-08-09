@@ -1933,3 +1933,21 @@ author: dlwh
 - Next action: replace the generic cuBLAS call plus scalar Map with Shuttle's
   reusable tiled Contract skeleton, then apply the same post-SPMD replacement
   mechanism to the larger routed forward/input-adjoint regions.
+
+### 2026-08-09 - TLTC-TRAIN-007 JAX-owned RMS reverse Fold on H100
+
+- A low-priority H100 replay executes the ordinary `jax.vjp` StableHLO through
+  the generated typed-FFI row/column Fold path with no Torch dependency.
+- Exact versioned `libcudart.so.13` linking now uses host-linker forwarding and
+  an embedded rpath. Both CUDA-library symlink scans were empty, and all manual
+  CUDA library-path environment variables were unset. The original NVCC
+  positional-input failure is retained in the artifact.
+- The generated result is bitwise deterministic. Against matched explicit FP32
+  algebra, `dx` maximum/mean error is `9.537e-7`/`9.838e-10` and feature-scale
+  cotangent maximum/mean error is `2.289e-5`/`3.701e-6`.
+- Thirty counterbalanced samples measure 0.079698 ms generated versus 0.040753
+  ms matched XLA, a `1.955629x` ratio. This closes the H100 execution and
+  correctness check but fails the performance gate; no LayerNorm-specific
+  tuning was attempted.
+- The natural BF16 JAX VJP is separately reported as an order/cast diagnostic.
+  Source-ordered BF16 equivalence is not established.

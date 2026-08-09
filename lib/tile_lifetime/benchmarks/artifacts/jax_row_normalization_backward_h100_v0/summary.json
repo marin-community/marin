@@ -1,0 +1,282 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "iterations_per_sample": 10,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready",
+    "warmups": 10
+  },
+  "correctness": {
+    "deterministic_hashes": [
+      "31ff64217f4d1de921bfb54584a87790a17eda3d890af6032cd1387ac17010ff",
+      "fda783d534c9d729e4bf5de05819b5edd0f3dc8a6e6b1d154e0664dd3186f2d4"
+    ],
+    "matched_fp32_algebra": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 2.288818359375e-05,
+        "mean_absolute_error": 3.7013123801443726e-06
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 9.5367431640625e-07,
+        "mean_absolute_error": 9.838027059672072e-10
+      }
+    },
+    "natural_jax_vjp_after_source_dtype_cast": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 1.0,
+        "mean_absolute_error": 0.06091634929180145
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0625,
+        "mean_absolute_error": 2.405909981462173e-05
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ]
+  ],
+  "frontend": {
+    "jax_owns_ad": true,
+    "named_semantics_erased": true,
+    "operation_kinds": {
+      "add": 2,
+      "broadcast_in_dim": 11,
+      "constant": 5,
+      "convert": 5,
+      "divide": 3,
+      "multiply": 10,
+      "reduce": 5,
+      "reshape": 2,
+      "rsqrt": 1
+    },
+    "source": "ordinary JAX function differentiated by jax.vjp and exported to StableHLO",
+    "stablehlo_sha256": "2646fa305d01911413040b43f5199282faf2c72e41062c46840597c7e110053f"
+  },
+  "generated": {
+    "handler_executions": 312,
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_fingerprints": [
+      "b4692655805765214e766b0cc5ef476d3666aa82ea561007a0f6d31a57681188",
+      "235d32f31cfbd5b18af407132dabddffd2196d29d5f114ee67a92b3dc7f0b80b"
+    ],
+    "source_sha256": "a4a08bb7f932c2e584ddb1a5e401e6a8dcd35e0eb335042ace9a211d0ca7a3ae",
+    "target": "shuttle.axis_fold_reverse_v1"
+  },
+  "measurements": {
+    "generated_ffi": {
+      "median_ms": 0.07969754999521683,
+      "minimum_ms": 0.07885539998824243,
+      "samples_ms": [
+        0.07942000002003624,
+        0.08056940000642498,
+        0.07921359997453692,
+        0.08009130001482845,
+        0.07936570000310894,
+        0.08035639998524857,
+        0.07885539998824243,
+        0.07986030000211031,
+        0.07895899998402456,
+        0.08014840000214463,
+        0.0790798999787512,
+        0.08045839999795135,
+        0.07968889999574458,
+        0.07999810000001162,
+        0.07991160000528907,
+        0.08006589996512048,
+        0.07925250001790118,
+        0.07986010000422539,
+        0.07934289997137967,
+        0.07970130000103381,
+        0.07915719997981796,
+        0.07969379998939985,
+        0.07948060001581325,
+        0.07984650001162663,
+        0.07990120002432377,
+        0.07964159999573894,
+        0.07944509998196736,
+        0.079812200010565,
+        0.07957559996611963,
+        0.07976740002959559
+      ]
+    },
+    "matched_xla": {
+      "median_ms": 0.04075289998581866,
+      "minimum_ms": 0.035220000017943676,
+      "samples_ms": [
+        0.0357063000137714,
+        0.045310900031836354,
+        0.04292449998501979,
+        0.03871549997711554,
+        0.04299130000617879,
+        0.04330450001361896,
+        0.042651800004023244,
+        0.03898049999406794,
+        0.042953800038958434,
+        0.043198299999858136,
+        0.04279720001250098,
+        0.044046199991498725,
+        0.03853849998449732,
+        0.04304149997551576,
+        0.035220000017943676,
+        0.038820099962322274,
+        0.035490800019033486,
+        0.03610879998632299,
+        0.043586399988271296,
+        0.03868700000566605,
+        0.0381532999654155,
+        0.038933099995119846,
+        0.04358170003797568,
+        0.03562249999049527,
+        0.042525299977569375,
+        0.035917500008508796,
+        0.04283910002413904,
+        0.03546520001691533,
+        0.043597000012596254,
+        0.03576169997359102
+      ]
+    }
+  },
+  "numerical_contract": {
+    "accepted_reference": "matched explicit FP32 Map/Fold algebra",
+    "generated_reassociation": [
+      "deterministic_tree",
+      "deterministic_tree"
+    ],
+    "natural_jax_vjp": "diagnostic after BF16 output cast; source-ordered equivalence is not established because XLA may select a different reduction tree"
+  },
+  "ratio_generated_to_matched_xla": 1.9556289251304884,
+  "revisions": {
+    "shuttle": "9e1a556477a38a4b73922a83aa8514539939e58a"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}

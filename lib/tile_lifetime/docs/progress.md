@@ -468,3 +468,21 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
 - Raw HLO, generated source, every timing/hash sample, toolchain failures, and
   hardware provenance are under
   `benchmarks/artifacts/grug_contract_map_gpu_gb200_v0`.
+
+## 2026-08-09: JAX-owned RMS reverse Fold replay on H100
+
+- Replayed the generic row-normalization reverse program from ordinary
+  `jax.vjp` StableHLO on one H100 without Torch, CUDA-library symlinks, or
+  process-global library-path overrides.
+- Fixed versioned pip CUDA linking generically: exact shared-library paths are
+  forwarded through the host linker and the selected toolkit library directory
+  is embedded as an rpath. The pre-fix positional-input failure is preserved.
+- The generated CUDA is deterministic and matches explicit FP32 Map/Fold
+  algebra with maximum errors `9.537e-7` for `dx` and `2.289e-5` for
+  `dfeature_scale`.
+- Thirty counterbalanced samples measure 0.079698 ms generated versus 0.040753
+  ms matched XLA, or `1.955629x`. This establishes clean executable generic
+  RMS backward on H100 but does not pass the performance gate.
+- Natural BF16 JAX-VJP differences remain an explicit numerical-order caveat;
+  source-ordered BF16 equivalence is not claimed. Evidence is under
+  `benchmarks/artifacts/jax_row_normalization_backward_h100_v0`.
