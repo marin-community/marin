@@ -25,7 +25,21 @@ copied, and both local session state and pod lookup verified that it was no
 longer active.
 
 This failure is infrastructure/harness compatibility, not a generated-code
-failure: the generated fused handler source was never compiled or loaded. A
-future replay requires either a JAX build exposing the benchmark's pinned HLO
-API or a separately reviewed migration of the harness away from
-`jaxlib._hlo`; it must be authorized as a new physical replay.
+failure: the generated fused handler source was never compiled or loaded.
+
+Follow-up commit `274e1b9238` removes the direct `jaxlib._hlo` dependency. HLO
+proto import now obtains the module type through the public
+`lower(...).compiler_ir(dialect="hlo")` path. The repository-pinned JAX/JAXLIB
+0.10.1 runtime passes that proto roundtrip and provides the required text parser
+as `jaxlib._jax.hlo_module_from_text`, but it does not provide
+`jax.extend.xla.register_hlo_module_transformation`. There is no public HLO
+text parser, so the parser remains an isolated, audited compatibility boundary.
+`harness-compatibility-audit.json` preserves this result.
+
+A future replay must run the CPU preflight successfully before allocating a
+GPU. The exact prerequisites are a matched JAX/JAXLIB build that provides the
+public compiler-IR proto roundtrip, one compatible HLO text parser, and both
+`register_hlo_module_transformation` and
+`clear_hlo_module_transformation` under `jax.extend.xla`. The previously
+successful environment used JAX/JAXLIB 0.11.0. The physical replay remains
+separately authorized work.

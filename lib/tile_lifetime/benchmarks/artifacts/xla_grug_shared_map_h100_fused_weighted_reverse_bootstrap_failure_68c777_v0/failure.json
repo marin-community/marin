@@ -8,6 +8,8 @@
   "failure_message": "ModuleNotFoundError: No module named 'jaxlib._hlo'",
   "generated_handler_compiled": false,
   "gpu": "NVIDIA H100 80GB HBM3",
+  "harness_fix_revision": "274e1b9238",
+  "harness_status": "public compiler-IR proto roundtrip passes; JAX 0.10.1 transformation registry unavailable",
   "jax_version": "0.10.1",
   "jaxlib_version": "0.10.1",
   "measurements_completed": 0,
