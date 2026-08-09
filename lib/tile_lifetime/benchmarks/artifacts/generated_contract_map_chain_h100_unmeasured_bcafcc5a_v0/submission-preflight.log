@@ -1,0 +1,19 @@
+Attempted canonical workspace submission before the one admitted holder:
+
+Workspace bundle size: 35.6 MB
+ValueError: Bundle size 35.6MB exceeds maximum 25MB. Consider excluding large files or using .gitignore.
+
+No Iris job was created by this client-side rejection.
+
+Attempted clean narrow workspace with the measured revision's Iris client:
+
+Workspace bundle size: 0.0 MB
+connectrpc.errors.ConnectError: marin-iris client is too old (build 2026-07-21; minimum 2026-07-26). Run `uv sync` or upgrade marin-iris and retry.
+
+No Iris job was created by this controller-side version rejection.
+
+The holder client was then pinned to
+eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb. Its legacy allocation CLI uses
+--gpus-per-node 1 --nodes 1. The resulting single admitted holder is recorded
+verbatim in allocation-bootstrap.log.
+

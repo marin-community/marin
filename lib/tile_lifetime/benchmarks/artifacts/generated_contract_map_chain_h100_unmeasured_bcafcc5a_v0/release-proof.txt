@@ -1,0 +1,31 @@
+Controller query after holder failure:
+
+matching_jobs 1
+job_id: /dlwh/dev-gpu-dlwh-shuttle-contract-map-chain-h100-bcaf
+state: JOB_STATE_FAILED
+failure_count: 1
+preemption_count: 0
+task_state_counts: failed=1
+active_jobs: []
+
+Explicit controller action:
+
+terminate-issued /dlwh/dev-gpu-dlwh-shuttle-contract-map-chain-h100-bcaf
+
+Local session state after failure and termination:
+
+session-state-absent
+
+Exact Kubernetes task-label query after the explicit terminate and a 30-second
+cleanup interval:
+
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-gpu_US-EAST-02A --namespace iris get pods \
+  -l iris.task_id=dlwh.dev-gpu-dlwh-shuttle-contract-map-chain-h100-bcaf.0 \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.status.phase}{"\\n"}{end}'
+
+Output: <empty>
+
+Release conclusion: no active controller job, no matching pod, and no local
+holder session state.
+

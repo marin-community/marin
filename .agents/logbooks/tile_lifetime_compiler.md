@@ -3250,3 +3250,29 @@ author: dlwh
   release; the local session and Kubernetes pod are absent.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_command_buffer_h100_unaccepted_e5ec17f2_v0/`.
+
+### 2026-08-09 - TLTC-XLA-058 H100 component replay blocked before execution
+
+- Requested one bounded batch-priority H100 replay of the standalone generated
+  two-Contract scalar-Map training component at source revision `bcafcc5ab1`.
+  The request was one H100, one CPU, 32 GB host memory, and 50 GB disk. The
+  benchmark protocol remained fixed at 30 counterbalanced samples with 1,000
+  iterations per sample; no candidate tuning or replay retry was authorized.
+- The canonical workspace was too large for the 25 MB Iris control-plane
+  bundle, and its Iris client predated the cluster minimum. Neither pre-submit
+  rejection created a job. A clean narrow holder using separately pinned Iris
+  revision `eafa4d49f7` reached the controller, but its one admitted job failed
+  during setup because the narrow bootstrap project did not define the `dev`
+  dependency group expected by the task image.
+- The benchmark process never started. Compile/link/load preflight, H100
+  execution, natural-JAX and ordered-CPU comparisons, column-major weight-
+  adjoint validation, determinism, handler counts, and timing distributions are
+  all unmeasured. This is an infrastructure result, not a component failure.
+- The controller reports the one matching job terminal failed and no active
+  matching job. An explicit terminate was issued; the exact task-label pod was
+  absent after cleanup, and no local holder session state remained.
+- A future authorized run requires a clean detached measured-source checkout
+  plus a current separate Iris holder whose sub-25-MB bootstrap project defines
+  the expected dependency groups (or an equivalent small holder setup). The
+  unmeasured artifact and release proof are under
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_unmeasured_bcafcc5a_v0/`.
