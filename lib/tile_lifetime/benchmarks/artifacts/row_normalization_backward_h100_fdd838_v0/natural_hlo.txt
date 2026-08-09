@@ -1,0 +1,88 @@
+HloModule jit_reverse, entry_computation_layout={(bf16[2048,4096]{1,0}, bf16[4096]{0}, bf16[2048,4096]{1,0})->(bf16[2048,4096]{1,0}, bf16[4096]{0})}
+
+region_0.1 {
+  reduce_sum.3 = f32[] parameter(0)
+  reduce_sum.4 = f32[] parameter(1)
+  ROOT reduce_sum.5 = f32[] add(reduce_sum.3, reduce_sum.4)
+}
+
+region_1.2 {
+  reduce_sum.10 = f32[] parameter(0)
+  reduce_sum.11 = f32[] parameter(1)
+  ROOT reduce_sum.12 = f32[] add(reduce_sum.10, reduce_sum.11)
+}
+
+region_2.3 {
+  reduce_sum.17 = f32[] parameter(0)
+  reduce_sum.18 = f32[] parameter(1)
+  ROOT reduce_sum.19 = f32[] add(reduce_sum.17, reduce_sum.18)
+}
+
+region_3.4 {
+  reduce_sum.24 = f32[] parameter(0)
+  reduce_sum.25 = f32[] parameter(1)
+  ROOT reduce_sum.26 = f32[] add(reduce_sum.24, reduce_sum.25)
+}
+
+region_4.5 {
+  reduce_sum.31 = f32[] parameter(0)
+  reduce_sum.32 = f32[] parameter(1)
+  ROOT reduce_sum.33 = f32[] add(reduce_sum.31, reduce_sum.32)
+}
+
+ENTRY main.6 {
+  cotangent.1 = bf16[2048,4096]{1,0} parameter(2)
+  convert_element_type.7 = f32[2048,4096]{1,0} convert(cotangent.1)
+  feature_scale.1 = bf16[4096]{0} parameter(1)
+  convert_element_type.6 = f32[4096]{0} convert(feature_scale.1)
+  broadcast_in_dim.4 = f32[1,4096]{1,0} reshape(convert_element_type.6)
+  mul.29 = f32[1,4096]{1,0} broadcast(broadcast_in_dim.4), dimensions={0,1}
+  mul.30 = f32[4096]{0} reshape(mul.29)
+  mul.31 = f32[2048,4096]{1,0} broadcast(mul.30), dimensions={1}
+  mul.32 = f32[2048,4096]{1,0} multiply(convert_element_type.7, mul.31)
+  x.1 = bf16[2048,4096]{1,0} parameter(0)
+  convert_element_type.5 = f32[2048,4096]{1,0} convert(x.1)
+  square.1 = f32[2048,4096]{1,0} multiply(convert_element_type.5, convert_element_type.5)
+  constant.9 = f32[] constant(0)
+  reduce_sum.35 = f32[2048]{0} reduce(square.1, constant.9), dimensions={1}, to_apply=region_0.1
+  broadcast_in_dim.3 = f32[2048,1]{1,0} reshape(reduce_sum.35)
+  constant.7 = f32[] constant(4096)
+  broadcast.1 = f32[2048,1]{1,0} broadcast(constant.7), dimensions={}
+  div.3 = f32[2048,1]{1,0} divide(broadcast_in_dim.3, broadcast.1)
+  constant.6 = f32[] constant(1e-05)
+  add.2 = f32[2048,1]{1,0} broadcast(constant.6), dimensions={}
+  add.3 = f32[2048,1]{1,0} add(div.3, add.2)
+  rsqrt.1 = f32[2048,1]{1,0} rsqrt(add.3)
+  mul.34 = f32[2048,1]{1,0} broadcast(rsqrt.1), dimensions={0,1}
+  mul.35 = f32[2048]{0} reshape(mul.34)
+  mul.36 = f32[2048,4096]{1,0} broadcast(mul.35), dimensions={0}
+  mul.37 = f32[2048,4096]{1,0} multiply(mul.32, mul.36)
+  mul.33 = f32[2048,4096]{1,0} multiply(convert_element_type.5, mul.32)
+  reduce_sum.38 = f32[2048]{0} reduce(mul.33, constant.9), dimensions={1}, to_apply=region_3.4
+  reshape.3 = f32[2048,1]{1,0} reshape(reduce_sum.38)
+  div.4 = f32[2048,1]{1,0} divide(rsqrt.1, add.3)
+  constant.5 = f32[] constant(-0.5)
+  mul.20 = f32[2048,1]{1,0} broadcast(constant.5), dimensions={}
+  mul.23 = f32[2048,1]{1,0} multiply(div.4, mul.20)
+  mul.38 = f32[2048,1]{1,0} multiply(reshape.3, mul.23)
+  div.5 = f32[2048,1]{1,0} divide(mul.38, broadcast.1)
+  reduce_sum.39 = f32[2048]{0} reduce(div.5, constant.9), dimensions={1}, to_apply=region_4.5
+  broadcast_in_dim.5 = f32[2048,4096]{1,0} broadcast(reduce_sum.39), dimensions={0}
+  constant.8 = f32[] constant(2)
+  mul.21 = f32[2048,4096]{1,0} broadcast(constant.8), dimensions={}
+  mul.22 = f32[2048,4096]{1,0} multiply(convert_element_type.5, mul.21)
+  mul.39 = f32[2048,4096]{1,0} multiply(broadcast_in_dim.5, mul.22)
+  add_any.1 = f32[2048,4096]{1,0} add(mul.37, mul.39)
+  convert_element_type.9 = bf16[2048,4096]{1,0} convert(add_any.1)
+  mul.24 = f32[2048,1]{1,0} broadcast(rsqrt.1), dimensions={0,1}
+  mul.25 = f32[2048]{0} reshape(mul.24)
+  mul.26 = f32[2048,4096]{1,0} broadcast(mul.25), dimensions={0}
+  mul.27 = f32[2048,4096]{1,0} multiply(convert_element_type.5, mul.26)
+  mul.28 = f32[2048,4096]{1,0} multiply(mul.27, convert_element_type.7)
+  reduce_sum.36 = f32[4096]{0} reduce(mul.28, constant.9), dimensions={0}, to_apply=region_1.2
+  reshape.2 = f32[1,4096]{1,0} reshape(reduce_sum.36)
+  reduce_sum.37 = f32[4096]{0} reduce(reshape.2, constant.9), dimensions={0}, to_apply=region_2.3
+  convert_element_type.8 = bf16[4096]{0} convert(reduce_sum.37)
+  ROOT tuple.1 = (bf16[2048,4096]{1,0}, bf16[4096]{0}) tuple(convert_element_type.9, convert_element_type.8)
+}
+

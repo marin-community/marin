@@ -1,0 +1,153 @@
+HloModule jit_matched_xla_algebra, is_scheduled=true, entry_computation_layout={(bf16[2048,4096]{1,0}, bf16[4096]{0}, bf16[2048,4096]{1,0})->(bf16[2048,4096]{1,0}, bf16[4096]{0})}, allow_spmd_sharding_propagation_to_parameters={true,true,true}, allow_spmd_sharding_propagation_to_output={true,true}, frontend_attributes={fingerprint_before_lhs="403cf1a28dc93a70fef354a05634edd1"}
+
+FileNames
+1 "/app/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "run.<locals>.matched_xla_algebra"
+5 "_natural_reverse"
+6 "_normalization"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=478 end_line=478 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=471 end_line=471 column=13 end_column=22}
+3 {file_name_id=1 function_name_id=3 line=253 end_line=253 column=12 end_column=66}
+4 {file_name_id=1 function_name_id=4 line=224 end_line=224 column=15 end_column=99}
+5 {file_name_id=1 function_name_id=5 line=52 end_line=52 column=18 end_column=59}
+6 {file_name_id=1 function_name_id=6 line=43 end_line=43 column=28 end_column=86}
+7 {file_name_id=1 function_name_id=6 line=42 end_line=42 column=12 end_column=33}
+8 {file_name_id=1 function_name_id=6 line=44 end_line=44 column=30 end_column=63}
+9 {file_name_id=1 function_name_id=6 line=43 end_line=43 column=37 end_column=54}
+10 {file_name_id=1 function_name_id=6 line=44 end_line=44 column=12 end_column=27}
+11 {file_name_id=1 function_name_id=6 line=43 end_line=43 column=14 end_column=87}
+12 {file_name_id=1 function_name_id=6 line=44 end_line=44 column=11 end_column=85}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=6}
+8 {file_location_id=8 parent_frame_id=6}
+9 {file_location_id=9 parent_frame_id=6}
+10 {file_location_id=10 parent_frame_id=6}
+11 {file_location_id=11 parent_frame_id=6}
+12 {file_location_id=12 parent_frame_id=6}
+
+
+%fused_convert_multiply (param_0.71: bf16[2048,4096], param_1.74: f32[2048,1], param_2.51: bf16[2048,4096], param_3.25: bf16[4096], param_4.18: f32[2048]) -> (bf16[2048,4096], f32[2048,4096]) {
+  %param_2.51 = bf16[2048,4096]{1,0} parameter(2), metadata={scheduling_name="param_2.51"}
+  %convert_element_type.7.4 = f32[2048,4096]{1,0} convert(%param_2.51), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.7.4" stack_frame_id=12}
+  %param_3.25 = bf16[4096]{0} parameter(3), metadata={scheduling_name="param_3.25"}
+  %convert_element_type.6.2 = f32[4096]{0} convert(%param_3.25), metadata={op_name="jit(matched_xla_algebra)/jvp()/convert_element_type" scheduling_name="convert_element_type.6.2" stack_frame_id=8}
+  %mul.31.3 = f32[2048,4096]{1,0} broadcast(%convert_element_type.6.2), dimensions={1}, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.31.3" stack_frame_id=10}
+  %mul.32.3 = f32[2048,4096]{1,0} multiply(%convert_element_type.7.4, %mul.31.3), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.32.3" stack_frame_id=10}
+  %param_4.18 = f32[2048]{0} parameter(4), metadata={scheduling_name="param_4.18"}
+  %constant_29 = f32[] constant(0.000244140625)
+  %broadcast.6.13 = f32[2048]{0} broadcast(%constant_29), dimensions={}, metadata={scheduling_name="broadcast.6.13"}
+  %multiply.4.13 = f32[2048]{0} multiply(%param_4.18, %broadcast.6.13), metadata={op_name="jit(matched_xla_algebra)/jvp()/div" scheduling_name="multiply.4.13" stack_frame_id=6}
+  %constant_6_1 = f32[] constant(1e-05)
+  %broadcast.11.11 = f32[2048]{0} broadcast(%constant_6_1), dimensions={}, metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="broadcast.11.11" stack_frame_id=6}
+  %add.0.11 = f32[2048]{0} add(%multiply.4.13, %broadcast.11.11), metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="add.0.11" stack_frame_id=6}
+  %bitcast.18 = f32[2048,1]{1,0} bitcast(%add.0.11), metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="bitcast.18" stack_frame_id=6}
+  %rsqrt.1.7 = f32[2048,1]{1,0} rsqrt(%bitcast.18), metadata={op_name="jit(matched_xla_algebra)/jvp()/rsqrt" scheduling_name="rsqrt.1.7" stack_frame_id=11}
+  %bitcast.1.9 = f32[2048]{0} bitcast(%rsqrt.1.7), metadata={op_name="jit(matched_xla_algebra)/jvp()/rsqrt" scheduling_name="bitcast.1.9" stack_frame_id=11}
+  %mul.36.9 = f32[2048,4096]{1,0} broadcast(%bitcast.1.9), dimensions={0}, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.36.9" stack_frame_id=10}
+  %mul.37.5 = f32[2048,4096]{1,0} multiply(%mul.32.3, %mul.36.9), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.37.5" stack_frame_id=10}
+  %param_0.71 = bf16[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0.71"}
+  %convert_element_type.5.6 = f32[2048,4096]{1,0} convert(%param_0.71), metadata={op_name="jit(matched_xla_algebra)/jvp()/convert_element_type" scheduling_name="convert_element_type.5.6" stack_frame_id=7}
+  %param_1.74 = f32[2048,1]{1,0} parameter(1), metadata={scheduling_name="param_1.74"}
+  %bitcast.3.3 = f32[2048]{0} bitcast(%param_1.74), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="bitcast.3.3" stack_frame_id=9}
+  %broadcast.4.3 = f32[2048,4096]{1,0} broadcast(%bitcast.3.3), dimensions={0}, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="broadcast.4.3" stack_frame_id=9}
+  %mul.39.3 = f32[2048,4096]{1,0} multiply(%convert_element_type.5.6, %broadcast.4.3), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.39.3" stack_frame_id=9}
+  %add_any.1.3 = f32[2048,4096]{1,0} add(%mul.37.5, %mul.39.3), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/add_any" scheduling_name="add_any.1.3" stack_frame_id=9}
+  %convert_element_type.9.1 = bf16[2048,4096]{1,0} convert(%add_any.1.3), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.9.1" stack_frame_id=7}
+  %mul.27.3.clone.1 = f32[2048,4096]{1,0} multiply(%convert_element_type.5.6, %mul.36.9), metadata={op_name="jit(matched_xla_algebra)/jvp()/mul" scheduling_name="mul.27.3.clone.1" stack_frame_id=10}
+  %mul.28.1.clone.1 = f32[2048,4096]{1,0} multiply(%mul.27.3.clone.1, %convert_element_type.7.4), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.28.1.clone.1" stack_frame_id=10}
+  ROOT %tuple = (bf16[2048,4096]{1,0}, f32[2048,4096]{1,0}) tuple(%convert_element_type.9.1, %mul.28.1.clone.1), metadata={scheduling_name="tuple"}
+}
+
+%region_0.1 (reduce_sum.3: f32[], reduce_sum.4: f32[]) -> f32[] {
+  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.4"}
+  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.3"}
+  ROOT %reduce_sum.5.0 = f32[] add(%reduce_sum.3, %reduce_sum.4), metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="reduce_sum.5.0" stack_frame_id=6}
+}
+
+%region_0.1.clone (reduce_sum.0: f32[], reduce_sum.1: f32[]) -> f32[] {
+  %reduce_sum.1 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.1"}
+  %reduce_sum.0 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.0"}
+  ROOT %reduce_sum.2.0 = f32[] add(%reduce_sum.0, %reduce_sum.1), metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="reduce_sum.2.0" stack_frame_id=6}
+}
+
+%fused_reduce (param_0.72: bf16[2048,4096], param_1.79: bf16[4096], param_2.59: bf16[2048,4096]) -> (f32[2048], f32[2048]) {
+  %param_0.72 = bf16[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0.72"}
+  %convert_element_type.5.12 = f32[2048,4096]{1,0} convert(%param_0.72), metadata={op_name="jit(matched_xla_algebra)/jvp()/convert_element_type" scheduling_name="convert_element_type.5.12" stack_frame_id=7}
+  %square.1.3 = f32[2048,4096]{1,0} multiply(%convert_element_type.5.12, %convert_element_type.5.12), metadata={op_name="jit(matched_xla_algebra)/jvp()/square" scheduling_name="square.1.3" stack_frame_id=9}
+  %constant_9_1 = f32[] constant(0)
+  %reduce_sum.35.1 = f32[2048]{0} reduce(%square.1.3, %constant_9_1), dimensions={1}, to_apply=%region_0.1, metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="reduce_sum.35.1" stack_frame_id=6}
+  %param_2.59 = bf16[2048,4096]{1,0} parameter(2), metadata={scheduling_name="param_2.59"}
+  %convert_element_type.7.8.clone.1 = f32[2048,4096]{1,0} convert(%param_2.59), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.7.8.clone.1" stack_frame_id=12}
+  %param_1.79 = bf16[4096]{0} parameter(1), metadata={scheduling_name="param_1.79"}
+  %convert_element_type.6.1.clone.1 = f32[4096]{0} convert(%param_1.79), metadata={op_name="jit(matched_xla_algebra)/jvp()/convert_element_type" scheduling_name="convert_element_type.6.1.clone.1" stack_frame_id=8}
+  %mul.31.7.clone.1 = f32[2048,4096]{1,0} broadcast(%convert_element_type.6.1.clone.1), dimensions={1}, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.31.7.clone.1" stack_frame_id=10}
+  %mul.32.7.clone.1 = f32[2048,4096]{1,0} multiply(%convert_element_type.7.8.clone.1, %mul.31.7.clone.1), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.32.7.clone.1" stack_frame_id=10}
+  %mul.33.3.clone.1 = f32[2048,4096]{1,0} multiply(%convert_element_type.5.12, %mul.32.7.clone.1), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.33.3.clone.1" stack_frame_id=10}
+  %reduce_sum.38.1.clone.1 = f32[2048]{0} reduce(%mul.33.3.clone.1, %constant_9_1), dimensions={1}, to_apply=%region_0.1.clone, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/reduce_sum" scheduling_name="reduce_sum.38.1.clone.1" stack_frame_id=10}
+  ROOT %tuple.2 = (f32[2048]{0}, f32[2048]{0}) tuple(%reduce_sum.35.1, %reduce_sum.38.1.clone.1), metadata={scheduling_name="tuple.2"}
+}
+
+%region_0.1.clone.1 (reduce_sum.6: f32[], reduce_sum.7: f32[]) -> f32[] {
+  %reduce_sum.7 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.7"}
+  %reduce_sum.6 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.6"}
+  ROOT %reduce_sum.8.0 = f32[] add(%reduce_sum.6, %reduce_sum.7), metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="reduce_sum.8.0" stack_frame_id=6}
+}
+
+%fused_reduce.1 (param_0.48: f32[2048,4096]) -> bf16[4096] {
+  %param_0.48 = f32[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0.48"}
+  %constant_9_3 = f32[] constant(0)
+  %reduce_sum.36.1 = f32[4096]{0} reduce(%param_0.48, %constant_9_3), dimensions={0}, to_apply=%region_0.1.clone.1, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/reduce_sum" scheduling_name="reduce_sum.36.1" stack_frame_id=10}
+  ROOT %convert_element_type.1.1 = bf16[4096]{0} convert(%reduce_sum.36.1), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.1.1" stack_frame_id=8}
+}
+
+%fused_multiply (param_0.69: f32[2048], param_1.76: f32[2048]) -> f32[2048,1] {
+  %param_0.69 = f32[2048]{0} parameter(0), metadata={scheduling_name="param_0.69"}
+  %bitcast.2.3 = f32[2048,1]{1,0} bitcast(%param_0.69), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/reduce_sum" scheduling_name="bitcast.2.3" stack_frame_id=10}
+  %param_1.76 = f32[2048]{0} parameter(1), metadata={scheduling_name="param_1.76"}
+  %constant_30 = f32[] constant(0.000244140625)
+  %broadcast.6.11 = f32[2048]{0} broadcast(%constant_30), dimensions={}, metadata={scheduling_name="broadcast.6.11"}
+  %multiply.4.11 = f32[2048]{0} multiply(%param_1.76, %broadcast.6.11), metadata={op_name="jit(matched_xla_algebra)/jvp()/div" scheduling_name="multiply.4.11" stack_frame_id=6}
+  %constant_6_2 = f32[] constant(1e-05)
+  %broadcast.11.9 = f32[2048]{0} broadcast(%constant_6_2), dimensions={}, metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="broadcast.11.9" stack_frame_id=6}
+  %add.0.9 = f32[2048]{0} add(%multiply.4.11, %broadcast.11.9), metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="add.0.9" stack_frame_id=6}
+  %bitcast.16 = f32[2048,1]{1,0} bitcast(%add.0.9), metadata={op_name="jit(matched_xla_algebra)/jvp()/add" scheduling_name="bitcast.16" stack_frame_id=6}
+  %rsqrt.1.5 = f32[2048,1]{1,0} rsqrt(%bitcast.16), metadata={op_name="jit(matched_xla_algebra)/jvp()/rsqrt" scheduling_name="rsqrt.1.5" stack_frame_id=11}
+  %div.4.7 = f32[2048,1]{1,0} divide(%rsqrt.1.5, %bitcast.16), metadata={op_name="jit(matched_xla_algebra)/jvp()/div" scheduling_name="div.4.7" stack_frame_id=11}
+  %constant_5_1 = f32[] constant(-0.5)
+  %mul.20.1 = f32[2048,1]{1,0} broadcast(%constant_5_1), dimensions={}, metadata={op_name="jit(matched_xla_algebra)/jvp()/mul" scheduling_name="mul.20.1" stack_frame_id=11}
+  %mul.23.5 = f32[2048,1]{1,0} multiply(%div.4.7, %mul.20.1), metadata={op_name="jit(matched_xla_algebra)/jvp()/mul" scheduling_name="mul.23.5" stack_frame_id=11}
+  %mul.38.3 = f32[2048,1]{1,0} multiply(%bitcast.2.3, %mul.23.5), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="mul.38.3" stack_frame_id=11}
+  %constant_2_1 = f32[] constant(0.00048828125)
+  %broadcast.10.1 = f32[2048,1]{1,0} broadcast(%constant_2_1), dimensions={}, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="broadcast.10.1" stack_frame_id=9}
+  ROOT %multiply.5.1 = f32[2048,1]{1,0} multiply(%mul.38.3, %broadcast.10.1), metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="multiply.5.1" stack_frame_id=9}
+}
+
+ENTRY %main.6 (primal_argument.1: bf16[2048,4096], feature_scale_argument.1: bf16[4096], output_cotangent_argument.1: bf16[2048,4096]) -> (bf16[2048,4096], bf16[4096]) {
+  %primal_argument.1 = bf16[2048,4096]{1,0} parameter(0), metadata={op_name="primal_argument" scheduling_name="primal_argument.1"}
+  %feature_scale_argument.1 = bf16[4096]{0} parameter(1), metadata={op_name="feature_scale_argument" scheduling_name="feature_scale_argument.1"}
+  %output_cotangent_argument.1 = bf16[2048,4096]{1,0} parameter(2), metadata={op_name="output_cotangent_argument" scheduling_name="output_cotangent_argument.1"}
+  %input_reduce_fusion = (f32[2048]{0}, f32[2048]{0}) fusion(%primal_argument.1, %feature_scale_argument.1, %output_cotangent_argument.1), kind=kInput, calls=%fused_reduce, metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="input_reduce_fusion" stack_frame_id=6}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %get-tuple-element.2 = f32[2048]{0} get-tuple-element(%input_reduce_fusion), index=0, metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="get-tuple-element.2" stack_frame_id=6}
+  %get-tuple-element.3 = f32[2048]{0} get-tuple-element(%input_reduce_fusion), index=1, metadata={op_name="jit(matched_xla_algebra)/jvp()/reduce_sum" scheduling_name="get-tuple-element.3" stack_frame_id=6}
+  %loop_multiply_fusion = f32[2048,1]{1,0} fusion(%get-tuple-element.3, %get-tuple-element.2), kind=kLoop, calls=%fused_multiply, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/mul" scheduling_name="loop_multiply_fusion" stack_frame_id=9}
+  %loop_convert_multiply_fusion = (bf16[2048,4096]{1,0}, f32[2048,4096]{1,0}) fusion(%primal_argument.1, %loop_multiply_fusion, %output_cotangent_argument.1, %feature_scale_argument.1, %get-tuple-element.2), kind=kLoop, calls=%fused_convert_multiply, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="loop_convert_multiply_fusion" stack_frame_id=7}
+  %get-tuple-element.1 = f32[2048,4096]{1,0} get-tuple-element(%loop_convert_multiply_fusion), index=1, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="get-tuple-element.1" stack_frame_id=7}
+  %get-tuple-element = bf16[2048,4096]{1,0} get-tuple-element(%loop_convert_multiply_fusion), index=0, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="get-tuple-element" stack_frame_id=7}
+  %input_reduce_fusion.1 = bf16[4096]{0} fusion(%get-tuple-element.1), kind=kInput, calls=%fused_reduce.1, metadata={op_name="jit(matched_xla_algebra)/transpose(jvp())/convert_element_type" scheduling_name="input_reduce_fusion.1" stack_frame_id=8}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  ROOT %tuple.1.0 = (bf16[2048,4096]{1,0}, bf16[4096]{0}) tuple(%get-tuple-element, %input_reduce_fusion.1), metadata={scheduling_name="tuple.1.0"}
+}
+

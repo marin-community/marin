@@ -93,3 +93,17 @@ It contains all 60 raw counterbalanced samples, original and transformed HLO,
 generated CUDA, numerical comparison, and checksums. The benchmark now records
 per-leaf hashes. A CPU regression verifies that mutating one leaf changes only
 that leaf's hash.
+
+## Static diagnosis
+
+All seven generated bodies write their complete logical outputs. The transformed
+HLO still contains `%scatter-add.42`, a BF16 reverse-route Fold with two updates
+for every source row. XLA may order those colliding updates differently after
+the producer is replaced, while the source-level benchmark audit checks for
+atomics only in generated CUDA.
+
+The shared-map composition now replaces both remaining input-adjoint Contracts
+and `%scatter-add.42`. The Fold has one thread per output element, traverses route
+edges in source order, and uses no atomics. This is the next bounded H100 replay.
+If nondeterminism remains, constrain cuBLAS workspace and algorithm selection
+before changing the attention or row-Fold kernels.

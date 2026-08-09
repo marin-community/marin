@@ -22,10 +22,13 @@ author: dlwh
   Contracts, streaming-attention reverse, and two row Folds. It measured
   `1.142374x` XLA and passed ordered-FP correctness, but three of 30 generated
   executions produced a second output hash. The result is unaccepted. Per-leaf
-  hash evidence is now recorded before the next bounded replay. Generic RMS
-  reverse measurement and absorption of the remaining two Contracts plus the
-  source-indexed Fold are in progress. H100, B200, and GB200 evidence remain
-  separate; Schmidt provides B200, not GB200.
+  hash evidence is now recorded before the next bounded replay. Static audit
+  identified the residual BF16 route scatter as the leading source of the hash
+  split. Shuttle now replaces it with a deterministic source-indexed Fold and
+  also owns the remaining two input-adjoint Contracts. Generic RMS reverse is
+  correct on H100 but measures `1.512778x` XLA, so Fold decomposition remains a
+  performance task. H100, B200, and GB200 evidence remain separate; Schmidt
+  provides B200, not GB200.
 
 ## Hypothesis Queue
 
@@ -2661,3 +2664,35 @@ author: dlwh
   varying state or metric before a component-level rerun.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_unaccepted_v0/`.
+
+### 2026-08-09 - TLTC-XLA-034 generated RMS reverse H100 replay
+
+- Ordinary JAX defines an uncentered row normalization and owns its VJP. Shuttle
+  recovers the exported StableHLO as a three-stage generic AxisFoldPipeline with
+  FP32 partial state and BF16 input/output boundaries.
+- The generated typed-FFI path passed the post-roundtrip audit with one custom
+  call, no copy or transpose adapters, two expected roots, and dead internal
+  source instructions. Both output hashes were deterministic.
+- Input-cotangent maximum and mean absolute errors were `0.0078125` and
+  `1.9742053e-8`. Feature-scale-cotangent errors were `0.00390625` and
+  `9.536743e-7`.
+- On a physical H100, the generated median was `0.102763 ms` and matched XLA was
+  `0.067930 ms`, or `1.512778x`. Correctness passes; performance does not meet the
+  `1.20x` target.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/row_normalization_backward_h100_fdd838_v0/`.
+
+### 2026-08-09 - TLTC-XLA-035 deterministic input-adjoint remainder
+
+- The shared-map composition now generates two generic rank-two BF16 Contracts
+  for the remaining input-adjoint matrix products and one generic
+  source-indexed Fold for the reverse route merge.
+- The Fold traverses route edges in source order, assigns one thread to each
+  output element, and contains no atomics. Contribution and reducer arithmetic
+  come from scalar ASTs; reducer and shape mutations regenerate the source.
+- XLA retains only slice, transpose, and reshape views plus relation/index and
+  placement operations. No input-adjoint arithmetic remains outside Shuttle.
+- A static audit of the failed H100 replay found two colliding BF16 updates per
+  source row in the former XLA `%scatter-add.42`. This is the leading explanation
+  for the 3-of-30 alternate hashes. The deterministic Fold requires a bounded
+  H100 replay before the diagnosis is confirmed.

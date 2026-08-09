@@ -1,0 +1,242 @@
+{
+  "generated_inputs": [
+    {
+      "dtype": "bf16",
+      "name": "primal",
+      "shape": [
+        2048,
+        4096
+      ]
+    },
+    {
+      "dtype": "bf16",
+      "name": "feature_scale",
+      "shape": [
+        4096
+      ]
+    },
+    {
+      "dtype": "bf16",
+      "name": "output_cotangent",
+      "shape": [
+        2048,
+        4096
+      ]
+    }
+  ],
+  "generated_outputs": [
+    {
+      "dtype": "bf16",
+      "name": "input_cotangent",
+      "shape": [
+        2048,
+        4096
+      ]
+    },
+    {
+      "dtype": "bf16",
+      "name": "feature_scale_cotangent",
+      "shape": [
+        4096
+      ]
+    }
+  ],
+  "generated_source_sha256": "bd59b26febead4f5e31f0a88e29a94e1cd1af7374c98b1e631ad1430ffbf37e0",
+  "input_bindings": [
+    [
+      "primal",
+      0
+    ],
+    [
+      "feature_scale",
+      1
+    ],
+    [
+      "output_cotangent",
+      2
+    ]
+  ],
+  "numerical_policy": "allow_rounding_reorder",
+  "output_bindings": [
+    [
+      "input_cotangent",
+      46
+    ],
+    [
+      "feature_scale_cotangent",
+      33
+    ]
+  ],
+  "pipeline": [
+    {
+      "expose_output": false,
+      "output_dtype": "fp32",
+      "output_name": "inverse_scale",
+      "reassociation": "deterministic_tree",
+      "semantic_fingerprint": "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77"
+    },
+    {
+      "expose_output": true,
+      "output_dtype": "bf16",
+      "output_name": "input_cotangent",
+      "reassociation": "deterministic_tree",
+      "semantic_fingerprint": "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf"
+    },
+    {
+      "expose_output": true,
+      "output_dtype": "bf16",
+      "output_name": "feature_scale_cotangent",
+      "reassociation": "deterministic_tree",
+      "semantic_fingerprint": "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+    }
+  ],
+  "post_roundtrip_audit": {
+    "call_instruction": "shuttle.generated.axis_fold.pipeline.shuttle.axis_fold_reverse_v1",
+    "copy_count": [
+      0,
+      0
+    ],
+    "dead_internal_instructions": [
+      "convert_element_type.7",
+      "convert_element_type.6",
+      "broadcast_in_dim.4",
+      "mul.29",
+      "mul.30",
+      "mul.31",
+      "mul.32",
+      "convert_element_type.5",
+      "square.1",
+      "constant.9",
+      "reduce_sum.35",
+      "broadcast_in_dim.3",
+      "constant.7",
+      "broadcast.1",
+      "div.3",
+      "constant.6",
+      "add.2",
+      "add.3",
+      "rsqrt.1",
+      "mul.34",
+      "mul.35",
+      "mul.36",
+      "mul.37",
+      "mul.33",
+      "reduce_sum.38",
+      "reshape.3",
+      "div.4",
+      "constant.5",
+      "mul.20",
+      "mul.23",
+      "mul.38",
+      "div.5",
+      "reduce_sum.39",
+      "broadcast_in_dim.5",
+      "constant.8",
+      "mul.21",
+      "mul.22",
+      "mul.39",
+      "add_any.1",
+      "convert_element_type.9",
+      "mul.24",
+      "mul.25",
+      "mul.26",
+      "mul.27",
+      "mul.28",
+      "reduce_sum.36",
+      "reshape.2",
+      "reduce_sum.37",
+      "convert_element_type.8"
+    ],
+    "root_outputs": [
+      "shuttle.axis_fold.pipeline.output.0.shuttle.axis_fold_reverse_v1",
+      "shuttle.axis_fold.pipeline.output.1.shuttle.axis_fold_reverse_v1"
+    ],
+    "transpose_count": [
+      0,
+      0
+    ]
+  },
+  "replacement_plan": {
+    "entry": "main.6",
+    "inputs": [
+      {
+        "buffer_name": "primal",
+        "instruction": "x.1",
+        "physical_shape": "bf16[2048,4096]{1,0}"
+      },
+      {
+        "buffer_name": "feature_scale",
+        "instruction": "feature_scale.1",
+        "physical_shape": "bf16[4096]{0}"
+      },
+      {
+        "buffer_name": "output_cotangent",
+        "instruction": "cotangent.1",
+        "physical_shape": "bf16[2048,4096]{1,0}"
+      }
+    ],
+    "numerical_policy": "allow_rounding_reorder",
+    "output_shapes": [
+      "bf16[2048,4096]{1,0}",
+      "bf16[4096]{0}"
+    ],
+    "replaced_instructions": [
+      "convert_element_type.7",
+      "convert_element_type.6",
+      "broadcast_in_dim.4",
+      "mul.29",
+      "mul.30",
+      "mul.31",
+      "mul.32",
+      "convert_element_type.5",
+      "square.1",
+      "constant.9",
+      "reduce_sum.35",
+      "broadcast_in_dim.3",
+      "constant.7",
+      "broadcast.1",
+      "div.3",
+      "constant.6",
+      "add.2",
+      "add.3",
+      "rsqrt.1",
+      "mul.34",
+      "mul.35",
+      "mul.36",
+      "mul.37",
+      "mul.33",
+      "reduce_sum.38",
+      "reshape.3",
+      "div.4",
+      "constant.5",
+      "mul.20",
+      "mul.23",
+      "mul.38",
+      "div.5",
+      "reduce_sum.39",
+      "broadcast_in_dim.5",
+      "constant.8",
+      "mul.21",
+      "mul.22",
+      "mul.39",
+      "add_any.1",
+      "convert_element_type.9",
+      "mul.24",
+      "mul.25",
+      "mul.26",
+      "mul.27",
+      "mul.28",
+      "reduce_sum.36",
+      "reshape.2",
+      "reduce_sum.37",
+      "convert_element_type.8"
+    ],
+    "root_instruction": "tuple.1"
+  },
+  "semantic_fingerprints": [
+    "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+    "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+    "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+  ],
+  "stablehlo_sha256": "d5ab4c778634c04833a81095f082d0443d4c6ed0602eaa1145928356461681d7"
+}

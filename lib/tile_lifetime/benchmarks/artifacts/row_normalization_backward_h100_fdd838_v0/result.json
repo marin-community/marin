@@ -1,0 +1,286 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "iterations_per_sample": 10,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready",
+    "warmups": 10
+  },
+  "component_profile": null,
+  "correctness": {
+    "deterministic_hashes": [
+      "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+      "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+    ],
+    "independent_natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    },
+    "natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ]
+  ],
+  "frontend": {
+    "jax_owns_ad": true,
+    "named_semantics_erased": true,
+    "operation_kinds": {
+      "add": 2,
+      "broadcast_in_dim": 11,
+      "constant": 5,
+      "convert": 5,
+      "divide": 3,
+      "multiply": 10,
+      "reduce": 5,
+      "reshape": 2,
+      "rsqrt": 1
+    },
+    "source": "ordinary JAX function differentiated by jax.vjp and exported to StableHLO",
+    "stablehlo_sha256": "671449f23e47b7a2d38ab443860d3fe8df4873df7e45a1402f8c40ef02784d77"
+  },
+  "generated": {
+    "handler_executions": 312,
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_fingerprints": [
+      "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+      "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+      "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+    ],
+    "source_sha256": "bd59b26febead4f5e31f0a88e29a94e1cd1af7374c98b1e631ad1430ffbf37e0",
+    "target": "shuttle.axis_fold_reverse_v1"
+  },
+  "measurements": {
+    "generated_ffi": {
+      "median_ms": 0.10276345019519795,
+      "minimum_ms": 0.10203300043940544,
+      "samples_ms": [
+        0.10290959980920888,
+        0.1029772000038065,
+        0.10287490003975108,
+        0.10349720032536425,
+        0.1024814999254886,
+        0.10279960042680614,
+        0.10203300043940544,
+        0.10275419990648516,
+        0.10251990024698898,
+        0.10267379984725267,
+        0.10277270048391074,
+        0.10307359989383258,
+        0.1023525997879915,
+        0.10330709992558695,
+        0.10264090014970861,
+        0.10273250009049661,
+        0.10250729974359274,
+        0.1031632004014682,
+        0.10249649931211025,
+        0.10316890038666315,
+        0.10263639996992424,
+        0.1030452003760729,
+        0.10250729974359274,
+        0.10299900022801012,
+        0.10285789976478554,
+        0.10304829993401654,
+        0.10261580027872697,
+        0.1029039005516097,
+        0.10268659971188754,
+        0.102698800037615
+      ]
+    },
+    "matched_xla": {
+      "median_ms": 0.06793030006519984,
+      "minimum_ms": 0.06720659948769026,
+      "samples_ms": [
+        0.06796790039516054,
+        0.06912960016052239,
+        0.06811269995523617,
+        0.06792770000174642,
+        0.06811990024289116,
+        0.06815419983468018,
+        0.06781209958717227,
+        0.06765400030417368,
+        0.06760289979865775,
+        0.06845300013083033,
+        0.06767240047338419,
+        0.06783969947719015,
+        0.06775340007152408,
+        0.0684823993651662,
+        0.06788480022805743,
+        0.06852459991932847,
+        0.06777420057915151,
+        0.06793290012865327,
+        0.06801019990234636,
+        0.06846640026196837,
+        0.0678668002365157,
+        0.06801490017096512,
+        0.06769980027456768,
+        0.06720659948769026,
+        0.06793329957872629,
+        0.06784449942642823,
+        0.06753799971193075,
+        0.06781589981983416,
+        0.06801019990234636,
+        0.06820999988121912
+      ]
+    }
+  },
+  "numerical_contract": {
+    "accepted_reference": "natural JAX VJP with BF16 inputs and outputs",
+    "generated_reassociation": [
+      "deterministic_tree",
+      "deterministic_tree",
+      "deterministic_tree"
+    ],
+    "natural_jax_vjp": "source-ordered equivalence is not established because generated and XLA reductions may select different deterministic trees",
+    "policy": "allow_rounding_reorder"
+  },
+  "ratio_generated_to_matched_xla": 1.5127778045520934,
+  "revisions": {
+    "shuttle": "fdd8380cf0a37809c5fafa6ab4a82be09cd1f1b1"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}
