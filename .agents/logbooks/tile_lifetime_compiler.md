@@ -2743,8 +2743,12 @@ author: dlwh
   differ from the full generated path by maxima `0.0312643` and `0.512909`.
 - Their isolated timings therefore cannot attribute the full latency gap or
   justify a schedule change. This is preserved as a negative benchmark result.
-- The next exact attribution is a single profiler-delimited trace of the
-  unchanged typed-FFI call, retaining its scratch allocator and sequential K0,
-  K1, and K2 launches. That capture is prepared but has not been launched.
+- Two bounded profiler attempts did not yield per-kernel timings. The first
+  stopped before GPU execution because the synced package lacked Git metadata.
+  The corrected attempt executed exactly one unchanged full handler inside a
+  CUDA profiler range, with correct deterministic hashes, but `nsys stats`
+  rejected its stale SQLite export before the report was transferred. The
+  terminal pod could not be copied from. A forced-export script is prepared but
+  remains unlaunched; no timing claim is made from either attempt.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_components_non_attributable_fdd838/`.

@@ -1,0 +1,61 @@
+{
+  "capture": {
+    "boundary": "one unchanged full typed-FFI handler execution",
+    "cuda_profiler_api": true,
+    "handler_calls_after": 3,
+    "handler_calls_before": 2,
+    "output_hashes": [
+      "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+      "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+    ]
+  },
+  "correctness": {
+    "deterministic_hashes": [
+      "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+      "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+    ],
+    "independent_natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    },
+    "natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1"
+  },
+  "generated": {
+    "semantic_fingerprints": [
+      "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+      "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+      "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+    ],
+    "source_sha256": "bd59b26febead4f5e31f0a88e29a94e1cd1af7374c98b1e631ad1430ffbf37e0",
+    "target": "shuttle.axis_fold_reverse_v1"
+  },
+  "revisions": {
+    "shuttle": "fdd8380cf0a37809c5fafa6ab4a82be09cd1f1b1+nsys-capture"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}

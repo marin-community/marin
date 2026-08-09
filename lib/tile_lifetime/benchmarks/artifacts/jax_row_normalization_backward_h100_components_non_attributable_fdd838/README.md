@@ -38,3 +38,19 @@ correctness metrics, and hashes. The three `.cu` files are the exact generated
 sources loaded by the measured process. `run_manifest.json` records source,
 environment, allocation, and archive identity. Binary build products and the
 312 KB raw log are intentionally omitted because they add no unique evidence.
+
+## Profiler follow-up
+
+The first profiler attempt stopped before GPU execution because source-identity
+logging invoked `git diff` inside an Iris bundle without Git metadata. The
+second and final authorized attempt did execute exactly one unchanged full
+handler inside a CUDA profiler range on the same H100. The handler count moved
+from two to three, and its output hashes and correctness metrics match this
+artifact.
+
+Nsight Systems 2026.1.3 generated the raw report, but postprocessing stopped
+before compact evidence was copied: an automatically generated SQLite export
+was older than the report and `nsys stats` required `--force-export=true`.
+The terminal pod cannot be copied from, so the raw report and per-kernel CSV are
+not recoverable. No raw report was transferred. `nsys_capture_v2.json` is the
+capture JSON printed by the process; the two attempt files record both failures.
