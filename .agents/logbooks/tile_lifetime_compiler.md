@@ -2166,3 +2166,37 @@ author: dlwh
   complete.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_input_adjoint_gpu_gb200_v0/`.
+
+### 2026-08-09 - TLTC-TRAIN-018 generic owner-Fold attachment on H100 and GB200
+
+- Hypothesis: the visible output-times-output-cotangent Map and feature Fold can
+  attach to the dQ query-owner traversal when both inputs are complete along the
+  reduction axis, eliminating one launch and one redundant cotangent read.
+- Commit Hash: implementation `9e73953092`; integrated artifacts
+  `1b8b74bfe3`.
+- Synthesis boundary: a workload-name-free `FoldAttachment` carries explicit
+  `OwnerTileAvailability` evidence. Planning and emission reject partial
+  reduction-axis tiles. The emitter revalidates the recovered Map/Fold and
+  derives its physical head dimension from the proven complete feature axis.
+  The row scalar remains materialized because the dK/dV traversal consumes it.
+- H100 result: generated/flash-SDPA medians are 0.527968/0.462000 ms, a
+  1.142788x ratio. The fused dQ plus output-dot stage measures 0.173603 ms and
+  dK/dV measures 0.356864 ms. Relative to the sealed prior result, the full
+  reverse improves 3.86%, and the affected stages improve 14.24%.
+- GB200 result: generated/flash-SDPA medians are 0.455238/0.407830 ms, a
+  1.116244x ratio. The fused dQ plus output-dot stage measures 0.140496 ms and
+  dK/dV measures 0.314048 ms. Relative to the sealed prior result, the full
+  reverse improves 5.95%, and the affected stages improve 20.52%. The accepted
+  device was an actual NVIDIA GB200 at compute capability 10.0; no B200 result
+  is involved.
+- Correctness: H100 dQ/dK/dV maximum errors are
+  0.015625/0.03125/0.0625; GB200 errors are 0.015625/0.03125/0.03125. Both
+  generated paths have one stable repeated-output hash.
+- Interpretation: this bounded generic placement closes most of the previous
+  launch/read overhead without changing the reverse pipeline. dK/dV remains the
+  dominant physical gap; further changes should target generic ownership and
+  accumulation structure rather than another named attention optimization.
+- Artifacts:
+  `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_output_dot_fold_h100_72397500a2/`
+  and
+  `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_output_dot_fold_gb200_72397500a2/`.
