@@ -1,0 +1,46 @@
+Traceback (most recent call last):
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 227, in <module>
+    main()
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 216, in main
+    result = run_smoke(args.nvcc, args.cuda_architecture, args.artifact_directory)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 143, in run_smoke
+    transformed = train_step.lower(state, batch, compute_watch=False).compile()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+    return Compiled(self._lowering.compile(**kw), self._lowering.const_args,
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+    executable = UnloadedMeshExecutable.from_hlo(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+    xla_executable = _cached_compilation(
+                     ^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+    xla_executable = compiler.compile_or_get_cached(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+    return backend_compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 360, in backend_compile_and_load
+    raise e
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+    return backend.compile_and_load(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: INTERNAL: Traceback (most recent call last):
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 227, in <module>
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 216, in main
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 143, in run_smoke
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/stages.py", line 593, in compile
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1260, in compile
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1757, in from_hlo
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1537, in _cached_compilation
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 419, in compile_or_get_cached
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 420, in wrapper
+  File "/app/.venv/lib/python3.12/site-packages/jax/_src/compiler.py", line 350, in backend_compile_and_load
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_gpu_custom_call_smoke.py", line 119, in replace
+  File "/app/shuttle/lib/tile_lifetime/benchmarks/xla_grug_backward_multi_output_custom_call_smoke.py", line 56, in _multi_output_region_index
+ValueError: expected one multi-output pair-Map region, found ()

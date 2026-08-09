@@ -1,0 +1,25 @@
+Ignoring existing lockfile due to change in fork strategy: `fewest` vs. `requires-python`
+   Updating https://github.com/marin-community/tpu-inference.git (e8809d492d5d6c7008369919a00384eb1c4de969)
+   Updating https://github.com/marin-community/harbor.git (0d0dbe8904ed984137a0dfa764583f1508cf3274)
+    Updated https://github.com/marin-community/tpu-inference.git (e8809d492d5d6c7008369919a00384eb1c4de969)
+    Updated https://github.com/marin-community/harbor.git (0d0dbe8904ed984137a0dfa764583f1508cf3274)
+  × No solution found when resolving dependencies for split (markers:
+  │ platform_machine == 'x86_64' and sys_platform == 'linux';
+  │ included: marin-core[cpu], marin-core[tpu], marin-core[vllm],
+  │ marin-fray[group:fray-tpu-test], marin-levanter[tpu]; excluded:
+  │ marin-core[gpu], marin-levanter[gpu]):
+  ╰─▶ Because only tpu-inference==0.23.0 is available and
+      tpu-inference==0.23.0 depends on numba==0.62.1, we can conclude that all
+      versions of tpu-inference depend on numba==0.62.1.
+      And because vllm==1+precompiled depends on numba==0.65.0, we can
+      conclude that all versions of tpu-inference and vllm==1+precompiled
+      are incompatible.
+      And because only vllm==1+precompiled is available and marin-core[vllm]
+      depends on tpu-inference, we can conclude that marin-core[vllm] and all
+      versions of vllm are incompatible.
+      And because marin-core[vllm] depends on vllm and your workspace requires
+      marin-core[vllm], we can conclude that your workspace's requirements
+      are unsatisfiable.
+
+      hint: The resolution failed for an environment that is not the current
+      one, consider limiting the environments with `tool.uv.environments`.

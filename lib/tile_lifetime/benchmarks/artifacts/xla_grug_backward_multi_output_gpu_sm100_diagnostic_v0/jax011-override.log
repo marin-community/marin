@@ -1,0 +1,65 @@
+Using Python 3.12.13 environment at: /app/.venv
+Resolved 23 packages in 414ms
+Downloading nvidia-cufft (176.1MiB)
+Downloading nvidia-cusparse (164.9MiB)
+Downloading nvidia-cublas (494.6MiB)
+Downloading nvidia-cusolver (254.9MiB)
+Downloading nvidia-cuda-nvrtc (47.0MiB)
+Downloading nvidia-cuda-nvcc (37.7MiB)
+Downloading nvidia-cudnn-cu13 (620.8MiB)
+Downloading nvidia-cuda-cupti (11.3MiB)
+ Downloaded nvidia-cuda-cupti
+ Downloaded nvidia-cuda-nvcc
+ Downloaded nvidia-cuda-nvrtc
+ Downloaded nvidia-cusparse
+ Downloaded nvidia-cufft
+ Downloaded nvidia-cusolver
+ Downloaded nvidia-cublas
+ Downloaded nvidia-cudnn-cu13
+Prepared 21 packages in 24.54s
+Uninstalled 20 packages in 149ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 21 packages in 324ms
+ - jax==0.10.1
+ + jax==0.11.0
+ - jax-cuda13-pjrt==0.10.1
+ + jax-cuda13-pjrt==0.11.0
+ - jax-cuda13-plugin==0.10.1
+ + jax-cuda13-plugin==0.11.0
+ - jaxlib==0.10.1
+ + jaxlib==0.11.0
+ - numpy==2.3.5
+ + numpy==2.5.1
+ - nvidia-cublas==13.4.1.1
+ + nvidia-cublas==13.6.1.10
+ + nvidia-cuda-cccl==13.3.3.4.1
+ - nvidia-cuda-crt==13.2.78
+ + nvidia-cuda-crt==13.3.73
+ - nvidia-cuda-cupti==13.0.85
+ + nvidia-cuda-cupti==13.3.75
+ - nvidia-cuda-nvcc==13.2.78
+ + nvidia-cuda-nvcc==13.3.73
+ - nvidia-cuda-nvrtc==13.0.88
+ + nvidia-cuda-nvrtc==13.3.33
+ - nvidia-cuda-runtime==13.0.96
+ + nvidia-cuda-runtime==13.3.29
+ - nvidia-cudnn-cu13==9.19.0.56
+ + nvidia-cudnn-cu13==9.24.0.43
+ - nvidia-cufft==12.0.0.61
+ + nvidia-cufft==12.3.0.29
+ - nvidia-cusolver==12.0.4.66
+ + nvidia-cusolver==12.2.6.9
+ - nvidia-cusparse==12.6.3.3
+ + nvidia-cusparse==12.8.2.51
+ - nvidia-nccl-cu13==2.28.9
+ + nvidia-nccl-cu13==2.30.7
+ - nvidia-nvjitlink==13.0.88
+ + nvidia-nvjitlink==13.3.33
+ - nvidia-nvshmem-cu13==3.4.5
+ + nvidia-nvshmem-cu13==3.7.2
+ - nvidia-nvvm==13.2.78
+ + nvidia-nvvm==13.3.73
+ - scipy==1.17.0
+ + scipy==1.18.0
