@@ -9,6 +9,16 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
+    _ROUTED_ATTENTION_TARGETS,
+    _SHARED_ROUTED_TARGETS,
+    _attention_reverse_program,
+    _audit_shared_map_composition,
+    _generate_axis_fold_programs,
+    _plan_shared_map_composition,
+    _replace_shared_map_composition,
+)
+from tile_lifetime.jax_streaming_attention_backward_ffi import generate_streaming_attention_backward_ffi
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
@@ -28,6 +38,10 @@ from tile_lifetime.xla_shared_contract_multimap import (
 from tile_lifetime.xla_shared_contract_multimap_ffi import (
     compile_shared_contract_multi_map_ffi,
     generate_cuda_shared_contract_multi_map_ffi,
+)
+from tile_lifetime.xla_streaming_attention_backward_ffi import (
+    derive_streaming_attention_backward_ffi_output_layouts,
+    plan_streaming_attention_backward_hlo_region_replacement,
 )
 
 _ARTIFACT = (
@@ -137,6 +151,46 @@ def test_routed_training_composition_replaces_shared_maps_without_double_owning_
     assert "shuttle_generated_routed_input_adjoint_region" not in rewritten
     assert audit.copy_count[1] <= audit.copy_count[0]
     assert audit.transpose_count[1] <= audit.transpose_count[0]
+
+
+def test_shared_map_harness_composes_seven_calls_and_retains_adjoint_remainder() -> None:
+    hlo = _hlo()
+    attention_program, attention_schedule, _ = _attention_reverse_program()
+    default_attention = generate_streaming_attention_backward_ffi(
+        attention_program,
+        attention_schedule,
+        target_name=_ROUTED_ATTENTION_TARGETS.attention_backward,
+    )
+    default_attention_plan = plan_streaming_attention_backward_hlo_region_replacement(
+        hlo,
+        attention_program,
+        default_attention,
+    )
+    attention = generate_streaming_attention_backward_ffi(
+        attention_program,
+        attention_schedule,
+        target_name=_ROUTED_ATTENTION_TARGETS.attention_backward,
+        output_layouts=derive_streaming_attention_backward_ffi_output_layouts(default_attention_plan),
+    )
+    axis_folds = _generate_axis_fold_programs(hlo)
+    plan = _plan_shared_map_composition(hlo, attention_program, attention, axis_folds)
+
+    transformed = _replace_shared_map_composition(hlo, plan)
+    audit = _audit_shared_map_composition(hlo, transformed, plan)
+
+    targets = (
+        _SHARED_ROUTED_TARGETS.forward,
+        _SHARED_ROUTED_TARGETS.shared_contract_multi_map,
+        *_SHARED_ROUTED_TARGETS.weight_gradients,
+        _ROUTED_ATTENTION_TARGETS.attention_backward,
+    )
+    assert all(transformed.count(target) == 1 for target in targets)
+    assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
+    assert "dot.67" in audit.routed.deferred_input_adjoint_instructions
+    assert "dot.68" in audit.routed.deferred_input_adjoint_instructions
+    assert "scatter-add.42" in audit.routed.deferred_input_adjoint_instructions
+    assert len(audit.axis_folds) == 2
+    assert audit.routed.shared_contract_multi_map.outputs == ("select.5", "select.7")
 
 
 def test_shared_contract_multi_map_cpu_reference_matches_source_ordered_formula() -> None:

@@ -15,6 +15,8 @@ import statistics
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -51,24 +53,45 @@ from tile_lifetime.streaming_attention_backward_reference import (
     StreamingAttentionBackwardDebugConfig,
     export_debug_streaming_attention_backward,
 )
-from tile_lifetime.xla_axis_fold_ffi import recover_axis_fold_hlo_region_candidates
+from tile_lifetime.xla_axis_fold_ffi import (
+    AxisFoldHloRegionReplacementAudit,
+    AxisFoldHloRegionReplacementPlan,
+    audit_axis_fold_hlo_region_replacement,
+    plan_axis_fold_hlo_region_replacement,
+    recover_axis_fold_hlo_region_candidates,
+    replace_axis_fold_hlo_region_with_custom_call,
+)
 from tile_lifetime.xla_relation_program_recovery import RoutedInputAdjointFfiOperandRole
 from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ffi
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
+from tile_lifetime.xla_routed_shared_map_training_ffi import (
+    RoutedSharedMapTrainingFfiTargets,
+    RoutedSharedMapTrainingReplacementAudit,
+    RoutedSharedMapTrainingTypedFfiPlan,
+    audit_routed_shared_map_training_replacement,
+    plan_routed_shared_map_training_typed_ffi,
+    replace_routed_shared_map_training_regions_with_custom_calls,
+)
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingAndAttentionFfiTargets,
     RoutedTrainingAttentionAndAxisFoldFfiTargets,
     RoutedTrainingFfiTargets,
     audit_routed_training_attention_and_axis_fold_replacement,
     entry_parameter_ancestors,
-    plan_routed_training_and_attention_typed_ffi,
     plan_routed_training_attention_and_axis_fold_typed_ffi,
     replace_routed_training_attention_and_axis_fold_regions_with_custom_calls,
 )
 from tile_lifetime.xla_routed_weight_gradient_ffi import generate_cuda_group_batched_contract_ffi
+from tile_lifetime.xla_shared_contract_multimap_ffi import (
+    GeneratedSharedContractMultiMapFfi,
+    generate_cuda_shared_contract_multi_map_ffi,
+)
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
+    StreamingReverseHloRegionReplacementPlan,
     audit_streaming_attention_backward_region_replacement,
     derive_streaming_attention_backward_ffi_output_layouts,
+    plan_streaming_attention_backward_hlo_region_replacement,
+    replace_streaming_attention_backward_region_with_custom_call,
 )
 
 _PASS_NAME = "shuttle_grug_routed_training_gpu_v1"
@@ -90,6 +113,39 @@ _TARGETS = RoutedTrainingAttentionAndAxisFoldFfiTargets(
         "shuttle.routed_training.axis_fold.1.v1",
     ),
 )
+_SHARED_ROUTED_TARGETS = RoutedSharedMapTrainingFfiTargets(
+    forward="shuttle.routed_training.shared_map.forward.v1",
+    shared_contract_multi_map="shuttle.routed_training.shared_map.multi_map.v1",
+    weight_gradients=(
+        "shuttle.routed_training.shared_map.weight_gradient.0.v1",
+        "shuttle.routed_training.shared_map.weight_gradient.1.v1",
+    ),
+)
+
+
+class RoutedTrainingCompositionMode(StrEnum):
+    """Generated routed-training ownership boundary used by the benchmark."""
+
+    MONOLITHIC_INPUT_ADJOINT = "monolithic_input_adjoint"
+    SHARED_MAP_XLA_REMAINDER = "shared_map_xla_remainder"
+
+
+@dataclass(frozen=True)
+class SharedMapTrainingAttentionAndAxisFoldPlan:
+    """Clean shared-Map routed plan composed with attention and row Folds."""
+
+    routed: RoutedSharedMapTrainingTypedFfiPlan
+    attention_backward: StreamingReverseHloRegionReplacementPlan
+    axis_folds: tuple[AxisFoldHloRegionReplacementPlan, ...]
+
+
+@dataclass(frozen=True)
+class SharedMapTrainingAttentionAndAxisFoldAudit:
+    """Post-roundtrip evidence for the clean seven-call composition."""
+
+    routed: RoutedSharedMapTrainingReplacementAudit
+    attention_backward_instruction: str
+    axis_folds: tuple[AxisFoldHloRegionReplacementAudit, ...]
 
 
 def _attention_reverse_program() -> tuple[Any, Any, bytes]:
@@ -139,6 +195,90 @@ def _generate_axis_fold_programs(hlo_text: str) -> tuple[Any, ...]:
     )
 
 
+def _plan_shared_map_composition(
+    hlo_text: str,
+    attention_program: Any,
+    generated_attention: Any,
+    generated_axis_folds: tuple[Any, ...],
+) -> SharedMapTrainingAttentionAndAxisFoldPlan:
+    """Plan seven disjoint calls while leaving the input-adjoint remainder in XLA."""
+    if len(generated_axis_folds) != len(_TARGETS.axis_folds):
+        raise ValueError("shared-Map composition requires one generated body per axis-Fold target")
+    axis_folds = tuple(
+        plan_axis_fold_hlo_region_replacement(
+            hlo_text,
+            generated,
+            numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        )
+        for generated in generated_axis_folds
+    )
+    if len({fold.internal_instructions for fold in axis_folds}) != len(axis_folds):
+        raise ValueError("shared-Map composition selected one axis-Fold region more than once")
+    return SharedMapTrainingAttentionAndAxisFoldPlan(
+        routed=plan_routed_shared_map_training_typed_ffi(hlo_text),
+        attention_backward=plan_streaming_attention_backward_hlo_region_replacement(
+            hlo_text,
+            attention_program,
+            generated_attention,
+        ),
+        axis_folds=axis_folds,
+    )
+
+
+def _replace_shared_map_composition(
+    hlo_text: str,
+    plan: SharedMapTrainingAttentionAndAxisFoldPlan,
+) -> str:
+    """Apply the clean seven-call composition without replacing the adjoint remainder."""
+    rewritten = replace_streaming_attention_backward_region_with_custom_call(
+        hlo_text,
+        plan.attention_backward,
+        target=_ROUTED_ATTENTION_TARGETS.attention_backward,
+    )
+    rewritten = replace_routed_shared_map_training_regions_with_custom_calls(
+        rewritten,
+        plan.routed,
+        targets=_SHARED_ROUTED_TARGETS,
+    )
+    for axis_fold, target in zip(plan.axis_folds, _TARGETS.axis_folds, strict=True):
+        rewritten = replace_axis_fold_hlo_region_with_custom_call(rewritten, axis_fold, target=target)
+    return rewritten
+
+
+def _audit_shared_map_composition(
+    original_hlo: str,
+    transformed_hlo: str,
+    plan: SharedMapTrainingAttentionAndAxisFoldPlan,
+) -> SharedMapTrainingAttentionAndAxisFoldAudit:
+    """Audit every generated call and the XLA-owned input-adjoint remainder."""
+    routed = audit_routed_shared_map_training_replacement(
+        original_hlo,
+        transformed_hlo,
+        plan.routed,
+        targets=_SHARED_ROUTED_TARGETS,
+    )
+    attention = audit_streaming_attention_backward_region_replacement(
+        original_hlo,
+        transformed_hlo,
+        plan.attention_backward,
+        target=_ROUTED_ATTENTION_TARGETS.attention_backward,
+    )
+    axis_folds = tuple(
+        audit_axis_fold_hlo_region_replacement(
+            original_hlo,
+            transformed_hlo,
+            fold,
+            target=target,
+        )
+        for fold, target in zip(plan.axis_folds, _TARGETS.axis_folds, strict=True)
+    )
+    return SharedMapTrainingAttentionAndAxisFoldAudit(
+        routed=routed,
+        attention_backward_instruction=attention.call_instruction,
+        axis_folds=axis_folds,
+    )
+
+
 def _register_cuda_target(library: ctypes.CDLL, target: str) -> None:
     handler = getattr(library, target.replace(".", "_"))
     handler.restype = ctypes.c_void_p
@@ -170,6 +310,7 @@ def run_smoke(
     architecture: str,
     artifact_directory: Path | None,
     *,
+    composition_mode: RoutedTrainingCompositionMode,
     repository: Path,
     triton_target: str | None,
     warmup: int = 4,
@@ -204,7 +345,7 @@ def run_smoke(
     original_modules: list[str] = []
     transformed_modules: list[str] = []
     recovered_plans: list[Any] = []
-    generated_programs: list[tuple[Any, Any, tuple[Any, Any], Any, tuple[Any, ...]]] = []
+    generated_programs: list[dict[str, Any]] = []
     replacement_audits: list[Any] = []
     attention_liveness_audits: list[Any] = []
     libraries: dict[str, ctypes.CDLL] = {}
@@ -245,7 +386,7 @@ def run_smoke(
                 original_modules.append(original)
                 if artifact_directory is not None:
                     write_gzip_text(directory / "original-gpu-pre-scheduler-hlo.txt.gz", original)
-                default_plan = plan_routed_training_and_attention_typed_ffi(
+                default_attention_plan = plan_streaming_attention_backward_hlo_region_replacement(
                     original,
                     attention_program,
                     default_attention,
@@ -254,51 +395,86 @@ def run_smoke(
                     attention_program,
                     attention_schedule,
                     target_name=_TARGETS.routed_attention.attention_backward,
-                    output_layouts=derive_streaming_attention_backward_ffi_output_layouts(
-                        default_plan.attention_backward
-                    ),
+                    output_layouts=derive_streaming_attention_backward_ffi_output_layouts(default_attention_plan),
                 )
                 generated_axis_folds = _generate_axis_fold_programs(original)
-                plan = plan_routed_training_attention_and_axis_fold_typed_ffi(
-                    original,
-                    attention_program,
-                    attention,
-                    generated_axis_folds,
-                    axis_fold_numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-                )
+                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                    plan = plan_routed_training_attention_and_axis_fold_typed_ffi(
+                        original,
+                        attention_program,
+                        attention,
+                        generated_axis_folds,
+                        axis_fold_numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+                    )
+                    routed_plan = plan.routed_attention.routed
+                    attention_plan = plan.routed_attention.attention_backward
+                else:
+                    plan = _plan_shared_map_composition(
+                        original,
+                        attention_program,
+                        attention,
+                        generated_axis_folds,
+                    )
+                    routed_plan = plan.routed
+                    attention_plan = plan.attention_backward
                 forward = generate_cuda_routed_forward_ffi(
-                    plan.routed_attention.routed.forward,
-                    target=_TARGETS.routed_attention.routed.forward,
+                    routed_plan.forward,
+                    target=(
+                        _TARGETS.routed_attention.routed.forward
+                        if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT
+                        else _SHARED_ROUTED_TARGETS.forward
+                    ),
                 )
-                input_adjoint = generate_cuda_routed_input_adjoint_ffi(
-                    plan.routed_attention.routed.input_adjoint,
-                    target=_TARGETS.routed_attention.routed.input_adjoint,
-                )
+                input_adjoint = None
+                shared_multi_map = None
+                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                    input_adjoint = generate_cuda_routed_input_adjoint_ffi(
+                        routed_plan.input_adjoint,
+                        target=_TARGETS.routed_attention.routed.input_adjoint,
+                    )
+                    routed_weight_targets = _TARGETS.routed_attention.routed.weight_gradients
+                else:
+                    shared_multi_map = generate_cuda_shared_contract_multi_map_ffi(
+                        routed_plan.shared_contract_multi_map,
+                        target=_SHARED_ROUTED_TARGETS.shared_contract_multi_map,
+                    )
+                    routed_weight_targets = _SHARED_ROUTED_TARGETS.weight_gradients
                 weights = tuple(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
                     for weight, target in zip(
-                        plan.routed_attention.routed.weight_gradients,
-                        _TARGETS.routed_attention.routed.weight_gradients,
+                        routed_plan.weight_gradients,
+                        routed_weight_targets,
                         strict=True,
                     )
                 )
                 generated_sources = (
                     forward.source,
-                    input_adjoint.source,
+                    *((input_adjoint.source,) if input_adjoint is not None else ()),
+                    *((shared_multi_map.source,) if shared_multi_map is not None else ()),
                     *(weight.source for weight in weights),
                     *(axis_fold.source for axis_fold in generated_axis_folds),
                 )
                 if any("atomicAdd(" in source for source in generated_sources):
                     raise RuntimeError("generated routed training source contains semantic atomic accumulation")
-                compile_target(forward.source, _TARGETS.routed_attention.routed.forward, "routed_forward")
-                compile_target(
-                    input_adjoint.source,
-                    _TARGETS.routed_attention.routed.input_adjoint,
-                    "routed_input_adjoint",
+                forward_target = (
+                    _TARGETS.routed_attention.routed.forward
+                    if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT
+                    else _SHARED_ROUTED_TARGETS.forward
                 )
-                for index, (weight, target) in enumerate(
-                    zip(weights, _TARGETS.routed_attention.routed.weight_gradients, strict=True)
-                ):
+                compile_target(forward.source, forward_target, "routed_forward")
+                if input_adjoint is not None:
+                    compile_target(
+                        input_adjoint.source,
+                        _TARGETS.routed_attention.routed.input_adjoint,
+                        "routed_input_adjoint",
+                    )
+                if shared_multi_map is not None:
+                    compile_target(
+                        shared_multi_map.source,
+                        _SHARED_ROUTED_TARGETS.shared_contract_multi_map,
+                        "shared_contract_multi_map",
+                    )
+                for index, (weight, target) in enumerate(zip(weights, routed_weight_targets, strict=True)):
                     compile_target(weight.source, target, f"group_batched_weight_gradient_{index}")
                 for index, (axis_fold, target) in enumerate(zip(generated_axis_folds, _TARGETS.axis_folds, strict=True)):
                     compile_target(axis_fold.source, target, f"axis_fold_{index}")
@@ -317,29 +493,54 @@ def run_smoke(
                     compiled_attention.source_path.read_text(),
                 )
                 attention_library_path = compiled_attention.library_path
-                rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
-                    original,
-                    plan,
-                    targets=_TARGETS,
-                )
-                recovered_plans.append(plan)
-                generated_programs.append((forward, input_adjoint, weights, compiled_attention, generated_axis_folds))
-                transformed_module = hlo.hlo_module_from_text(rewritten)
-                transformed_text = transformed_module.to_string()
-                transformed_modules.append(transformed_text)
-                replacement_audits.append(
-                    audit_routed_training_attention_and_axis_fold_replacement(
+                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                    rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
                         original,
-                        transformed_text,
                         plan,
                         targets=_TARGETS,
                     )
+                else:
+                    rewritten = _replace_shared_map_composition(original, plan)
+                recovered_plans.append(plan)
+                generated_programs.append(
+                    {
+                        "forward": forward,
+                        "input_adjoint": input_adjoint,
+                        "shared_multi_map": shared_multi_map,
+                        "weights": weights,
+                        "attention": compiled_attention,
+                        "attention_source_sha256": {
+                            "handler": _sha256(compiled_attention.source_path),
+                            "aot_sources": [_sha256(path) for path in compiled_attention.aot_sources],
+                        },
+                        "axis_folds": generated_axis_folds,
+                    }
                 )
+                transformed_module = hlo.hlo_module_from_text(rewritten)
+                transformed_text = transformed_module.to_string()
+                transformed_modules.append(transformed_text)
+                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                    replacement_audits.append(
+                        audit_routed_training_attention_and_axis_fold_replacement(
+                            original,
+                            transformed_text,
+                            plan,
+                            targets=_TARGETS,
+                        )
+                    )
+                else:
+                    replacement_audits.append(
+                        _audit_shared_map_composition(
+                            original,
+                            transformed_text,
+                            plan,
+                        )
+                    )
                 attention_liveness_audits.append(
                     audit_streaming_attention_backward_region_replacement(
                         original,
                         transformed_text,
-                        plan.routed_attention.attention_backward,
+                        attention_plan,
                         target=_TARGETS.routed_attention.attention_backward,
                     )
                 )
@@ -347,7 +548,7 @@ def run_smoke(
 
             xla.register_hlo_module_transformation(
                 replace,
-                name=_PASS_NAME,
+                name=f"{_PASS_NAME}_{composition_mode.value}",
                 stage=xla.PipelineStage.PRE_SCHEDULER,
                 platforms="cuda",
             )
@@ -361,7 +562,7 @@ def run_smoke(
                 ).compile()
             finally:
                 xla.clear_hlo_module_transformation(
-                    _PASS_NAME,
+                    f"{_PASS_NAME}_{composition_mode.value}",
                     stage=xla.PipelineStage.PRE_SCHEDULER,
                     platforms="cuda",
                 )
@@ -401,12 +602,8 @@ def run_smoke(
                         transformed_hashes.append(output_hash)
                 raw_samples.append(sample)
 
-            call_counts = {
+            call_counts: dict[str, Any] = {
                 "forward": _call_count(libraries["routed_forward"], "shuttle_routed_forward_call_count"),
-                "input_adjoint": _call_count(
-                    libraries["routed_input_adjoint"],
-                    "shuttle_routed_input_adjoint_call_count",
-                ),
                 "weight_gradients": [
                     _call_count(
                         libraries[f"group_batched_weight_gradient_{index}"],
@@ -423,11 +620,22 @@ def run_smoke(
                     for index in range(2)
                 ],
             }
+            if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                call_counts["input_adjoint"] = _call_count(
+                    libraries["routed_input_adjoint"],
+                    "shuttle_routed_input_adjoint_call_count",
+                )
+            else:
+                call_counts["shared_contract_multi_map"] = _call_count(
+                    libraries["shared_contract_multi_map"],
+                    "shuttle_shared_contract_multi_map_call_count",
+                )
     finally:
         if artifact_directory is not None:
             for name in (
                 "routed_forward",
                 "routed_input_adjoint",
+                "shared_contract_multi_map",
                 "group_batched_weight_gradient_0",
                 "group_batched_weight_gradient_1",
                 "axis_fold_0",
@@ -454,27 +662,72 @@ def run_smoke(
     plan = recovered_plans[0]
     replacement_audit = replacement_audits[0]
     attention_liveness = attention_liveness_audits[0]
-    forward, input_adjoint, weights, compiled_attention, generated_axis_folds = generated_programs[0]
-    target_occurrences = {
-        "forward": transformed_hlo.count(_TARGETS.routed_attention.routed.forward),
-        "input_adjoint": transformed_hlo.count(_TARGETS.routed_attention.routed.input_adjoint),
-        "weight_gradients": [
-            transformed_hlo.count(target) for target in _TARGETS.routed_attention.routed.weight_gradients
-        ],
+    generated = generated_programs[0]
+    forward = generated["forward"]
+    input_adjoint = generated["input_adjoint"]
+    shared_multi_map: GeneratedSharedContractMultiMapFfi | None = generated["shared_multi_map"]
+    weights = generated["weights"]
+    compiled_attention = generated["attention"]
+    attention_source_sha256 = generated["attention_source_sha256"]
+    generated_axis_folds = generated["axis_folds"]
+    if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+        routed_plan = plan.routed_attention.routed
+        attention_plan = plan.routed_attention.attention_backward
+        axis_fold_plans = plan.axis_folds
+        routed_audit = replacement_audit.routed_attention.routed
+        attention_instruction = replacement_audit.routed_attention.attention_backward_instruction
+        axis_fold_audits = replacement_audit.axis_folds
+        routed_targets = _TARGETS.routed_attention.routed
+        mode_target_key = "input_adjoint"
+        mode_target = routed_targets.input_adjoint
+        mode_generated = input_adjoint
+        mode_operands = routed_plan.input_adjoint.operands
+        mode_numerical_policy = routed_plan.input_adjoint.region.numerical_policy.value
+        input_adjoint_auxiliary = routed_audit.input_adjoint_auxiliary
+        deferred_input_adjoint = ()
+        generated_regions = [
+            "Contract -> Map -> Contract -> source Fold",
+            "Contract -> reverse Map -> Contract -> source Fold",
+        ]
+    else:
+        routed_plan = plan.routed
+        attention_plan = plan.attention_backward
+        axis_fold_plans = plan.axis_folds
+        routed_audit = replacement_audit.routed
+        attention_instruction = replacement_audit.attention_backward_instruction
+        axis_fold_audits = replacement_audit.axis_folds
+        routed_targets = _SHARED_ROUTED_TARGETS
+        mode_target_key = "shared_contract_multi_map"
+        mode_target = routed_targets.shared_contract_multi_map
+        mode_generated = shared_multi_map
+        mode_operands = routed_plan.shared_contract_multi_map.operands
+        mode_numerical_policy = routed_plan.shared_contract_multi_map.numerical_contract.numerical_policy.value
+        input_adjoint_auxiliary = None
+        deferred_input_adjoint = routed_audit.deferred_input_adjoint_instructions
+        generated_regions = [
+            "Contract -> Map -> Contract -> source Fold",
+            "shared Contract -> two generated scalar Maps",
+        ]
+    if mode_generated is None:
+        raise RuntimeError(f"composition {composition_mode.value} did not generate its routed mode body")
+    target_occurrences: dict[str, Any] = {
+        "forward": transformed_hlo.count(routed_targets.forward),
+        mode_target_key: transformed_hlo.count(mode_target),
+        "weight_gradients": [transformed_hlo.count(target) for target in routed_targets.weight_gradients],
         "attention_backward": transformed_hlo.count(_TARGETS.routed_attention.attention_backward),
         "axis_folds": [transformed_hlo.count(target) for target in _TARGETS.axis_folds],
     }
     minimum_calls = repeats + warmup + 1
     observed_calls = [
         call_counts["forward"],
-        call_counts["input_adjoint"],
+        call_counts[mode_target_key],
         *call_counts["weight_gradients"],
         call_counts["attention_backward"],
         *call_counts["axis_folds"],
     ]
     observed_occurrences = [
         target_occurrences["forward"],
-        target_occurrences["input_adjoint"],
+        target_occurrences[mode_target_key],
         *target_occurrences["weight_gradients"],
         target_occurrences["attention_backward"],
         *target_occurrences["axis_folds"],
@@ -484,25 +737,24 @@ def run_smoke(
     all_operands = tuple(
         dict.fromkeys(
             (
-                *(operand.value.instruction for operand in plan.routed_attention.routed.forward.operands),
-                *(operand.value.instruction for operand in plan.routed_attention.routed.input_adjoint.operands),
-                *(
-                    operand.value.instruction
-                    for weight in plan.routed_attention.routed.weight_gradients
-                    for operand in weight.operands
-                ),
-                *(value.instruction for value in plan.routed_attention.attention_backward.inputs),
-                *(value.instruction for fold in plan.axis_folds for value in fold.inputs),
+                *(operand.value.instruction for operand in routed_plan.forward.operands),
+                *(operand.value.instruction for operand in mode_operands),
+                *(operand.value.instruction for weight in routed_plan.weight_gradients for operand in weight.operands),
+                *(value.instruction for value in attention_plan.inputs),
+                *(value.instruction for fold in axis_fold_plans for value in fold.inputs),
             )
         )
     )
     parameter_ancestors = entry_parameter_ancestors(original, all_operands)
     static_roles = tuple(
-        operand.role.value
-        for operand in plan.routed_attention.routed.input_adjoint.operands
-        if not parameter_ancestors[operand.value.instruction]
+        operand.role.value for operand in mode_operands if not parameter_ancestors[operand.value.instruction]
     )
-    if static_roles != (RoutedInputAdjointFfiOperandRole.FOLD_INITIAL.value,):
+    expected_static_roles = (
+        (RoutedInputAdjointFfiOperandRole.FOLD_INITIAL.value,)
+        if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT
+        else ()
+    )
+    if static_roles != expected_static_roles:
         raise RuntimeError(f"unexpected routed training static operands: {static_roles}")
     baseline_median = statistics.median(baseline_samples)
     transformed_median = statistics.median(transformed_samples)
@@ -512,6 +764,7 @@ def run_smoke(
         write_gzip_text(directory / "transformed-gpu-pre-scheduler-hlo.txt.gz", transformed_hlo)
     return {
         "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
+        "composition_mode": composition_mode.value,
         "jax_version": jax.__version__,
         "jaxlib_version": jaxlib.__version__,
         "platform": "cuda",
@@ -519,8 +772,7 @@ def run_smoke(
         "architecture": architecture,
         "natural_frontend": "ordinary one-layer Grug train step with JAX-owned differentiation",
         "generated_regions": [
-            "Contract -> Map -> Contract -> source Fold",
-            "Contract -> reverse Map -> Contract -> source Fold",
+            *generated_regions,
             "group-batched weight Contract 0",
             "group-batched weight Contract 1",
             "causal GQA attention reverse Contract/Fold/DomainRestriction region",
@@ -528,44 +780,40 @@ def run_smoke(
             "generic 8x32 row-axis Fold 1",
         ],
         "numerical_policies": {
-            "forward": plan.routed_attention.routed.forward.region.numerical_policy.value,
-            "input_adjoint": plan.routed_attention.routed.input_adjoint.region.numerical_policy.value,
+            "forward": routed_plan.forward.region.numerical_policy.value,
+            mode_target_key: mode_numerical_policy,
             "weight_gradients": [
-                weight.numerical_contract.numerical_policy.value
-                for weight in plan.routed_attention.routed.weight_gradients
+                weight.numerical_contract.numerical_policy.value for weight in routed_plan.weight_gradients
             ],
-            "attention_backward": plan.routed_attention.attention_backward.reassociation,
-            "axis_folds": [fold.program.numerical_policy.value for fold in plan.axis_folds],
+            "attention_backward": attention_plan.reassociation,
+            "axis_folds": [fold.program.numerical_policy.value for fold in axis_fold_plans],
         },
-        "external_collectives": replacement_audit.routed_attention.routed.weight_gradient_collectives,
+        "external_collectives": routed_audit.weight_gradient_collectives,
         "uses_atomic_accumulation": False,
         "static_operand_roles": static_roles,
         "operand_ancestry": {operand: parameter_ancestors[operand] for operand in all_operands},
-        "output_alias_operands": [
-            weight.output_alias_operand for weight in plan.routed_attention.routed.weight_gradients
-        ],
+        "output_alias_operands": [weight.output_alias_operand for weight in routed_plan.weight_gradients],
         "custom_call_targets": {
-            "forward": _TARGETS.routed_attention.routed.forward,
-            "input_adjoint": _TARGETS.routed_attention.routed.input_adjoint,
-            "weight_gradients": _TARGETS.routed_attention.routed.weight_gradients,
+            "forward": routed_targets.forward,
+            mode_target_key: mode_target,
+            "weight_gradients": routed_targets.weight_gradients,
             "attention_backward": _TARGETS.routed_attention.attention_backward,
             "axis_folds": _TARGETS.axis_folds,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
-        "input_adjoint_auxiliary": replacement_audit.routed_attention.routed.input_adjoint_auxiliary,
+        "input_adjoint_auxiliary": input_adjoint_auxiliary,
+        "deferred_input_adjoint_instructions": deferred_input_adjoint,
         "target_instruction_names": (
-            *replacement_audit.routed_attention.routed.target_instructions,
-            replacement_audit.routed_attention.attention_backward_instruction,
-            *(axis_fold.call_instruction for axis_fold in replacement_audit.axis_folds),
+            *routed_audit.target_instructions,
+            attention_instruction,
+            *(axis_fold.call_instruction for axis_fold in axis_fold_audits),
         ),
-        "copy_count": dict(
-            zip(("original", "transformed"), replacement_audit.routed_attention.routed.copy_count, strict=True)
-        ),
+        "copy_count": dict(zip(("original", "transformed"), routed_audit.copy_count, strict=True)),
         "transpose_count": dict(
             zip(
                 ("original", "transformed"),
-                replacement_audit.routed_attention.routed.transpose_count,
+                routed_audit.transpose_count,
                 strict=True,
             )
         ),
@@ -573,19 +821,16 @@ def run_smoke(
         "attention_preserved_shared_users": dict(attention_liveness.preserved_shared_users),
         "generated_semantic_sha256": {
             "forward": forward.semantic_digest,
-            "input_adjoint": input_adjoint.semantic_digest,
+            mode_target_key: mode_generated.semantic_digest,
             "weight_gradients": [weight.semantic_digest for weight in weights],
             "attention_backward": compiled_attention.generated.semantic_fingerprint,
             "axis_folds": [axis_fold.semantic_fingerprints for axis_fold in generated_axis_folds],
         },
         "generated_source_sha256": {
             "forward": forward.source_digest,
-            "input_adjoint": input_adjoint.source_digest,
+            mode_target_key: mode_generated.source_digest,
             "weight_gradients": [weight.source_digest for weight in weights],
-            "attention_backward": {
-                "handler": _sha256(compiled_attention.source_path),
-                "aot_sources": [_sha256(path) for path in compiled_attention.aot_sources],
-            },
+            "attention_backward": attention_source_sha256,
             "axis_folds": [axis_fold.source_sha256 for axis_fold in generated_axis_folds],
         },
         "baseline_median_ms": baseline_median,
@@ -606,8 +851,11 @@ def run_smoke(
         **comparison,
         "outputs_match": True,
         "remaining_ownership_gap": (
-            "The rematerialized routed forward chain, relation index plane, and placement collectives remain under "
-            "XLA; this checkpoint composes seven generic generated physical regions without a megakernel."
+            "The relation index plane and placement collectives remain under XLA; the nonoverlapping "
+            "input-adjoint Contract/Fold remainder also stays in XLA."
+            if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+            else "The rematerialized routed forward chain, relation index plane, and placement collectives remain "
+            "under XLA; the monolithic generated input-adjoint region owns the overlapping reverse path."
         ),
     }
 
@@ -626,6 +874,12 @@ def main() -> None:
     parser.add_argument("--triton-target")
     parser.add_argument("--artifact-directory", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--composition-mode",
+        type=RoutedTrainingCompositionMode,
+        choices=tuple(RoutedTrainingCompositionMode),
+        default=RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER,
+    )
     parser.add_argument("--warmup", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=30)
     args = parser.parse_args()
@@ -633,6 +887,7 @@ def main() -> None:
         args.nvcc,
         args.architecture,
         args.artifact_directory,
+        composition_mode=args.composition_mode,
         repository=args.repository,
         triton_target=args.triton_target,
         warmup=args.warmup,
