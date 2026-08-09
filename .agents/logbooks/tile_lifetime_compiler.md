@@ -1689,12 +1689,12 @@ author: dlwh
   mutation, sharding/alias/effect transfer, and a GPU body generated from the
   same multi-output AST remain open. Commit `1ff3e6b77e` is pushed.
 
-### 2026-08-08 - TLTC-XLA-004 routed train-step ownership boundary
+### 2026-08-08 - TLTC-XLA-005 routed train-step ownership boundary
 
 - Hypothesis: physical XLA HLO retains enough name-free structure to recover
   the main routed forward and backward program after fusion and padding, while
   leaving placement collectives external.
-- Commit Hash: uncommitted on `023755efca`.
+- Commit Hash: `bb363f56ac`.
 - Command: `uv run --frozen --package marin-tile-lifetime python
   lib/tile_lifetime/benchmarks/analyze_xla_relation_program_hlo.py
   lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz
