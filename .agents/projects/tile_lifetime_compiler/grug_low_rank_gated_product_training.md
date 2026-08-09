@@ -2,13 +2,17 @@
 
 ## Result
 
-Shuttle now recovers the repeated low-rank gated-product forward and JAX-owned
-reverse structure from the pinned natural post-SPMD Grug HLO. Recovery uses
-only shapes, contraction dimensions, scalar dataflow, liveness, and shared
-parameter origins. Removing all HLO metadata produces the same plans.
+Shuttle now forms exact typed-FFI replacement boundaries for the repeated
+low-rank gated-product forward, rematerialization, and JAX-owned reverse
+structure in the pinned natural post-SPMD Grug HLO. Recovery uses only shapes,
+contraction dimensions, scalar dataflow, liveness, and shared parameter
+origins. Removing all HLO metadata produces the same boundary families and
+ABIs.
 
-This is a semantic-recovery checkpoint. It does not include a generated GPU
-kernel, a replacement call, latency measurements, or a launch-count claim.
+This is a structural replacement checkpoint. It uses placeholder generic
+typed-FFI targets and does not claim a generated GPU body, latency, or launch
+reduction. The result composes after the existing thirteen-call routed,
+normalized-exponential, attention-reverse, and axis-Fold rewrite.
 
 ## Generic algebra
 
@@ -74,11 +78,37 @@ Contract dimensions, scalar reachability between the two input-adjoint
 Contracts, and equality of the layout-stripped scalar values consumed by the
 weight adjoints.
 
+## Exact replacement boundaries
+
+The maximal bounded decomposition needs ten generic calls:
+
+| Boundary | Calls | Inputs per call | Outputs per call | Contracts per call |
+| --- | ---: | ---: | ---: | ---: |
+| Forward/rematerialization | 6 | 4 | `5,1,1,5,5,5` | 2 |
+| JAX-owned reverse | 4 | 9 | 3 | 4 |
+
+The two forward-only realizations return only their final BF16 value. The four
+realizations used by JAX's reverse also return the exact BF16 pre-Map, sigmoid,
+and hidden values already live in the source program. This preserves the
+existing save/rematerialize policy and cast ordering. It does not silently
+replace saved values with recomputation.
+
+Each reverse call consumes those source-order values, the two weights, the
+incoming cotangent, and the required physical input views. It returns:
+
+~~~
+input adjoint
+down-weight adjoint
+up-weight adjoint
+~~~
+
+The reverse scalar Maps are re-imported from the saved-value cut. JAX continues
+to own differentiation; Shuttle does not differentiate the forward AST.
+
 ## Live work after current replacements
 
-The accounting starts from the checked-in transformed HLO artifact and applies
-the public compact normalized-exponential forward replacement, followed by its
-reverse replacement. Root reachability then leaves:
+The accounting starts from the checked-in thirteen-call transformed HLO
+artifact. Root reachability leaves:
 
 | Static HLO work | Contract count | Dot FLOPs |
 | --- | ---: | ---: |
@@ -96,11 +126,11 @@ dot FLOPs in this small padded fixture. Its 28 Contracts split into:
 ~~~
 
 This is static HLO accounting, not a production-shape throughput estimate.
-There are ten algebraic regions (six forward/rematerialized and four reverse),
-but 28 HLO dots do not imply 28 physical GPU launches. XLA may fuse surrounding
-work or select library implementations, and a generated reverse may require
-several kernels. Measure launch and latency deltas only after an exact generated
-replacement executes.
+The ten placeholder calls replace all 28 Contracts. The transformed HLO has 23
+generated calls in total: the existing thirteen plus six forward/rematerialized
+and four reverse calls. This is exact structural accounting, not a recommended
+physical kernelization. A later generated backend may attach compatible
+boundaries or use more than one kernel per call.
 
 ## Numerical and placement boundaries
 
@@ -117,13 +147,13 @@ Weight adjoints are BF16 at the Contract boundary and are converted to FP32 by
 the existing optimizer path. The scalar ASTs carry source_ordered; no
 real-algebra reassociation is claimed.
 
-Placement all-reduces feeding the incoming cotangents remain outside the
-recovered reverse plans. The recovered plans record the nearest upstream
-collectives so a future replacement cannot silently absorb or move them.
-Input-adjoint outputs feed the surrounding normalization reverse. Weight
-adjoints feed the ordinary FP32 optimizer update.
+All ten placement all-reduces remain byte-for-byte outside the replacement
+regions. The audit records the exact cotangent inputs and their upstream
+collective paths. Input-adjoint outputs feed the surrounding normalization
+reverse. BF16 weight adjoints feed the ordinary FP32 optimizer conversion and
+update.
 
-## Proposed physical ownership boundary
+## Physical ownership boundary
 
 A generic physical implementation should compose the existing Contract
 skeleton with generated scalar Maps:
@@ -138,12 +168,15 @@ reverse:
     + two generic weight-gradient Contracts
 ~~~
 
-The first replacement should preserve JAX's existing saved/rematerialized
-values and keep collectives outside. A later candidate can choose save versus
-recompute and kernel boundaries. An exact HLO replacement is intentionally not
-part of this checkpoint because its tuple outputs must cover the forward result,
-the input adjoint, both weight adjoints, and any saved values required by the
-selected policy.
+The implemented structural replacement preserves JAX's existing
+saved/rematerialized values and keeps collectives outside. Every call has an
+exact multi-output ABI, every old scalar instruction is absent or dead after
+replacement, and all 28 old dot instructions cease to be live Contracts.
+
+A tanh mutation changes the generated hidden scalar AST while retaining the
+same boundary-family digest, call target, input ABI, output ABI, and Contract
+shapes. This demonstrates that the boundary follows generic Contract/Map
+structure rather than a workload name.
 
 ## Reproduction
 
@@ -152,7 +185,8 @@ uv run --frozen --package marin-tile-lifetime --group test pytest -q \
   lib/tile_lifetime/tests/test_xla_low_rank_gated_product.py
 ~~~
 
-The test applies the two normalized-exponential replacements, performs
-root-reachable accounting, removes frontend metadata, checks every numerical
-boundary, and exercises a hidden-Map mutation through the same scalar
+The focused tests consume the frozen thirteen-call natural Grug HLO, perform
+root-reachable accounting, remove frontend metadata, check every numerical and
+collective boundary, round-trip all ten placeholder typed-FFI calls, audit the
+23-call composition, and exercise a hidden-Map mutation through the same scalar
 generator.

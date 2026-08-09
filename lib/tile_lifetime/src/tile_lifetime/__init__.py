@@ -477,6 +477,17 @@ from tile_lifetime.xla_low_rank_gated_product import (
     RankTwoContractPlan,
     recover_low_rank_gated_product_training,
 )
+from tile_lifetime.xla_low_rank_gated_product_ffi import (
+    LowRankContractMapCallAudit,
+    LowRankContractMapForwardHloReplacementPlan,
+    LowRankContractMapReverseHloReplacementPlan,
+    LowRankContractMapTrainingHloReplacementAudit,
+    LowRankContractMapTrainingHloReplacementPlan,
+    audit_low_rank_contract_map_training_hlo_replacement,
+    mutate_forward_hidden_scalar_program,
+    plan_low_rank_contract_map_training_hlo_replacements,
+    replace_low_rank_contract_map_training_hlo_regions_with_custom_calls,
+)
 from tile_lifetime.xla_normalized_exp_contract_forward import (
     NormalizedExpContractForwardHloRegion,
     NormalizedExpContractForwardHloReplacementAudit,
