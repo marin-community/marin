@@ -27,6 +27,7 @@ from tile_lifetime import (
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
     scaled_score_map,
+    verify_streaming_attention_backward_score_map_vjp,
 )
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant
 
@@ -154,6 +155,20 @@ def test_score_map_mutation_reuses_one_backward_stage_family() -> None:
         "cotangent.key",
         "cotangent.value",
     )
+    verify_streaming_attention_backward_score_map_vjp(baseline)
+    verify_streaming_attention_backward_score_map_vjp(mutated)
+
+
+def test_score_map_vjp_verifier_rejects_a_fixed_backend_formula() -> None:
+    backward = derive_streaming_attention_backward(_program(causal=False, softcap=1.3))
+    forged_vjp = replace(
+        backward.score_map_vjp,
+        expression=scalar_constant(0.7),
+        inputs=(),
+    )
+
+    with pytest.raises(ValueError, match="not the derivative"):
+        verify_streaming_attention_backward_score_map_vjp(replace(backward, score_map_vjp=forged_vjp))
 
 
 def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() -> None:

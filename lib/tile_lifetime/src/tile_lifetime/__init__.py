@@ -342,6 +342,7 @@ from tile_lifetime.streaming_attention_backward import (
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
+    verify_streaming_attention_backward_score_map_vjp,
 )
 from tile_lifetime.streaming_attention_backward_reference import (
     STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,

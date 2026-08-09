@@ -232,6 +232,34 @@ def eliminate_normalized_exp_maximum_vjp(
     )
 
 
+def verify_streaming_attention_backward_score_map_vjp(
+    program: StreamingAttentionBackwardProgram,
+) -> None:
+    """Verify that the reverse score Map is derived from the forward scalar AST.
+
+    Physical streaming templates may lower only a constrained scalar primitive
+    set, but they must not substitute a fixed workload formula for the recovered
+    program. This check keeps the semantic mutation boundary explicit before a
+    backend binds the scalar derivative into its tile schedule.
+    """
+    forward_map = program.forward.score_map
+    expected_expression = differentiate_scalar_expression(
+        forward_map.expression,
+        program.forward.qk.output.name,
+    )
+    if program.score_map_vjp.expression != expected_expression:
+        raise ValueError("score Map VJP is not the derivative of the recovered forward scalar AST")
+    expected_inputs = scalar_expression_inputs(expected_expression)
+    actual_inputs = tuple(value.name for value in program.score_map_vjp.inputs)
+    if len(actual_inputs) != len(expected_inputs) or set(actual_inputs) != expected_inputs:
+        raise ValueError(
+            "score Map VJP inputs do not match its derived scalar expression: "
+            f"expected {tuple(sorted(expected_inputs))}, found {actual_inputs}"
+        )
+    if program.score_map_vjp.output != forward_map.output:
+        raise ValueError("score Map VJP must preserve the forward score Map output domain")
+
+
 def derive_streaming_attention_backward_tile_schedule(
     program: StreamingAttentionBackwardProgram,
     *,

@@ -40,6 +40,7 @@ from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardProgram,
     StreamingAttentionBackwardTileSchedule,
     eliminate_normalized_exp_maximum_vjp,
+    verify_streaming_attention_backward_score_map_vjp,
 )
 from tile_lifetime.tensor_program import serialize_scalar_expression
 
@@ -376,6 +377,7 @@ def prepare_streaming_attention_backward_launches(
             "the first reverse emitter requires an explicit legality rewrite to the "
             "normalized-exp maximum-VJP invariant"
         )
+    verify_streaming_attention_backward_score_map_vjp(program)
     forward = program.forward
     lowered = lower_score_map(forward)
     block_m = schedule.query_tile_size
