@@ -27,6 +27,13 @@ from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_e
 
 logger = logging.getLogger(__name__)
 
+# Slice for polling a pending coordinator RPC: short enough to stay responsive to
+# shutdown, long enough not to spin. The warn thresholds bound how long a coordinator
+# can stay silent before the worker says so.
+RPC_POLL_INTERVAL = 0.5
+REGISTER_WARN_AFTER = 60.0
+PULL_TASK_WARN_AFTER = 30.0
+
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
     """Return worker status text, or two idle values when no task is active."""
@@ -106,18 +113,20 @@ class ZephyrWorker:
         return self._host_shutdown_event is not None and self._host_shutdown_event.is_set()
 
     def _register(self) -> bool:
-        """Block until registration lands. Return False if we are told to stop first.
+        """Register with the coordinator and restore the memory tables it returns.
 
-        Waits on the outstanding request rather than re-sending it: a busy coordinator
-        answers late, and a client-side deadline would turn that delay into a second
-        registration. ``register_worker`` requeues a worker's in-flight tasks whenever
-        it sees a known ``worker_id``, so a duplicate from a live worker would hand a
-        shard it is still running to somebody else. A new request goes out only when
-        the RPC itself failed.
-
-        The retry is unbounded. Returning instead exits the poll loop, and iris records
-        that clean exit as a successful task and never replaces the worker.
+        Returns True once registration lands, False if this worker is told to stop
+        first. Blocks for as long as registration takes.
         """
+        # Wait on the outstanding request rather than re-send it. A busy coordinator
+        # answers late, and a client-side deadline would turn that delay into a second
+        # registration -- register_worker requeues a worker's in-flight tasks whenever
+        # it sees a known worker_id, so a duplicate from a live worker would hand a
+        # shard it is still running to somebody else. Only a failed RPC starts a new
+        # request.
+        #
+        # Unbounded on purpose: returning exits the poll loop, and iris records that
+        # clean exit as a successful task and never replaces the worker.
         backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
         future: ActorFuture | None = None
         request_start = 0.0
@@ -129,10 +138,10 @@ class ZephyrWorker:
                     future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle)
                     request_start = time.monotonic()
                     warned = False
-                registrations = future.result(timeout=0.5)
+                registrations = future.result(timeout=RPC_POLL_INTERVAL)
             except TimeoutError:
                 elapsed = time.monotonic() - request_start
-                if elapsed > 60 and not warned:
+                if elapsed > REGISTER_WARN_AFTER and not warned:
                     logger.warning("[%s] Waiting to register with the coordinator (%.0fs)", self._worker_id, elapsed)
                     warned = True
                 continue
@@ -188,10 +197,10 @@ class ZephyrWorker:
                     future = self._coordinator.pull_task.remote(self._worker_id, avail)
                     future_start = time.monotonic()
                     warned = False
-                response = future.result(timeout=0.5)
+                response = future.result(timeout=RPC_POLL_INTERVAL)
             except TimeoutError:
                 elapsed = time.monotonic() - future_start
-                if elapsed > 30 and not warned:
+                if elapsed > PULL_TASK_WARN_AFTER and not warned:
                     logger.warning("[%s] Waiting for pull_task response (%.0fs)", self._worker_id, elapsed)
                     warned = True
                 continue

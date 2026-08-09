@@ -1614,21 +1614,27 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     """
 
     class _RegistrationRpc:
-        """Fails the first call, then answers the second one 1.2s late."""
+        """Fails the first call. Answers the second one after two poll timeouts.
+
+        Doubles as the future it returns, so the test drives the outcome of each poll
+        instead of waiting on a clock.
+        """
 
         def __init__(self):
             self.calls = 0
+            self._timeouts = 2
 
         def remote(self, *_args):
             self.calls += 1
-            future: Future = Future()
+            return self
+
+        def result(self, timeout=None):
             if self.calls == 1:
-                future.set_exception(ConnectionError("simulated coordinator overload"))
-                return future
-            timer = threading.Timer(1.2, lambda: future.set_result(()))
-            timer.daemon = True
-            timer.start()
-            return future
+                raise ConnectionError("simulated coordinator overload")
+            if self._timeouts > 0:
+                self._timeouts -= 1
+                raise TimeoutError
+            return ()
 
     rpc = _RegistrationRpc()
     worker = ZephyrWorker.__new__(ZephyrWorker)
