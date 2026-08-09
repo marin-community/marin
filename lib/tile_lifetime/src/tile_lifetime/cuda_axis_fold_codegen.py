@@ -178,6 +178,33 @@ class GeneratedCudaAxisFold:
     source_sha256: str
 
 
+@dataclass(frozen=True)
+class CudaAxisFoldFfiBuffer:
+    """One fixed-rank buffer in a generated XLA typed-FFI signature."""
+
+    name: str
+    dtype: DType
+    shape: tuple[int, ...]
+
+    @property
+    def rank(self) -> int:
+        """Static rank encoded in the typed-FFI signature."""
+        return len(self.shape)
+
+
+@dataclass(frozen=True)
+class GeneratedCudaAxisFoldFfi:
+    """Torch-free typed-FFI source for a sequence of axis-Fold programs."""
+
+    source: str
+    target_name: str
+    handler_symbol: str
+    inputs: tuple[CudaAxisFoldFfiBuffer, ...]
+    outputs: tuple[CudaAxisFoldFfiBuffer, ...]
+    semantic_fingerprints: tuple[str, ...]
+    source_sha256: str
+
+
 def generate_cuda_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxisFold:
     """Render a generic deterministic Map/Fold CUDA extension."""
     if program.groups_per_block > 1:
@@ -304,6 +331,113 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
     )
 
 
+def generate_cuda_axis_fold_ffi(
+    programs: tuple[AxisFoldProgram, ...],
+    *,
+    target_name: str,
+) -> GeneratedCudaAxisFoldFfi:
+    """Render fixed-shape axis Folds behind one CUDA XLA typed-FFI call.
+
+    The handler is only a runtime boundary. Each device kernel is still
+    generated from the program's scalar contribution, reducer, finalization,
+    broadcast relations, and physical Fold schedule.
+    """
+    if not programs:
+        raise ValueError("axis-Fold FFI generation requires at least one program")
+    handler_symbol = target_name.replace(".", "_")
+    if not handler_symbol.isidentifier():
+        raise ValueError(f"FFI target does not map to a C identifier: {target_name!r}")
+    inputs = _ffi_input_buffers(programs)
+    outputs = tuple(
+        CudaAxisFoldFfiBuffer(
+            name=f"output{index}",
+            dtype=program.output_dtype,
+            shape=(
+                (program.rows, program.columns)
+                if program.output_kind is AxisFoldOutputKind.ELEMENT
+                else (program.columns if program.reduction_axis is AxisFoldDirection.ROWS else program.rows,)
+            ),
+        )
+        for index, program in enumerate(programs)
+    )
+    input_arguments = ",\n    ".join(
+        f"ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}> {value.name}_buffer" for value in inputs
+    )
+    output_arguments = ",\n    ".join(
+        f"ffi::Result<ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}>> {value.name}" for value in outputs
+    )
+    input_pointers = "\n".join(_ffi_input_pointer(value) for value in inputs)
+    output_pointers = "\n".join(_ffi_output_pointer(value) for value in outputs)
+    kernels = "\n\n".join(
+        _ffi_axis_fold_kernel(program, symbol=f"ShuttleAxisFoldKernel{index}", prefix=f"Program{index}")
+        for index, program in enumerate(programs)
+    )
+    launches = "\n".join(
+        _ffi_axis_fold_launch(program, index=index, output=outputs[index]) for index, program in enumerate(programs)
+    )
+    input_bindings = "\n".join(f"      .Arg<ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}>>()" for value in inputs)
+    output_bindings = "\n".join(
+        f"      .Ret<ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}>>()" for value in outputs
+    )
+    source = f"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic rank-two Map/Fold semantics; do not edit.
+#include <atomic>
+#include <cstdint>
+#include <string>
+
+#include <cuda_bf16.h>
+#include <cuda_runtime_api.h>
+
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
+
+namespace {{
+std::atomic<int> call_count{{0}};
+
+{kernels}
+
+ffi::Error ShuttleAxisFoldRegion(
+    cudaStream_t stream,
+    {input_arguments},
+    {output_arguments}) {{
+{input_pointers}
+{output_pointers}
+{launches}
+  call_count.fetch_add(1, std::memory_order_relaxed);
+  return ffi::Error::Success();
+}}
+
+auto ShuttleAxisFoldRegionBinding() {{
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+{input_bindings}
+{output_bindings};
+}}
+}}  // namespace
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    {handler_symbol},
+    ShuttleAxisFoldRegion,
+    ShuttleAxisFoldRegionBinding());
+
+extern "C" int shuttle_axis_fold_ffi_call_count() {{
+  return call_count.load(std::memory_order_relaxed);
+}}
+""".strip()
+    return GeneratedCudaAxisFoldFfi(
+        source=source,
+        target_name=target_name,
+        handler_symbol=handler_symbol,
+        inputs=inputs,
+        outputs=outputs,
+        semantic_fingerprints=tuple(program.semantic_fingerprint for program in programs),
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+    )
+
+
 def _generate_tiled_row_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxisFold:
     """Render a coalesced multi-group schedule for a row-axis reduction."""
     argument_declarations = ",\n    ".join(f"torch::Tensor {value.name}" for value in program.inputs)
@@ -415,6 +549,268 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
         semantic_fingerprint=program.semantic_fingerprint,
         source_sha256=hashlib.sha256(source.encode()).hexdigest(),
     )
+
+
+def _ffi_input_buffers(programs: tuple[AxisFoldProgram, ...]) -> tuple[CudaAxisFoldFfiBuffer, ...]:
+    ordered: list[CudaAxisFoldFfiBuffer] = []
+    by_name: dict[str, CudaAxisFoldFfiBuffer] = {}
+    for program in programs:
+        for value in program.inputs:
+            candidate = CudaAxisFoldFfiBuffer(
+                name=value.name,
+                dtype=value.dtype,
+                shape={
+                    AxisFoldInputLayout.ELEMENT: (program.rows, program.columns),
+                    AxisFoldInputLayout.ROW: (program.rows,),
+                    AxisFoldInputLayout.COLUMN: (program.columns,),
+                    AxisFoldInputLayout.SCALAR: (),
+                }[value.layout],
+            )
+            previous = by_name.get(value.name)
+            if previous is not None and previous != candidate:
+                raise ValueError(f"axis-Fold FFI input {value.name!r} has incompatible uses: {previous} and {candidate}")
+            if previous is None:
+                by_name[value.name] = candidate
+                ordered.append(candidate)
+    return tuple(ordered)
+
+
+def _ffi_dtype(dtype: DType) -> str:
+    return {DType.BF16: "ffi::BF16", DType.FP32: "ffi::F32"}[dtype]
+
+
+def _ffi_input_pointer(value: CudaAxisFoldFfiBuffer) -> str:
+    if value.dtype is DType.BF16:
+        return (
+            f"  const auto* {value.name} = reinterpret_cast<const __nv_bfloat16*>(" f"{value.name}_buffer.typed_data());"
+        )
+    return f"  const auto* {value.name} = {value.name}_buffer.typed_data();"
+
+
+def _ffi_output_pointer(value: CudaAxisFoldFfiBuffer) -> str:
+    if value.dtype is DType.BF16:
+        return f"  auto* {value.name}_data = reinterpret_cast<__nv_bfloat16*>(" f"{value.name}->typed_data());"
+    return f"  auto* {value.name}_data = {value.name}->typed_data();"
+
+
+def _ffi_axis_fold_kernel(program: AxisFoldProgram, *, symbol: str, prefix: str) -> str:
+    rows = f"k{prefix}Rows"
+    columns = f"k{prefix}Columns"
+    threads = f"k{prefix}Threads"
+    parameters = ", ".join(
+        (*(_kernel_parameter(value) for value in program.inputs), f"{_ffi_output_type(program)} output")
+    )
+    local_reductions = "\n".join(f"  float local_{value.name} = 0.0f;" for value in program.reductions)
+    shared_declarations = "\n".join(
+        f"  __shared__ float shared_{value.name}[{threads}];" for value in program.reductions
+    )
+    shared_initialization = "\n".join(
+        f"  shared_{value.name}[threadIdx.x] = local_{value.name};" for value in program.reductions
+    )
+    if program.groups_per_block > 1:
+        return _ffi_tiled_row_axis_fold_kernel(
+            program,
+            symbol=symbol,
+            prefix=prefix,
+            parameters=parameters,
+            local_reductions=local_reductions,
+            shared_declarations=shared_declarations,
+            shared_initialization=shared_initialization,
+        )
+    reduction_extent = rows if program.reduction_axis is AxisFoldDirection.ROWS else columns
+    group_extent = columns if program.reduction_axis is AxisFoldDirection.ROWS else rows
+    coordinate_setup = (
+        "    const int row = reduction_index;\n    const int column = group;"
+        if program.reduction_axis is AxisFoldDirection.ROWS
+        else "    const int row = group;\n    const int column = reduction_index;"
+    )
+    aliases = _ffi_input_aliases(program.inputs, "row", "column", columns)
+    contribution_updates = "\n".join(
+        f"    local_{value.name} = __fadd_rn(local_{value.name}, {_cuda_expression(value.contribution, aliases)});"
+        for value in program.reductions
+    )
+    shared_updates = "\n".join(
+        f"      shared_{value.name}[threadIdx.x] = __fadd_rn("
+        f"shared_{value.name}[threadIdx.x], shared_{value.name}[threadIdx.x + stride]);"
+        for value in program.reductions
+    )
+    reduction_aliases = {value.name: f"shared_{value.name}[0]" for value in program.reductions}
+    output_body = _ffi_output_body(program, reduction_aliases, rows=rows, columns=columns)
+    return f"""
+constexpr int {rows} = {program.rows};
+constexpr int {columns} = {program.columns};
+constexpr int {threads} = {program.threads};
+
+__global__ __launch_bounds__({threads}) void {symbol}({parameters}) {{
+{shared_declarations}
+  const int group = blockIdx.x;
+  if (group >= {group_extent}) return;
+{local_reductions}
+  for (int reduction_index = threadIdx.x; reduction_index < {reduction_extent};
+       reduction_index += {threads}) {{
+{coordinate_setup}
+{contribution_updates}
+  }}
+{shared_initialization}
+  __syncthreads();
+  for (int stride = {threads} / 2; stride > 0; stride /= 2) {{
+    if (threadIdx.x < stride) {{
+{shared_updates}
+    }}
+    __syncthreads();
+  }}
+{output_body}
+}}
+""".strip()
+
+
+def _ffi_tiled_row_axis_fold_kernel(
+    program: AxisFoldProgram,
+    *,
+    symbol: str,
+    prefix: str,
+    parameters: str,
+    local_reductions: str,
+    shared_declarations: str,
+    shared_initialization: str,
+) -> str:
+    rows = f"k{prefix}Rows"
+    columns = f"k{prefix}Columns"
+    threads = f"k{prefix}Threads"
+    groups = f"k{prefix}GroupsPerBlock"
+    lanes = f"k{prefix}ReductionLanes"
+    aliases = _ffi_input_aliases(program.inputs, "row", "column", columns)
+    contribution_updates = "\n".join(
+        f"      local_{value.name} = __fadd_rn(local_{value.name}, " f"{_cuda_expression(value.contribution, aliases)});"
+        for value in program.reductions
+    )
+    shared_updates = "\n".join(
+        f"      shared_{value.name}[threadIdx.x] = __fadd_rn("
+        f"shared_{value.name}[threadIdx.x], shared_{value.name}[threadIdx.x + stride * {groups}]);"
+        for value in program.reductions
+    )
+    reduction_aliases = {value.name: f"shared_{value.name}[threadIdx.x]" for value in program.reductions}
+    output_aliases = _ffi_reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
+    output_expression = _cuda_expression(program.output_expression, output_aliases)
+    output_store = _output_store(program.output_dtype, "group", output_expression)
+    return f"""
+constexpr int {rows} = {program.rows};
+constexpr int {columns} = {program.columns};
+constexpr int {threads} = {program.threads};
+constexpr int {groups} = {program.groups_per_block};
+constexpr int {lanes} = {threads} / {groups};
+
+__global__ __launch_bounds__({threads}) void {symbol}({parameters}) {{
+{shared_declarations}
+  const int group_lane = threadIdx.x % {groups};
+  const int reduction_lane = threadIdx.x / {groups};
+  const int group = blockIdx.x * {groups} + group_lane;
+{local_reductions}
+  if (group < {columns}) {{
+    for (int row = reduction_lane; row < {rows}; row += {lanes}) {{
+      const int column = group;
+{contribution_updates}
+    }}
+  }}
+{shared_initialization}
+  __syncthreads();
+  for (int stride = {lanes} / 2; stride > 0; stride /= 2) {{
+    if (reduction_lane < stride) {{
+{shared_updates}
+    }}
+    __syncthreads();
+  }}
+  if (reduction_lane == 0 && group < {columns}) {{
+    {output_store}
+  }}
+}}
+""".strip()
+
+
+def _ffi_output_type(program: AxisFoldProgram) -> str:
+    return "__nv_bfloat16*" if program.output_dtype is DType.BF16 else "float*"
+
+
+def _ffi_input_aliases(
+    inputs: tuple[AxisFoldInput, ...],
+    row: str,
+    column: str,
+    columns: str,
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for value in inputs:
+        index = {
+            AxisFoldInputLayout.ELEMENT: f"{row} * {columns} + {column}",
+            AxisFoldInputLayout.ROW: row,
+            AxisFoldInputLayout.COLUMN: column,
+            AxisFoldInputLayout.SCALAR: "0",
+        }[value.layout]
+        load = f"{value.name}[{index}]"
+        aliases[value.name] = f"__bfloat162float({load})" if value.dtype is DType.BF16 else load
+    return aliases
+
+
+def _ffi_reduced_output_aliases(
+    inputs: tuple[AxisFoldInput, ...],
+    reduction_axis: AxisFoldDirection,
+    group: str,
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for value in inputs:
+        index = {
+            AxisFoldInputLayout.ROW: group if reduction_axis is AxisFoldDirection.COLUMNS else None,
+            AxisFoldInputLayout.COLUMN: group if reduction_axis is AxisFoldDirection.ROWS else None,
+            AxisFoldInputLayout.SCALAR: "0",
+            AxisFoldInputLayout.ELEMENT: None,
+        }[value.layout]
+        if index is None:
+            continue
+        load = f"{value.name}[{index}]"
+        aliases[value.name] = f"__bfloat162float({load})" if value.dtype is DType.BF16 else load
+    return aliases
+
+
+def _ffi_output_body(
+    program: AxisFoldProgram,
+    reduction_aliases: dict[str, str],
+    *,
+    rows: str,
+    columns: str,
+) -> str:
+    if program.output_kind is AxisFoldOutputKind.REDUCED:
+        aliases = _ffi_reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
+        expression = _cuda_expression(program.output_expression, aliases)
+        return f"  if (threadIdx.x == 0) {{\n    {_output_store(program.output_dtype, 'group', expression)}\n  }}"
+    element_extent = rows if program.reduction_axis is AxisFoldDirection.ROWS else columns
+    row = "element" if program.reduction_axis is AxisFoldDirection.ROWS else "group"
+    column = "group" if program.reduction_axis is AxisFoldDirection.ROWS else "element"
+    aliases = _ffi_input_aliases(program.inputs, row, column, columns) | reduction_aliases
+    expression = _cuda_expression(program.output_expression, aliases)
+    return (
+        f"  for (int element = threadIdx.x; element < {element_extent}; element += blockDim.x) {{\n"
+        f"    const int row = {row};\n"
+        f"    const int column = {column};\n"
+        f"    {_output_store(program.output_dtype, 'row * ' + columns + ' + column', expression)}\n"
+        "  }"
+    )
+
+
+def _ffi_axis_fold_launch(program: AxisFoldProgram, *, index: int, output: CudaAxisFoldFfiBuffer) -> str:
+    prefix = f"Program{index}"
+    blocks = (
+        f"(k{prefix}Columns + k{prefix}GroupsPerBlock - 1) / k{prefix}GroupsPerBlock"
+        if program.groups_per_block > 1
+        else (f"k{prefix}Columns" if program.reduction_axis is AxisFoldDirection.ROWS else f"k{prefix}Rows")
+    )
+    arguments = ",\n      ".join((*tuple(value.name for value in program.inputs), f"{output.name}_data"))
+    return f"""
+  ShuttleAxisFoldKernel{index}<<<{blocks}, k{prefix}Threads, 0, stream>>>(
+      {arguments});
+  if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {{
+    return ffi::Error::Internal(
+        std::string("ShuttleAxisFoldKernel{index}: ") + cudaGetErrorString(status));
+  }}
+""".rstrip()
 
 
 def evaluate_axis_fold_program(

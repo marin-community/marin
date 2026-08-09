@@ -15,6 +15,7 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldReduction,
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
+    generate_cuda_axis_fold_ffi,
 )
 from tile_lifetime.ir import DType
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input
@@ -95,3 +96,78 @@ def test_source_ordered_fold_uses_one_worker() -> None:
 
     assert source_ordered.semantic_fingerprint != program.semantic_fingerprint
     assert "constexpr int kThreads = 1" in generate_cuda_axis_fold(source_ordered).source
+
+
+def test_axis_fold_ffi_composes_element_and_reduced_programs_without_torch() -> None:
+    value = scalar_input("value")
+    row_scale = scalar_input("row_scale")
+    element_program = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(
+            AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("row_scale", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("row_total", value),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            row_scale,
+            scalar_binary(
+                ScalarExpressionKind.SUBTRACT,
+                value,
+                scalar_binary(
+                    ScalarExpressionKind.DIVIDE,
+                    scalar_input("row_total"),
+                    scalar_constant(3.0),
+                ),
+            ),
+        ),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    reduced_program = replace(_scaled_column_sum_program(threads=64), groups_per_block=16)
+
+    generated = generate_cuda_axis_fold_ffi(
+        (element_program, reduced_program),
+        target_name="shuttle.axis_fold_test_v1",
+    )
+
+    assert generated.handler_symbol == "shuttle_axis_fold_test_v1"
+    assert [(value.name, value.dtype, value.rank) for value in generated.inputs] == [
+        ("value", DType.FP32, 2),
+        ("row_scale", DType.FP32, 1),
+        ("scale", DType.FP32, 1),
+    ]
+    assert [(value.dtype, value.rank) for value in generated.outputs] == [
+        (DType.FP32, 2),
+        (DType.FP32, 1),
+    ]
+    assert generated.semantic_fingerprints == (
+        element_program.semantic_fingerprint,
+        reduced_program.semantic_fingerprint,
+    )
+    assert "XLA_FFI_DEFINE_HANDLER_SYMBOL" in generated.source
+    assert "ShuttleAxisFoldKernel0" in generated.source
+    assert "ShuttleAxisFoldKernel1" in generated.source
+    assert "kProgram1GroupsPerBlock = 16" in generated.source
+    assert "torch" not in generated.source.lower()
+
+
+def test_axis_fold_ffi_semantic_mutation_regenerates_physical_source() -> None:
+    program = _scaled_column_sum_program()
+    mutated = replace(
+        program,
+        output_expression=scalar_binary(
+            ScalarExpressionKind.ADD,
+            program.output_expression,
+            scalar_constant(1.0),
+        ),
+    )
+
+    original = generate_cuda_axis_fold_ffi((program,), target_name="shuttle.axis_fold_mutation_v1")
+    changed = generate_cuda_axis_fold_ffi((mutated,), target_name="shuttle.axis_fold_mutation_v1")
+
+    assert original.semantic_fingerprints != changed.semantic_fingerprints
+    assert original.source_sha256 != changed.source_sha256
