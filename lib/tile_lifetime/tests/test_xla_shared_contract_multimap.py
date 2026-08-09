@@ -1,0 +1,189 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import gzip
+import re
+from pathlib import Path
+
+import jax.numpy as jnp
+import numpy as np
+
+from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
+from tile_lifetime.xla_relation_program_recovery import (
+    SharedContractMapDependence,
+    SharedContractMultiMapOperandRole,
+    form_shared_contract_multi_map_region,
+)
+from tile_lifetime.xla_shared_contract_multimap import (
+    audit_shared_contract_multi_map_replacement,
+    evaluate_shared_contract_multi_map_plan,
+    replace_shared_contract_multi_map_region_with_custom_call,
+)
+
+_ARTIFACT = (
+    Path(__file__).parents[1]
+    / "benchmarks/artifacts/xla_grug_routed_forward_gpu_gb200_v0/original-gpu-pre-scheduler-hlo.txt.gz"
+)
+_TARGET = "shuttle.shared_contract_multi_map.test"
+
+
+def _hlo() -> str:
+    return gzip.decompress(_ARTIFACT.read_bytes()).decode()
+
+
+def _bf16(value: np.ndarray) -> np.ndarray:
+    return np.asarray(jnp.asarray(value, dtype=jnp.bfloat16).astype(jnp.float32))
+
+
+def test_natural_hlo_recovers_one_shared_contract_with_two_live_scalar_maps() -> None:
+    plan = form_shared_contract_multi_map_region(_hlo())
+
+    assert plan.convex
+    assert plan.topologically_insertable
+    assert plan.contract.output_shape == "bf16[512,64]{1,0}"
+    assert plan.contract.dimensions.lhs_contracting == (1,)
+    assert plan.contract.dimensions.rhs_contracting == (0,)
+    assert tuple(operand.role for operand in plan.operands) == tuple(SharedContractMultiMapOperandRole)
+    assert tuple(operand.value.instruction for operand in plan.operands) == (
+        "reshape.354",
+        "reshape.355",
+        "slice.54",
+        "and.34",
+        "and.35",
+    )
+    assert tuple(output.dependence for output in plan.outputs) == (
+        SharedContractMapDependence.CONTRACT_ONLY,
+        SharedContractMapDependence.CONTRACT_AND_AUXILIARY,
+    )
+    assert tuple(output.value.instruction for output in plan.outputs) == ("select.5", "select.7")
+    assert tuple(output.value.shape for output in plan.outputs) == (
+        "bf16[4,512,32]{2,1,0}",
+        "bf16[4,512,64]{2,1,0}",
+    )
+    assert tuple(output.external_users for output in plan.outputs) == (
+        ("transpose.169", "dot.7"),
+        ("transpose.167", "dot.6"),
+    )
+    assert plan.boundary.internal_instructions.count("dot.66") == 1
+    assert "dot.67" not in plan.boundary.internal_instructions
+    assert "dot.68" not in plan.boundary.internal_instructions
+    assert "dot.69" not in plan.boundary.internal_instructions
+    assert plan.numerical_contract.scalar_policy.value == "source_ordered"
+    assert plan.numerical_contract.numerical_policy is NumericalPolicy.ALLOW_ROUNDING_REORDER
+
+
+def test_shared_contract_multi_map_cpu_reference_matches_source_ordered_formula() -> None:
+    plan = form_shared_contract_multi_map_region(_hlo())
+    rng = np.random.default_rng(19)
+    lhs = _bf16(rng.normal(scale=0.15, size=(512, 128)).astype(np.float32))
+    rhs = _bf16(rng.normal(scale=0.15, size=(128, 64)).astype(np.float32))
+    cotangent = _bf16(rng.normal(scale=0.2, size=(16, 32)).astype(np.float32))
+    forward_validity = np.zeros((4, 512, 32), dtype=np.bool_)
+    reverse_validity = np.zeros((4, 512, 64), dtype=np.bool_)
+    for row in range(16):
+        forward_validity[row % 4, row, :] = True
+        reverse_validity[row % 4, row, :] = True
+
+    observed_forward, observed_reverse = evaluate_shared_contract_multi_map_plan(
+        plan,
+        (lhs, rhs, cotangent, forward_validity, reverse_validity),
+    )
+
+    projection = _bf16(lhs.astype(np.float32) @ rhs.astype(np.float32))[:16]
+    gate = projection[:, :32]
+    up = projection[:, 32:]
+    sigmoid = _bf16(1.0 / _bf16(_bf16(np.exp(_bf16(-gate))) + 1.0))
+    activated = _bf16(gate * sigmoid)
+    forward = _bf16(activated * up)
+    upstream_times_up = _bf16(cotangent * up)
+    gate_gradient = _bf16(
+        _bf16(upstream_times_up * sigmoid)
+        + _bf16(_bf16(gate * upstream_times_up) * _bf16(sigmoid * _bf16(1.0 - sigmoid)))
+    )
+    up_gradient = _bf16(activated * cotangent)
+    reverse = np.concatenate((gate_gradient, up_gradient), axis=1)
+    expected_forward = np.zeros((4, 512, 32), dtype=np.float32)
+    expected_reverse = np.zeros((4, 512, 64), dtype=np.float32)
+    for row in range(16):
+        expected_forward[row % 4, row] = forward[row]
+        expected_reverse[row % 4, row] = reverse[row]
+
+    assert np.array_equal(observed_forward, expected_forward)
+    assert np.array_equal(observed_reverse, expected_reverse)
+    repeated = evaluate_shared_contract_multi_map_plan(
+        plan,
+        (lhs, rhs, cotangent, forward_validity, reverse_validity),
+    )
+    assert all(
+        np.array_equal(first, second)
+        for first, second in zip((observed_forward, observed_reverse), repeated, strict=True)
+    )
+
+
+def test_scalar_map_mutations_change_only_the_affected_generated_ast() -> None:
+    hlo = _hlo()
+    baseline = form_shared_contract_multi_map_region(hlo)
+    forward_mutation = hlo.replace(
+        "%mul.960 = bf16[16,32]{1,0} multiply(%mul.83, %split.11)",
+        "%mul.960 = bf16[16,32]{1,0} add(%mul.83, %split.11)",
+        1,
+    )
+    reverse_mutation = hlo.replace(
+        "%mul.972 = bf16[16,32]{1,0} multiply(%mul.83, %slice.54)",
+        "%mul.972 = bf16[16,32]{1,0} add(%mul.83, %slice.54)",
+        1,
+    )
+    assert forward_mutation != hlo
+    assert reverse_mutation != hlo
+    forward = form_shared_contract_multi_map_region(forward_mutation)
+    reverse = form_shared_contract_multi_map_region(reverse_mutation)
+
+    baseline_digests = tuple(
+        tuple(scalar.scalar_program.digest for scalar in output.scalar_outputs) for output in baseline.outputs
+    )
+    forward_digests = tuple(
+        tuple(scalar.scalar_program.digest for scalar in output.scalar_outputs) for output in forward.outputs
+    )
+    reverse_digests = tuple(
+        tuple(scalar.scalar_program.digest for scalar in output.scalar_outputs) for output in reverse.outputs
+    )
+    assert forward_digests[0] != baseline_digests[0]
+    assert forward_digests[1] == baseline_digests[1]
+    assert reverse_digests[0] == baseline_digests[0]
+    assert reverse_digests[1] != baseline_digests[1]
+
+
+def test_shared_contract_multi_map_replacement_preserves_both_consumer_sets() -> None:
+    hlo = _hlo()
+    plan = form_shared_contract_multi_map_region(hlo)
+    transformed = replace_shared_contract_multi_map_region_with_custom_call(hlo, plan, target=_TARGET)
+    audit = audit_shared_contract_multi_map_replacement(hlo, transformed, plan, target=_TARGET)
+
+    assert transformed.count(f'custom_call_target="{_TARGET}"') == 1
+    assert "%dot.66 =" not in transformed
+    assert "%dot.67 =" in transformed
+    assert "%dot.68 =" in transformed
+    assert "%dot.69 =" in transformed
+    assert "%select.5 = bf16[4,512,32]{2,1,0} get-tuple-element" in transformed
+    assert "%select.7 = bf16[4,512,64]{2,1,0} get-tuple-element" in transformed
+    assert audit.external_users == (
+        ("select.5", ("transpose.169", "dot.7")),
+        ("select.7", ("transpose.167", "dot.6")),
+    )
+    assert audit.copy_count[0] == audit.copy_count[1]
+    assert audit.transpose_count[0] == audit.transpose_count[1]
+    parse_hlo_module_text(transformed)
+
+
+def test_shared_contract_multi_map_recovery_ignores_frontend_metadata() -> None:
+    hlo = _hlo()
+    renamed = re.sub(r'op_name="[^"]*"', 'op_name="unrelated_label"', hlo)
+
+    baseline = form_shared_contract_multi_map_region(hlo)
+    mutated = form_shared_contract_multi_map_region(renamed)
+
+    assert tuple(output.value for output in mutated.outputs) == tuple(output.value for output in baseline.outputs)
+    assert tuple(
+        scalar.scalar_program.digest for output in mutated.outputs for scalar in output.scalar_outputs
+    ) == tuple(scalar.scalar_program.digest for output in baseline.outputs for scalar in output.scalar_outputs)

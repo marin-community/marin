@@ -510,6 +510,72 @@ class RoutedWeightGradientTypedFfiCodegenPlan:
     output_alias_operand: int | None
 
 
+class SharedContractMapDependence(StrEnum):
+    """Data dependence of one scalar Map emitted from a shared Contract."""
+
+    CONTRACT_ONLY = "contract_only"
+    CONTRACT_AND_AUXILIARY = "contract_and_auxiliary"
+
+
+class SharedContractMultiMapOperandRole(StrEnum):
+    """Structural role of one shared-Contract/multi-Map runtime operand."""
+
+    CONTRACT_LHS = "contract_lhs"
+    CONTRACT_RHS = "contract_rhs"
+    MAP_AUXILIARY = "map_auxiliary"
+    CONTRACT_ONLY_VALIDITY = "contract_only_validity"
+    CONTRACT_AND_AUXILIARY_VALIDITY = "contract_and_auxiliary_validity"
+
+
+@dataclass(frozen=True)
+class SharedContractMultiMapOperand:
+    """One physical entry value bound without using frontend metadata."""
+
+    role: SharedContractMultiMapOperandRole
+    value: EntryRegionValue
+
+
+@dataclass(frozen=True)
+class SharedContractMapOutput:
+    """One physical Map result generated from a shared Contract tile."""
+
+    dependence: SharedContractMapDependence
+    value: EntryRegionValue
+    logical_row_extent: int
+    logical_feature_extent: int
+    scalar_outputs: tuple[ScalarMapOutputRecord, ...]
+    validity_role: SharedContractMultiMapOperandRole
+    external_users: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SharedContractMultiMapNumericalContract:
+    """Finite-precision promise for shared Contract plus generated Maps."""
+
+    input_dtype: str
+    accumulation_dtype: str
+    contract_output_dtype: str
+    contract_output_rounding: str
+    scalar_policy: CastScalarNumericalPolicy
+    numerical_policy: NumericalPolicy
+    effect: str
+
+
+@dataclass(frozen=True)
+class SharedContractMultiMapRegionRecord:
+    """One Contract evaluated once before several generated scalar Maps."""
+
+    contract: RoutedForwardContractStage
+    boundary: RecoveredEntryRegionBoundary
+    outputs: tuple[SharedContractMapOutput, ...]
+    operands: tuple[SharedContractMultiMapOperand, ...]
+    absorbed_constant_inputs: tuple[EntryRegionValue, ...]
+    insertion_instruction: str
+    convex: bool
+    topologically_insertable: bool
+    numerical_contract: SharedContractMultiMapNumericalContract
+
+
 @dataclass(frozen=True)
 class RelationProgramRecoveryReport:
     """Inspectable generic ownership boundary for routed forward/backward work."""
@@ -1021,6 +1087,247 @@ def plan_routed_weight_gradient_typed_ffi(
             )
         )
     return tuple(plans)
+
+
+def form_shared_contract_multi_map_region(
+    hlo_text: str,
+    *,
+    numerical_policy: NumericalPolicy = NumericalPolicy.ALLOW_ROUNDING_REORDER,
+) -> SharedContractMultiMapRegionRecord:
+    """Recover one rematerialized Contract shared by two live scalar Maps.
+
+    Selection is entirely dataflow based. The shared Contract must feed one
+    Contract-only scalar Map and one scalar Map that also consumes a second
+    physical value. Both Map results must remain live at distinct downstream
+    Contracts. Constants in the source scalar graph are absorbed by the
+    generated AST; layout validity predicates remain explicit operands.
+    """
+    if numerical_policy is NumericalPolicy.BITWISE_EXACT:
+        raise ValueError("a generated Contract cannot preserve an unspecified bitwise dot reduction tree")
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    analysis = _GraphAnalysis(module, graph)
+    report = recover_relation_programs(hlo_text)
+    contract_only_candidates = tuple(
+        chain for chain in report.contract_chains if chain.role is ContractChainRole.FORWARD_RECOMPUTE
+    )
+    auxiliary_candidates = tuple(
+        chain for chain in report.contract_chains if chain.role is ContractChainRole.INPUT_GRADIENT
+    )
+    if len(contract_only_candidates) != 1 or len(auxiliary_candidates) != 1:
+        raise ValueError(
+            "expected one Contract-only rematerialization and one auxiliary Map chain, found "
+            f"{len(contract_only_candidates)} and {len(auxiliary_candidates)}"
+        )
+    contract_only_chain = contract_only_candidates[0]
+    auxiliary_chain = auxiliary_candidates[0]
+    shared = graph.node(contract_only_chain.first.node)
+    auxiliary_first = graph.node(auxiliary_chain.first.node)
+    edge_counts = {
+        plan.edge_count for plan in report.relation_plans if analysis.is_ancestor(plan.destination_sort, shared.id)
+    }
+    if len(edge_counts) != 1:
+        raise ValueError(f"shared Contract has {len(edge_counts)} routed logical row extents")
+    logical_rows = next(iter(edge_counts))
+    auxiliary_sources = _input_gradient_map_source_nodes(
+        analysis,
+        first=auxiliary_first,
+        second=graph.node(auxiliary_chain.second.node),
+        edge_count=logical_rows,
+    )[0]
+    if set(auxiliary_sources) != {auxiliary_first.id, shared.id}:
+        raise ValueError("auxiliary scalar Map does not consume exactly the shared Contract and one other value")
+
+    contract_only_output_node = _external_contract_map_frontier(
+        analysis,
+        first=shared,
+        second=graph.node(contract_only_chain.second.node),
+    )
+    auxiliary_output_node = _external_contract_map_frontier(
+        analysis,
+        first=auxiliary_first,
+        second=graph.node(auxiliary_chain.second.node),
+    )
+    if contract_only_output_node.id == auxiliary_output_node.id:
+        raise ValueError("the two scalar Maps do not expose distinct physical results")
+
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    shared_instruction = _entry_instruction_for_node(module, shared.id)
+    contract_only_instruction = _entry_instruction_for_node(module, contract_only_output_node.id)
+    auxiliary_instruction = _entry_instruction_for_node(module, auxiliary_output_node.id)
+    internal = tuple(
+        sorted(
+            set(_entry_dataflow_interval(entry, shared_instruction, contract_only_instruction))
+            | set(_entry_dataflow_interval(entry, shared_instruction, auxiliary_instruction)),
+            key=order.__getitem__,
+        )
+    )
+    boundary = _entry_region_boundary(entry, internal)
+    output_names = {value.instruction for value in boundary.outputs}
+    expected_outputs = {contract_only_instruction, auxiliary_instruction}
+    if output_names != expected_outputs:
+        raise ValueError(
+            f"shared Contract/multi-Map region exposes outputs {sorted(output_names)}, "
+            f"expected {sorted(expected_outputs)}"
+        )
+    external_users = dict(boundary.external_users)
+
+    contract = _contract_codegen_stage(graph, contract_only_chain.first)
+    contract_lhs = _entry_instruction_for_node(module, contract.lhs)
+    contract_rhs = _entry_instruction_for_node(module, contract.rhs)
+    auxiliary_value = _auxiliary_map_boundary_input(
+        module,
+        graph,
+        boundary=boundary,
+        auxiliary_source=auxiliary_first.id,
+        output=auxiliary_output_node.id,
+    )
+    contract_only_validity = _map_validity_input(module, graph, contract_only_output_node)
+    auxiliary_validity = _map_validity_input(module, graph, auxiliary_output_node)
+    bindings = (
+        SharedContractMultiMapOperand(
+            SharedContractMultiMapOperandRole.CONTRACT_LHS,
+            EntryRegionValue(contract_lhs, instructions[contract_lhs].shape),
+        ),
+        SharedContractMultiMapOperand(
+            SharedContractMultiMapOperandRole.CONTRACT_RHS,
+            EntryRegionValue(contract_rhs, instructions[contract_rhs].shape),
+        ),
+        SharedContractMultiMapOperand(
+            SharedContractMultiMapOperandRole.MAP_AUXILIARY,
+            EntryRegionValue(auxiliary_value, instructions[auxiliary_value].shape),
+        ),
+        SharedContractMultiMapOperand(
+            SharedContractMultiMapOperandRole.CONTRACT_ONLY_VALIDITY,
+            EntryRegionValue(contract_only_validity, instructions[contract_only_validity].shape),
+        ),
+        SharedContractMultiMapOperand(
+            SharedContractMultiMapOperandRole.CONTRACT_AND_AUXILIARY_VALIDITY,
+            EntryRegionValue(auxiliary_validity, instructions[auxiliary_validity].shape),
+        ),
+    )
+    if len({binding.value.instruction for binding in bindings}) != len(bindings):
+        raise ValueError("shared Contract/multi-Map runtime operands are not distinct")
+    bound_names = {binding.value.instruction for binding in bindings}
+    absorbed = tuple(value for value in boundary.inputs if value.instruction not in bound_names)
+    if any(not _entry_is_constant_expression(instructions, value.instruction) for value in absorbed):
+        raise ValueError("shared Contract/multi-Map boundary has an unbound non-constant input")
+
+    contract_only_shape = _parse_array_shape(contract_only_output_node.shape)
+    auxiliary_shape = _parse_array_shape(auxiliary_output_node.shape)
+    if contract_only_shape is None or auxiliary_shape is None:
+        raise ValueError("shared Contract/multi-Map physical outputs must be arrays")
+    if len(contract_only_shape[1]) != 3 or len(auxiliary_shape[1]) != 3:
+        raise ValueError("shared Contract/multi-Map physical outputs must use segmented rank-three layouts")
+    output_records = (
+        SharedContractMapOutput(
+            dependence=SharedContractMapDependence.CONTRACT_ONLY,
+            value=EntryRegionValue(contract_only_instruction, instructions[contract_only_instruction].shape),
+            logical_row_extent=logical_rows,
+            logical_feature_extent=sum(output.feature_extent for output in contract_only_chain.map.scalar_outputs),
+            scalar_outputs=contract_only_chain.map.scalar_outputs,
+            validity_role=SharedContractMultiMapOperandRole.CONTRACT_ONLY_VALIDITY,
+            external_users=external_users[contract_only_instruction],
+        ),
+        SharedContractMapOutput(
+            dependence=SharedContractMapDependence.CONTRACT_AND_AUXILIARY,
+            value=EntryRegionValue(auxiliary_instruction, instructions[auxiliary_instruction].shape),
+            logical_row_extent=logical_rows,
+            logical_feature_extent=sum(output.feature_extent for output in auxiliary_chain.map.scalar_outputs),
+            scalar_outputs=auxiliary_chain.map.scalar_outputs,
+            validity_role=SharedContractMultiMapOperandRole.CONTRACT_AND_AUXILIARY_VALIDITY,
+            external_users=external_users[auxiliary_instruction],
+        ),
+    )
+    scalar_policies = {
+        scalar.scalar_program.numerical_policy for output in output_records for scalar in output.scalar_outputs
+    }
+    if scalar_policies != {CastScalarNumericalPolicy.SOURCE_ORDERED}:
+        raise ValueError(f"shared Contract/multi-Map has unsupported scalar policies {scalar_policies}")
+    if {instructions[contract_lhs].dtype, instructions[contract_rhs].dtype, shared.dtype} != {"bf16"}:
+        raise ValueError("shared Contract/multi-Map prototype currently requires BF16 storage")
+    topologically_insertable = all(order[binding.value.instruction] < order[shared_instruction] for binding in bindings)
+    return SharedContractMultiMapRegionRecord(
+        contract=contract,
+        boundary=boundary,
+        outputs=output_records,
+        operands=bindings,
+        absorbed_constant_inputs=absorbed,
+        insertion_instruction=shared_instruction,
+        convex=_entry_region_is_convex(entry, internal),
+        topologically_insertable=topologically_insertable,
+        numerical_contract=SharedContractMultiMapNumericalContract(
+            input_dtype="bf16",
+            accumulation_dtype="f32",
+            contract_output_dtype="bf16",
+            contract_output_rounding="round_to_nearest_even",
+            scalar_policy=CastScalarNumericalPolicy.SOURCE_ORDERED,
+            numerical_policy=numerical_policy,
+            effect=(
+                "The shared Contract is accumulated in FP32 and rounded once to BF16. Both scalar Maps then "
+                "preserve every imported BF16 conversion in source order. Only the Contract reduction tree may "
+                "differ from the source implementation."
+            ),
+        ),
+    )
+
+
+def _external_contract_map_frontier(
+    analysis: _GraphAnalysis,
+    *,
+    first: InlinedHloNode,
+    second: InlinedHloNode,
+) -> InlinedHloNode:
+    """Find the physical Map value shared with a second downstream Contract."""
+    data_operands = tuple(operand for operand in second.operands if analysis.is_ancestor(first.id, operand))
+    if len(data_operands) != 1:
+        raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(data_operands)} data operands")
+    path = _inlined_path(analysis.graph, first.id, data_operands[0])
+    candidates = tuple(
+        analysis.nodes[node_id]
+        for node_id in path[1:]
+        if any(analysis.nodes[user].opcode == "dot" and user != second.id for user in analysis.users.get(node_id, ()))
+    )
+    if len(candidates) != 1:
+        raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(candidates)} external Map frontiers")
+    return candidates[0]
+
+
+def _auxiliary_map_boundary_input(
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    *,
+    boundary: RecoveredEntryRegionBoundary,
+    auxiliary_source: str,
+    output: str,
+) -> str:
+    """Find the first physical boundary value on the auxiliary Map path."""
+    boundary_names = {value.instruction for value in boundary.inputs}
+    candidates = tuple(
+        _entry_instruction_for_node(module, node_id)
+        for node_id in _inlined_path(graph, auxiliary_source, output)
+        if _entry_instruction_for_node(module, node_id) in boundary_names
+    )
+    distinct = tuple(dict.fromkeys(candidates))
+    if len(distinct) != 1:
+        raise ValueError(f"auxiliary Map path crosses {len(distinct)} physical boundary values")
+    return distinct[0]
+
+
+def _map_validity_input(
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    output: InlinedHloNode,
+) -> str:
+    """Recover a segmented Map's physical predicate independently of its scalar body."""
+    if output.opcode != "select" or len(output.operands) != 3:
+        raise ValueError(f"physical Map frontier {output.id!r} is not a ternary select")
+    predicates = tuple(operand for operand in output.operands if graph.node(operand).dtype == "pred")
+    if len(predicates) != 1:
+        raise ValueError(f"physical Map frontier {output.id!r} has {len(predicates)} predicates")
+    return _entry_instruction_for_node(module, predicates[0])
 
 
 def _entry_parameter_ancestors(entry: HloComputation, value: str) -> tuple[str, ...]:
