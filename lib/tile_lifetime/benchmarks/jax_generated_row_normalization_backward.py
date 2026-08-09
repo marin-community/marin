@@ -231,6 +231,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "semantic_fingerprints": list(generated.semantic_fingerprints),
             "handler_executions": int(call_count_function()),
         },
+        "numerical_contract": {
+            "generated_reassociation": [program.reassociation.value for program in programs],
+            "accepted_reference": "matched explicit FP32 Map/Fold algebra",
+            "natural_jax_vjp": (
+                "diagnostic after BF16 output cast; source-ordered equivalence is not established because "
+                "XLA may select a different reduction tree"
+            ),
+        },
         "correctness": {**correctness, "deterministic_hashes": list(first_hashes)},
         "measurements": measurements,
         "execution_order": execution_order,

@@ -1842,19 +1842,36 @@ author: dlwh
   visibility, and generation validation for segmented and attention-like
   schedules is being measured separately.
 
-### 2026-08-09 01:43 PDT - TLTC-TRAIN-009 partitioned key/value reverse Fold
+### 2026-08-09 01:43 PDT - TLTC-TRAIN-009 rejected partitioned key/value reverse Fold
 
 - Hypothesis: the primary streaming-attention reverse gap is partly caused by
   insufficient parallelism in the deterministic key/value-gradient Fold. A
   bounded query-domain partition can expose more tasks without changing the
   recovered Contract/Map/Fold semantics or using atomic accumulation.
 - Commit Hash: `ace2636514`.
-- Result: the schedule now represents 1, 2, 4, or 8 physical query partitions
-  per key/value tile. Partitioned tasks emit FP32 dK/dV partials and a generic
-  finalizer combines them in fixed partition order before BF16 storage. Work
-  estimates expose task count, finalizer count, and partial-buffer traffic.
-  The original one-partition schedule remains the default. Six focused
-  semantic/schedule tests and scoped lint pass.
-- Caveat: all partitioned candidates are deliberately unmeasured. The next
-  direct GPU experiment compares one and four partitions at S=2048 and retains
-  the candidate only if end-to-end backward latency improves meaningfully.
+- Result: on one GB200 at S=2048 with a 32x32 tile, the one-partition path
+  measures 0.864582 ms versus 0.148534 ms for matched SDPA (5.821x). Four
+  partitions measure 0.854435 ms versus 0.154432 ms (5.533x). Correctness and
+  deterministic hashes pass for both.
+- Interpretation: 1.17% generated latency improvement does not justify 64 MiB
+  of FP32 partials, four times as many key/value tasks, and 512 finalizers. The
+  experiment was stopped before the two/eight-partition variants. Commit
+  `0f28376aea` removes the candidate. The remaining gap is in the physical
+  reverse QK/PV pipeline and data reuse, not missing Fold task parallelism.
+
+### 2026-08-09 02:02 PDT - TLTC-XLA-009 Torch-free JAX Fold execution
+
+- Hypothesis: JAX can own AD and invoke Shuttle-generated generic Fold kernels
+  directly, without Torch in the accepted runtime, while remaining competitive
+  with the same explicit algebra compiled by XLA.
+- Commit Hash: `1e0512923d`.
+- Result: on one GB200 the JAX typed-FFI path measures 0.0610993 ms versus
+  0.0669201 ms for matched XLA algebra (0.91302x), across 30 counterbalanced
+  samples and 312 handler executions. Repeated hashes are deterministic.
+  Against the matched FP32 algebra, maximum errors are 9.537e-7 for dX and
+  2.289e-5 for the feature Fold.
+- Numerical boundary: after casting both results to the natural BF16 VJP
+  outputs, the differences are materially larger (maximum 0.0625 for dX and
+  1.0 for the feature Fold). This is a deterministic-tree result; source-order
+  equivalence to XLA's selected reduction tree is not established and must not
+  be claimed. The benchmark now records that contract explicitly.
