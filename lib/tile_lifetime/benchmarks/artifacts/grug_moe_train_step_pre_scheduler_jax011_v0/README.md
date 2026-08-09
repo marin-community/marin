@@ -22,6 +22,32 @@ downstream Contract. The pass sees 82 Contracts across 2,913 inlined logical
 nodes. The recovered Maps retain every BF16 conversion boundary; this report
 does not claim that collapsing those conversions is source-order legal.
 
+The routed-program pass also recovers the main sparse forward/backward boundary
+without consulting HLO metadata or source names:
+
+- two equivalent runtime Relations (the executed path and its rematerialized
+  backward path), each with 8 source rows, 2 slots, 16 edges, 4 destination
+  segments, a stable destination permutation, destination counts, and prefix
+  offsets;
+- one executed and one rematerialized segmented Contract -> pair-Map ->
+  segmented Contract forward chain;
+- one segmented input-gradient Contract -> pointwise Map-adjoint -> segmented
+  Contract chain;
+- two source-keyed additive scatter Folds, including the forward weighted
+  contribution and the reducer's BF16 round trip; and
+- two group-batched weight-gradient Contracts with the following all-reduce
+  left as an explicit placement boundary.
+
+This identifies what a Shuttle-owned training region must replace while
+allowing communication to remain external. It is not yet an executable GPU
+replacement. In particular, the scalar Map is preserved as an opcode and cast
+program; importing it into the shared scalar AST generator remains the next
+code-generation step. The captured XLA implementation pads 16 logical edges to
+a physical 512-row Contract domain. That 32-times amplification is an artifact
+of this tiny CPU fixture, but it makes the required segmented-GMM replacement
+boundary concrete. The HLO scatter does not establish a source-ordered GPU
+merge; Shuttle must select and generate that numerical policy explicitly.
+
 ## Pinned environment
 
 - JAX: `0.11.0`
@@ -71,6 +97,8 @@ uv run --script lib/tile_lifetime/benchmarks/xla_pre_scheduler_probe.py \
 - `pre-scheduler-hlo.txt.gz`: deterministic gzip of the callback input text.
 - `pair-map-recovery.json`: generic Contract/Map recovery report from the frozen
   callback HLO.
+- `relation-program-recovery.json`: generic RelationPlan, segmented Contract,
+  Map, Fold, and Contract-adjoint ownership report from the same frozen HLO.
 - `summary.json`: callback stage, versions, hashes, and HLO census.
 
 Regenerate the recovery report with:
@@ -80,7 +108,17 @@ uv run --frozen --package marin-tile-lifetime \
   python lib/tile_lifetime/benchmarks/analyze_xla_pair_map_hlo.py \
   lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz \
   --output \
-  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pair-map-recovery.json
+    lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pair-map-recovery.json
+```
+
+Regenerate the routed-program report with:
+
+```bash
+uv run --frozen --package marin-tile-lifetime \
+  python lib/tile_lifetime/benchmarks/analyze_xla_relation_program_hlo.py \
+  lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz \
+  --output \
+    lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/relation-program-recovery.json
 ```
 
 ## Limits

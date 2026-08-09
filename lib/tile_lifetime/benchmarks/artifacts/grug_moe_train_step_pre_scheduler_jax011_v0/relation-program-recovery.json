@@ -1,0 +1,423 @@
+{
+  "contract_chains": [
+    {
+      "first": {
+        "input_shapes": [
+          "f32[512,128]{1,0}",
+          "f32[128,64]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.36/dot.105",
+        "output_shape": "f32[512,64]{1,0}",
+        "relation_plans": [
+          "main.149/sort.9"
+        ]
+      },
+      "map": {
+        "cast_shapes": [
+          [
+            "f32[512,64]{1,0}",
+            "bf16[512,64]{1,0}"
+          ],
+          [
+            "bf16[512,64]{1,0}",
+            "f32[512,64]{1,0}"
+          ],
+          [
+            "f32[16,64]{1,0}",
+            "bf16[16,64]{1,0}"
+          ],
+          [
+            "bf16[16,64]{1,0}",
+            "f32[16,64]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[512,32]{1,0}",
+            "bf16[512,32]{1,0}"
+          ],
+          [
+            "bf16[512,32]{1,0}",
+            "f32[512,32]{1,0}"
+          ],
+          [
+            "f32[4,512,32]{2,1,0}",
+            "bf16[4,512,32]{2,1,0}"
+          ],
+          [
+            "bf16[4,512,32]{2,1,0}",
+            "f32[4,512,32]{2,1,0}"
+          ]
+        ],
+        "opcodes": [
+          "convert",
+          "convert",
+          "slice",
+          "convert",
+          "convert",
+          "slice",
+          "convert",
+          "convert",
+          "multiply",
+          "convert",
+          "convert",
+          "pad",
+          "convert",
+          "convert",
+          "broadcast",
+          "select",
+          "convert",
+          "convert",
+          "transpose",
+          "copy",
+          "bitcast"
+        ]
+      },
+      "role": "forward_recompute",
+      "second": {
+        "input_shapes": [
+          "f32[512,128]{1,0}",
+          "f32[128,32]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.34/dot.103",
+        "output_shape": "f32[512,32]{1,0}",
+        "relation_plans": [
+          "main.149/sort.9"
+        ]
+      }
+    },
+    {
+      "first": {
+        "input_shapes": [
+          "f32[512,128]{1,0}",
+          "f32[128,64]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.65/dot.123",
+        "output_shape": "f32[512,64]{1,0}",
+        "relation_plans": [
+          "main.149/sort.3"
+        ]
+      },
+      "map": {
+        "cast_shapes": [
+          [
+            "f32[512,64]{1,0}",
+            "bf16[512,64]{1,0}"
+          ],
+          [
+            "bf16[512,64]{1,0}",
+            "f32[512,64]{1,0}"
+          ],
+          [
+            "f32[16,64]{1,0}",
+            "bf16[16,64]{1,0}"
+          ],
+          [
+            "bf16[16,64]{1,0}",
+            "f32[16,64]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[512,32]{1,0}",
+            "bf16[512,32]{1,0}"
+          ],
+          [
+            "bf16[512,32]{1,0}",
+            "f32[512,32]{1,0}"
+          ],
+          [
+            "f32[4,512,32]{2,1,0}",
+            "bf16[4,512,32]{2,1,0}"
+          ],
+          [
+            "bf16[4,512,32]{2,1,0}",
+            "f32[4,512,32]{2,1,0}"
+          ]
+        ],
+        "opcodes": [
+          "convert",
+          "convert",
+          "slice",
+          "convert",
+          "convert",
+          "slice",
+          "convert",
+          "convert",
+          "multiply",
+          "convert",
+          "convert",
+          "pad",
+          "convert",
+          "convert",
+          "broadcast",
+          "select",
+          "convert",
+          "convert",
+          "transpose",
+          "copy",
+          "bitcast"
+        ]
+      },
+      "role": "forward",
+      "second": {
+        "input_shapes": [
+          "f32[512,128]{1,0}",
+          "f32[128,32]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.64/dot.122",
+        "output_shape": "f32[512,32]{1,0}",
+        "relation_plans": [
+          "main.149/sort.3"
+        ]
+      }
+    },
+    {
+      "first": {
+        "input_shapes": [
+          "f32[512,128]{1,0}",
+          "f32[128,32]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.37/dot.106",
+        "output_shape": "f32[512,32]{1,0}",
+        "relation_plans": [
+          "main.149/sort.9",
+          "main.149/sort.3"
+        ]
+      },
+      "map": {
+        "cast_shapes": [
+          [
+            "f32[512,32]{1,0}",
+            "bf16[512,32]{1,0}"
+          ],
+          [
+            "bf16[512,32]{1,0}",
+            "f32[512,32]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[16,32]{1,0}",
+            "bf16[16,32]{1,0}"
+          ],
+          [
+            "bf16[16,32]{1,0}",
+            "f32[16,32]{1,0}"
+          ],
+          [
+            "f32[16,64]{1,0}",
+            "bf16[16,64]{1,0}"
+          ],
+          [
+            "bf16[16,64]{1,0}",
+            "f32[16,64]{1,0}"
+          ],
+          [
+            "f32[512,64]{1,0}",
+            "bf16[512,64]{1,0}"
+          ],
+          [
+            "bf16[512,64]{1,0}",
+            "f32[512,64]{1,0}"
+          ],
+          [
+            "f32[4,512,64]{2,1,0}",
+            "bf16[4,512,64]{2,1,0}"
+          ],
+          [
+            "bf16[4,512,64]{2,1,0}",
+            "f32[4,512,64]{2,1,0}"
+          ]
+        ],
+        "opcodes": [
+          "convert",
+          "convert",
+          "slice",
+          "convert",
+          "convert",
+          "multiply",
+          "convert",
+          "convert",
+          "concatenate",
+          "convert",
+          "convert",
+          "pad",
+          "convert",
+          "convert",
+          "broadcast",
+          "select",
+          "convert",
+          "convert",
+          "transpose",
+          "copy",
+          "bitcast"
+        ]
+      },
+      "role": "input_gradient",
+      "second": {
+        "input_shapes": [
+          "f32[512,256]{1,0}",
+          "f32[256,32]{1,0}"
+        ],
+        "node": "main.149/ynn_fusion.35/dot.104",
+        "output_shape": "f32[512,32]{1,0}",
+        "relation_plans": [
+          "main.149/sort.9",
+          "main.149/sort.3"
+        ]
+      }
+    }
+  ],
+  "external_collectives": [
+    "main.149/psum.0",
+    "main.149/all-reduce"
+  ],
+  "folds": [
+    {
+      "contribution_opcodes": [
+        "convert",
+        "convert",
+        "slice",
+        "convert",
+        "convert",
+        "multiply",
+        "convert",
+        "convert",
+        "bitcast"
+      ],
+      "fold": "main.149/wrapped_scatter.2/scatter-add.19",
+      "output_shape": "f32[8,32]{1,0}",
+      "reducer": "add",
+      "reducer_opcodes": [
+        "add",
+        "convert",
+        "convert"
+      ],
+      "source_contract": "main.149/ynn_fusion.64/dot.122"
+    },
+    {
+      "contribution_opcodes": [
+        "convert",
+        "convert",
+        "slice",
+        "convert",
+        "convert",
+        "bitcast"
+      ],
+      "fold": "main.149/wrapped_scatter.6/scatter-add.25",
+      "output_shape": "f32[8,32]{1,0}",
+      "reducer": "add",
+      "reducer_opcodes": [
+        "add",
+        "convert",
+        "convert"
+      ],
+      "source_contract": "main.149/ynn_fusion.35/dot.104"
+    }
+  ],
+  "limitations": [
+    "The pass forms generic ownership boundaries but does not yet replace them with GPU execution.",
+    "Physical HLO has already padded the runtime segments; dynamic counts and offsets remain explicit inputs.",
+    "Collectives are intentionally reported as external placement boundaries rather than absorbed.",
+    "The pair Map is retained as an opcode/cast program; scalar-AST import from HLO remains to be shared with the existing Contract+Map replacement path."
+  ],
+  "relation_plans": [
+    {
+      "destination_count": 4,
+      "destination_counts": "main.149/wrapped_scatter/scatter-add.15",
+      "destination_offsets": "main.149/wrapped_reduce-window/reduce-window.12",
+      "destination_sort": "main.149/sort.9",
+      "edge_count": 16,
+      "selected_indices": "main.149/get-tuple-element.5",
+      "selected_shape": "s32[8,2]{1,0}",
+      "selection": "main.149/custom-call",
+      "slots_per_token": 2,
+      "stable_permutation": "main.149/sort.10",
+      "token_count": 8
+    },
+    {
+      "destination_count": 4,
+      "destination_counts": "main.149/wrapped_scatter.1/scatter-add.16",
+      "destination_offsets": "main.149/wrapped_reduce-window.1/reduce-window.13",
+      "destination_sort": "main.149/sort.3",
+      "edge_count": 16,
+      "selected_indices": "main.149/slice_bitcast_fusion.1/slice.61",
+      "selected_shape": "s32[8,2]{1,0}",
+      "selection": "main.149/sort",
+      "slots_per_token": 2,
+      "stable_permutation": "main.149/sort.8",
+      "token_count": 8
+    }
+  ],
+  "weight_gradients": [
+    {
+      "contract": {
+        "input_shapes": [
+          "f32[4,512,32]{2,1,0}",
+          "f32[4,512,64]{2,1,0}"
+        ],
+        "node": "main.149/dot_general.248",
+        "output_shape": "f32[4,32,64]{2,1,0}",
+        "relation_plans": [
+          "main.149/sort.9",
+          "main.149/sort.3"
+        ]
+      },
+      "external_collectives": [
+        "main.149/all-reduce"
+      ]
+    },
+    {
+      "contract": {
+        "input_shapes": [
+          "f32[4,512,32]{2,1,0}",
+          "f32[4,512,32]{2,1,0}"
+        ],
+        "node": "main.149/dot_general.246",
+        "output_shape": "f32[4,32,32]{2,1,0}",
+        "relation_plans": [
+          "main.149/sort.9",
+          "main.149/sort.3"
+        ]
+      },
+      "external_collectives": [
+        "main.149/all-reduce"
+      ]
+    }
+  ]
+}
