@@ -33,9 +33,9 @@ def import_hlo_scalar_map(
     """Import scalar semantics between one Contract output and a Map output.
 
     Slice starts become affine source-coordinate offsets. Shape-only operations
-    are accepted only when they preserve rank-two scalar coordinates. Every HLO
-    convert remains an explicit AST node, including F32-to-BF16-to-F32 round
-    trips.
+    may flatten or restore leading row axes when they preserve the flattened
+    row count and final feature coordinate. Every HLO convert remains an
+    explicit AST node, including F32-to-BF16-to-F32 round trips.
     """
     nodes = {node.id: node for node in graph.nodes}
     if not source_nodes or len(set(source_nodes)) != len(source_nodes):
@@ -43,8 +43,9 @@ def import_hlo_scalar_map(
     source_indices = {node_id: index for index, node_id in enumerate(source_nodes)}
     for source_node in source_nodes:
         source_shape = _array_shape(nodes[source_node].shape)
-        if source_shape is None or len(source_shape[1]) != 2:
-            raise ValueError(f"scalar Map source must be a rank-two array: {nodes[source_node].shape}")
+        if source_shape is None:
+            raise ValueError(f"scalar Map source must be an array: {nodes[source_node].shape}")
+        _flattened_row_feature_domain(source_shape[1])
     selected_concatenation_operands = concatenate_choices or {}
     memo: dict[tuple[str, int, int], CastScalarExpression] = {}
 
@@ -95,7 +96,11 @@ def import_hlo_scalar_map(
                 raise ValueError(f"shape wrapper {node.id!r} must have one operand")
             source = _array_shape(nodes[node.operands[0]].shape)
             target = _array_shape(node.shape)
-            if source is None or target is None or source[1] != target[1]:
+            if (
+                source is None
+                or target is None
+                or _flattened_row_feature_domain(source[1]) != _flattened_row_feature_domain(target[1])
+            ):
                 raise ValueError(f"shape-changing wrapper {node.id!r} needs an explicit index map")
             result = import_node(node.operands[0], row_offset, feature_offset)
         elif node.opcode == "convert":
@@ -139,6 +144,16 @@ def import_hlo_scalar_map(
         return result
 
     return CastScalarProgram(import_node(target_node, 0, 0))
+
+
+def _flattened_row_feature_domain(dimensions: tuple[int, ...]) -> tuple[int, int]:
+    """Flatten leading axes while preserving the final feature coordinate."""
+    if not dimensions:
+        raise ValueError("scalar Map array must have at least one dimension")
+    rows = 1
+    for extent in dimensions[:-1]:
+        rows *= extent
+    return rows, dimensions[-1]
 
 
 def import_hlo_scalar_computation(computation: HloComputation) -> CastScalarProgram:

@@ -448,6 +448,13 @@ from tile_lifetime.xla_axis_fold_pipeline_ffi import (
     plan_axis_fold_pipeline_hlo_replacement,
     replace_axis_fold_pipeline_hlo_with_custom_call,
 )
+from tile_lifetime.xla_low_rank_gated_product import (
+    LowRankGatedProductForwardPlan,
+    LowRankGatedProductReversePlan,
+    LowRankGatedProductTrainingReport,
+    RankTwoContractPlan,
+    recover_low_rank_gated_product_training,
+)
 from tile_lifetime.xla_normalized_exp_contract_forward import (
     NormalizedExpContractForwardHloRegion,
     NormalizedExpContractForwardHloReplacementAudit,
