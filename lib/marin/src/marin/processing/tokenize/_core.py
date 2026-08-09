@@ -189,6 +189,7 @@ def tokenize_batches_with_id(
     responsible for ``ctx.put('tokenizer_name', ...)`` and
     ``ctx.put('tokenizer_backend', ...)`` before pipeline execution.
     """
+    initialization_start = time.monotonic()
     ctx = zephyr_worker_ctx()
     name = ctx.get_shared("tokenizer_name")
     backend = ctx.get_shared("tokenizer_backend")
@@ -204,6 +205,7 @@ def tokenize_batches_with_id(
     if hasattr(inner, "_long_string_workaround"):
         inner._long_string_workaround = True
     processor = IdPreservingPreprocessor(inner)
+    counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
 
     batch_count = 0
     record_count = 0
@@ -212,13 +214,13 @@ def tokenize_batches_with_id(
 
     for batch in batches:
         batch_count += 1
-        for record in processor(batch):
-            n_tokens = len(record.get("input_ids", []))
-            counters.pipeline.update_counter("tokenize/docs_out", 1)
-            counters.pipeline.update_counter("tokenize/tokens_out", n_tokens)
-            record_count += 1
-            token_count += n_tokens
-            yield record
+        records = processor(batch)
+        batch_token_count = sum(len(record.get("input_ids", [])) for record in records)
+        counters.pipeline.update_counter("tokenize/docs_out", len(records))
+        counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
+        record_count += len(records)
+        token_count += batch_token_count
+        yield from records
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
@@ -231,6 +233,7 @@ def tokenize_batches_with_id(
             )
 
     elapsed = time.monotonic() - start_time
+    counters.pipeline.update_counter("tokenize/processing_seconds", elapsed)
     tok_per_sec = token_count / elapsed if elapsed > 0 else 0
     doc_per_sec = record_count / elapsed if elapsed > 0 else 0
     avg_tok_per_doc = token_count / record_count if record_count > 0 else 0

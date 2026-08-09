@@ -664,10 +664,6 @@ def verify_fuzzy_dups(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)
     ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
 
@@ -685,7 +681,12 @@ def verify_fuzzy_dups(
             reducer=_write_verified_shard,
         )
     )
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=map_task_resources,
+        reduce_task_resources=reduce_task_resources,
+    )
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)

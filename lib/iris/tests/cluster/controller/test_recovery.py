@@ -3,6 +3,8 @@
 
 """Restore-path behavior for scale groups that left config (drain mode)."""
 
+import urllib.request
+
 import pytest
 from iris.cluster.config import ScaleGroupConfig
 from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
@@ -131,7 +133,8 @@ def test_configured_group_not_replaced_by_drain():
 )
 def test_drain_group_reclaims_only_idle_slices(monkeypatch, running_task_ids, expected_slice_count):
     """A draining group reclaims an idle slice (target=0) but never kills one running a task."""
-    monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", lambda url: True)
+    response = type("HealthResponse", (), {"status": 200})()
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", lambda *args, **kwargs: response)
     handle = make_fake_slice_handle("slice-001", scale_group="retired-group", all_ready=True)
     platform = make_mock_platform(slices_to_discover=[handle])
     drain = _draining_group(platform)

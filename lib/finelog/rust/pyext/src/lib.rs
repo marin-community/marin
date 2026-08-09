@@ -72,8 +72,13 @@ impl EmbeddedServer {
         // keep running on the runtime's worker threads after `block_on` returns.
         let (store, app, listener, addr) = runtime.block_on(async {
             let store = Arc::new(
-                Store::new(log_dir.map(PathBuf::from), remote_log_dir)
-                    .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
+                Store::new(
+                    log_dir.map(PathBuf::from),
+                    remote_log_dir,
+                    finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                    finelog::store::ServeMode::Live,
+                )
+                .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
             store.bootstrap_maintenance();
             // No policy → the private allow-localhost default (loopback only); a

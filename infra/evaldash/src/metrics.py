@@ -4,7 +4,7 @@
 """Standard-error lookup paired with the canonical primary-metric selection.
 
 Primary-metric selection (``PRIMARY_METRIC_PRIORITY``, ``FILTER_PRIORITY``, ``primary_metric``) is
-defined once, in ``marin.evaluation.samples`` (the per-sample export contract), and re-exported here
+defined once, in ``finestore.eval`` (the per-sample export contract), and re-exported here
 so the matrix/leaderboard views and the sample browser rank metrics identically. ``stderr_for`` is the
 one piece specific to run-level metric dicts: finding the stderr paired with a metric key.
 """
@@ -14,8 +14,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from finestore.eval import primary_metric as primary_metric
 from marin.evaluation.records import EvalRunRecord, RunStatus
-from marin.evaluation.samples import primary_metric as primary_metric
 
 # Capped-instance launcher validation runs; kept out of the headline grid and cohort payloads (they
 # stay visible in the runs list and history).

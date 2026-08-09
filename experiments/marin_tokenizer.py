@@ -277,18 +277,20 @@ def inject_special_tokens(
 
 def create_marin_tokenizer(
     tokenizer: PreTrainedTokenizer,
+    token_renames: dict[int, str],
 ) -> PreTrainedTokenizer:
     """
     Create a modified version of tokenizer with custom chat format and special tokens.
 
     Args:
         tokenizer: The base tokenizer to modify (typically llama3)
+        token_renames: Existing token IDs mapped to their Marin token strings
 
     Returns:
         A new tokenizer instance
     """
     # Inject special tokens
-    marin_tokenizer = inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
+    marin_tokenizer = inject_special_tokens(tokenizer, token_renames)
 
     # Assign marin template
     marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
@@ -318,7 +320,7 @@ def main(dry_run: bool = False):
     ``dry_run``) pushes the result to the Hub.
     """
     llama3_tokenizer = load_llama3_tokenizer()
-    tokenizer = create_marin_tokenizer(llama3_tokenizer)
+    tokenizer = create_marin_tokenizer(llama3_tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
 
     # Roundtrip write-read to ensure consistency.
     with tempfile.TemporaryDirectory() as temp_path:

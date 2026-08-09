@@ -88,11 +88,13 @@ class FakeReranker:
     def __init__(self):
         self.queries: list[str] = []
         self.documents: list[list[str]] = []
+        self.batch_sizes: list[int] = []
 
-    def rerank(self, query, documents):
+    def rerank(self, query, documents, batch_size):
         values = list(documents)
         self.queries.append(query)
         self.documents.append(values)
+        self.batch_sizes.append(batch_size)
         return [0.0] * len(values)
 
 
@@ -230,6 +232,7 @@ def test_training_log_question_uses_finelog_and_iris_query_vocabulary(client_wit
     expanded = f"{query}\n{echo.search_config.LOG_QUERY_EXPANSION}"
     assert harness.model.queries == [expanded]
     assert harness.reranker.queries == [expanded]
+    assert harness.reranker.batch_sizes == [echo.search_config.RERANK_BATCH_SIZE]
 
 
 def test_kv_cache_question_uses_levanter_query_vocabulary():
@@ -430,8 +433,9 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
     )
 
     class DeploymentReranker:
-        def rerank(self, query, documents):
+        def rerank(self, query, documents, batch_size):
             assert query == "how do i deploy iris"
+            assert batch_size == 4
             return [float("verifies controller health" in document) for document in documents]
 
     ranked = echo.rerank_candidates([distractor, runbook], "how do i deploy iris", DeploymentReranker(), 2)
@@ -456,7 +460,8 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
     )
 
     class RejectingReranker:
-        def rerank(self, _query, documents):
+        def rerank(self, _query, documents, batch_size):
+            assert batch_size == 4
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)

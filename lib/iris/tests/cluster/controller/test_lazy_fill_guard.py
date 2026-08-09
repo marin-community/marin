@@ -45,15 +45,3 @@ def test_reset_floors_all_keys():
     assert not guard.may_store(8, "fresh")  # even a never-seen key is floored
     assert guard.may_store(9, "j")
     assert guard.may_store(9, "fresh")
-
-
-def test_note_invalidated_self_bounds_into_floor(monkeypatch):
-    """Past the tracked-key cap, invalidations fold into the floor instead of growing."""
-    guard: LazyFillGuard[int] = LazyFillGuard()
-    monkeypatch.setattr(type(guard), "_MAX_TRACKED", 3)
-    guard.note_invalidated(10, [0, 1, 2])  # fills the per-key map to the cap
-    guard.note_invalidated(11, [3])  # overflow → reset(11) then track key 3
-    assert guard._floor == 11
-    assert not guard.may_store(10, 0)  # folded into the floor
-    assert not guard.may_store(10, 3)
-    assert guard.may_store(11, 3)

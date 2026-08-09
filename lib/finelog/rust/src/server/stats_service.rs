@@ -165,7 +165,7 @@ impl StatsService for StatsServiceImpl {
 
     async fn query(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         request: OwnedQueryRequestView,
     ) -> ServiceResult<QueryResponse> {
         let sql = request.sql.unwrap_or("").to_string();
@@ -185,22 +185,22 @@ impl StatsService for StatsServiceImpl {
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
         // faults are client errors, IO/execution faults are server errors.
         //
-        // Bound execution by the server-side wall-clock deadline: on elapse the
-        // query future is dropped (aborting the scan) and the caller gets a
-        // clean deadline_exceeded, so one pathological query can't run unbounded.
-        let ctx = make_ctx();
-        let query = run_query_over(&ctx, providers, &sql);
-        let result = match query_timeout() {
+        // Bound execution by the earlier of the server ceiling and the caller's
+        // remaining budget. On elapse the query future is dropped (aborting the
+        // scan), so a timed-out caller cannot leave CPU work behind.
+        let query_ctx = make_ctx();
+        let query = run_query_over(&query_ctx, providers, &sql);
+        let result = match query_timeout(ctx.time_remaining()) {
             Some(deadline) => match tokio::time::timeout(deadline, query).await {
                 Ok(r) => r.map_err(map_query_error)?,
                 Err(_elapsed) => {
                     tracing::warn!(
                         deadline_ms = deadline.as_millis() as u64,
                         sql = %truncate_sql_for_log(&sql),
-                        "query aborted: exceeded server-side deadline",
+                        "query aborted: exceeded deadline",
                     );
                     return Err(ConnectError::deadline_exceeded(format!(
-                        "query exceeded server-side deadline of {} ms",
+                        "query exceeded deadline of {} ms",
                         deadline.as_millis()
                     )));
                 }

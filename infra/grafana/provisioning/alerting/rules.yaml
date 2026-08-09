@@ -461,6 +461,11 @@ groups:
         title: TrainingProgressStalled
         condition: C
         for: 5m
+        # Even the bounded metric-family scan exceeds Finelog's 10s production
+        # deadline. Keep the rule visible but inactive until telemetry has a
+        # filtered projection; failed evaluations otherwise consume one core
+        # for ten seconds every minute.
+        isPaused: true
         noDataState: Alerting
         execErrState: Alerting
         labels:

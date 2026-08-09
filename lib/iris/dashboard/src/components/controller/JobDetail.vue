@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
+import { controllerRpcCall, endpointRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
@@ -247,7 +247,7 @@ async function fetchEndpoints(gen: number) {
   // Endpoint links are an enhancement; a fetch failure should never block the
   // task table, so swallow the error and leave the prior grouping in place.
   try {
-    const resp = await controllerRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
+    const resp = await endpointRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
     if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     const grouped = new Map<string, EndpointInfo[]>()
     for (const ep of resp.endpoints ?? []) {

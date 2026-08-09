@@ -6,7 +6,10 @@ This tutorial walks through setting up a Google Cloud Storage (GCS) bucket that 
 ## When You Need This
 
 - Running local GPU or TPU experiments that write checkpoints to `gs://...` paths.
-- Launching TPU/GPU jobs on the shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster, where every worker streams artifacts to a shared prefix.
+- Launching TPU jobs on the shared
+  [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+  cluster. CoreWeave GPU jobs use the object storage described in [Training on
+  Cloud GPUs](cloud-gpu.md).
 - Hosting tokenized datasets or compilation caches that multiple jobs should reuse.
 
 If you only run experiments locally with `local_store/` you can skip this, but migrating to GCS early prevents churn later.
@@ -126,7 +129,8 @@ trainer:
     base_path: "$BUCKET/your-run"
 ```
 
-Put personal launch defaults in `~/.config/marin/config.yaml` so every launch script uses the same location:
+For `iris job run`, put personal launch values in the gitignored `.marin.yaml`
+at the checkout root:
 
 ```yaml
 env:
@@ -135,7 +139,11 @@ env:
   WANDB_ENTITY: your-entity
 ```
 
-Use a checkout-local `.levanter.yaml` only for values that should override your personal defaults for that repository.
+The Iris CLI loads this `env` section when run from that directory. Direct SDK
+submissions and commands run from another directory do not load it. A GCS
+`MARIN_PREFIX` in this file also overrides the CoreWeave storage default. Omit
+it from checkouts that submit CoreWeave jobs, or set it only on the GCP job that
+needs it.
 
 ## Ongoing Hygiene Checklist
 

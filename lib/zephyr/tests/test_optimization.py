@@ -3,6 +3,8 @@
 
 """Tests for operation fusion optimization via compute_plan."""
 
+import itertools
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 from zephyr.dataset import Dataset, FilterOp, MapOp, ReshardOp, TakePerShardOp
@@ -145,3 +147,35 @@ def test_lambda_filter_blocks_select_pushdown(tmp_path):
     # because referenced columns are added back at read time.
     ds_expr = Dataset.from_files(path).load_parquet().filter(col("c") > 150).select("a", "b")
     assert ZephyrContext(name="test").execute(ds_expr).results == [{"a": 2, "b": 20}]
+
+
+def test_parquet_splits_stay_paired_with_their_input_file(tmp_path):
+    """approx_shard_bytes splits each parquet file into contiguous row spans, and
+    every span stays attached to the file it was computed from — the planner reads
+    the footers concurrently, so the spans must be re-paired in input order."""
+    row_counts = [6, 24, 12, 40]
+    paths = []
+    for file_idx, row_count in enumerate(row_counts):
+        path = str(tmp_path / f"data-{file_idx}.parquet")
+        records = [{"id": file_idx * 100 + row} for row in range(row_count)]
+        pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
+        paths.append(path)
+
+    row_group_bytes = pq.ParquetFile(paths[0]).metadata.row_group(0).total_byte_size
+    ds = Dataset.from_list(paths).load_parquet(approx_shard_bytes=row_group_bytes * 2 + 1)
+    plan = compute_plan(ds)
+
+    spans_by_path: dict[str, list[tuple[int, int]]] = {}
+    for expected_shard_idx, item in enumerate(plan.source_items):
+        assert item.shard_idx == expected_shard_idx
+        spans_by_path.setdefault(item.data.path, []).append((item.data.row_start, item.data.row_end))
+
+    assert list(spans_by_path) == paths
+    for path, row_count in zip(paths, row_counts, strict=True):
+        spans = spans_by_path[path]
+        assert len(spans) > 1
+        assert spans[0][0] == 0
+        # The last span ends at this file's own row count.
+        assert spans[-1][1] == row_count
+        for (_, end), (start, _) in itertools.pairwise(spans):
+            assert end == start

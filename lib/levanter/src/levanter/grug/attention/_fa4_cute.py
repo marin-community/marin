@@ -19,6 +19,13 @@ from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, fla
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
+def _replicate_metadata(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return reshard(x, P(None, None))
+
+
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
     if segment_ids.ndim == 1:
         if segment_ids.shape[0] != seq_len:
@@ -50,7 +57,7 @@ def _packed_segment_start_positions(
     segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
     valid = segment_ids >= 0
     starts = _segment_starts(segment_ids)
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     start_positions = jnp.where(starts, positions, 0)
     current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
@@ -75,10 +82,23 @@ def _packed_segment_causal_lower_bounds(
         seq_len=seq_len,
     )
     if sliding_window is not None:
-        positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+        positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
-    return jnp.where(valid, lower_bounds, seq_len), valid
+
+    # The forward kernel uses the first query's lower bound to skip whole key
+    # tiles. If an M tile begins with left padding, a ``seq_len`` sentinel would
+    # incorrectly skip every key tile for valid queries later in that M tile.
+    # Give each invalid query the next valid query's bound instead. Trailing
+    # padding keeps the ``seq_len`` sentinel, so fully padded tail tiles remain
+    # cheap. The per-score predicate still uses ``valid`` as the authority.
+    next_valid_lower_bound = jax.lax.associative_scan(
+        jnp.minimum,
+        jnp.where(valid, lower_bounds, seq_len),
+        axis=1,
+        reverse=True,
+    )
+    return jnp.where(valid, lower_bounds, next_valid_lower_bound), valid
 
 
 def _simple_causal_lower_bounds(
@@ -90,13 +110,13 @@ def _simple_causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     if sliding_window is None:
-        lower_bounds = jnp.zeros((1, seq_len), dtype=jnp.int32)
+        lower_bounds = _replicate_metadata(jnp.zeros((1, seq_len), dtype=jnp.int32))
     else:
         lower_bounds = jnp.maximum(positions - (sliding_window - 1), 0)
-    lower_bounds = jnp.broadcast_to(lower_bounds, (batch_size, seq_len))
-    valid = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)
+    lower_bounds = _replicate_metadata(jnp.broadcast_to(lower_bounds, (batch_size, seq_len)))
+    valid = _replicate_metadata(jnp.ones((batch_size, seq_len), dtype=jnp.bool_))
     return lower_bounds, valid
 
 

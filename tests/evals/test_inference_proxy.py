@@ -17,6 +17,7 @@ import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
+from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -28,7 +29,12 @@ from marin.inference.config import (
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.iris import RemoteInferenceStartupError, remote_inference
+from marin.inference.iris import (
+    InferenceBackendState,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+    remote_inference,
+)
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
@@ -135,7 +141,7 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu", "vllm"]),
+        worker_environment=create_environment(extras=["tpu"]),
     )
 
     with remote_inference(
@@ -193,7 +199,7 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu", "vllm"]),
+        worker_environment=create_environment(extras=["tpu"]),
     )
 
     with pytest.raises(RemoteInferenceStartupError) as exc_info:
@@ -209,6 +215,151 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     assert exc_info.value.jobs == (job,)
     assert job.terminated
     assert len(requests) == 1
+
+
+@dataclass
+class _SessionJob:
+    job_status: JobStatus
+    job_id: str = "/tester/inference"
+
+    def status(self) -> JobStatus:
+        return self.job_status
+
+
+def _remote_session(job_status: JobStatus = JobStatus.RUNNING) -> RemoteInferenceSession:
+    return RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_SessionJob(job_status),),
+        endpoint_name="/serve/inference",
+        endpoint_health_timeout_seconds=1800.0,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_state", "endpoint_count", "expected"),
+    [
+        (job_pb2.TASK_STATE_PENDING, 1, InferenceBackendState.RECOVERING),
+        (job_pb2.TASK_STATE_RUNNING, 0, InferenceBackendState.RECOVERING),
+        (job_pb2.TASK_STATE_RUNNING, 1, InferenceBackendState.READY),
+    ],
+)
+def test_direct_inference_session_reports_backend_state(
+    task_state: int,
+    endpoint_count: int,
+    expected: InferenceBackendState,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda _job_id: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
+            )
+        ),
+    )
+    session = _remote_session()
+
+    assert session.backend_state() is expected
+
+
+def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
+    session = _remote_session(JobStatus.FAILED)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args, **_kwargs: SimpleNamespace(state=job_pb2.JOB_STATE_FAILED, tasks=[])
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        session.wait_until_ready()
+
+
+def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> None:
+    task_pending = True
+    probe_statuses: list[int] = []
+
+    def list_tasks(_job_id):
+        nonlocal task_pending
+        state = job_pb2.TASK_STATE_PENDING if task_pending else job_pb2.TASK_STATE_RUNNING
+        task_pending = False
+        return [SimpleNamespace(state=state)]
+
+    def probe_endpoint(_url, timeout):
+        del timeout
+        status_code = 502 if not probe_statuses else 200
+        probe_statuses.append(status_code)
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=list_tasks,
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+            )
+        ),
+    )
+    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(iris_module.requests, "get", probe_endpoint)
+
+    session = _remote_session()
+    session.wait_until_ready()
+
+    assert probe_statuses == [502, 200]
+
+
+def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monkeypatch) -> None:
+    class ExpiredDeadline:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def remaining_seconds(self) -> float:
+            return 5.0
+
+        def raise_if_expired(self, message: str) -> None:
+            self.checks += 1
+            if self.checks > 1:
+                raise TimeoutError(message)
+
+    probes: list[str] = []
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda _job_id: [SimpleNamespace(state=job_pb2.TASK_STATE_RUNNING)],
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        iris_module.Deadline,
+        "from_seconds",
+        lambda _timeout: ExpiredDeadline(),
+    )
+    monkeypatch.setattr(
+        iris_module.requests,
+        "get",
+        lambda url, **_kwargs: probes.append(url) or SimpleNamespace(status_code=502),
+    )
+
+    with pytest.raises(TimeoutError, match=r"did not become healthy within 1800\.0s"):
+        _remote_session().wait_until_ready()
+    assert probes == ["https://iris.example/capability/v1/models"]
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:
@@ -421,7 +572,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4", regions=["us-east5"], zone="us-east5-a"),
         worker_environment=create_environment(
-            extras=["tpu", "vllm"],
+            extras=["tpu"],
             env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
         ),
     )
@@ -448,7 +599,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:
-        assert worker_request.environment.extras == ["tpu", "vllm"]
+        assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
         assert worker_request.resources.regions == ["us-east5"]
         assert worker_request.resources.zone == "us-east5-a"

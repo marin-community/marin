@@ -526,6 +526,7 @@ def build_clustered_store(
     target_tokens_per_subshard: int = DEFAULT_TARGET_TOKENS_PER_SUBSHARD,
     max_subshards: int = 128,
     default_subshards: int = DEFAULT_SUBSHARDS,
+    zephyr_context: ZephyrContext | None = None,
 ) -> ClusteredStoreData:
     """Shuffle the joined attributes into one materialized cache per ``(cluster, quality, sub)``.
 
@@ -642,7 +643,7 @@ def build_clustered_store(
         # buffer (~512 MB write-chunk) and the map holds numpy token payloads.
         worker_resources = ResourceConfig(cpu=2, ram="16g", disk="16g")
 
-    ctx = ZephyrContext(
+    ctx = zephyr_context or ZephyrContext(
         resources=worker_resources,
         coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
         max_workers=min(max_workers, len(batched_specs)),
@@ -661,7 +662,11 @@ def build_clustered_store(
             num_output_shards=reduce_shards,
         )
     )
-    outcome = ctx.execute(ds, verbose=True)
+    outcome = ctx.execute(
+        ds,
+        verbose=True,
+        map_task_resources=worker_resources,
+    )
     subshard_stats = [r for r in outcome.results if r is not None]
     logger.info(
         "build_clustered_store: wrote %d subshard caches (records_out=%d, tokens_out=%d)",

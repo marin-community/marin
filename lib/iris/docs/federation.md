@@ -1,8 +1,9 @@
 # Federation: what crosses a cluster boundary
 
 A cluster with `peers:` in its config may hand whole jobs to another cluster. `marin` (GCP:
-TPU and CPU) peers with `cw-rno2a` and `cw-us-east-02a` (CoreWeave: H100), so a user submits
-every job to `marin` and GPU work lands on CoreWeave.
+TPU and CPU) peers with `cw-rno2a` and `cw-us-east-02a` (CoreWeave: H100) and
+`cw-us-east-08a` (CoreWeave: GB200), so a user submits every job to `marin` and GPU work
+lands on CoreWeave.
 
 This page is the job model. For the auth, networking, and DNS that carry a handoff, see
 [`coreweave.md`](coreweave.md).

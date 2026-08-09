@@ -20,7 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::store::types::SegmentRow;
+use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
 
 /// `POST /debug/maintain` body: which namespace, and whether to force an L0->L1
@@ -51,14 +51,6 @@ struct DebugSegment {
     byte_size: i64,
     location: String,
     created_at_ms: i64,
-}
-
-fn basename(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-        .to_string()
 }
 
 fn to_debug_segment(row: SegmentRow) -> DebugSegment {

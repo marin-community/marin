@@ -11,6 +11,7 @@ from typing import ClassVar
 import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
+import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePolicy, schema_from_dataclass
@@ -22,7 +23,16 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import MAP_STRING_STRING, Column, Schema, schema_from_proto, schema_to_arrow, schema_to_proto
+from finelog.schema import (
+    MAP_STRING_STRING,
+    Column,
+    CoveringProjection,
+    GroupedExtrema,
+    Schema,
+    schema_from_proto,
+    schema_to_arrow,
+    schema_to_proto,
+)
 
 
 class FakeLogClient:
@@ -127,6 +137,38 @@ class _FakeStatsServiceClient:
         pass
 
 
+class _RecordingHttpClient:
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, str]] = []
+
+    def post(self, *, url, headers, content, timeout):
+        del timeout
+        encoding = headers.get("content-encoding")
+        decoded = zstandard.ZstdDecompressor().decompress(content)
+        if url.endswith("/RegisterTable"):
+            request = stats_pb2.RegisterTableRequest()
+            request.ParseFromString(decoded)
+            response = stats_pb2.RegisterTableResponse(
+                effective_schema=request.schema,
+                effective_policy=request.storage_policy,
+            )
+        elif url.endswith("/WriteRows"):
+            request = stats_pb2.WriteRowsRequest()
+            request.ParseFromString(decoded)
+            self.writes.append((request.namespace, encoding))
+            response = stats_pb2.WriteRowsResponse(rows_written=_decode_ipc_row_count(request.arrow_ipc))
+        else:
+            raise AssertionError(f"unexpected request URL: {url}")
+        return SimpleNamespace(
+            status=200,
+            headers={"content-type": "application/proto"},
+            content=response.SerializeToString(),
+        )
+
+    def close(self) -> None:
+        pass
+
+
 def _decode_ipc_row_count(blob: bytes) -> int:
     reader = paipc.open_stream(pa.BufferReader(blob))
     table = reader.read_all()
@@ -190,6 +232,28 @@ def test_connect_returns_usable_client(tracked_clients):
         assert decoded.column("data").to_pylist() == ["hi"]
     finally:
         client.close()
+
+
+def test_all_log_client_table_writes_use_zstd(monkeypatch: pytest.MonkeyPatch) -> None:
+    http_client = _RecordingHttpClient()
+    stats_client_class = log_client_mod.StatsServiceClientSync
+
+    def factory(address, **kwargs):
+        return stats_client_class(address=address, http_client=http_client, **kwargs)
+
+    monkeypatch.setattr(log_client_mod, "StatsServiceClientSync", factory)
+    client = LogClient.connect("http://finelog")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        client.write_batch("key", [logging_pb2.LogEntry(source="stdout", data="hello")])
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
+    finally:
+        client.close()
+
+    assert sorted(http_client.writes) == [("iris.worker", "zstd"), ("log", "zstd")]
 
 
 def test_close_is_idempotent(tracked_clients):
@@ -804,6 +868,8 @@ def test_schema_from_proto_consistency():
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
         assert proto_col.index.trigram == src_col.trigram_index
+        assert tuple(proto_col.index.exact_values) == src_col.exact_values
+        assert proto_col.index.value_counts == src_col.value_counts
 
 
 def test_trigram_index_round_trips_through_proto():
@@ -820,3 +886,65 @@ def test_trigram_index_round_trips_through_proto():
         "level": False,
         "timestamp_ms": False,
     }
+
+
+def test_exact_indexes_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(
+                name="name",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                exact_values=("phase", "step"),
+            ),
+            Column(
+                name="service",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                value_counts=True,
+            ),
+        )
+    )
+    back = schema_from_proto(schema_to_proto(schema))
+    assert back.columns[0].exact_values == ("phase", "step")
+    assert back.columns[1].value_counts
+
+
+def test_covering_projections_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="name", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="value", type=stats_pb2.COLUMN_TYPE_FLOAT64),
+        ),
+        projections=(
+            CoveringProjection(
+                name="training-status",
+                predicate_column="name",
+                predicate_values=("phase", "step"),
+                columns=("name", "value"),
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_grouped_extrema_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="timestamp", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="scope", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        ),
+        key_column="timestamp",
+        grouped_extrema=(
+            GroupedExtrema(
+                filter_column="scope",
+                group_json_column="labels",
+                group_json_key="identity",
+                extrema_column="timestamp",
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema

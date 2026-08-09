@@ -9,6 +9,7 @@ import { tableFromIPC, type Table } from 'apache-arrow'
 
 export interface ArrowResult {
   columns: string[]
+  types: Record<string, string>
   rows: Record<string, unknown>[]
 }
 
@@ -20,10 +21,11 @@ function base64ToUint8(b64: string): Uint8Array {
 }
 
 export function decodeArrowIpc(arrowIpc: string | undefined | null): ArrowResult {
-  if (!arrowIpc) return { columns: [], rows: [] }
+  if (!arrowIpc) return { columns: [], types: {}, rows: [] }
   const bytes = base64ToUint8(arrowIpc)
   const table: Table = tableFromIPC(bytes)
   const columns = table.schema.fields.map((f) => f.name)
+  const types = Object.fromEntries(table.schema.fields.map((field) => [field.name, String(field.type)]))
   const rows: Record<string, unknown>[] = []
   for (let i = 0; i < table.numRows; i++) {
     const row: Record<string, unknown> = {}
@@ -34,14 +36,17 @@ export function decodeArrowIpc(arrowIpc: string | undefined | null): ArrowResult
     }
     rows.push(row)
   }
-  return { columns, rows }
+  return { columns, types, rows }
 }
 
 function normalize(v: unknown): unknown {
   if (v === null || v === undefined) return null
   if (typeof v === 'bigint') return Number(v)
   if (v instanceof Uint8Array) return `<bytes ${v.byteLength}>`
-  if (v instanceof Date) return v.toISOString()
+  // Instants stay epoch milliseconds so rendering can honour the viewer's
+  // timezone. Formatting one to a UTC string here would freeze that choice
+  // before any component sees the value.
+  if (v instanceof Date) return v.getTime()
   // Nested columns (a native Map<Utf8,Utf8> `labels`, a struct, a list) arrive
   // as arrow MapRow/StructRow/sub-Vector objects. DataTable renders cells as
   // text, so flatten them to compact JSON — coercing any nested bigint the way

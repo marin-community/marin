@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
+import { useControllerRpc, useEndpointRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
@@ -62,7 +62,7 @@ const rootCauseHighlights = computed(() => taskResponse.value?.rootCauseHighligh
 const {
   data: endpointsResponse,
   refresh: fetchEndpoints,
-} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
 
 const endpoints = computed<EndpointInfo[]>(() => endpointsResponse.value?.endpoints ?? [])
 

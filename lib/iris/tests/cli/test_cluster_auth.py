@@ -1,77 +1,79 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock
+import asyncio
+import json
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
+import httpx
+import pytest
 from click.testing import CliRunner
 from iris.cli import cluster as cluster_cli
-from iris.cli.connect import _cluster_auth_from_config
-from iris.cluster.config import AuthConfig, IapAuthConfig
 from rigging.auth import StaticTokenProvider
-from rigging.cluster_manifest import AuthProvider
 from rigging.credentials import ClientCredentials
 
 
-def test_cluster_auth_from_config_passes_programmatic_audiences_through():
-    """The service-account edge audience is configured explicitly and passed
-    straight through to rigging's credential vocabulary."""
-    auth = AuthConfig(
-        iap=IapAuthConfig(
-            url="https://iris.example",
-            oauth_client_id="desktop.apps.googleusercontent.com",
-            programmatic_audiences=["iap-secured.apps.googleusercontent.com"],
-        )
-    )
+@pytest.fixture
+def authenticated_upstream() -> Iterator[tuple[str, list[str | None]]]:
+    proxy_authorizations: list[str | None] = []
 
-    cluster_auth = _cluster_auth_from_config(auth)
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            proxy_authorizations.append(self.headers.get("Proxy-Authorization"))
+            body = json.dumps({"enabled": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
-    assert cluster_auth.provider is AuthProvider.IAP
-    assert cluster_auth.iap is not None
-    assert cluster_auth.iap.programmatic_audiences == ("iap-secured.apps.googleusercontent.com",)
+        def log_message(self, _format: str, *args: object) -> None:
+            pass
 
-
-def test_cluster_auth_from_config_empty_programmatic_audiences():
-    """With no ``programmatic_audiences`` set the adapter exposes none; the edge path
-    then falls back to the desktop client id in rigging's resolver (see
-    ``test_credentials``)."""
-    auth = AuthConfig(
-        iap=IapAuthConfig(
-            url="https://iris.example",
-            oauth_client_id="desktop.apps.googleusercontent.com",
-        )
-    )
-
-    cluster_auth = _cluster_auth_from_config(auth)
-
-    assert cluster_auth.iap is not None
-    assert cluster_auth.iap.programmatic_audiences == ()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", proxy_authorizations
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
-def test_dashboard_proxy_command_forwards_context_credentials_to_the_proxy(monkeypatch):
-    """The browser holds no cluster credentials, so the proxy must send the operator's.
-
-    Regression guard: the command resolved them onto the context and then built the
-    proxy without them, so every upstream call hit an IAP-fronted controller
-    unauthenticated.
-    """
+def test_dashboard_proxy_sends_context_credentials_to_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticated_upstream: tuple[str, list[str | None]],
+) -> None:
+    upstream_url, proxy_authorizations = authenticated_upstream
     credentials = ClientCredentials(iap_provider=StaticTokenProvider("iap-token"))
-    built = {}
 
-    class StubDashboard:
-        def __init__(self, **kwargs):
-            built.update(kwargs)
-            self.app = object()
+    monkeypatch.setattr(cluster_cli.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cluster_cli.subprocess,
+        "Popen",
+        lambda *args, **kwargs: SimpleNamespace(terminate=lambda: None, wait=lambda: None),
+    )
 
-    monkeypatch.setattr(cluster_cli, "ProxyControllerDashboard", StubDashboard)
-    monkeypatch.setattr(cluster_cli, "require_controller_url", lambda ctx: "https://iris.example")
-    monkeypatch.setattr(cluster_cli.subprocess, "run", lambda *a, **kw: None)
-    monkeypatch.setattr(cluster_cli.subprocess, "Popen", lambda *a, **kw: Mock())
-    monkeypatch.setattr(cluster_cli.uvicorn, "run", lambda *a, **kw: None)
+    async def request_through_proxy(app) -> int:
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://proxy.test") as client:
+                return (await client.get("/auth/config")).status_code
 
-    CliRunner().invoke(
+    def serve_proxy(app, **_kwargs) -> None:
+        assert asyncio.run(request_through_proxy(app)) == 200
+
+    monkeypatch.setattr(cluster_cli.uvicorn, "run", serve_proxy)
+
+    result = CliRunner().invoke(
         cluster_cli.cluster_dashboard_proxy,
-        obj={"credentials": credentials},
+        obj={"controller_url": upstream_url, "credentials": credentials},
         catch_exceptions=False,
     )
 
-    assert built["credentials"] is credentials
+    assert result.exit_code == 0
+    assert proxy_authorizations == ["Bearer iap-token"]

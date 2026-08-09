@@ -1,8 +1,9 @@
 # Running Evaluations with Marin
 
-The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model.
-It starts one OpenAI-compatible model server, runs every selected evaluation against that endpoint,
-writes one durable record per evaluation, and tears the server down.
+The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
+file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
+evaluation against that endpoint, writes one durable record per evaluation, and tears the server
+down.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -12,12 +13,13 @@ See [Evaluation Overview](../explanations/evaluation.md) for the evaluator and s
 
 - Run commands from the Marin repository with `uv`.
 - Use a model key registered in `experiments/evaluation/models.py` or
-  `experiments/evaluation/serve/models/`.
+  `experiments/evaluation/serve/models/`, or supply a file with the
+  [model catalog schema](https://github.com/marin-community/marin/blob/main/experiments/evaluation/serve/models/README.md#schema).
 - Have access to the selected Iris cluster and its TPU or GPU serving resources.
 - For Harbor evaluations, use an environment with access to the Daytona credential described in
   [Harbor credentials](#harbor-credentials).
 
-## Launch registered evaluations
+## Launch registered models and evaluations
 
 The command accepts one model key and either a named suite or comma-separated evaluation keys:
 
@@ -28,7 +30,8 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Run the resolved plan before submitting an unfamiliar model or suite. `--dry-run` prints the model
-location, serving backend, accelerator, target cluster or region, task names, and records prefix:
+location, serving backend, accelerator, target cluster or region, priority band, task names, and
+records prefix:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -36,6 +39,54 @@ uv run python -m experiments.evaluation.cli launch \
   --evals smoke \
   --dry-run
 ```
+
+## Launch file-backed evaluations
+
+Use `--model-config` for a one-off model export that does not belong in the central catalog. The file
+uses the same YAML or JSON schema as `experiments/evaluation/serve/models/`; its `name` becomes the
+served model name and run identity. This dry run evaluates a fresh RL export without modifying the
+checkout:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/fresh-rl-checkpoint.yaml \
+  --evals smoke \
+  --dry-run
+```
+
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. `record.json` stores
+the normalized model schema under `model.config`, including registry-backed launches, so the durable
+record is self-contained.
+
+Use `--evalchemy-config` for an Evalchemy or lm-eval definition that does not belong in the central
+registry. This dry run resolves the checked-in IFEval definition without opening Iris:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --dry-run
+```
+
+The option is repeatable. It composes with registry selections and Harbor policy files, so one
+served model can run all three sources:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals mmlu-smoke \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2 \
+  --dry-run
+```
+
+Each config file is one evaluation with its own `record.json`. Marin decodes the launch YAML without
+importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from the pinned
+external runtime. A dry run checks the YAML shape and launch plan; unavailable task names fail when
+the Evalchemy process starts. The record keeps the normalized launch-time task routing, few-shot
+counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
+`eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
 
 ### Command recipes
 
@@ -81,6 +132,16 @@ Run a two-task Terminal-Bench 2 Harbor check on the validated Qwen3-32B GPU shap
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-32b \
   --evals tb2-lite
+```
+
+Route a GPU serve group to RNO2A at interactive priority:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb2-lite \
+  --federated_cluster cw-rno2a \
+  --priority interactive
 ```
 
 Run one capped Evalchemy task and one capped Harbor benchmark against the same model server:
@@ -195,14 +256,21 @@ documents how to register a Hugging Face model or object-store checkpoint.
 
 - `--evals smoke` selects a named suite. `--evals mmlu,gsm8k` selects explicit keys. One invocation
   may mix Evalchemy and Harbor keys.
+- `--evalchemy-config path.yaml` adds one portable Evalchemy or lm-eval definition. Repeat the option
+  for multiple files.
+- `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
   that platform.
 - `--accelerator v6e-8` or `--accelerator H100x8` requests an exact compatible slice.
+- `--federated_cluster cw-rno2a` overrides the GPU fleet profile's target cluster. The launcher
+  always submits through the `marin` Iris controller.
+- `--priority production|interactive|batch` sets the orchestrator and serve priority band. Omitting
+  it preserves Iris priority inheritance.
 - `--version` and `--description` attach run metadata.
-- `--cluster` changes the submitting Iris cluster. `--records-prefix` changes the result store.
+- `--records-prefix` changes the result store.
 
 Each invocation serves the model once and evaluates the selected keys in order. An evaluation
 failure gets its own terminal record and does not skip later evaluations. An inference failure
@@ -218,14 +286,15 @@ endpoint details.
 
 ### Results
 
-TPU-routed runs default to `gs://marin-eval-metadata/runs`. CoreWeave GPU runs default to
-`s3://marin-us-east-02a/marin/eval-metadata/runs`. `--dry-run` prints the effective prefix.
+TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs default to
+`s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
-results and normalized sample parquet. Harbor also persists trial directories and trajectories in
-the same GCS or S3 results tree. A Harbor trial with `exception_info` marks the evaluation failed
-after its artifacts are saved; a verifier-scored zero without an exception remains a completed
-evaluation with a zero score.
+results and normalized sample parquet. Evalchemy records include the normalized launch configuration;
+Harbor records include the dataset, agent, environment, task limit, and source-policy
+digest. Harbor also persists trial directories and trajectories in the same GCS or S3 results tree.
+A Harbor trial with `exception_info` marks the evaluation failed after its artifacts are saved; a
+verifier-scored zero without an exception remains a completed evaluation with a zero score.
 
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job

@@ -22,7 +22,7 @@ if str(_EVALDASH_SRC) not in sys.path:
 import fixtures  # noqa: E402
 import samples  # noqa: E402
 import server  # noqa: E402
-from marin.evaluation.records import list_records  # noqa: E402
+from marin.evaluation.records import list_records, write_record  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 
@@ -66,6 +66,11 @@ def test_groups_roll_up_mixed_launch_status(store):
     assert groups["tootsie-8b-2026.07.20"]["status"] == "mixed"
     assert groups["snowball-2026.07.20"]["status"] == "succeeded"
     assert groups["snowball-2026.07.20"]["n_succeeded"] == 4
+
+
+def test_status_rollup_does_not_invent_evaluator_failure():
+    assert server._status_rollup({"artifact_failed", "infra_failed"}) == "mixed"
+    assert server._status_rollup({"failed", "artifact_failed", "infra_failed"}) == "failed"
 
 
 def test_fetch_runs_filters_and_get_record_round_trip(store):
@@ -165,6 +170,23 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     assert len(probe["parse_failures"]) == 1
     assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")
     assert "launch_host" in probe["parse_failures"][0]["error"]
+
+
+def test_memory_store_deduplicates_migrated_runs_with_canonical_precedence(tmp_path):
+    source = tmp_path / "source"
+    fixtures.build_fixtures(str(source))
+    record = list_records(str(source))[0]
+    canonical = tmp_path / "canonical"
+    legacy = tmp_path / "legacy"
+    write_record(record.model_copy(update={"description": "canonical"}), str(canonical))
+    write_record(record.model_copy(update={"description": "legacy"}), str(legacy))
+    store = server.MemoryRecordStore()
+    store.refresh(list_records(str(canonical)) + list_records(str(legacy)))
+
+    assert len(store.fetch_runs()) == 1
+    stored = store.get_record(record.run_id)
+    assert stored is not None
+    assert stored["description"] == "canonical"
 
 
 def test_api_jobs_degrade_without_a_cluster(client):

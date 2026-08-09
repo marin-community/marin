@@ -12,7 +12,13 @@ import pytest
 from iac.config import load_iris_config
 from iac.coreweave.cluster import _nodepool_manifest
 from iac.nodepools import NodePoolSpec, derive_nodepools
-from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    CW_LABEL_FABRIC,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    CW_LABEL_SUPERPOD,
+    RACK_SIZE,
+)
 
 
 def _node_based_spec() -> NodePoolSpec:
@@ -63,6 +69,17 @@ def test_derive_gb200_pool_is_rack_based():
     assert gb200.autoscaling is False
     cpu = pools["cw-use08a-cpu-erapids"]
     assert cpu.target_racks is None and cpu.autoscaling is True
+
+
+def test_derive_nodepools_assigns_unified_tas_labels():
+    pools = {p.name: p for p in derive_nodepools(load_iris_config("cw-us-east-08a"))}
+    gb200 = pools["cw-use08a-gb200"]
+    cpu = pools["cw-use08a-cpu-erapids"]
+
+    assert all(pool.node_labels["iris.kueue"] == "true" for pool in pools.values())
+    for topology_label in (CW_LABEL_FABRIC, CW_LABEL_SUPERPOD, CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN):
+        assert cpu.node_labels[topology_label] == "iris-cpu-only"
+        assert topology_label not in gb200.node_labels
 
 
 def test_derive_rejects_rack_pool_with_partial_rack():

@@ -22,6 +22,7 @@ from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     _PAYLOAD_COL,
+    _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
@@ -101,6 +102,40 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         recovered = sorted(_read_shard(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
+
+
+def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
+    path = "s3://marin-us-east-02a/execution/stage0/shard-0000/scatter/c0000.parquet"
+    calls = []
+    frame = pl.DataFrame(
+        {
+            _PAYLOAD_COL: [cloudpickle.dumps({"k": "a"})],
+            _SHARD_COL: [0],
+            _SORT_KEY_COL: [OrderedDict([("key", b"a"), ("sort_value", None)])],
+        }
+    ).lazy()
+
+    def scan_parquet(scan_path, *, storage_options):
+        calls.append((scan_path, storage_options))
+        return frame
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
+    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
+
+    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    rows = reader.get_frames()[0].collect().to_dicts()
+
+    assert len(rows) == 1
+    assert calls == [
+        (
+            path,
+            {
+                "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
+                "aws_virtual_hosted_style_request": "true",
+            },
+        )
+    ]
 
 
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
@@ -353,6 +388,38 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
+def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
+    """A multiplexed shard flushes against its task budget, not the worker pod limit."""
+    items = [{"k": 0, "v": i} for i in range(100)]
+    frame = _items_to_dataframe(items, _key, None, 1)
+    task_memory_bytes = int(frame.estimated_size()) * 3
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test",
+        execution_id="test",
+        stage_name="test",
+        task_memory_bytes=task_memory_bytes,
+    )
+    token = _worker_ctx_var.set(ctx)
+    try:
+        with patch("zephyr.shuffle.TaskResources.from_environment") as environment_resources:
+            environment_resources.return_value = TaskResources(
+                memory_bytes=1024**3,
+                cpu_cores=1,
+                gpu_count=0,
+                tpu_count=0,
+            )
+            writer = ScatterWriter(data_path=str(tmp_path / "scatter"), key_fn=_key, source_shard=0)
+            writer.write(frame)
+            writer.write(frame)
+            scatter_paths = list(writer.close())
+    finally:
+        _worker_ctx_var.reset(token)
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    assert shard.total_chunks == 2
+    assert sorted(row["v"] for row in _read_shard(shard)) == sorted([*range(100), *range(100)])
+
+
 # ---------------------------------------------------------------------------
 # external_sort_merge
 # ---------------------------------------------------------------------------
@@ -374,6 +441,7 @@ def _external_sort_items(
     sort_key: str,
     external_sort_dir: str,
     fan_in: int,
+    max_merge_fan_in: int = 32,
     shard: int,
 ) -> list:
     merged = external_sort_merge(
@@ -381,6 +449,7 @@ def _external_sort_items(
         sort_key=sort_key,
         external_sort_dir=external_sort_dir,
         fan_in=fan_in,
+        max_merge_fan_in=max_merge_fan_in,
         shard=shard,
     )
     return list(itertools.chain.from_iterable(map(_dataframe_to_items, merged)))
@@ -421,10 +490,26 @@ def test_external_sort_merge_cleans_up(tmp_path):
             sort_key=_SORT_KEY_COL,
             external_sort_dir=str(tmp_path),
             fan_in=fan_in,
+            max_merge_fan_in=32,
             shard=0,
         )
     )
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+
+
+def test_external_sort_merge_limits_later_pass_fan_in(tmp_path):
+    frames = [_make_sorted_frame([value]) for value in range(20)]
+    rows = _external_sort_items(
+        frames,
+        sort_key=_SORT_KEY_COL,
+        external_sort_dir=str(tmp_path),
+        fan_in=2,
+        max_merge_fan_in=2,
+        shard=0,
+    )
+
+    assert [row["v"] for row in rows] == list(range(20))
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_scatter_removes_partial_dir_on_write_failure(tmp_path):

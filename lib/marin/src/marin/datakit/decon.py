@@ -491,6 +491,7 @@ def decon_to_parquet(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> DeconAttributes:
     """Mark records in *normalized_data* that overlap with eval text.
 
@@ -584,8 +585,11 @@ def decon_to_parquet(
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
-    outcome = ctx.execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
 
     return DeconAttributes(
         main_output_dir=prefix_join(output_path, "outputs/main"),
@@ -1028,6 +1032,7 @@ def build_all_source_drop_sets(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
 
@@ -1101,7 +1106,11 @@ def build_all_source_drop_sets(
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
     global_rows = list(outcome.results)
     global_output_dir = f"{output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}"
     out_file = _write_global_drop_set(global_output_dir, global_rows)
@@ -1139,6 +1148,7 @@ def all_source_drop_sets_step(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1203,6 +1213,7 @@ def all_source_drop_sets_step(
             global_common_min_sources=global_common_min_sources,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[prebuilt_bloom, *source_dependencies],
         hash_attrs=hash_attrs,
@@ -1229,6 +1240,7 @@ def decon_step(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1335,6 +1347,7 @@ def decon_step(
                 flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
+                zephyr_context=zephyr_context,
             ),
             deps=[*norm_deps, bloom_step, *drop_deps],
             hash_attrs=hash_attrs,
@@ -1365,6 +1378,7 @@ def decon_step(
             false_positive_rate=false_positive_rate,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[*norm_deps, *eval_steps, *drop_deps],
         hash_attrs=inline_hash_attrs,

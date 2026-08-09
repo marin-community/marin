@@ -3,8 +3,7 @@
  * Agentic (Harbor) sample view. The reward/grading is shown by the page's GradingPanel above; this
  * component lazy-loads the step trajectory referenced by `trajectory_uri` through the server's
  * artifact endpoint and renders it, degrading to a clear state when the URI is absent or the object
- * is unreachable. `exchange_uri` points at a prediction's raw request/response artifact; it is
- * surfaced as a note when present, and rendering its contents is out of scope here.
+ * is unreachable.
  */
 import { ref, watch } from 'vue'
 import { apiGet } from '@/composables/useApi'
@@ -69,9 +68,5 @@ watch(
       class="rounded border border-status-warning-border bg-status-warning-bg text-status-warning text-sm px-3 py-2"
     >Trajectory unavailable — {{ unavailableReason }}</p>
     <TrajectoryViewer v-else-if="trajectory" :trajectory="trajectory" />
-
-    <p v-if="sample.exchange_uri" class="text-xs text-text-muted">
-      Request/response exchange recorded for this sample.
-    </p>
   </section>
 </template>

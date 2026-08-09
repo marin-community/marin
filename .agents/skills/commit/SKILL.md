@@ -25,7 +25,7 @@ commit. The review is read-only: it never edits, commits, or pushes for you.
 Work top to bottom. For a quick work-in-progress checkpoint, do **1, 2, 4, 5,
 7** (clean up, lint, stage, commit, push) and stop. The changed-test cleanup in
 step 1 is a PR-readiness gate, not required for disposable WIP checkpoints. Run
-the whole list before you open or update a PR.
+the whole list for PR-ready work.
 
 1. Clean up your own diff (self-review).
 2. Mechanical lint & format — `./infra/pre-commit.py --changed-files --fix`.
@@ -35,6 +35,7 @@ the whole list before you open or update a PR.
 6. Lint-catalog review — run `./infra/pre-commit.py --review` once; fix or answer every finding.
 7. Push (maybe).
 8. Open or update the PR.
+9. Monitor the PR with `wait_for.py` until an exit condition.
 
 ## 1. Clean up your own diff
 
@@ -187,12 +188,16 @@ gh pr create --title "<title>" --body-file "<body-file>" --label agent-generated
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
 - If you have a specific github tool, you may use it.
 
-## 9. Monitor the PR through handoff
+## 9. Monitor the PR
 
-Opening the PR starts the integration phase. Monitor the current CI run and
-feedback already present before handing the PR to a reviewer. Waiting for future
-human reviews or a merge is a separate, longer-running mode; use it only when the
-user or task explicitly asks for continued monitoring.
+Opening the PR starts the integration phase. Green CI is not an exit condition:
+reviews and comments can arrive after checks pass. Monitor every PR until it
+merges or closes, the user tells you to stop, or a 12-hour wait times out.
+
+Before the first wait, read every current issue comment, inline review comment,
+and submitted review once, then address anything actionable. This is a one-time
+inspection, not a monitoring loop. The comment and review arms establish a
+baseline when they start and wake only for later new or edited feedback.
 
 Set one honest status immediately before waiting, for example:
 
@@ -210,9 +215,10 @@ uv run scripts/ci/wait_for.py --timeout 12h \
 ```
 
 `github.pr` covers terminal merged/closed state, merge conflicts,
-ready-for-review transitions, and review-decision changes. Ordinary PR lifecycle
-monitoring must not use a raw `poll` shell expression or separate `gh pr view`
-checks.
+ready-for-review transitions, and review-decision changes. It does not inspect
+comment or review bodies, so it does not replace `github.pr_comment` or
+`github.review`. Keep all three arms. Monitoring must not use a raw `poll` shell
+expression, `gh pr checks --watch`, or repeated `gh pr view` calls.
 
 The wait owns its exponential backoff. While it is running:
 
@@ -228,7 +234,7 @@ the overall timeout elapsed, and `1` means the wait failed. An event is not
 always a successful verdict. Read `result.conclusion` for `github.ci` and
 `result.reasons` for `github.pr`.
 
-Act on the event before deciding whether to re-arm:
+Act on the event, read any feedback that arrived concurrently, then re-arm:
 
 1. **`github.ci`** — on failure, read the failing job log and fix the
    regression. A failure in an untouched file is not automatically
@@ -239,26 +245,26 @@ Act on the event before deciding whether to re-arm:
 2. **`github.pr`** — `merged` and `closed` are terminal. Resolve `conflicted`
    before re-arming; an unchanged conflict is intentionally reported again by a
    fresh wait. `ready_for_review` and `review_decision` describe review-state
-   changes in the attached snapshots.
+   changes in the attached snapshots. When `review_decision` fires, inspect the
+   submitted review because the lifecycle payload does not include its body.
 3. **`github.pr_comment` / `github.review`** — address every actionable human
-   and agent comment already present. Prefix agent-authored replies with `🤖`
-   and resolve the thread. The default significant-comment filter ignores the
-   authenticated user's comments, review-bot progress placeholders, clean
-   verdicts, wrappers, and Loom's exact
+   and agent comment. Prefix agent-authored replies with `🤖` and resolve the
+   thread. The default significant-comment filter ignores the authenticated
+   user's comments, review-bot progress placeholders, clean verdicts, wrappers,
+   and Loom's exact
    `Working on this in loom: <session URL>` acknowledgement.
 4. **Timeout** — report the last statuses in the timeout payload and hand off.
    Do not replace the completed 12-hour block with manual polling.
 
-The default handoff condition is: CI passed and every actionable comment or
-review already present is addressed. Set `weaver status attention "PR #<N> is
-ready for review"` once and end the monitoring turn. Do not wait for a future
-review or merge by default.
+Re-arm after every non-terminal event. Once CI finishes, omit `github.ci` so its
+terminal result does not fire immediately; keep `github.pr`,
+`github.pr_comment`, and `github.review` armed for later feedback. Read current
+feedback once before each re-arm so simultaneous events are not absorbed into a
+new baseline without being handled.
 
-When continued monitoring was explicitly requested, re-arm after each
-non-terminal event. That mode ends only when the PR merges or closes, the user
-tells you to stop, or a 12-hour wait times out. A question requiring user input
-ends the current blocking wait: raise `attention`, ask the question, and resume
-monitoring after the answer.
+A question requiring user input pauses monitoring: raise `attention`, ask the
+question, and resume after the answer. Otherwise the only exit conditions are a
+merged or closed PR, an explicit request to stop, or a 12-hour timeout.
 
 ## Rules
 

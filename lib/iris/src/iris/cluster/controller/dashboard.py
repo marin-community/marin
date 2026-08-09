@@ -7,7 +7,8 @@ The dashboard serves:
 - Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /worker/{id} (worker detail page)
-- Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
+- Connect RPC at /iris.cluster.ControllerService/* and /iris.cluster.EndpointService/*
+  (called directly by JS)
 - Health check at /health
 
 All data fetching happens via Connect RPC calls from the browser JavaScript.
@@ -167,9 +168,8 @@ class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
     The dashboard serves a single-page web UI that fetches all data directly
-    via Connect RPC calls to the ControllerService. This eliminates the need
-    for a separate REST API layer and ensures the dashboard shows exactly
-    what the RPC returns.
+    via Connect RPC calls. This eliminates the need for a separate REST API
+    layer and ensures the dashboard shows exactly what the RPC returns.
     """
 
     def __init__(
@@ -234,10 +234,7 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
-        # Leased service-discovery registry on its own wire surface. The legacy
-        # ControllerService.{Register,Unregister,List}Endpoint RPCs forward into
-        # the same backend in-process (see ControllerServiceImpl); new clients
-        # call this service directly to learn their lease and renew.
+        # Leased service-discovery registry on its own wire surface.
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
@@ -538,6 +535,11 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/iris.cluster.EndpointService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),

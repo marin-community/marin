@@ -11,6 +11,7 @@ import marin.profiling.cli as cli_module
 import marin.profiling.ingest as ingest_module
 import marin.profiling.xplane as xplane_module
 import pytest
+from google.protobuf.message import DecodeError
 from marin.profiling.ingest import summarize_profile_artifact, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
@@ -472,6 +473,17 @@ def test_profile_dir_falls_back_to_perfetto_when_xplane_is_malformed(tmp_path: P
 
     assert summary.source_format == "perfetto_trace_json"
     assert summary.step_time.steady_state_steps.median == 130.0
+
+
+def test_profile_dir_reports_xplane_decode_failure_when_no_trace_exists(tmp_path: Path) -> None:
+    # With no Perfetto fallback the corrupt XPlane protobuf is the actionable diagnostic,
+    # so the decode failure must surface instead of "no trace JSON found".
+    profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "host.xplane.pb").write_bytes(b"\xff")
+
+    with pytest.raises(DecodeError):
+        summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
 
 
 def test_xplane_summary_honors_breakdown_mode(tmp_path: Path, monkeypatch) -> None:

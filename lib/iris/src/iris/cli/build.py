@@ -58,6 +58,40 @@ def _versioned_tag(image_base: str, provenance: Provenance, platform: str) -> st
     return f"{image_base}:{version}"
 
 
+def _split_image_tag(image: str) -> tuple[str, str | None]:
+    """Split an image reference into its repository and optional tag."""
+    if "@" in image:
+        raise click.ClickException(f"Cannot build directly to a digest reference: {image}")
+    final_component_start = image.rfind("/") + 1
+    tag_separator = image.rfind(":")
+    if tag_separator < final_component_start:
+        return image, None
+    return image[:tag_separator], image[tag_separator + 1 :]
+
+
+def _image_repository(image: str) -> str:
+    """Remove an optional tag or digest from an image reference."""
+    repository, _ = _split_image_tag(image.split("@", 1)[0])
+    return repository
+
+
+def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
+    """Return the fully qualified GHCR reference for ``image``."""
+    registry, separator, _ = image.partition("/")
+    if separator and registry == "ghcr.io":
+        return image
+    return f"ghcr.io/{ghcr_org}/{image}"
+
+
+def _cache_export_ref(cache_ref: str, platform: str) -> str:
+    """Keep single-platform cache exports from replacing the multiarch cache."""
+    platforms = platform.split(",")
+    if len(platforms) > 1:
+        return cache_ref
+    architecture = platforms[0].rsplit("/", 1)[-1]
+    return f"{cache_ref}-{architecture}"
+
+
 def find_marin_root() -> Path:
     """Find the marin monorepo root (contains pyproject.toml + lib/iris)."""
     iris_root = find_iris_root()
@@ -206,17 +240,16 @@ def build_image(
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
 
-    # Derive image base name from tag (e.g. "iris-worker:latest" -> "iris-worker")
-    image_base = tag.split(":")[0]
+    image_base, image_version = _split_image_tag(tag)
     sha_tag = _versioned_tag(image_base, provenance, platform)
     latest_tag = f"{image_base}:latest"
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
     if push:
-        if tag == latest_tag:
-            raise click.ClickException("Refusing to publish a mutable :latest image; use a SHA-pinned tag")
-        all_tags = {f"ghcr.io/{ghcr_org}/{tag}": None}
+        if image_version in {None, "latest"}:
+            raise click.ClickException("Refusing to publish without an explicit immutable image tag")
+        all_tags = {_ghcr_image_reference(tag, ghcr_org): None}
     else:
         all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
 
@@ -249,7 +282,9 @@ def build_image(
         cmd.extend(
             [
                 "--cache-to",
-                f"type=registry,ref={cache_ref},mode=max,{PUSH_COMPRESSION},oci-mediatypes=true,image-manifest=true",
+                "type=registry,"
+                f"ref={_cache_export_ref(cache_ref, platform)},"
+                f"mode=max,{PUSH_COMPRESSION},oci-mediatypes=true,image-manifest=true",
             ]
         )
         cmd.extend(["--output", f"type=image,{PUSH_COMPRESSION},push=true"])
@@ -259,9 +294,10 @@ def build_image(
 
     cmd.append(str(context_path))
 
-    extra = [t for t in all_tags if t != tag]
+    primary_tag = _ghcr_image_reference(tag, ghcr_org) if push else tag
+    extra = [t for t in all_tags if t != primary_tag]
     extra_msg = f" (also tagged as {', '.join(extra)})" if extra else ""
-    click.echo(f"Building image: {tag}{extra_msg}")
+    click.echo(f"Building image: {primary_tag}{extra_msg}")
     click.echo(f"Platform: {platform}")
     click.echo(f"Context: {context_path}")
     if push:

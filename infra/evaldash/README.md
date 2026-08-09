@@ -2,14 +2,23 @@
 
 A leaderboard and browsable run log over every Marin eval run.
 
-Eval runs write one canonical JSON record per run to an object-store prefix —
-`gs://marin-eval-metadata/runs/<run_id>/record.json` for GCP runs,
-`s3://marin-us-east-02a/marin/eval-metadata/runs/...` (CoreWeave object storage) for CW GPU
-runs. A background loop scans every prefix in `RECORDS_PREFIXES` (CW credentials come from
-Secret Manager; endpoint/addressing via `rigging.filesystem.s3_compat`) and upserts records
-into a Cloud SQL Postgres index (`hai-gcp-models:us-central1:marin-metadata`, database
-`evals`). A Starlette app serves a JSON API over that index and the built Vue SPA. Served at
-https://evaldash.oa.dev.
+Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
+`s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also contains the evaluator's
+results and per-sample artifacts. A background loop scans the roots in `RECORDS_PREFIXES` (CW
+credentials come from Secret Manager; endpoint/addressing via
+`rigging.filesystem.s3_compat`) and upserts records into a Cloud SQL Postgres index
+(`hai-gcp-models:us-central1:marin-metadata`, database `evals`). A Starlette app serves a JSON API over
+that index and the built Vue SPA. Served at https://evaldash.oa.dev.
+
+The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
+`s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
+Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.
+
+Record discovery uses a delimiter-based directory listing and checks only `*/record.json`. It does not
+recursively enumerate results, samples, trajectories, or other evaluator payloads. It reads candidate
+record bodies with up to 16 concurrent object-store requests. Successful records are cached by
+immutable object path, so later ingest passes fetch only new records; directory listings still detect
+additions and deletions.
 
 The SPA has four views: leaderboard (per-model mean score over its latest version cohort, a
 colour-scaled model x task heatmap with model-comparison bars and score-over-time charts,
@@ -21,9 +30,9 @@ per-sample browser, and group siblings), and status (per-prefix ingest probes).
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
 samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
-and renders the agent's turns, tool calls, observations, and reward. A sample's unbounded payloads
-(the trajectory, a prediction's raw exchange) live as sibling artifact files, so paging the light
-columns never materializes them.
+and renders the agent's turns, tool calls, observations, and reward. A sample's one unbounded
+payload, the trajectory, lives as an archive blob referenced by URI, so paging the light columns
+never materializes it.
 
 IAP is the only access gate; there is no application auth.
 
@@ -38,7 +47,7 @@ GET  /api/runs/{run_id}/jobs           live iris job + per-task attempt status f
 GET  /api/runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
 GET  /api/runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
 GET  /api/runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
-GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (trajectory/exchange) as text
+GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /api/runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /api/runs/{run_id}/group          sibling runs sharing the run's group_id
 GET  /api/models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
@@ -67,7 +76,7 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri`/`exchange_uri` through fsspec,
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
 restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
 refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
 logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized

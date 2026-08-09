@@ -48,6 +48,12 @@ def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
     if resp.HasField("error"):
         if resp.error.serialized_exception:
             raise cloudpickle.loads(resp.error.serialized_exception)
+        try:
+            code = Code(resp.error.error_type)
+        except ValueError:
+            pass
+        else:
+            raise ConnectError(code, resp.error.message)
         raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
     return cloudpickle.loads(resp.serialized_value)
 
