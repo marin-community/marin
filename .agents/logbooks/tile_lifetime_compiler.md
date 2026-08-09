@@ -2752,3 +2752,24 @@ author: dlwh
   remains unlaunched; no timing claim is made from either attempt.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_components_non_attributable_fdd838/`.
+
+### 2026-08-09 - TLTC-XLA-039 twelve-call weighted reverse replay
+
+- The natural Grug composition now generates a weighted RelationProgram reverse
+  as a generic rank-two Contract followed by scalar edge Map, hidden Fold, and
+  deterministic source-slot Fold. The placement all-reduce and router VJP remain
+  explicit XLA boundaries.
+- On a physical H100, all twelve exact targets occurred once and all handlers
+  executed 35 times. The generated path passed ordered-FP correctness and
+  produced one output hash across 30 samples.
+- The result is unaccepted for performance: generated median was `0.658288 ms`
+  versus `0.527480 ms` XLA, or `1.247988x`, above the `1.20x` ceiling.
+- XLA itself produced two hashes. Only the MLP GatedNorm down-weight leaf varied;
+  its alternate hash appeared in the final sample, alongside a `1.292757 ms`
+  baseline latency. The generated result remained stable in that sample.
+- The next bounded optimization is demand-driven Contract-domain narrowing. The
+  current generated Contract recomputes 512 padded rows although its Fold
+  consumes only 16 logical relation edges. Domain narrowing must be derived from
+  the consumer slice/index relation, not MoE identity.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_unaccepted_2732ef51_v0/`.

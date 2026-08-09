@@ -1,0 +1,47 @@
+{
+  "source": {
+    "revision": "2732ef51a98ad36841f116c566b7e0272654b6e2",
+    "benchmark": "lib/tile_lifetime/benchmarks/xla_grug_routed_combined_gpu_custom_call.py",
+    "benchmark_sha256": "4517102d86ff16d852416470b84a93c700b43c06e45058374979c251dc121b02",
+    "transfer_bundle_sha256": "98ce9fe4e91f84c18bc69f92630b3e2d44c0a4577d61d3e8cfe5b36e4ef5a6b0",
+    "transfer_bundle_size_bytes": 17527730,
+    "transfer_bundle_exclusions": [
+      ".git",
+      "lib/tile_lifetime/benchmarks/artifacts",
+      "__pycache__"
+    ],
+    "required_code_and_fixtures_present": true,
+    "in_pod_bundle_and_benchmark_hashes_verified": true
+  },
+  "protocol": {
+    "composition_mode": "shared_map_xla_remainder",
+    "warmup_repetitions": 4,
+    "measured_repetitions": 30,
+    "measurement_order": "counterbalanced alternating, 15 each",
+    "replay_retry_count": 0,
+    "requested_cpu": 1,
+    "normalized_cpu": 4
+  },
+  "device": {
+    "model": "NVIDIA H100 80GB HBM3",
+    "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e",
+    "compute_capability": "9.0",
+    "driver": "595.71.05",
+    "power_limit_watts": 700,
+    "backend_architecture": "sm_90a"
+  },
+  "toolchain": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "triton": "3.6.0",
+    "cuda_nvcc": "13.2.78",
+    "cuda_cccl_python_package": "13.3.3.4.1"
+  },
+  "allocation": {
+    "name": "codex-twelve-call-2732",
+    "job": "/dlwh/dev-gpu-codex-twelve-call-2732",
+    "pod": "iris-dlwh-dev-gpu-codex-twelve-call-dade7f66-0-955908ffaacc1a00",
+    "released": true,
+    "inactive_status_verified": true
+  }
+}

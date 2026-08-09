@@ -1,0 +1,75 @@
+{
+  "status": "unaccepted",
+  "reasons": [
+    {
+      "kind": "performance_ratio",
+      "generated_over_baseline": 1.2479878384849266,
+      "maximum_accepted_ratio": 1.2
+    },
+    {
+      "kind": "baseline_bitwise_nondeterminism",
+      "unique_whole_tree_hashes": 2,
+      "unique_per_leaf_hash_sets": 2
+    }
+  ],
+  "latency": {
+    "baseline_median_ms": 0.5274795003060717,
+    "generated_median_ms": 0.6582880014320835,
+    "generated_minus_baseline_ms": 0.13080850112601183,
+    "generated_over_baseline": 1.2479878384849266
+  },
+  "correctness": {
+    "ordered_fp_outputs_match": true,
+    "maximum_absolute_error": 9.760260581970215e-7,
+    "mean_absolute_error": 7.977907171711482e-11,
+    "bitwise_equal_leaf_count": 38,
+    "result_leaf_count": 53
+  },
+  "target_evidence": {
+    "exact_target_count": 12,
+    "occurrences_per_target": 1,
+    "handler_executions_per_target": 35
+  },
+  "generated_determinism": {
+    "unique_whole_tree_hashes": 1,
+    "unique_per_leaf_hash_sets": 1,
+    "whole_tree_hash": "684f483a7598fb5079e27d329eed02521752fefc823694ba5f844f651d687b18"
+  },
+  "baseline_determinism": {
+    "whole_tree_hashes": [
+      {
+        "sha256": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+        "count": 29
+      },
+      {
+        "sha256": "198a61f384c408d9befa9ce3002e0c04fe32e9bbf116db7cac1794d9a04bba9a",
+        "count": 1
+      }
+    ],
+    "varying_leaves": [
+      {
+        "index": 15,
+        "path": "[0].params.blocks[0].mlp_gated_norm.w_down",
+        "dtype": "<f4",
+        "shape": [32, 128],
+        "hashes": [
+          {
+            "sha256": "9f58735867a0040a14e23f15cbdc243163212ef163d9122b62e89c429deab719",
+            "count": 29
+          },
+          {
+            "sha256": "ad00ac9ab7dd35437df50764a84808ca8a0dff7b1c54fedff224656423dff29b",
+            "count": 1,
+            "sample_index": 29,
+            "sample_order": ["transformed", "baseline"],
+            "baseline_latency_ms": 1.2927570060128346
+          }
+        ]
+      }
+    ]
+  },
+  "execution_evidence_checkpoint_status": "execution_checks_passed",
+  "runtime_dependency_and_source_audits_passed": true,
+  "allocation_released_and_inactive": true,
+  "replay_retry_count": 0
+}
