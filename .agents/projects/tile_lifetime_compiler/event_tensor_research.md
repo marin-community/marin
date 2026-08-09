@@ -22,7 +22,7 @@ These records are inspectable, but they do not retain an exact indexed producer-
 
 ### External Prior Art
 
-The primary source is Jin et al., [*Event Tensor: A Unified Abstraction for Compiling Dynamic Megakernel*](https://arxiv.org/abs/2604.13327), MLSys 2026. The paper represents a task graph as tiled device-function calls connected through tensor-shaped event counters. Coordinate relations map producer tiles to event coordinates and event coordinates to consumer tiles. The same graph can lower to static per-SM queues with notify/wait or a dynamic on-GPU ready queue with push/pop. Runtime-dependent mappings such as token-to-expert routing determine both notifications and triggered task ranges.
+The primary source is Jin et al., [*Event Tensor: A Unified Abstraction for Compiling Dynamic Megakernel*](https://arxiv.org/abs/2604.13327v2), arXiv v2 dated 2026-04-21 and accepted at MLSys 2026. The paper PDF and TeX source were read in full. The paper represents a task graph as tiled device-function calls connected through tensor-shaped event counters. Coordinate relations map producer tiles to event coordinates and event coordinates to consumer tiles. The same graph can lower to static per-SM queues with notify/wait or a dynamic on-GPU ready queue with push/pop. Runtime-dependent mappings such as token-to-expert routing determine both notifications and triggered task ranges.
 
 The [MLSys 2026 slides](https://mlsys.org/media/mlsys-2026/Slides/3815.pdf) make the compiler contract especially explicit: the input already contains tiled task grids and `in_edges`/`out_edges` Event Tensor annotations. The paper's conclusion identifies automatic generation of Event Tensor task graphs from standard computational graphs as future work. Shuttle's proposed derivation from a post-decomposition exact dependence relation therefore extends, rather than reproduces, the paper's frontend boundary.
 
@@ -59,7 +59,7 @@ The physical-lowering boundary in the plan agrees with NVIDIA's programming mode
   - Paper ablations show static and dynamic performance trade-offs vary by workload; dynamic queues are not free.
 - Directness to Marin: high for a backend-neutral reference interpreter; unproven for production SM100 schedules.
 - Confidence: high for semantics, exploratory for performance.
-- Action: implement both as reference policies and stop before GPU runtime work.
+- Action: implement both as reference policies, then validate a bounded CTA realization without copying ETC's persistent runtime.
 
 #### Claim: Event Tensor should be below Shuttle semantics
 
@@ -113,7 +113,7 @@ The physical-lowering boundary in the plan agrees with NVIDIA's programming mode
 
 | Source | Type | Location | Claim used for | Confidence | Notes |
 |---|---|---|---|---|---|
-| Jin et al., Event Tensor | paper | https://arxiv.org/abs/2604.13327 | Event representation, dynamic relations, static/dynamic transformations, current frontend boundary | high | Primary paper and downloaded source read in full |
+| Jin et al., Event Tensor | paper | https://arxiv.org/abs/2604.13327v2 | Event representation, dynamic relations, static/dynamic transformations, current frontend boundary | high | arXiv v2 (2026-04-21); PDF and TeX source read in full |
 | MLSys 2026 Event Tensor slides | conference slides | https://mlsys.org/media/mlsys-2026/Slides/3815.pdf | Concrete IR syntax and evaluation summary | high | Author presentation |
 | TIRx announcement | official project post | https://tvm.apache.org/2026/06/22/tirx | TVM-based implementation lineage and future public integration | medium-high | Does not release ETC itself |
 | CUDA asynchronous barriers | official docs | https://docs.nvidia.com/cuda/archive/13.2.0/cuda-programming-guide/04-special-topics/async-barriers.html | Physical scope and arrival/wait candidates | high | CUDA 13.2 |

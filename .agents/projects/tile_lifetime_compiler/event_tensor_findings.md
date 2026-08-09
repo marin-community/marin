@@ -2,7 +2,7 @@
 
 ## Result
 
-The bounded CPU prototype supports the proposed lowering boundary:
+The CPU interpreter and bounded H100 prototype support the proposed lowering boundary:
 
 ```text
 semantic algebra
@@ -13,6 +13,12 @@ semantic algebra
 ```
 
 One derivation, verifier, and interpreter handles split Fold, runtime relation segmentation, and a tiled Contract-to-placement-change graph. Event coarsening is a schedule projection and produces a verified superset of the exact dependency relation.
+
+The H100 proof lowers runtime `RelationPlan` indegrees to counted readiness and
+lowers a generic Contract/Fold/Contract task graph to a generation-tagged CTA
+pipeline. Runtime relation mutations and phased shape mutations reuse the same
+generated bodies. This validates the physical attachment boundary, not a
+production MoE or attention kernel.
 
 ## Acceptance answers
 
@@ -59,7 +65,23 @@ Replacing those records is not part of this bounded branch because existing acce
 - Static scheduling is a deterministic priority policy, not an optimized per-SM queue.
 - Dynamic scheduling is a reference FIFO, not a concurrent MPMC queue.
 - Deadlock verification proves acyclicity of the concrete scheduled task graph but does not reason about finite worker/resource deadlock.
-- Memory visibility is verified by scope and release/acquire requirements but is not yet legalized to an instruction sequence.
+- CTA memory visibility is legalized through `__threadfence_block` plus atomics in the bounded emitters. Cluster, device, and system scopes remain unimplemented.
 - No official ETC code was available for implementation-level comparison.
 
-These limits support stopping here. The algebra survived the intended tests without requiring a GPU runtime or workload-specific event construction.
+The Torch extension used to compile the probes is prototype-only. The intended
+integration is a JAX-registered, Torch-free-by-default runtime. The algebra and
+CTA lowering survived the intended tests without workload-specific event
+construction; high-performance persistent scheduling remains separate work.
+
+## Paper lineage
+
+The implementation used Jin et al., arXiv:2604.13327v2 (2026-04-21), and the
+MLSys 2026 slides as design references. Shuttle adopted tensor-shaped event
+domains, producer-notify/consumer-trigger relations, runtime-dependent counts,
+and the ability to lower one plan with static or dynamic policy.
+
+Shuttle did not copy ETC's explicitly annotated tiled frontend, centralized
+dynamic queue, round-robin static scheduler, persistent megakernel runtime, or
+workload schedules. Shuttle derives exact task dependences from generic task
+decomposition, verifies coverage, makes event granularity a coarsening choice,
+and keeps memory visibility and generation policy explicit.
