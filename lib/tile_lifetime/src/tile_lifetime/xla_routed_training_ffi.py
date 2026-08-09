@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tile_lifetime.collective_transport import CollectiveCompletionPlan, recover_collective_completion_plans
+from tile_lifetime.event_dataflow import EventSchedulingMode
+from tile_lifetime.event_dataflow_adapters import (
+    CollectiveCompletionSchedule,
+    CollectiveCompletionTaskDataflow,
+    collective_completion_task_dataflow,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import GeneratedStreamingAttentionBackwardFfi
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProgram
@@ -58,6 +65,16 @@ class RoutedTrainingReplacementAudit:
     input_adjoint_auxiliary: str
     copy_count: tuple[int, int]
     transpose_count: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class RoutedTrainingCollectiveCompletionAttachment:
+    """One generated weight Contract linked to its external completion Fold."""
+
+    producer_instruction: str
+    collective_instruction: str
+    completion: CollectiveCompletionPlan
+    dataflow: CollectiveCompletionTaskDataflow
 
 
 @dataclass(frozen=True)
@@ -275,6 +292,48 @@ def audit_routed_training_replacement(
         copy_count=copy_count,
         transpose_count=transpose_count,
     )
+
+
+def attach_routed_training_collective_completions(
+    transformed_hlo: str,
+    audit: RoutedTrainingReplacementAudit,
+    *,
+    scheduling_mode: EventSchedulingMode = EventSchedulingMode.STATIC,
+) -> tuple[RoutedTrainingCollectiveCompletionAttachment, ...]:
+    """Attach Event Tensor completion to generated weight-Contract users.
+
+    The post-SPMD all-reduce remains an ordinary JAX/XLA collective. Shuttle
+    recovers its Fold and placement semantics, then attaches readiness to the
+    direct generated producer without replacing the collective or its adjoint.
+    """
+    producers = audit.target_instructions[2:]
+    completions = recover_collective_completion_plans(transformed_hlo, producer_values=producers)
+    completions_by_source = {completion.transport.source_value: completion for completion in completions}
+    if set(completions_by_source) != set(producers):
+        raise ValueError(
+            "every generated weight Contract must feed one recoverable collective completion; "
+            f"found producers {tuple(completions_by_source)} for {producers}"
+        )
+    attachments = []
+    for producer, collective in zip(producers, audit.weight_gradient_collectives, strict=True):
+        completion = completions_by_source[producer]
+        if completion.transport.destination_value != collective:
+            raise ValueError(
+                f"generated weight Contract %{producer} expected collective %{collective}, "
+                f"found %{completion.transport.destination_value}"
+            )
+        attachments.append(
+            RoutedTrainingCollectiveCompletionAttachment(
+                producer_instruction=producer,
+                collective_instruction=collective,
+                completion=completion,
+                dataflow=collective_completion_task_dataflow(
+                    completion,
+                    schedule=CollectiveCompletionSchedule(tile_count=1, scheduling_mode=scheduling_mode),
+                ),
+            )
+        )
+    return tuple(attachments)
 
 
 def audit_routed_training_and_attention_replacement(

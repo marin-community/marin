@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tile_lifetime.collective_transport import CollectiveReduction
+from tile_lifetime.event_dataflow import EventMemoryScope
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import RoutedForwardFfiOperandRole, RoutedInputAdjointFfiOperandRole
@@ -16,6 +18,7 @@ from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ff
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingFfiTargets,
+    attach_routed_training_collective_completions,
     audit_routed_training_replacement,
     entry_parameter_ancestors,
     plan_routed_training_typed_ffi,
@@ -88,6 +91,41 @@ def test_routed_training_replacement_preserves_wiring_and_collectives() -> None:
     assert audit.copy_count[1] <= audit.copy_count[0]
     assert audit.transpose_count[1] <= audit.transpose_count[0]
     parse_hlo_module_text(rewritten)
+
+
+def test_routed_training_collective_completion_attaches_after_generated_contracts() -> None:
+    hlo = _hlo()
+    plan = plan_routed_training_typed_ffi(hlo)
+    rewritten = replace_routed_training_regions_with_custom_calls(hlo, plan, targets=_TARGETS)
+    audit = audit_routed_training_replacement(hlo, rewritten, plan, targets=_TARGETS)
+
+    attachments = attach_routed_training_collective_completions(rewritten, audit)
+
+    assert tuple(attachment.producer_instruction for attachment in attachments) == ("dot.6", "dot.7")
+    assert tuple(attachment.collective_instruction for attachment in attachments) == ("psum.52", "psum.53")
+    assert all(attachment.completion.fold.reduction is CollectiveReduction.SUM for attachment in attachments)
+    assert all(
+        attachment.dataflow.program.event_plans[-1].memory_scope is EventMemoryScope.SYSTEM for attachment in attachments
+    )
+    assert all(
+        attachment.dataflow.program.event_plans[-1].initial_count.as_mapping() == {(0, 0): 1}
+        for attachment in attachments
+    )
+
+
+def test_routed_training_replica_group_mutation_changes_attached_event_count() -> None:
+    hlo = _hlo()
+    plan = plan_routed_training_typed_ffi(hlo)
+    rewritten = replace_routed_training_regions_with_custom_calls(hlo, plan, targets=_TARGETS)
+    audit = audit_routed_training_replacement(hlo, rewritten, plan, targets=_TARGETS)
+    mutated = rewritten.replace("replica_groups={{0}}", "replica_groups={{0,1}}")
+
+    attachments = attach_routed_training_collective_completions(mutated, audit)
+
+    assert all(
+        attachment.dataflow.program.event_plans[-1].initial_count.as_mapping() == {(0, 0): 2}
+        for attachment in attachments
+    )
 
 
 def test_routed_training_all_dynamic_operands_have_parameter_ancestry() -> None:
