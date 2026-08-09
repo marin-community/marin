@@ -91,16 +91,20 @@ BOUNDARY_MARKERS = ("\n\n", ". ", "\n", "}, ", "},", "} ", "; ", ", ")
 EXCERPT_NOTICE = "\n\n[Excerpt ends here — the document continues beyond this point.]"
 
 
-def _excerpt(text: str) -> str:
-    """``text`` capped for the oracle prompt, cut on a boundary and marked as an excerpt.
+def excerpt(text: str, limit: int = MAX_TEXT_CHARS) -> str:
+    """``text`` capped to ``limit``, cut on a boundary and marked as an excerpt.
 
     A document under the cap is returned unchanged, so most rows carry no notice at
     all and the grader has nothing to react to.
+
+    ``limit`` is a parameter because the labeler applies a second, smaller cap: this
+    one keeps the stored label set readable, while the labeler needs the prompt to
+    fit a token budget that characters only approximate.
     """
-    if len(text) <= MAX_TEXT_CHARS:
+    if len(text) <= limit:
         return text
-    window = text[:MAX_TEXT_CHARS]
-    floor = MAX_TEXT_CHARS - BOUNDARY_SEARCH_CHARS
+    window = text[:limit]
+    floor = limit - BOUNDARY_SEARCH_CHARS
     for marker in BOUNDARY_MARKERS:
         cut = window.rfind(marker, floor)
         if cut > 0:
@@ -200,7 +204,7 @@ def _source_frame(
                         "source": source,
                         "id": doc_id,
                         "v0_score": id_scores[doc_id],
-                        "text": _excerpt(text or ""),
+                        "text": excerpt(text or ""),
                     }
                 )
     return rows
