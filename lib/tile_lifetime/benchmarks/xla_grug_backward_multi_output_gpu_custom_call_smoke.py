@@ -30,14 +30,40 @@ from lib.tile_lifetime.benchmarks.xla_grug_pair_map_custom_call_smoke import (
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _PASS_NAME,
     _TARGET_NAME,
+    ContractMapRegionRewrite,
+    MultiOutputRegionRewrite,
     _compile_cuda_ffi_handler,
     _register_cuda_ffi_custom_call,
+    contract_map_recovery_diagnostic,
+    generate_cuda_contract_map_ffi_handler,
     generate_cuda_multi_output_ffi_handler,
     pair_map_recovery_diagnostic,
+    recover_contract_map_region_rewrite,
     recover_multi_output_region_rewrite,
     replace_multi_output_region_with_custom_call,
     write_gzip_text,
 )
+from tile_lifetime.xla_hlo_recovery import recover_multi_output_contract_map_regions, recover_pair_map_regions
+
+
+def _recover_gpu_region_rewrite(hlo_text: str) -> ContractMapRegionRewrite | MultiOutputRegionRewrite:
+    """Prefer the shared-input proof, then recover a generic Contract/Map."""
+    pair_report = recover_pair_map_regions(hlo_text)
+    if pair_report.regions:
+        return recover_multi_output_region_rewrite(hlo_text, _multi_output_region_index(hlo_text))
+    contract_map_report = recover_multi_output_contract_map_regions(hlo_text)
+    if len(contract_map_report.regions) != 1:
+        raise ValueError(
+            "expected one generic Contract/multi-output-Map region when no pair region exists, "
+            f"found {len(contract_map_report.regions)}"
+        )
+    return recover_contract_map_region_rewrite(hlo_text, 0)
+
+
+def _generate_cuda_handler(rewrite: ContractMapRegionRewrite | MultiOutputRegionRewrite) -> str:
+    if isinstance(rewrite, ContractMapRegionRewrite):
+        return generate_cuda_contract_map_ffi_handler(rewrite.program)
+    return generate_cuda_multi_output_ffi_handler(rewrite.program)
 
 
 def _compare_under_ordered_fp(expected: Any, actual: Any) -> dict[str, Any]:
@@ -114,10 +140,18 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
                 if artifact_directory is not None:
                     write_gzip_text(directory / "original-gpu-pre-scheduler-hlo.txt.gz", original)
                     (directory / "gpu-recovery-diagnostic.json").write_text(
-                        json.dumps(pair_map_recovery_diagnostic(original), indent=2, sort_keys=True) + "\n"
+                        json.dumps(
+                            {
+                                "pair_map": pair_map_recovery_diagnostic(original),
+                                "contract_map": contract_map_recovery_diagnostic(original),
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n"
                     )
-                rewrite = recover_multi_output_region_rewrite(original, _multi_output_region_index(original))
-                source = generate_cuda_multi_output_ffi_handler(rewrite.program)
+                rewrite = _recover_gpu_region_rewrite(original)
+                source = _generate_cuda_handler(rewrite)
                 library = _compile_cuda_ffi_handler(source, directory, nvcc, architecture)
                 _register_cuda_ffi_custom_call(library)
                 holder["library"] = library
@@ -171,7 +205,8 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
             "GPU custom-call evidence mismatch: "
             f"targets={target_occurrences}, tuple_gets={tuple_gets}, executions={call_count}"
         )
-    source = generate_cuda_multi_output_ffi_handler(rewrite.program)
+    source = _generate_cuda_handler(rewrite)
+    contract_count = 1 if isinstance(rewrite, ContractMapRegionRewrite) else 2
     if artifact_directory is not None:
         write_gzip_text(artifact_directory / "original-pre-scheduler-hlo.txt.gz", original_modules[0])
         write_gzip_text(artifact_directory / "transformed-pre-scheduler-hlo.txt.gz", transformed_hlo)
@@ -183,7 +218,10 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
         "device_kind": jax.devices()[0].device_kind,
         "cuda_architecture": architecture,
         "natural_frontend": "ordinary one-layer Grug train step",
-        "selection": "unique generic pair-Map region with several externally used pointwise outputs",
+        "selection": (
+            "shared-input pair-Contract Map when available; otherwise the unique generic "
+            "one-Contract/multi-output scalar-Map region"
+        ),
         "region_inputs": tuple((value.instruction, value.shape) for value in rewrite.boundary.inputs),
         "region_outputs": tuple((value.instruction, value.shape) for value in rewrite.boundary.outputs),
         "generated_scalar_expressions": rewrite.program.scalar_expressions,
@@ -200,7 +238,8 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
         "outputs_match": True,
         "ffi_api": "XLA typed FFI api_version=1 with CUDA platform stream",
         "explicit_warning": (
-            "Execution proof only: two generic cuBLAS Contracts feed the generated source-ordered Map. "
+            f"Execution proof only: {contract_count} generic cuBLAS Contract(s) feed the generated "
+            "source-ordered Map. "
             "Competitive lowering still needs the reusable tiled Contract mainloop and fusion policy."
         ),
     }

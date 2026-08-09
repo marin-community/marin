@@ -46,6 +46,7 @@ from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
     inline_elementwise_fusions,
     parse_hlo_module_text,
+    recover_multi_output_contract_map_regions,
     recover_pair_map_regions,
 )
 
@@ -54,6 +55,9 @@ _TARGET_NAME = "shuttle.pair_map_contract_smoke_v1"
 _PARAMETER_NUMBER = re.compile(r"parameter\((\d+)\)")
 _CONSTANT_VALUE = re.compile(r"constant\(([^)]+)\)")
 _SHAPE = re.compile(r"(?P<dtype>[a-z0-9]+)\[(?P<dims>[0-9,]*)\](?:\{[^}]*\})?")
+_CONTRACTING_DIMENSIONS = re.compile(
+    r"lhs_contracting_dims=\{(?P<lhs>[0-9]+)\}, rhs_contracting_dims=\{(?P<rhs>[0-9]+)\}"
+)
 
 
 def write_gzip_text(path: Path, value: str) -> None:
@@ -106,6 +110,29 @@ class MultiOutputRegionRewrite:
     boundary: RecoveredEntryRegionBoundary
 
 
+@dataclass(frozen=True)
+class ContractMapFixedShapeProgram:
+    """One generic Contract followed by a generated multi-output scalar Map."""
+
+    rows: int
+    reduction: int
+    features: int
+    input_dtypes: tuple[str, ...]
+    output_dtype: str
+    contract_lhs_input: int
+    contract_rhs_input: int
+    rhs_contracting_dimension: int
+    scalar_expressions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ContractMapRegionRewrite:
+    """A checked one-Contract/multi-output-Map entry boundary."""
+
+    program: ContractMapFixedShapeProgram
+    boundary: RecoveredEntryRegionBoundary
+
+
 def natural_program(
     activation: jax.Array,
     left_weight: jax.Array,
@@ -145,12 +172,19 @@ def _pointwise_c_expression(
     graph: InlinedHloGraph,
     node_id: str,
     leaf_expressions: dict[str, str],
+    *,
+    round_bf16_operations: bool = False,
 ) -> str:
     if node_id in leaf_expressions:
         return leaf_expressions[node_id]
     node = graph.node(node_id)
     if node.opcode == "convert" and len(node.operands) == 1:
-        operand = _pointwise_c_expression(graph, node.operands[0], leaf_expressions)
+        operand = _pointwise_c_expression(
+            graph,
+            node.operands[0],
+            leaf_expressions,
+            round_bf16_operations=round_bf16_operations,
+        )
         source_dtype, _ = _shape(graph.node(node.operands[0]).shape)
         result_dtype, _ = _shape(node.shape)
         if source_dtype == "f32" and result_dtype == "bf16":
@@ -159,19 +193,33 @@ def _pointwise_c_expression(
             return operand
         raise ValueError(f"unsupported generated scalar conversion {source_dtype}->{result_dtype}")
     if node.opcode in {"copy", "reshape", "bitcast", "broadcast"} and len(node.operands) == 1:
-        return _pointwise_c_expression(graph, node.operands[0], leaf_expressions)
+        return _pointwise_c_expression(
+            graph,
+            node.operands[0],
+            leaf_expressions,
+            round_bf16_operations=round_bf16_operations,
+        )
     if node.opcode == "constant" and not node.operands:
         match = _CONSTANT_VALUE.search(node.attributes)
         if match is None:
             raise ValueError(f"scalar constant has no value: {node.attributes!r}")
         return match.group(1)
     if node.opcode in {"tanh", "exponential", "negate"} and len(node.operands) == 1:
-        operand = _pointwise_c_expression(graph, node.operands[0], leaf_expressions)
+        operand = _pointwise_c_expression(
+            graph,
+            node.operands[0],
+            leaf_expressions,
+            round_bf16_operations=round_bf16_operations,
+        )
         if node.opcode == "tanh":
-            return f"std::tanh({operand})"
-        if node.opcode == "exponential":
-            return f"std::exp({operand})"
-        return f"(-({operand}))"
+            expression = f"std::tanh({operand})"
+        elif node.opcode == "exponential":
+            expression = f"std::exp({operand})"
+        else:
+            expression = f"(-({operand}))"
+        if round_bf16_operations and node.dtype == "bf16":
+            return f"shuttle_round_bf16({expression})"
+        return expression
     binary = {
         "add": "+",
         "subtract": "-",
@@ -179,9 +227,22 @@ def _pointwise_c_expression(
         "divide": "/",
     }
     if node.opcode in binary and len(node.operands) == 2:
-        left = _pointwise_c_expression(graph, node.operands[0], leaf_expressions)
-        right = _pointwise_c_expression(graph, node.operands[1], leaf_expressions)
-        return f"(({left}) {binary[node.opcode]} ({right}))"
+        left = _pointwise_c_expression(
+            graph,
+            node.operands[0],
+            leaf_expressions,
+            round_bf16_operations=round_bf16_operations,
+        )
+        right = _pointwise_c_expression(
+            graph,
+            node.operands[1],
+            leaf_expressions,
+            round_bf16_operations=round_bf16_operations,
+        )
+        expression = f"(({left}) {binary[node.opcode]} ({right}))"
+        if round_bf16_operations and node.dtype == "bf16":
+            return f"shuttle_round_bf16({expression})"
+        return expression
     raise ValueError(f"unsupported generated scalar node {node.opcode!r}")
 
 
@@ -408,6 +469,108 @@ def recover_multi_output_region_rewrite(hlo_text: str, region_index: int) -> Mul
     )
 
 
+def recover_contract_map_region_rewrite(hlo_text: str, region_index: int) -> ContractMapRegionRewrite:
+    """Lower one structurally recovered Contract/multi-output-Map boundary.
+
+    Selection and scalar generation use only HLO opcodes, shapes, and
+    dependencies. The current execution proof accepts a rank-two lhs Contract
+    and either physical rhs orientation; surrounding scalar inputs and outputs
+    may be f32 or bf16.
+    """
+    report = recover_multi_output_contract_map_regions(hlo_text)
+    if not 0 <= region_index < len(report.regions):
+        raise ValueError(f"region index {region_index} is outside {len(report.regions)} recovered regions")
+    region = report.regions[region_index]
+    boundary = region.boundary
+    if boundary.has_explicit_sharding or boundary.has_side_effect:
+        raise ValueError("text smoke refuses sharded or effectful connected regions")
+    if len(boundary.outputs) < 2:
+        raise ValueError("Contract/Map smoke requires at least two outputs")
+
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    prefix = f"{module.entry}/"
+    if not region.contract.node.startswith(prefix):
+        raise ValueError("recovered Contract is not physically in the entry computation")
+    contract_name = region.contract.node.removeprefix(prefix).split("/", 1)[0]
+    contract = instructions[contract_name]
+    if contract.opcode != "dot" or len(contract.operands) != 2:
+        raise ValueError("execution proof requires one physical binary entry Contract")
+    try:
+        lhs_input = tuple(value.instruction for value in boundary.inputs).index(contract.operands[0])
+        rhs_input = tuple(value.instruction for value in boundary.inputs).index(contract.operands[1])
+    except ValueError as error:
+        raise ValueError("physical Contract operands are not explicit region inputs") from error
+
+    dimension_match = _CONTRACTING_DIMENSIONS.search(contract.attributes)
+    if dimension_match is None:
+        raise ValueError("Contract has no one-axis contracting-dimension description")
+    lhs_contracting_dimension = int(dimension_match.group("lhs"))
+    rhs_contracting_dimension = int(dimension_match.group("rhs"))
+    if lhs_contracting_dimension != 1 or rhs_contracting_dimension not in {0, 1}:
+        raise ValueError("execution proof requires lhs dimension 1 and rank-two rhs dimension 0 or 1")
+
+    input_types_and_dims = tuple(_shape(value.shape) for value in boundary.inputs)
+    lhs_dtype, lhs_dims = input_types_and_dims[lhs_input]
+    rhs_dtype, rhs_dims = input_types_and_dims[rhs_input]
+    contract_dtype, contract_dims = _shape(contract.shape)
+    if lhs_dtype != rhs_dtype or contract_dtype != lhs_dtype or lhs_dtype not in {"f32", "bf16"}:
+        raise ValueError("Contract execution proof requires one homogeneous f32 or bf16 dtype")
+    if len(lhs_dims) != 2 or len(rhs_dims) != 2 or len(contract_dims) != 2:
+        raise ValueError("Contract execution proof requires rank-two physical values")
+    rows, reduction = lhs_dims
+    if rhs_contracting_dimension == 0:
+        rhs_reduction, features = rhs_dims
+    else:
+        features, rhs_reduction = rhs_dims
+    if rhs_reduction != reduction or contract_dims != (rows, features):
+        raise ValueError("Contract dimensions are incompatible")
+
+    output_types_and_dims = tuple(_shape(value.shape) for value in boundary.outputs)
+    if any(value != (contract_dtype, contract_dims) for value in output_types_and_dims):
+        raise ValueError("scalar Map outputs must preserve the Contract shape and dtype")
+    for index, (dtype, dimensions) in enumerate(input_types_and_dims):
+        if dtype not in {"f32", "bf16"} or len(dimensions) != 2:
+            raise ValueError(f"unsupported region input {index}: {boundary.inputs[index].shape}")
+        if index not in {lhs_input, rhs_input} and dimensions != contract_dims:
+            raise ValueError("scalar side inputs must have the Contract output shape")
+
+    leaves = {region.contract.node: "projection_value"}
+    for index, value in enumerate(boundary.inputs):
+        if index in {lhs_input, rhs_input}:
+            continue
+        node = graph.entry_value(value.instruction)
+        if input_types_and_dims[index][0] == "bf16":
+            leaves[node] = f"shuttle_bf16_to_f32(input{index}[index])"
+        else:
+            leaves[node] = f"input{index}[index]"
+    expressions = tuple(
+        _pointwise_c_expression(
+            graph,
+            graph.entry_value(output.instruction),
+            leaves,
+            round_bf16_operations=True,
+        )
+        for output in boundary.outputs
+    )
+    return ContractMapRegionRewrite(
+        program=ContractMapFixedShapeProgram(
+            rows=rows,
+            reduction=reduction,
+            features=features,
+            input_dtypes=tuple(dtype for dtype, _ in input_types_and_dims),
+            output_dtype=contract_dtype,
+            contract_lhs_input=lhs_input,
+            contract_rhs_input=rhs_input,
+            rhs_contracting_dimension=rhs_contracting_dimension,
+            scalar_expressions=expressions,
+        ),
+        boundary=boundary,
+    )
+
+
 def pair_map_recovery_diagnostic(hlo_text: str) -> dict[str, Any]:
     """Describe every structural pair-Map candidate before selecting a region."""
     report = recover_pair_map_regions(hlo_text)
@@ -439,6 +602,38 @@ def pair_map_recovery_diagnostic(hlo_text: str) -> dict[str, Any]:
     return {
         "contract_count": report.contract_count,
         "pair_map_region_count": len(report.regions),
+        "candidates": candidates,
+    }
+
+
+def contract_map_recovery_diagnostic(hlo_text: str) -> dict[str, Any]:
+    """Describe generic one-Contract/multi-output-Map candidates and lowering."""
+    report = recover_multi_output_contract_map_regions(hlo_text)
+    candidates: list[dict[str, Any]] = []
+    for index, region in enumerate(report.regions):
+        candidate: dict[str, Any] = {
+            "index": index,
+            "contract_shape": region.contract.output_shape,
+            "map_opcodes": region.map_opcodes,
+            "input_shapes": tuple(value.shape for value in region.boundary.inputs),
+            "output_shapes": tuple(value.shape for value in region.boundary.outputs),
+            "consumer_contract_count": len(region.consumer_contracts),
+            "has_explicit_sharding": region.boundary.has_explicit_sharding,
+            "has_side_effect": region.boundary.has_side_effect,
+        }
+        try:
+            rewrite = recover_contract_map_region_rewrite(hlo_text, index)
+        except ValueError as error:
+            candidate["lowering_error"] = str(error)
+        else:
+            candidate["contract_lhs_input"] = rewrite.program.contract_lhs_input
+            candidate["contract_rhs_input"] = rewrite.program.contract_rhs_input
+            candidate["rhs_contracting_dimension"] = rewrite.program.rhs_contracting_dimension
+            candidate["scalar_expressions"] = rewrite.program.scalar_expressions
+        candidates.append(candidate)
+    return {
+        "contract_count": report.contract_count,
+        "contract_map_region_count": len(report.regions),
         "candidates": candidates,
     }
 
@@ -837,6 +1032,215 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {target_symbol},
     ShuttlePairMapRegion,
     ShuttlePairMapRegionBinding());
+
+extern "C" int shuttle_pair_map_smoke_call_count() {{
+  return call_count.load(std::memory_order_relaxed);
+}}
+"""
+
+
+def generate_cuda_contract_map_ffi_handler(program: ContractMapFixedShapeProgram) -> str:
+    """Generate a typed CUDA FFI body for one Contract and scalar Map AST."""
+    if program.output_dtype not in {"f32", "bf16"}:
+        raise ValueError(f"unsupported output dtype {program.output_dtype!r}")
+    if any(dtype not in {"f32", "bf16"} for dtype in program.input_dtypes):
+        raise ValueError(f"unsupported input dtypes {program.input_dtypes!r}")
+    contract_dtype = program.input_dtypes[program.contract_lhs_input]
+    if program.input_dtypes[program.contract_rhs_input] != contract_dtype or program.output_dtype != contract_dtype:
+        raise ValueError("generated Contract requires homogeneous lhs, rhs, and output dtypes")
+
+    ffi_types = {"f32": "ffi::F32", "bf16": "ffi::BF16"}
+    cpp_types = {"f32": "float", "bf16": "std::uint16_t"}
+    cuda_types = {"f32": "CUDA_R_32F", "bf16": "CUDA_R_16BF"}
+    scalar_inputs = tuple(
+        index
+        for index in range(len(program.input_dtypes))
+        if index not in {program.contract_lhs_input, program.contract_rhs_input}
+    )
+    ffi_input_arguments = ",\n    ".join(
+        f"ffi::Buffer<{ffi_types[dtype]}, 2> input{index}_buffer" for index, dtype in enumerate(program.input_dtypes)
+    )
+    input_bindings = "\n".join(
+        (
+            f"  const auto* input{index} = input{index}_buffer.typed_data();"
+            if dtype == "f32"
+            else (
+                f"  const auto* input{index} = reinterpret_cast<const std::uint16_t*>("
+                f"input{index}_buffer.typed_data());"
+            )
+        )
+        for index, dtype in enumerate(program.input_dtypes)
+    )
+    kernel_input_arguments = ",\n    ".join(
+        f"const {cpp_types[program.input_dtypes[index]]}* input{index}" for index in scalar_inputs
+    )
+    launch_inputs = ",\n      ".join(f"input{index}" for index in scalar_inputs)
+    output_arguments = ",\n    ".join(
+        f"ffi::Result<ffi::Buffer<{ffi_types[program.output_dtype]}, 2>> output{index}"
+        for index in range(len(program.scalar_expressions))
+    )
+    output_bindings = "\n".join(
+        (
+            f"  auto* output{index}_data = output{index}->typed_data();"
+            if program.output_dtype == "f32"
+            else (f"  auto* output{index}_data = reinterpret_cast<std::uint16_t*>(" f"output{index}->typed_data());")
+        )
+        for index in range(len(program.scalar_expressions))
+    )
+    kernel_output_arguments = ",\n    ".join(
+        f"{cpp_types[program.output_dtype]}* output{index}" for index in range(len(program.scalar_expressions))
+    )
+    launch_outputs = ",\n      ".join(f"output{index}_data" for index in range(len(program.scalar_expressions)))
+    stores = "\n".join(
+        (
+            f"  output{index}[index] = {_cuda_scalar_expression(expression)};"
+            if program.output_dtype == "f32"
+            else f"  output{index}[index] = shuttle_f32_to_bf16({_cuda_scalar_expression(expression)});"
+        )
+        for index, expression in enumerate(program.scalar_expressions)
+    )
+    input_bindings_ffi = "\n".join(f"      .Arg<ffi::Buffer<{ffi_types[dtype]}, 2>>()" for dtype in program.input_dtypes)
+    output_bindings_ffi = "\n".join(
+        f"      .Ret<ffi::Buffer<{ffi_types[program.output_dtype]}, 2>>()" for _ in program.scalar_expressions
+    )
+    rhs_operation = "CUBLAS_OP_N" if program.rhs_contracting_dimension == 0 else "CUBLAS_OP_T"
+    rhs_leading_dimension = program.features if program.rhs_contracting_dimension == 0 else program.reduction
+    target_symbol = _TARGET_NAME.replace(".", "_")
+    projection_load = "projection[index]" if program.output_dtype == "f32" else "shuttle_bf16_to_f32(projection[index])"
+    contract_cpp_type = cpp_types[contract_dtype]
+    contract_cuda_type = cuda_types[contract_dtype]
+    return f"""// Generated by xla_pair_map_custom_call_smoke.py; do not edit.
+#include <atomic>
+#include <cstdint>
+#include <string>
+
+#include <cublas_v2.h>
+#include <cuda_runtime_api.h>
+
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
+
+namespace {{
+constexpr int kRows = {program.rows};
+constexpr int kReduction = {program.reduction};
+constexpr int kFeatures = {program.features};
+std::atomic<int> call_count{{0}};
+thread_local cublasHandle_t contract_handle = nullptr;
+
+__device__ float shuttle_round_bf16(float value) {{
+  std::uint32_t bits = __float_as_uint(value);
+  const std::uint32_t least_significant = (bits >> 16) & 1;
+  bits += 0x7fff + least_significant;
+  return __uint_as_float(bits & 0xffff0000);
+}}
+
+__device__ float shuttle_bf16_to_f32(std::uint16_t value) {{
+  return __uint_as_float(static_cast<std::uint32_t>(value) << 16);
+}}
+
+__device__ std::uint16_t shuttle_f32_to_bf16(float value) {{
+  return static_cast<std::uint16_t>(__float_as_uint(shuttle_round_bf16(value)) >> 16);
+}}
+
+__global__ void ShuttleContractMapKernel(
+    const {contract_cpp_type}* projection,
+    {kernel_input_arguments},
+    {kernel_output_arguments}) {{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= kRows * kFeatures) {{
+    return;
+  }}
+  const float projection_value = {projection_load};
+{stores}
+}}
+
+ffi::Error Contract(
+    cudaStream_t stream,
+    const {contract_cpp_type}* lhs,
+    const {contract_cpp_type}* rhs,
+    {contract_cpp_type}* output) {{
+  if (contract_handle == nullptr) {{
+    const cublasStatus_t create_status = cublasCreate(&contract_handle);
+    if (create_status != CUBLAS_STATUS_SUCCESS) {{
+      return ffi::Error::Internal(
+          "cublasCreate failed with status " + std::to_string(static_cast<int>(create_status)));
+    }}
+  }}
+  cublasStatus_t status = cublasSetStream(contract_handle, stream);
+  if (status != CUBLAS_STATUS_SUCCESS) {{
+    return ffi::Error::Internal(
+        "cublasSetStream failed with status " + std::to_string(static_cast<int>(status)));
+  }}
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+  status = cublasGemmEx(
+      contract_handle,
+      {rhs_operation},
+      CUBLAS_OP_N,
+      kFeatures,
+      kRows,
+      kReduction,
+      &alpha,
+      rhs,
+      {contract_cuda_type},
+      {rhs_leading_dimension},
+      lhs,
+      {contract_cuda_type},
+      kReduction,
+      &beta,
+      output,
+      {contract_cuda_type},
+      kFeatures,
+      CUBLAS_COMPUTE_32F_PEDANTIC,
+      CUBLAS_GEMM_DEFAULT);
+  if (status != CUBLAS_STATUS_SUCCESS) {{
+    return ffi::Error::Internal(
+        "cublasGemmEx failed with status " + std::to_string(static_cast<int>(status)));
+  }}
+  return ffi::Error::Success();
+}}
+
+ffi::Error ShuttleContractMapRegion(
+    cudaStream_t stream,
+    {ffi_input_arguments},
+    {output_arguments}) {{
+{input_bindings}
+{output_bindings}
+  ffi::Error contract = Contract(
+      stream,
+      input{program.contract_lhs_input},
+      input{program.contract_rhs_input},
+      output0_data);
+  if (contract.failure()) {{
+    return contract;
+  }}
+  constexpr int kThreads = 256;
+  constexpr int kBlocks = (kRows * kFeatures + kThreads - 1) / kThreads;
+  ShuttleContractMapKernel<<<kBlocks, kThreads, 0, stream>>>(
+      output0_data,
+      {launch_inputs},
+      {launch_outputs});
+  const cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {{
+    return ffi::Error::Internal(std::string("ShuttleContractMapKernel: ") + cudaGetErrorString(status));
+  }}
+  call_count.fetch_add(1, std::memory_order_relaxed);
+  return ffi::Error::Success();
+}}
+
+auto ShuttleContractMapRegionBinding() {{
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+{input_bindings_ffi}
+{output_bindings_ffi};
+}}
+}}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    {target_symbol},
+    ShuttleContractMapRegion,
+    ShuttleContractMapRegionBinding());
 
 extern "C" int shuttle_pair_map_smoke_call_count() {{
   return call_count.load(std::memory_order_relaxed);

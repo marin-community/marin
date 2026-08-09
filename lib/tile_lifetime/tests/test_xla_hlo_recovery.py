@@ -4,10 +4,18 @@
 import gzip
 from pathlib import Path
 
+from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call_smoke import (
+    _recover_gpu_region_rewrite,
+)
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
+    _TARGET_NAME,
     MultiOutputFixedShapeProgram,
+    contract_map_recovery_diagnostic,
+    generate_cuda_contract_map_ffi_handler,
     generate_cuda_multi_output_ffi_handler,
     pair_map_recovery_diagnostic,
+    recover_contract_map_region_rewrite,
+    replace_multi_output_region_with_custom_call,
 )
 from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
@@ -206,6 +214,44 @@ def test_reverse_contract_map_recovery_exposes_two_generated_map_results() -> No
     assert len(region.consumer_contracts) == 2
 
 
+def test_reverse_contract_map_rewrite_generates_from_structure_and_tracks_mutation() -> None:
+    rewrite = recover_contract_map_region_rewrite(_SYNTHETIC_REVERSE_CONTRACT_MAP, 0)
+
+    assert rewrite.program.rows == 8
+    assert rewrite.program.reduction == 32
+    assert rewrite.program.features == 64
+    assert rewrite.program.contract_lhs_input == 0
+    assert rewrite.program.contract_rhs_input == 1
+    assert rewrite.program.rhs_contracting_dimension == 0
+    assert rewrite.program.scalar_expressions == (
+        "((projection_value) * (input2[index]))",
+        "((projection_value) * (input3[index]))",
+    )
+
+    mutated = _SYNTHETIC_REVERSE_CONTRACT_MAP.replace(
+        "%right_map = f32[8,64]{1,0} multiply(%projected, %saved_right)",
+        "%right_map = f32[8,64]{1,0} add(%projected, %saved_right)",
+    )
+    mutated_rewrite = recover_contract_map_region_rewrite(mutated, 0)
+    assert mutated_rewrite.program.scalar_expressions[0] == rewrite.program.scalar_expressions[0]
+    assert mutated_rewrite.program.scalar_expressions[1] == "((projection_value) + (input3[index]))"
+
+
+def test_reverse_contract_map_rewrite_rewires_both_live_values() -> None:
+    rewrite = recover_contract_map_region_rewrite(_SYNTHETIC_REVERSE_CONTRACT_MAP, 0)
+
+    transformed = replace_multi_output_region_with_custom_call(
+        _SYNTHETIC_REVERSE_CONTRACT_MAP,
+        rewrite,
+        _TARGET_NAME,
+        typed_ffi=True,
+    )
+
+    assert transformed.count(_TARGET_NAME) == 1
+    assert transformed.count("get-tuple-element(%shuttle_generated_multi_output_region)") == 2
+    assert "custom-call(%cotangent, %weight, %saved_left, %saved_right)" in transformed
+
+
 def test_gpu_grug_hlo_recovers_generic_reverse_contract_map_boundary() -> None:
     artifact = (
         Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_backward_multi_output_gpu_sm100_diagnostic_v0/"
@@ -222,3 +268,33 @@ def test_gpu_grug_hlo_recovers_generic_reverse_contract_map_boundary() -> None:
     assert tuple(value.shape for value in region.boundary.outputs) == ("bf16[8,32]{1,0}",) * 2
     assert len(region.boundary.inputs) == 7
     assert len(region.consumer_contracts) == 2
+
+
+def test_gpu_grug_contract_map_rewrite_preserves_bf16_map_rounding() -> None:
+    artifact = (
+        Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_backward_multi_output_gpu_sm100_diagnostic_v0/"
+        "original-gpu-pre-scheduler-hlo.txt.gz"
+    )
+    hlo_text = gzip.decompress(artifact.read_bytes()).decode()
+
+    rewrite = recover_contract_map_region_rewrite(hlo_text, 0)
+    selected = _recover_gpu_region_rewrite(hlo_text)
+    source = generate_cuda_contract_map_ffi_handler(rewrite.program)
+    diagnostic = contract_map_recovery_diagnostic(hlo_text)
+
+    assert rewrite.program.input_dtypes == ("bf16",) * 7
+    assert selected == rewrite
+    assert rewrite.program.output_dtype == "bf16"
+    assert rewrite.program.contract_lhs_input == 3
+    assert rewrite.program.contract_rhs_input == 4
+    assert rewrite.program.rhs_contracting_dimension == 1
+    assert len(rewrite.program.scalar_expressions) == 2
+    assert rewrite.program.scalar_expressions[0].startswith("shuttle_round_bf16")
+    assert rewrite.program.scalar_expressions[1].count("shuttle_round_bf16") == 6
+    assert "CUBLAS_OP_T" in source
+    assert source.count("cublasGemmEx(") == 1
+    assert "CUDA_R_16BF" in source
+    assert "CUBLAS_COMPUTE_32F_PEDANTIC" in source
+    assert "shuttle_f32_to_bf16" in source
+    assert diagnostic["contract_map_region_count"] == 1
+    assert "lowering_error" not in diagnostic["candidates"][0]
