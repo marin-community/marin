@@ -480,9 +480,13 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
 - The generated CUDA is deterministic and matches explicit FP32 Map/Fold
   algebra with maximum errors `9.537e-7` for `dx` and `2.289e-5` for
   `dfeature_scale`.
-- Thirty counterbalanced samples measure 0.079698 ms generated versus 0.040753
-  ms matched XLA, or `1.955629x`. This establishes clean executable generic
-  RMS backward on H100 but does not pass the performance gate.
+- The original `1.955629x` ratio is withdrawn: the matched XLA function closed
+  over arrays and was constant-folded. Corrected runtime-input profiling with
+  30 counterbalanced samples measures 0.072270 ms generated versus 0.072500 ms
+  XLA, or `0.996827x`.
+- Isolated generated/XLA ratios are `0.768795x` for the input-cotangent row Fold
+  and `0.944353x` for the feature-scale column Fold. Optimized HLO shows that
+  full XLA fuses the output Map and feature Fold after a separate row reduction.
 - Natural BF16 JAX-VJP differences remain an explicit numerical-order caveat;
   source-ordered BF16 equivalence is not claimed. Evidence is under
-  `benchmarks/artifacts/jax_row_normalization_backward_h100_v0`.
+  `benchmarks/artifacts/jax_row_normalization_backward_h100_components_corrected_v1`.

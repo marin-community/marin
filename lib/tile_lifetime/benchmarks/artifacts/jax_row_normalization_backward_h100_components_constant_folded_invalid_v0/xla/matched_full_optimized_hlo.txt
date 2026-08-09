@@ -1,0 +1,37 @@
+HloModule jit_matched_xla_algebra, is_scheduled=true, entry_computation_layout={()->(f32[2048,4096]{1,0}, f32[4096]{0})}, allow_spmd_sharding_propagation_to_output={true,true}, frontend_attributes={fingerprint_before_lhs="e892b2bca6d80a18725b06764ee80bb3"}
+
+FileNames
+1 "/tmp/shuttle-rms-components-348befaad1/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "run.<locals>.matched_xla_algebra"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=429 end_line=429 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=422 end_line=422 column=13 end_column=22}
+3 {file_name_id=1 function_name_id=3 line=225 end_line=225 column=12 end_column=39}
+4 {file_name_id=1 function_name_id=4 line=209 end_line=209 column=28 end_column=89}
+5 {file_name_id=1 function_name_id=4 line=208 end_line=208 column=26 end_column=48}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=4}
+
+
+ENTRY %main.3 () -> (f32[2048,4096], f32[4096]) {
+  %constant_20_0 = f32[2048,4096]{1,0} constant({...}), metadata={op_name="jit(matched_xla_algebra)/mul" stack_frame_id=5}
+  %constant_16_0 = f32[4096]{0} constant({...}), metadata={op_name="jit(matched_xla_algebra)/reduce_sum" stack_frame_id=4}
+  %tuple = (f32[2048,4096]{1,0}, f32[4096]{0}) tuple(%constant_20_0, %constant_16_0), metadata={scheduling_name="tuple"}
+  %get-tuple-element.2 = f32[2048,4096]{1,0} get-tuple-element(%tuple), index=0
+  %get-tuple-element.3 = f32[4096]{0} get-tuple-element(%tuple), index=1
+  %copy.2 = f32[2048,4096]{1,0} copy(%get-tuple-element.2)
+  %copy.3 = f32[4096]{0} copy(%get-tuple-element.3)
+  ROOT %tuple.2 = (f32[2048,4096]{1,0}, f32[4096]{0}) tuple(%copy.2, %copy.3)
+}
+

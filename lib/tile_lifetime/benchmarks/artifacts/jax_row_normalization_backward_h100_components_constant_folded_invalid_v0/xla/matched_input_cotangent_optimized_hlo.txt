@@ -1,0 +1,29 @@
+HloModule jit_matched_xla_input_cotangent, is_scheduled=true, entry_computation_layout={()->f32[2048,4096]{1,0}}, allow_spmd_sharding_propagation_to_output={true}, frontend_attributes={fingerprint_before_lhs="93212af3e26b59b6de052218b3b7b756"}
+
+FileNames
+1 "/tmp/shuttle-rms-components-348befaad1/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "run.<locals>.matched_xla_input_cotangent"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=429 end_line=429 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=422 end_line=422 column=13 end_column=22}
+3 {file_name_id=1 function_name_id=3 line=228 end_line=228 column=12 end_column=47}
+4 {file_name_id=1 function_name_id=4 line=216 end_line=216 column=15 end_column=37}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+
+
+ENTRY %main.2 () -> f32[2048,4096] {
+  %constant_17_0 = f32[2048,4096]{1,0} constant({...}), metadata={op_name="jit(matched_xla_input_cotangent)/mul" stack_frame_id=4}
+  ROOT %copy.1 = f32[2048,4096]{1,0} copy(%constant_17_0)
+}
+

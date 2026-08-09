@@ -1,5 +1,12 @@
 # JAX-owned RMS reverse Fold on H100
 
+> **Performance withdrawal:** the matched XLA function closed over benchmark
+> arrays, so XLA constant-folded the algebra into constants and copies. The
+> `1.955629x` ratio below is invalid. Raw samples are preserved for audit, and
+> the correctness/determinism evidence remains valid. See
+> `../jax_row_normalization_backward_h100_components_corrected_v1` for the
+> corrected runtime-input measurement.
+
 This artifact records one low-priority H100 replay of the generic generated
 row-normalization reverse Fold. Ordinary JAX owns automatic differentiation;
 Shuttle imports the exported StableHLO reverse program, erases the RMS name,
@@ -19,9 +26,9 @@ At `rows=2048`, `hidden=4096`, BF16 inputs, and explicit FP32 reverse algebra,
 | Generated typed FFI | 0.079698 ms | 0.078855 ms |
 | Matched XLA algebra | 0.040753 ms | 0.035220 ms |
 
-The generated/XLA ratio is `1.955629x`. This is a clean executable and
-correctness proof, not a performance-gate pass. The next performance work is
-generic Fold scheduling; no LayerNorm-specific tuning was done in this replay.
+The originally reported generated/XLA ratio was `1.955629x`. It is withdrawn
+because the XLA side was constant-folded and is not a compute baseline. This
+remains a clean executable and correctness proof only.
 
 The generated result is bitwise deterministic across repeated executions. Its
 maximum/mean errors against the matched explicit FP32 algebra are:
@@ -53,4 +60,3 @@ library resolving the exact versioned cuDART path. The preserved
 
 See `summary.json` for all raw timing samples, hashes, semantic provenance, and
 numerical results. `generated_axis_fold_ffi.cu` is the exact generated source.
-

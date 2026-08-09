@@ -1,0 +1,84 @@
+HloModule jit_matched_xla_input_cotangent, is_scheduled=true, entry_computation_layout={(f32[2048,4096]{1,0}, bf16[4096]{0}, bf16[2048,4096]{1,0}, f32[2048]{0})->f32[2048,4096]{1,0}}, allow_spmd_sharding_propagation_to_parameters={true,true,true,true}, allow_spmd_sharding_propagation_to_output={true}, frontend_attributes={fingerprint_before_lhs="4124ad2fb00011be7c1336318fa10435"}
+
+FileNames
+1 "/tmp/shuttle-rms-components-348befaad1/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "run.<locals>.matched_xla_input_cotangent"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=475 end_line=475 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=468 end_line=468 column=13 end_column=22}
+3 {file_name_id=1 function_name_id=3 line=254 end_line=254 column=12 end_column=100}
+4 {file_name_id=1 function_name_id=4 line=232 end_line=232 column=22 end_column=118}
+5 {file_name_id=1 function_name_id=4 line=233 end_line=233 column=15 end_column=46}
+6 {file_name_id=1 function_name_id=4 line=233 end_line=233 column=50 end_column=114}
+7 {file_name_id=1 function_name_id=4 line=233 end_line=233 column=59 end_column=100}
+8 {file_name_id=1 function_name_id=4 line=231 end_line=231 column=17 end_column=80}
+9 {file_name_id=1 function_name_id=4 line=231 end_line=231 column=38 end_column=80}
+10 {file_name_id=1 function_name_id=4 line=232 end_line=232 column=30 end_column=80}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=4}
+6 {file_location_id=6 parent_frame_id=4}
+7 {file_location_id=7 parent_frame_id=4}
+8 {file_location_id=8 parent_frame_id=4}
+9 {file_location_id=9 parent_frame_id=4}
+10 {file_location_id=10 parent_frame_id=4}
+
+
+%fused_multiply (param_0.14: bf16[2048,4096], param_1.24: f32[2048], param_2.12: f32[2048,4096], param_3.8: bf16[4096], param_4.3: f32[2048]) -> f32[2048,4096] {
+  %param_1.24 = f32[2048]{0} parameter(1), metadata={scheduling_name="param_1.24"}
+  %mul.24.1 = f32[2048,4096]{1,0} broadcast(%param_1.24), dimensions={0}, metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.24.1" stack_frame_id=5}
+  %param_2.12 = f32[2048,4096]{1,0} parameter(2), metadata={scheduling_name="param_2.12"}
+  %param_3.8 = bf16[4096]{0} parameter(3), metadata={scheduling_name="param_3.8"}
+  %convert_element_type.3.1 = f32[4096]{0} convert(%param_3.8), metadata={op_name="jit(matched_xla_input_cotangent)/convert_element_type" scheduling_name="convert_element_type.3.1" stack_frame_id=9}
+  %mul.15.5 = f32[2048,4096]{1,0} broadcast(%convert_element_type.3.1), dimensions={1}, metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.15.5" stack_frame_id=8}
+  %mul.16.5 = f32[2048,4096]{1,0} multiply(%param_2.12, %mul.15.5), metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.16.5" stack_frame_id=8}
+  %param_0.14 = bf16[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0.14"}
+  %convert_element_type.5.6 = f32[2048,4096]{1,0} convert(%param_0.14), metadata={op_name="jit(matched_xla_input_cotangent)/convert_element_type" scheduling_name="convert_element_type.5.6" stack_frame_id=7}
+  %param_4.3 = f32[2048]{0} parameter(4), metadata={scheduling_name="param_4.3"}
+  %constant_10 = f32[] constant(0.000244140625)
+  %broadcast.3.3 = f32[2048]{0} broadcast(%constant_10), dimensions={}, metadata={op_name="jit(matched_xla_input_cotangent)/div" scheduling_name="broadcast.3.3" stack_frame_id=4}
+  %multiply.1.3 = f32[2048]{0} multiply(%param_4.3, %broadcast.3.3), metadata={op_name="jit(matched_xla_input_cotangent)/div" scheduling_name="multiply.1.3" stack_frame_id=4}
+  %mul.20.1 = f32[2048,4096]{1,0} broadcast(%multiply.1.3), dimensions={0}, metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.20.1" stack_frame_id=7}
+  %mul.21.5 = f32[2048,4096]{1,0} multiply(%convert_element_type.5.6, %mul.20.1), metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.21.5" stack_frame_id=7}
+  %sub.1.3 = f32[2048,4096]{1,0} subtract(%mul.16.5, %mul.21.5), metadata={op_name="jit(matched_xla_input_cotangent)/sub" scheduling_name="sub.1.3" stack_frame_id=6}
+  ROOT %mul.25.1 = f32[2048,4096]{1,0} multiply(%mul.24.1, %sub.1.3), metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.25.1" stack_frame_id=5}
+}
+
+%region_0.1 (reduce_sum.3: f32[], reduce_sum.4: f32[]) -> f32[] {
+  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.4"}
+  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum" scheduling_name="reduce_sum.3"}
+  ROOT %reduce_sum.5.0 = f32[] add(%reduce_sum.3, %reduce_sum.4), metadata={op_name="jit(matched_xla_input_cotangent)/reduce_sum" scheduling_name="reduce_sum.5.0" stack_frame_id=4}
+}
+
+%fused_reduce (param_0.17: bf16[2048,4096], param_1.25: f32[2048,4096], param_2.13: bf16[4096]) -> f32[2048] {
+  %param_1.25 = f32[2048,4096]{1,0} parameter(1), metadata={scheduling_name="param_1.25"}
+  %param_2.13 = bf16[4096]{0} parameter(2), metadata={scheduling_name="param_2.13"}
+  %convert_element_type.3.2 = f32[4096]{0} convert(%param_2.13), metadata={op_name="jit(matched_xla_input_cotangent)/convert_element_type" scheduling_name="convert_element_type.3.2" stack_frame_id=9}
+  %mul.15.3 = f32[2048,4096]{1,0} broadcast(%convert_element_type.3.2), dimensions={1}, metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.15.3" stack_frame_id=8}
+  %mul.16.3 = f32[2048,4096]{1,0} multiply(%param_1.25, %mul.15.3), metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.16.3" stack_frame_id=8}
+  %param_0.17 = bf16[2048,4096]{1,0} parameter(0), metadata={scheduling_name="param_0.17"}
+  %convert_element_type.5.8 = f32[2048,4096]{1,0} convert(%param_0.17), metadata={op_name="jit(matched_xla_input_cotangent)/convert_element_type" scheduling_name="convert_element_type.5.8" stack_frame_id=7}
+  %mul.17.3 = f32[2048,4096]{1,0} multiply(%mul.16.3, %convert_element_type.5.8), metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="mul.17.3" stack_frame_id=10}
+  %constant_3_1 = f32[] constant(0)
+  ROOT %reduce_sum.7.1 = f32[2048]{0} reduce(%mul.17.3, %constant_3_1), dimensions={1}, to_apply=%region_0.1, metadata={op_name="jit(matched_xla_input_cotangent)/reduce_sum" scheduling_name="reduce_sum.7.1" stack_frame_id=4}
+}
+
+ENTRY %main.2 (projected_argument.1: f32[2048,4096], feature_scale_argument.1: bf16[4096], standardized_argument.1: bf16[2048,4096], inverse_scale_argument.1: f32[2048]) -> f32[2048,4096] {
+  %standardized_argument.1 = bf16[2048,4096]{1,0} parameter(2), metadata={op_name="standardized_argument" scheduling_name="standardized_argument.1"}
+  %feature_scale_argument.1 = bf16[4096]{0} parameter(1), metadata={op_name="feature_scale_argument" scheduling_name="feature_scale_argument.1"}
+  %projected_argument.1 = f32[2048,4096]{1,0} parameter(0), metadata={op_name="projected_argument" scheduling_name="projected_argument.1"}
+  %inverse_scale_argument.1 = f32[2048]{0} parameter(3), metadata={op_name="inverse_scale_argument" scheduling_name="inverse_scale_argument.1"}
+  %input_reduce_fusion = f32[2048]{0} fusion(%standardized_argument.1, %projected_argument.1, %feature_scale_argument.1), kind=kCustom, calls=%fused_reduce, metadata={op_name="jit(matched_xla_input_cotangent)/reduce_sum" scheduling_name="input_reduce_fusion" stack_frame_id=4}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":true,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"8","output_tiles":[{"sizes":["4"]}],"waves_per_eu":0},"kind":"__triton"},"operation_queue_id":"0","reification_cost":[]}
+  ROOT %loop_multiply_fusion = f32[2048,4096]{1,0} fusion(%standardized_argument.1, %inverse_scale_argument.1, %projected_argument.1, %feature_scale_argument.1, %input_reduce_fusion), kind=kLoop, calls=%fused_multiply, metadata={op_name="jit(matched_xla_input_cotangent)/mul" scheduling_name="loop_multiply_fusion" stack_frame_id=5}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+}
+

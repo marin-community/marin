@@ -849,13 +849,20 @@ The generic reverse-Fold path now executes directly through JAX CUDA typed FFI
 on H100. JAX owns AD; Shuttle imports the ordinary `jax.vjp` StableHLO and
 generates deterministic row and column Folds from erased Map/Fold semantics.
 
-At 2048 rows and hidden size 4096, 30 counterbalanced samples measure 0.079698
-ms generated versus 0.040753 ms for the identical explicit FP32 XLA algebra,
-or `1.955629x`. The result is correct and deterministic but not competitive:
-maximum errors are `9.537e-7` for the input cotangent and `2.289e-5` for the
+The original `1.955629x` H100 ratio and `0.913018x` GB200 ratio are withdrawn.
+Their matched XLA functions closed over benchmark inputs, and optimized HLO
+shows that XLA replaced the algebra with constants and copies. The raw evidence
+is preserved; its correctness and determinism checks remain valid.
+
+At 2048 rows and hidden size 4096, the corrected runtime-input H100 benchmark
+uses 30 counterbalanced samples with 100 iterations per sample. It measures
+0.072270 ms generated versus 0.072500 ms XLA, or `0.996827x`. Isolated ratios
+are `0.768795x` for the input-cotangent row Fold and `0.944353x` for the
+feature-scale column Fold. The result is correct and deterministic: maximum
+errors are `9.537e-7` for the input cotangent and `3.052e-5` for the
 feature-scale cotangent. Natural BF16 VJP output remains diagnostic because its
 cast and reduction order differs from the generated deterministic-tree policy.
 
 The replay also validates versioned-only pip CUDA linking without symlinks or
 manual library-path settings. Evidence is under
-`benchmarks/artifacts/jax_row_normalization_backward_h100_v0`.
+`benchmarks/artifacts/jax_row_normalization_backward_h100_components_corrected_v1`.

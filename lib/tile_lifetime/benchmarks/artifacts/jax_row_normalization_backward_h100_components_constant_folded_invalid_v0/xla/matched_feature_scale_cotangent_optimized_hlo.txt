@@ -1,0 +1,29 @@
+HloModule jit_matched_xla_feature_scale_cotangent, is_scheduled=true, entry_computation_layout={()->f32[4096]{0}}, allow_spmd_sharding_propagation_to_output={true}, frontend_attributes={fingerprint_before_lhs="90d0f7214279725eb12e4083d8ff920a"}
+
+FileNames
+1 "/tmp/shuttle-rms-components-348befaad1/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "run"
+4 "run.<locals>.matched_xla_feature_scale_cotangent"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=429 end_line=429 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=422 end_line=422 column=13 end_column=22}
+3 {file_name_id=1 function_name_id=3 line=231 end_line=231 column=12 end_column=55}
+4 {file_name_id=1 function_name_id=4 line=220 end_line=220 column=15 end_column=76}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+
+
+ENTRY %main.2 () -> f32[4096] {
+  %constant_2_0 = f32[4096]{0} constant({...}), metadata={op_name="jit(matched_xla_feature_scale_cotangent)/reduce_sum" stack_frame_id=4}
+  ROOT %copy.1 = f32[4096]{0} copy(%constant_2_0)
+}
+
