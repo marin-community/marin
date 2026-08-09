@@ -1,0 +1,50 @@
+source_revision=239372d31dc8e52b63c42c0321f38483e6d66034
+source_archive_sha256=d63b9afff367c0345d99fc6d4a68f787cddbd7f07a0619e62a5a4e30c7f2c9ed
+holder_revision=eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+
+NVIDIA H100 80GB HBM3, GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e, 595.71.05, 700.00, 345, 2619
+
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2026 NVIDIA Corporation
+Built on Tue_Jun_09_02:43:40_PM_PDT_2026
+Cuda compilation tools, release 13.3, V13.3.73
+Build cuda_13.3.r13.3/compiler.38244171_0
+
+cloudpickle==3.1.2
+jax==0.11.0
+jax-cuda13-pjrt==0.11.0
+jax-cuda13-plugin==0.11.0
+jaxlib==0.11.0
+jinja2==3.1.6
+linkify-it-py==2.1.0
+markdown-it-py==4.2.0
+markupsafe==3.0.3
+mdit-py-plugins==0.6.1
+mdurl==0.1.2
+memray==1.20.0
+ml-dtypes==0.5.4
+numpy==2.5.2
+nvidia-cublas==13.6.1.10
+nvidia-cuda-cccl==13.3.3.4.1
+nvidia-cuda-crt==13.3.73
+nvidia-cuda-cupti==13.3.75
+nvidia-cuda-nvcc==13.3.73
+nvidia-cuda-nvrtc==13.3.33
+nvidia-cuda-runtime==13.3.29
+nvidia-cudnn-cu13==9.24.0.43
+nvidia-cufft==12.3.0.29
+nvidia-cusolver==12.2.6.9
+nvidia-cusparse==12.8.2.51
+nvidia-nccl-cu13==2.30.7
+nvidia-nvjitlink==13.3.33
+nvidia-nvshmem-cu13==3.7.2
+nvidia-nvvm==13.3.73
+opt-einsum==3.4.0
+platformdirs==4.11.1
+py-spy==0.4.2
+pygments==2.20.0
+rich==15.0.0
+scipy==1.18.0
+textual==8.2.8
+typing-extensions==4.16.0
+uc-micro-py==2.0.0
