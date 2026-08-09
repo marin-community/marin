@@ -2300,3 +2300,26 @@ author: dlwh
   tests pass, and the complete tile-lifetime suite passes 369 tests.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_combined_gpu_gb200_v0/`.
+
+### 2026-08-09 - TLTC-DIST-022 generic collective-completion recovery
+
+- Hypothesis: the placement collectives left outside the combined routed train
+  step can first become generic Shuttle plans without replacing XLA transport
+  or introducing a workload-specific distributed lowering.
+- Commit Hash: `1cdffc27b1`.
+- Result: both direct expert weight-gradient `psum` consumers recover from
+  post-SPMD HLO as a placement-partial input, a generic completion Fold, and a
+  placement transition. Plans retain producer/result wiring, tensor shape and
+  dtype, reducer, explicit reassociation policy, replica groups, global versus
+  local device-ID semantics, and channel ID. They contain no NCCL or XLA
+  implementation choice.
+- Generality: mutating replica groups changes only the transport domain;
+  mutating the reducer changes only Fold semantics. Reducer dtype mismatches
+  are rejected. Recovery uses HLO structure and reducer computations rather
+  than metadata or model names.
+- Scope: this is the structural start of collective ownership. XLA continues
+  to execute the all-reduces. The next steps are candidate transport selection,
+  Event Tensor completion/visibility linkage, and an executable typed-FFI or
+  existing-runtime lowering only after those contracts are explicit.
+- Verification: four collective mutation/recovery tests and all six combined
+  routed-training structural tests pass; scoped pre-commit checks pass.
