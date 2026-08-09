@@ -1605,6 +1605,45 @@ def test_heartbeat_failures_fail_actor_context():
     assert isinstance(actor_ctx._errors[0], CoordinatorUnreachable)
 
 
+def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
+    """Registration keeps trying until it lands, and a late answer is not a new attempt.
+
+    ``register_worker`` requeues a worker's in-flight tasks whenever it sees a known
+    worker_id, so a duplicate registration from a live worker would hand a shard it is
+    still running to somebody else.
+    """
+
+    class _RegistrationRpc:
+        """Fails the first call, then answers the second one 1.2s late."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def remote(self, *_args):
+            self.calls += 1
+            future: Future = Future()
+            if self.calls == 1:
+                future.set_exception(ConnectionError("simulated coordinator overload"))
+                return future
+            timer = threading.Timer(1.2, lambda: future.set_result(()))
+            timer.daemon = True
+            timer.start()
+            return future
+
+    rpc = _RegistrationRpc()
+    worker = ZephyrWorker.__new__(ZephyrWorker)
+    worker._coordinator = MagicMock(register_worker=rpc)
+    worker._worker_id = "test-worker-0"
+    worker._actor_handle = MagicMock()
+    worker._memory_store = MagicMock()
+    worker._shutdown_event = threading.Event()
+    worker._host_shutdown_event = None
+
+    assert worker._register() is True
+    assert rpc.calls == 2, "one retry for the failed RPC, none for the slow answer"
+    worker._memory_store.restore.assert_called_once_with(())
+
+
 # --- Integration tests (all backends) ---
 
 

@@ -99,6 +99,55 @@ class ZephyrWorker:
         )
         self._poll_thread.start()
 
+    def _stopping(self) -> bool:
+        """True once this worker, or the actor hosting it, has been told to stop."""
+        if self._shutdown_event.is_set():
+            return True
+        return self._host_shutdown_event is not None and self._host_shutdown_event.is_set()
+
+    def _register(self) -> bool:
+        """Block until registration lands. Return False if we are told to stop first.
+
+        Waits on the outstanding request rather than re-sending it: a busy coordinator
+        answers late, and a client-side deadline would turn that delay into a second
+        registration. ``register_worker`` requeues a worker's in-flight tasks whenever
+        it sees a known ``worker_id``, so a duplicate from a live worker would hand a
+        shard it is still running to somebody else. A new request goes out only when
+        the RPC itself failed.
+
+        The retry is unbounded. Returning instead exits the poll loop, and iris records
+        that clean exit as a successful task and never replaces the worker.
+        """
+        backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
+        future: ActorFuture | None = None
+        request_start = 0.0
+        warned = False
+
+        while not self._stopping():
+            try:
+                if future is None:
+                    future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle)
+                    request_start = time.monotonic()
+                    warned = False
+                registrations = future.result(timeout=0.5)
+            except TimeoutError:
+                elapsed = time.monotonic() - request_start
+                if elapsed > 60 and not warned:
+                    logger.warning("[%s] Waiting to register with the coordinator (%.0fs)", self._worker_id, elapsed)
+                    warned = True
+                continue
+            except Exception as e:
+                logger.warning("[%s] register_worker failed (%s), retrying", self._worker_id, e)
+                future = None
+                self._shutdown_event.wait(timeout=backoff.next_interval())
+                continue
+
+            self._memory_store.restore(registrations)
+            return True
+
+        logger.info("[%s] Told to stop before registration completed", self._worker_id)
+        return False
+
     def _poll_loop(self) -> None:
         """Single poll loop: requests tasks from the coordinator using current available resources.
 
@@ -107,16 +156,9 @@ class ZephyrWorker:
         At stage boundaries, the loop sleeps briefly and then polls again.
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
-        try:
-            registrations = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(
-                timeout=30.0
-            )
-            self._memory_store.restore(registrations)
-        except Exception:
-            logger.error("[%s] Failed to register with coordinator", self._worker_id, exc_info=True)
-            self._shutdown_event.set()
-            if self._host_shutdown_event is not None:
-                self._host_shutdown_event.set()
+        # Registration must land before polling: it returns the memory-table
+        # registrations that tasks read through memory_store.
+        if not self._register():
             return
 
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
