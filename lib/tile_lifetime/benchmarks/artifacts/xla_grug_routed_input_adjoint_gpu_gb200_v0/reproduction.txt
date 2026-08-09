@@ -1,0 +1,2 @@
+resource_request: 1 GB200 GPU, 1 CPU, batch priority, 16GB host memory, 50GB disk
+benchmark_command: .venv/bin/python -m lib.tile_lifetime.benchmarks.xla_grug_routed_input_adjoint_gpu_custom_call --nvcc .venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc --architecture sm_100a --artifact-directory /tmp/shuttle-input-adjoint-gb200 --output /tmp/shuttle-input-adjoint-gb200/summary.json --warmup 4 --repeats 30

@@ -1,0 +1,5 @@
+GPU 0: NVIDIA GB200 (UUID: GPU-a1dac3f0-65b2-2567-26c1-a0951f6bfe4f)
+name, uuid, driver_version, compute_cap, pstate, clocks.current.graphics [MHz], clocks.current.sm [MHz], power.draw [W], power.limit [W]
+NVIDIA GB200, GPU-a1dac3f0-65b2-2567-26c1-a0951f6bfe4f, 595.71.05, 10.0, P0, 120 MHz, 120 MHz, 152.44 W, 1200.00 W
+name, uuid, driver_version, compute_cap, pstate, clocks.current.graphics [MHz], clocks.current.sm [MHz], power.draw [W], power.limit [W]
+NVIDIA GB200, GPU-a1dac3f0-65b2-2567-26c1-a0951f6bfe4f, 595.71.05, 10.0, P0, 1950 MHz, 1950 MHz, 213.78 W, 1200.00 W

@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import hashlib
+import json
 import re
+import statistics
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -47,6 +50,9 @@ _GPU_ARTIFACT = (
 _NATURAL_TRAIN_GPU_ARTIFACT = (
     Path(__file__).parents[1]
     / "benchmarks/artifacts/xla_grug_routed_forward_gpu_gb200_v0/original-gpu-pre-scheduler-hlo.txt.gz"
+)
+_INPUT_ADJOINT_GPU_ARTIFACT = (
+    Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_routed_input_adjoint_gpu_gb200_v0"
 )
 
 
@@ -163,6 +169,40 @@ def test_natural_grug_input_adjoint_cpu_interpreter_is_deterministic() -> None:
     assert np.array_equal(first[0], second[0])
     assert np.array_equal(first[1], second[1])
     assert np.count_nonzero(first[0][:, 16:, :]) == 0
+
+
+def test_routed_input_adjoint_gb200_artifact_preserves_acceptance_evidence() -> None:
+    checksums = (_INPUT_ADJOINT_GPU_ARTIFACT / "SHA256SUMS").read_text().splitlines()
+    assert len(checksums) == 11
+    for record in checksums:
+        expected, relative_path = record.split("  ", maxsplit=1)
+        payload = (_INPUT_ADJOINT_GPU_ARTIFACT / relative_path).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == expected
+
+    summary = json.loads((_INPUT_ADJOINT_GPU_ARTIFACT / "summary.json").read_text())
+    assert summary["device_kind"] == "NVIDIA GB200"
+    assert summary["custom_call_occurrences_in_transformed_hlo"] == 1
+    assert summary["custom_call_handler_executions"] == 35
+    assert not summary["uses_atomic_accumulation"]
+    assert summary["outputs_match"]
+    assert summary["maximum_absolute_error"] < 3e-10
+    assert summary["mean_absolute_error"] < 2e-14
+    assert summary["bitwise_equal_leaf_count"] == 51
+    samples = summary["raw_samples"]
+    assert len(samples) == 30
+    assert sum(sample["order"][0] == "baseline" for sample in samples) == 15
+    assert sum(sample["order"][0] == "transformed" for sample in samples) == 15
+    baseline_median = statistics.median(sample["baseline"]["latency_ms"] for sample in samples)
+    generated_median = statistics.median(sample["transformed"]["latency_ms"] for sample in samples)
+    assert baseline_median == summary["baseline_median_ms"]
+    assert generated_median == summary["generated_median_ms"]
+    assert generated_median / baseline_median == summary["generated_over_baseline"]
+    assert summary["generated_over_baseline"] < 1.0
+
+    source = (_INPUT_ADJOINT_GPU_ARTIFACT / "generated_routed_input_adjoint_ffi.cu").read_text()
+    assert "ShuttleReverseMapKernel" in source
+    assert "ShuttleSourceFoldKernel" in source
+    assert "atomicAdd" not in source
 
 
 def test_gpu_grug_hlo_generates_bf16_routed_forward_executor() -> None:
