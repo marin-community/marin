@@ -1810,3 +1810,51 @@ author: dlwh
 - Next action: use the recovered RelationPlan and generated Fold bodies to
   replace the executed routed forward/input-adjoint region; retain the
   all-reduce as an external placement transition for this checkpoint.
+
+### 2026-08-09 00:25 PDT - TLTC-XLA-008 Torch-free JAX Fold registration
+
+- Hypothesis: the generic axis-Fold family recovered from a JAX-owned reverse
+  graph can execute through JAX without using Torch as either the accepted
+  runtime or the owner of automatic differentiation.
+- Commit Hash: `a5b39dc65e`.
+- Result: one generated XLA typed-FFI handler now registers multiple generic
+  CUDA axis Folds with JAX. The benchmark path begins with ordinary JAX,
+  obtains the reverse graph through `jax.vjp`, recovers the Fold programs from
+  StableHLO, compiles their generated CUDA, and calls them through `jax.ffi`.
+  Source audits and focused tests pass; generated runtime source contains no
+  Torch dependency.
+- Caveat: H100/GB200 compilation, correctness, and performance remain pending.
+  This checkpoint establishes the intended ownership and runtime boundary, not
+  a measured acceptance result.
+
+### 2026-08-09 00:52 PDT - TLTC-EVENT-002 runtime and phased Event inputs
+
+- Hypothesis: readiness state can be derived mechanically from generic task
+  relations, including runtime RelationPlan indegrees and repeated phased
+  Contract/Fold dataflow, without workload-specific event annotations.
+- Commit Hash: `1e0512923d`.
+- Result: `EventTensorRuntimeInputs` carries count and notify/trigger CSR
+  tables; empty runtime groups are initially ready. Explicit physical event
+  slots and generations represent circular reuse. A generic phased
+  Contract-to-Fold-to-Contract-to-finalize graph derives its dependencies from
+  task relations. Twenty-three focused CPU/reference tests pass.
+- Caveat: this is the static/reference checkpoint. Device-side notify, wait,
+  visibility, and generation validation for segmented and attention-like
+  schedules is being measured separately.
+
+### 2026-08-09 01:43 PDT - TLTC-TRAIN-009 partitioned key/value reverse Fold
+
+- Hypothesis: the primary streaming-attention reverse gap is partly caused by
+  insufficient parallelism in the deterministic key/value-gradient Fold. A
+  bounded query-domain partition can expose more tasks without changing the
+  recovered Contract/Map/Fold semantics or using atomic accumulation.
+- Commit Hash: `ace2636514`.
+- Result: the schedule now represents 1, 2, 4, or 8 physical query partitions
+  per key/value tile. Partitioned tasks emit FP32 dK/dV partials and a generic
+  finalizer combines them in fixed partition order before BF16 storage. Work
+  estimates expose task count, finalizer count, and partial-buffer traffic.
+  The original one-partition schedule remains the default. Six focused
+  semantic/schedule tests and scoped lint pass.
+- Caveat: all partitioned candidates are deliberately unmeasured. The next
+  direct GPU experiment compares one and four partitions at S=2048 and retains
+  the candidate only if end-to-end backward latency improves meaningfully.
