@@ -1875,3 +1875,28 @@ author: dlwh
   1.0 for the feature Fold). This is a deterministic-tree result; source-order
   equivalence to XLA's selected reduction tree is not established and must not
   be claimed. The benchmark now records that contract explicitly.
+
+### 2026-08-09 01:31 PDT - TLTC-TRAIN-010 packed mapped heads in dQ
+
+- Hypothesis: deriving the GQA packed-row domain from the QK Contract index map
+  for the query-gradient traversal will reduce physical Contract and K/V-load
+  duplication without partial gradients or atomics.
+- Commit Hash: `f0f2aa6b73395d360d69a0ce4dd74add86d022ca`.
+- Config: one H100 80GB, causal BF16, batch 1, sequence 2,048, 32 query heads,
+  eight K/V heads, dimension 128, 32-by-32 tile, eight warps, three stages;
+  Torch 2.8.0+cu128 and Triton 3.4.0. Each path used 30 counterbalanced samples
+  with five iterations per sample.
+- Result: scalar-head dQ measures 1.297498 ms versus 0.464624 ms for SDPA.
+  Packed dQ measures 0.584992 ms versus 0.465133 ms for SDPA. Packing reduces
+  generated latency by 54.91%; the packed result is 1.257688x SDPA and remains
+  outside the 1.20 gate. Both paths pass correctness and produce the same
+  deterministic output hash.
+- Resources: packed dQ uses 114,688 bytes of shared memory versus 45,568 bytes
+  for scalar-head dQ. Register and spill counts were unavailable. Static
+  physical reverse Contract invocations fall from 266,240 to 116,480.
+- Interpretation: mapped-head operand reuse is a useful generic schedule
+  transformation. The next gap is the two-traversal reverse pipeline: dQ and
+  dK/dV still recompute QK, probability, dP, and dS separately and do not use a
+  TMA/WGMMA producer-consumer schedule.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_packed_h100/`.
