@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +27,10 @@ from tile_lifetime.jax_collective_transport import (
     execute_jax_collective_completion,
 )
 from tile_lifetime.plan import NumericalPolicy
+
+H100_ARTIFACT_ROOT = (
+    Path(__file__).resolve().parents[1] / "benchmarks" / "artifacts" / "jax_collective_completion_h100_v0"
+)
 
 
 def _completion(
@@ -131,3 +138,27 @@ def test_jax_collective_completion_rejects_local_replica_id_groups() -> None:
             axis_name="collective",
             device_id_by_axis_index=(0,),
         )
+
+
+def test_h100_collective_completion_artifact_is_sealed_and_structurally_clean() -> None:
+    for line in (H100_ARTIFACT_ROOT / "SHA256SUMS").read_text().splitlines():
+        expected, relative_path = line.split("  ", maxsplit=1)
+        digest = hashlib.sha256((H100_ARTIFACT_ROOT / relative_path).read_bytes()).hexdigest()
+        assert digest == expected
+
+    result = json.loads((H100_ARTIFACT_ROOT / "results.json").read_text())
+    assert result["device_count"] == 2
+    assert {device["device_kind"] for device in result["devices"]} == {"NVIDIA H100 80GB HBM3"}
+    assert result["sum_event_initial_count"] == [{"coordinate": [0, 0], "count": 2}]
+    assert result["sum_max_abs_error"] == 0.0
+    assert result["maximum_max_abs_error"] == 0.0
+    assert result["gradient_max_abs_error"] == 0.0
+    assert result["sum_deterministic"]
+    assert result["maximum_deterministic"]
+    assert result["gradient_deterministic"]
+    assert result["sum_forward_all_reduce_count"] == 1
+    assert result["maximum_forward_all_reduce_count"] == 1
+    assert result["gradient_all_reduce_count"] == 2
+    assert result["sum_forward_custom_call_count"] == 0
+    assert result["maximum_forward_custom_call_count"] == 0
+    assert result["gradient_custom_call_count"] == 0

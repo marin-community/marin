@@ -1,0 +1,89 @@
+{
+  "completion_visibility": {
+    "acquire_before_consumer": true,
+    "physical_signal": "jax_array_result_data_dependency",
+    "release_on_notify": true,
+    "scope": "system"
+  },
+  "cuda_visible_devices": null,
+  "device_count": 2,
+  "devices": [
+    {
+      "device_kind": "NVIDIA H100 80GB HBM3",
+      "id": 0,
+      "platform": "gpu"
+    },
+    {
+      "device_kind": "NVIDIA H100 80GB HBM3",
+      "id": 1,
+      "platform": "gpu"
+    }
+  ],
+  "dtype": "bf16",
+  "gradient_all_reduce_count": 2,
+  "gradient_custom_call_count": 0,
+  "gradient_deterministic": true,
+  "gradient_max_abs_error": 0.0,
+  "gradient_sha256": "4510cff13467dc2a719641669c8857c7c7f1d3ee29a8e0756f885c67dd88ff68",
+  "jax": "0.10.1",
+  "jax_default_backend": "gpu",
+  "jaxlib": "0.10.1",
+  "maximum_axis_index_groups": [
+    [
+      0,
+      1
+    ]
+  ],
+  "maximum_deterministic": true,
+  "maximum_forward_all_reduce_count": 1,
+  "maximum_forward_custom_call_count": 0,
+  "maximum_max_abs_error": 0.0,
+  "maximum_output_sha256": "6d6d690bbd56fcc0d8a4e7dabfe52438d444f63b146e9bf5731f898b8e06ec5d",
+  "nvidia_smi": [
+    {
+      "clocks.mem": "2619",
+      "clocks.sm": "1830",
+      "compute_cap": "9.0",
+      "driver_version": "595.71.05",
+      "index": "0",
+      "name": "NVIDIA H100 80GB HBM3",
+      "power.limit": "700.00",
+      "uuid": "GPU-ebf5eb3c-ee19-f81c-f67b-f3e56919d531"
+    },
+    {
+      "clocks.mem": "2619",
+      "clocks.sm": "1830",
+      "compute_cap": "9.0",
+      "driver_version": "595.71.05",
+      "index": "1",
+      "name": "NVIDIA H100 80GB HBM3",
+      "power.limit": "700.00",
+      "uuid": "GPU-73992f91-940c-01a5-0f07-2f8ba16c0294"
+    }
+  ],
+  "shape": [
+    2,
+    8
+  ],
+  "shuttle_revision": "e7b37a07f098caa7d8e433061b08ecfa75f68080",
+  "sum_axis_index_groups": [
+    [
+      0,
+      1
+    ]
+  ],
+  "sum_deterministic": true,
+  "sum_event_initial_count": [
+    {
+      "coordinate": [
+        0,
+        0
+      ],
+      "count": 2
+    }
+  ],
+  "sum_forward_all_reduce_count": 1,
+  "sum_forward_custom_call_count": 0,
+  "sum_max_abs_error": 0.0,
+  "sum_output_sha256": "1a208b5d175e3bd4843140dc00aca826a195a5cf22fe2edf6e1f59b940dda732"
+}

@@ -1,0 +1,14 @@
+module @jit__lambda attributes {mhlo.num_partitions = 2 : i32, mhlo.num_replicas = 1 : i32} {
+  sdy.mesh @mesh = <["collective"=2]> {stablehlo.mesh = {axes = [{name = "collective", size = 2 : i64}]}}
+  func.func public @main(%arg0: tensor<2x8xbf16>) -> (tensor<2x8xbf16> {jax.result_info = "result"}) {
+    %0 = sdy.manual_computation(%arg0) in_shardings=[<@mesh, [{"collective"}, {}]>] out_shardings=[<@mesh, [{"collective"}, {}]>] manual_axes={"collective"} (%arg1: tensor<1x8xbf16>) {
+      %1 = "stablehlo.all_reduce"(%arg1) <{channel_handle = #stablehlo.channel_handle<handle = 1, type = 1>, replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>, use_global_device_ids}> ({
+      ^bb0(%arg2: tensor<bf16>, %arg3: tensor<bf16>):
+        %2 = stablehlo.add %arg2, %arg3 : tensor<bf16>
+        stablehlo.return %2 : tensor<bf16>
+      }) : (tensor<1x8xbf16>) -> tensor<1x8xbf16>
+      sdy.return %1 : tensor<1x8xbf16>
+    } : (tensor<2x8xbf16>) -> tensor<2x8xbf16>
+    return %0 : tensor<2x8xbf16>
+  }
+}
