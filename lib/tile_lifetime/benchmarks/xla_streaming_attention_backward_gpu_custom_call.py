@@ -12,13 +12,23 @@ import gzip
 import hashlib
 import importlib
 import json
+import statistics
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import jax
 import jax.numpy as jnp
+import jaxlib
 import numpy as np
+from benchmark_metadata import (  # pyrefly: ignore[missing-import]
+    command_record,
+    file_sha256,
+    nvidia_smi_snapshot,
+    toolchain_snapshot,
+)
 
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
@@ -63,10 +73,25 @@ def _hash(values: tuple[jax.Array, ...]) -> str:
     return digest.hexdigest()
 
 
+def _timed_execution(executable: Any, arguments: tuple[jax.Array, ...], *, iterations: int) -> tuple[float, str]:
+    start = time.perf_counter()
+    result = None
+    for _ in range(iterations):
+        result = executable(*arguments)
+    if result is None:
+        raise RuntimeError("timed streaming reverse produced no result")
+    jax.block_until_ready(result)
+    return (time.perf_counter() - start) * 1e3 / iterations, _hash(tuple(result))
+
+
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     """Compile and execute baseline and transformed natural JAX VJPs."""
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("streaming reverse HLO replacement requires a CUDA JAX device")
+    if args.repeats <= 0 or args.repeats % 2:
+        raise ValueError("counterbalanced replay requires a positive even repeat count")
+    if args.iterations <= 0 or args.warmups < 0 or args.determinism_repeats <= 0:
+        raise ValueError("iteration counts must be positive and warmups must be nonnegative")
     scale = args.head_dimension**-0.5
     config = StreamingAttentionBackwardDebugConfig(
         batch=1,
@@ -78,6 +103,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         scale=scale,
     )
     source_stablehlo = export_debug_streaming_attention_backward(config)
+    args.artifact_directory.mkdir(parents=True, exist_ok=True)
+    (args.artifact_directory / "source-vjp-stablehlo.mlir.bc").write_bytes(source_stablehlo)
     graph = import_stablehlo(source_stablehlo, input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES)
     recovered = recover_stablehlo_streaming_attention_backward(
         graph,
@@ -136,11 +163,19 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     xla = importlib.import_module("jax.extend.xla")
     original_modules: list[str] = []
     transformed_modules: list[str] = []
+    original_protos: list[bytes] = []
+    transformed_protos: list[bytes] = []
     plans: list[Any] = []
 
     def replace(serialized_module: bytes) -> bytes:
         module = hlo.HloModule.from_serialized_hlo_module_proto(serialized_module)
         original = module.to_string()
+        # Persist the actual natural-JAX GPU module before planning so a
+        # fail-closed structural mismatch still leaves an exact repro artifact.
+        (args.artifact_directory / "original-pre-scheduler-hlo.pb").write_bytes(serialized_module)
+        (args.artifact_directory / "original-pre-scheduler-hlo.txt.gz").write_bytes(
+            gzip.compress(original.encode(), mtime=0)
+        )
         plan = plan_streaming_attention_backward_hlo_replacement(original, program, generated)
         transformed_text = replace_streaming_attention_backward_entry_with_custom_call(
             original,
@@ -148,10 +183,13 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             target=target,
         )
         transformed = hlo.hlo_module_from_text(transformed_text)
+        transformed_proto = transformed.as_serialized_hlo_module_proto()
         original_modules.append(original)
         transformed_modules.append(transformed.to_string())
+        original_protos.append(serialized_module)
+        transformed_protos.append(transformed_proto)
         plans.append(plan)
-        return transformed.as_serialized_hlo_module_proto()
+        return transformed_proto
 
     xla.register_hlo_module_transformation(
         replace,
@@ -170,21 +208,103 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         )
     actual = transformed(*arguments)
     jax.block_until_ready(actual)
-    if len(original_modules) != 1 or len(transformed_modules) != 1 or len(plans) != 1:
+    if not (
+        len(original_modules)
+        == len(transformed_modules)
+        == len(original_protos)
+        == len(transformed_protos)
+        == len(plans)
+        == 1
+    ):
         raise RuntimeError("expected exactly one whole-entry streaming reverse transformation")
     call_count = compiled.library.shuttle_streaming_attention_backward_ffi_call_count
     call_count.restype = ctypes.c_int
     executions = int(call_count())
-    if executions < 1:
+    if executions < 1 or transformed_modules[0].count(target) != 1:
         raise RuntimeError("generated streaming reverse handler did not execute")
 
     plan = plans[0]
+    errors = {
+        role: _error(output, reference)
+        for role, output, reference in zip(
+            ("query", "key", "value"),
+            actual,
+            expected,
+            strict=True,
+        )
+    }
+    if any(error["maximum_absolute_error"] > 0.03125 for error in errors.values()):
+        raise RuntimeError(f"streaming reverse maximum error exceeds the accepted BF16 bound: {errors}")
+    if any(error["mean_absolute_error"] > 2e-4 for error in errors.values()):
+        raise RuntimeError(f"streaming reverse mean error exceeds the accepted BF16 bound: {errors}")
+
+    executables = {"baseline": baseline, "transformed": transformed}
+    for warmup in range(args.warmups):
+        order = ("baseline", "transformed") if warmup % 2 == 0 else ("transformed", "baseline")
+        for name in order:
+            _timed_execution(executables[name], arguments, iterations=1)
+    raw_samples: list[dict[str, Any]] = []
+    samples: dict[str, list[float]] = {"baseline": [], "transformed": []}
+    output_hashes: dict[str, list[str]] = {"baseline": [], "transformed": []}
+    telemetry_before = nvidia_smi_snapshot()
+    for repeat in range(args.repeats):
+        order = ("baseline", "transformed") if repeat % 2 == 0 else ("transformed", "baseline")
+        sample: dict[str, Any] = {"order": order}
+        for name in order:
+            latency, output_hash = _timed_execution(
+                executables[name],
+                arguments,
+                iterations=args.iterations,
+            )
+            sample[name] = {"latency_ms": latency, "output_hash": output_hash}
+            samples[name].append(latency)
+            output_hashes[name].append(output_hash)
+        raw_samples.append(sample)
+    telemetry_after = nvidia_smi_snapshot()
+    determinism = {
+        name: [_timed_execution(executable, arguments, iterations=1)[1] for _ in range(args.determinism_repeats)]
+        for name, executable in executables.items()
+    }
+    executions = int(call_count())
+    minimum_handler_executions = 1 + args.warmups + args.repeats * args.iterations + args.determinism_repeats
+    if executions < minimum_handler_executions:
+        raise RuntimeError(
+            f"typed-FFI handler executed {executions} times; expected at least {minimum_handler_executions}"
+        )
+    if any(len(set(hashes)) != 1 for hashes in determinism.values()):
+        raise RuntimeError(f"repeated executions were not deterministic: {determinism}")
+    baseline_median = statistics.median(samples["baseline"])
+    transformed_median = statistics.median(samples["transformed"])
+    observed_revision = subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     result = {
         "kind": "xla_streaming_attention_backward_pre_scheduler_replacement",
+        "command": command_record(),
+        "requested_shuttle_revision": args.shuttle_revision,
+        "observed_shuttle_revision": observed_revision,
+        "holder_revision": args.holder_revision,
+        "jax_version": jax.__version__,
+        "jaxlib_version": jaxlib.__version__,
         "platform": "cuda",
         "device_kind": jax.devices()[0].device_kind,
         "architecture": args.architecture,
+        "allocation": {
+            "gpu_variant": "H100",
+            "gpu_count": 1,
+            "cpu": args.allocation_cpu,
+            "memory": args.allocation_memory,
+            "disk": args.allocation_disk,
+            "priority": args.allocation_priority,
+        },
+        "toolchain": toolchain_snapshot(str(args.nvcc)),
+        "telemetry_before": telemetry_before,
+        "telemetry_after": telemetry_after,
         "natural_frontend": "ordinary JAX tensor algebra differentiated by JAX",
+        "pipeline_stage": "PRE_SCHEDULER",
         "state_policy": plan.state_policy.value,
         "maximum_vjp": plan.maximum_vjp,
         "reassociation": plan.reassociation,
@@ -197,31 +317,51 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "output_roles": [value.role.value for value in plan.outputs],
         "custom_call_occurrences": transformed_modules[0].count(target),
         "handler_executions": executions,
-        "errors": {
-            role: _error(output, reference)
-            for role, output, reference in zip(
-                ("query", "key", "value"),
-                actual,
-                expected,
-                strict=True,
-            )
-        },
+        "errors": errors,
         "baseline_hash": _hash(expected),
         "transformed_hash": _hash(actual),
+        "determinism": {
+            name: {"hashes": hashes, "bitwise_stable": len(set(hashes)) == 1} for name, hashes in determinism.items()
+        },
+        "timing": {
+            "warmups": args.warmups,
+            "repeats": args.repeats,
+            "iterations_per_sample": args.iterations,
+            "baseline_median_ms": baseline_median,
+            "transformed_median_ms": transformed_median,
+            "transformed_over_baseline": transformed_median / baseline_median,
+            "raw_samples": raw_samples,
+            "unique_output_hashes": {name: sorted(set(hashes)) for name, hashes in output_hashes.items()},
+        },
+        "hlo": {
+            "original_proto_sha256": hashlib.sha256(original_protos[0]).hexdigest(),
+            "transformed_proto_sha256": hashlib.sha256(transformed_protos[0]).hexdigest(),
+            "original_text_sha256": hashlib.sha256(original_modules[0].encode()).hexdigest(),
+            "transformed_text_sha256": hashlib.sha256(transformed_modules[0].encode()).hexdigest(),
+        },
+        "generated_handler": {
+            "source_sha256": file_sha256(compiled.source_path),
+            "library_sha256": file_sha256(compiled.library_path),
+            "aot_source_sha256": {source.name: file_sha256(source) for source in compiled.aot_sources},
+        },
         "runtime_imports": {
             "torch": "torch" in sys.modules,
             "triton": "triton" in sys.modules,
         },
     }
-    args.artifact_directory.mkdir(parents=True, exist_ok=True)
-    (args.artifact_directory / "source-vjp-stablehlo.mlir.bc").write_bytes(source_stablehlo)
+    (args.artifact_directory / "original-pre-scheduler-hlo.pb").write_bytes(original_protos[0])
+    (args.artifact_directory / "transformed-pre-scheduler-hlo.pb").write_bytes(transformed_protos[0])
     (args.artifact_directory / "original-pre-scheduler-hlo.txt.gz").write_bytes(
         gzip.compress(original_modules[0].encode(), mtime=0)
     )
     (args.artifact_directory / "transformed-pre-scheduler-hlo.txt.gz").write_bytes(
         gzip.compress(transformed_modules[0].encode(), mtime=0)
     )
+    (args.artifact_directory / "generated-handler.cu").write_bytes(compiled.source_path.read_bytes())
     (args.artifact_directory / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    artifact_files = sorted(path for path in args.artifact_directory.iterdir() if path.is_file())
+    checksum_lines = [f"{file_sha256(path)}  {path.name}" for path in artifact_files]
+    (args.artifact_directory / "SHA256SUMS").write_text("\n".join(checksum_lines) + "\n")
     return result
 
 
@@ -233,7 +373,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", default="sm_90a")
     parser.add_argument("--triton-target")
-    parser.add_argument("--sequence", type=int, default=64)
+    parser.add_argument("--sequence", type=int, default=2048)
     parser.add_argument("--query-heads", type=int, default=32)
     parser.add_argument("--key-value-heads", type=int, default=8)
     parser.add_argument("--head-dimension", type=int, choices=(64, 128), default=128)
@@ -241,6 +381,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--block-n", type=int, choices=(16, 32, 64), default=32)
     parser.add_argument("--num-warps", type=int, choices=(4, 8), default=8)
     parser.add_argument("--num-stages", type=int, choices=(2, 3, 4), default=3)
+    parser.add_argument("--warmups", type=int, default=4)
+    parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--determinism-repeats", type=int, default=5)
+    parser.add_argument("--shuttle-revision", required=True)
+    parser.add_argument("--holder-revision", required=True)
+    parser.add_argument("--allocation-cpu", type=float, required=True)
+    parser.add_argument("--allocation-memory", required=True)
+    parser.add_argument("--allocation-disk", required=True)
+    parser.add_argument("--allocation-priority", required=True)
     return parser.parse_args()
 
 
