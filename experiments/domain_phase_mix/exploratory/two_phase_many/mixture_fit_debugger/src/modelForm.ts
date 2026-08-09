@@ -475,6 +475,83 @@ function hierarchicalPhaseReplayForm(detail: FitDetail, policyClass: PolicyClass
   };
 }
 
+function retainedPowerLawForm(detail: FitDetail, policyClass: PolicyClass): ModelForm {
+  const chips: FormulaChip[] = [];
+  for (const [label, symbol, keys] of [
+    ["benefit exponent", String.raw`a`, ["benefit_exponent"]],
+    ["benefit offset", String.raw`E_0`, ["benefit_offset"]],
+    ["damage exponent", String.raw`g`, ["damage_exponent"]],
+    ["damage onset", String.raw`T`, ["damage_threshold"]],
+    ["retention sensitivity", String.raw`\lambda`, ["retention"]],
+    ["late-share value", String.raw`m`, ["late_multiplier"]],
+    ["ridge", String.raw`\lambda_{L2}`, ["ridge"]],
+  ] as const) {
+    if (policyClass === "single_phase" && ["retention sensitivity", "late-share value"].includes(label)) continue;
+    const chip = fittedChip(detail, label, symbol, ...keys);
+    if (chip) chips.push(chip);
+  }
+
+  if (policyClass === "single_phase") {
+    return {
+      topLevelTex: String.raw`\widehat Y_b(w)=b_0+\sum_i A_i(w_i+E_0)^{-a}+\sum_i B_i[D_i-T]_+^g`,
+      topLevelExplanation: "The fitted one-phase restriction keeps the same inverse-power shortage and epoch-damage mechanisms while removing every schedule-sensitive state and response column.",
+      layers: [
+        {
+          label: "01 / Restriction",
+          title: "Phase-blind state",
+          tex: String.raw`S_i=w_i,\qquad D_i=(c_i^{(0)}+c_i^{(1)})w_i`,
+          explanation: "Tying the phases collapses retained share to aggregate token share and raw dose to total materialized epochs.",
+        },
+        {
+          label: "02 / Response",
+          title: "Shortage benefit and replay damage",
+          tex: String.raw`B_i(S_i)=(S_i+E_0)^{-a},\qquad P_i(D_i)=[D_i-T]_+^g,\qquad A_i,B_i\ge 0`,
+          explanation: "Inverse-power shortage falls with useful share; repetition damage rises only after its epoch onset. Family bases plus ridge-shrunk bucket departures set the amplitudes.",
+        },
+      ],
+      chips,
+    };
+  }
+
+  const orderingEnabled = (parameterValue(detail, "ordering_channel") ?? 0) > 0.5;
+  const layers: FormulaLayer[] = [
+    {
+      label: "01 / Retained state",
+      title: "Contrast-gated early share",
+      tex: String.raw`S_i=e^{c\tanh(\lambda(w_i^{(1)}-w_i^{(0)})/c)}\alpha_0w_i^{(0)}+m\alpha_1w_i^{(1)},\qquad c=4`,
+      explanation: "Early share survives according to the signed phase contrast; late share receives a learned endpoint value. This interaction cannot be reduced to a fixed phase-weighted dose.",
+    },
+    {
+      label: "02 / Aggregate response",
+      title: "Shortage benefit and literal epoch damage",
+      tex: String.raw`\begin{array}{c}D_i=c_i^{(0)}w_i^{(0)}+c_i^{(1)}w_i^{(1)}\\[2pt]\widehat Y_{\mathrm{agg}}=b_0+\sum_iA_i(S_i+E_0)^{-a}+\sum_iB_i[D_i-T]_+^g,\quad A_i,B_i\ge0\end{array}`,
+      explanation: "Retained token share controls diminishing benefit, while raw materialized epochs preserve repetition harm even if later training overwrites useful state.",
+    },
+    {
+      label: "03 / Concentration",
+      title: "Within-window Jensen gap",
+      tex: String.raw`\begin{array}{c}h(x)=[x-1]_+^2,\quad e_i^{(t)}=c_i^{(t)}w_i^{(t)}\\[2pt]J=\sum_i\!\left[\alpha_0h(e_i^{(0)}/\alpha_0)+\alpha_1h(e_i^{(1)}/\alpha_1)-h(D_i)\right]\end{array}`,
+      explanation: "This exactly vanishes for tied schedules and measures the extra convex intensity created by cramming the same dose into one phase. Its fitted coefficient is signed, not forced to be a cost.",
+    },
+  ];
+  if (orderingEnabled) {
+    layers.push({
+      label: "04 / Local ordering",
+      title: "Family-pooled derivative controls",
+      tex: String.raw`O_{\mathrm{phase}}=\sum_Cu_C\!\sum_{i\in C}(\bar w_i+E_0)^{-(a+1)}\Delta_i+\sum_Cv_C\!\sum_{i\in C}[D_i-T]_+^{g-1}\Delta_i+q\sum_i(\bar w_i+E_0)^{-(a+2)}\Delta_i^2`,
+      explanation: "With aggregate share bar-w and contrast delta = late minus early, signed family coefficients model first-order ordering along the model's own benefit and damage gradients; one curvature-weighted term captures the even response.",
+    });
+  }
+  return {
+    topLevelTex: orderingEnabled
+      ? String.raw`\widehat Y_b(w)=\widehat Y_{\mathrm{agg}}(S,D)+\theta_JJ(w)+O_{\mathrm{phase}}(w)`
+      : String.raw`\widehat Y_b(w)=\widehat Y_{\mathrm{agg}}(S,D)+\theta_JJ(w)`,
+    topLevelExplanation: "RPL combines an interacting retained state with nonnegative aggregate shortage and damage amplitudes, then fits identifiable, ridge-penalized signed phase controls.",
+    layers,
+    chips,
+  };
+}
+
 function powerSeparateHeadsGrpForm(
   detail: FitDetail,
   policyClass: PolicyClass,
@@ -692,6 +769,7 @@ export function modelForm(
   if (modelId === "compact_retained_state") return compactRetainedForm(detail, policyClass);
   if (modelId === "bucket_family_grp") return bucketFamilyGrpForm(detail, policyClass);
   if (modelId === "hpr_band" || modelId === "hierarchical_phase_bucket_replay") return hierarchicalPhaseReplayForm(detail, policyClass);
+  if (modelId === "retained_power_law") return retainedPowerLawForm(detail, policyClass);
   if (modelId === "crs_plus") return crsPlusForm(detail, policyClass);
   if (modelId === "crs_bounded") return crsBoundedForm(detail, policyClass);
   if (modelId === "bucket_family_power_separate_heads") return powerSeparateHeadsGrpForm(detail, policyClass);

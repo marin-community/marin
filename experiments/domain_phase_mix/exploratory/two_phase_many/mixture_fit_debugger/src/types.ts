@@ -9,6 +9,7 @@ export type ModelId =
   | "compact_retained_state"
   | "bucket_family_grp"
   | "hierarchical_phase_bucket_replay"
+  | "retained_power_law"
   | "crs_plus"
   | "crs_bounded"
   | "hpr_band"

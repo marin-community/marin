@@ -7,6 +7,9 @@ Canonical logbook: [WSD80 mechanistic surrogate](../logbooks/wsd80-mechanistic-s
 Active candidate registry:
 [two-phase surrogate active registry](two_phase_surrogate_active_registry.csv)
 
+Current execution plan:
+[two-phase surrogate iteration plan](two_phase_surrogate_iteration_plan_20260804.md)
+
 Historical 99-route registry:
 [mechanistic surrogate discovery registry](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mechanistic_surrogate_discovery_20260719/approach_registry.csv)
 
@@ -292,23 +295,23 @@ The following are insufficient:
 
 ## Near-Term Execution Order
 
-1. Reproduce the expanded-data Pareto baseline with common folds and metric
-   definitions.
-2. Repair retained-power-law estimation before adding mechanisms:
-   standardize phase features, penalize every phase-control column, and select
-   hyperparameters using lower-tail and Regret@\(k\) diagnostics rather than
-   pooled RMSE alone.
-3. Re-run the WSD80 positive/negative controls and the structured 300M gate.
-4. If estimation repair fails, test the finite-contrast aggregate-conditioned
-   even/odd decomposition above. Do not add another unconstrained residual
-   feature.
-5. Promote at most three mechanistically distinct families. Require nested
-   ablations and an independent Claude Code review of each completed candidate
-   round.
-6. Freeze one candidate and its one-phase restriction before proposing new
-   3e18 validation.
-7. Only after a reliable optimum is established, run the 280-row
-   sample-efficiency ablation and design a lower-cost acquisition procedure.
+The dated [iteration plan](two_phase_surrogate_iteration_plan_20260804.md) is
+the sole mutable execution queue. Do not reconstruct a queue from this
+charter. In particular, the following routes have already completed and must
+not be repeated:
+
+- the expanded-data Pareto baseline (`WSD80-SUR-054/055`);
+- retained-power-law estimator repair (`WSD80-SUR-046`);
+- endpoint even/odd, phase-gate, and response-link variants
+  (`WSD80-SUR-013/020/029--053`); and
+- endpoint-only trajectory-state variants (`WSD80-SUR-060--075`).
+
+The current queue is: resolve the sealed `WSD80-SUR-073` aggregate gate;
+calibrate what the existing 300M design can and cannot say about measurement
+noise and aggregate-conditioned phase response; then fit a new temporal model
+only after an intervention identifies its state or transition. Independent
+review is required after each completed candidate round. Sample efficiency and
+new 3e18 validation remain downstream of a stable raw optimum.
 
 ## Stopping and Negative Results
 
@@ -333,16 +336,15 @@ needed to distinguish the remaining possibilities.
 
 ## Current State at Charter Creation
 
-- Retained power law models the WSD80 Programming Languages surface and optimum
-  substantially better than the incumbent Observatory forms.
-- Cross-metric WSD80 evaluation shows that this success transfers to code
-  targets but not automatically to broad-text targets.
-- The current phase block can produce unsupported low-aggregate or boundary
-  optima; several singular asymmetry features were insufficiently regularized.
-- The unresolved problem is no longer whether a compact model can represent one
-  two-domain surface. It is whether a simple, regularized temporal interaction
-  can be identified in the high-TPP 39-bucket design and optimized without
-  extrapolation failure.
+This section records the charter's original context, not the active queue.
+Subsequent work established that repaired retained power law represents the
+WSD80 Programming-Languages gain and optimum but fails the 300M gate and can
+select degenerate 300M policies. HPR remains the strongest 300M empirical
+phase baseline, while none of the tested endpoint-only states supplied a
+shared mechanism. The unresolved aggregate route is the independently
+identified `WSD80-SUR-073`; the unresolved phase route requires new
+identification evidence. See the iteration plan and active registry for the
+current decision.
 
 ## Compaction and Handoff Protocol
 

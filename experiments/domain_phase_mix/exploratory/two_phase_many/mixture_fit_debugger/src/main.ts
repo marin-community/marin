@@ -53,7 +53,12 @@ function isModel(value: string | null): value is ModelId {
 }
 
 function modelsInFamily(familyId: string): ModelId[] {
-  return modelIds.filter((id) => data.models[id]!.familyId === familyId);
+  return availableModelIds().filter((id) => data.models[id]!.familyId === familyId);
+}
+
+function availableModelIds(): ModelId[] {
+  const available = data.swarms[state.swarm]?.fits[state.target]?.[state.policyClass];
+  return modelIds.filter((id) => available?.[id] !== undefined);
 }
 
 function isView(value: string | null): value is ViewMode {
@@ -559,6 +564,10 @@ function ensureState(): void {
   if (!targetIds.includes(state.target)) state.target = targetIds[0]!;
   const policies = availablePolicyClasses();
   if (!policies.includes(state.policyClass)) state.policyClass = policies.includes("two_phase") ? "two_phase" : policies[0]!;
+  const models = availableModelIds();
+  if (!models.includes(state.model)) {
+    state.model = models.includes("separate_heads") ? "separate_heads" : models[0]!;
+  }
   if (state.tab === "population" && !populationAvailable()) state.tab = "mixtures";
   if (state.tab === "population") state.policyClass = "two_phase";
   const panels = populationPanels();
@@ -665,7 +674,8 @@ function renderSelection(): void {
     return `<button data-action="policy" data-value="${policy}" class="${policy === state.policyClass ? "active" : ""}"><strong>${label}</strong><span>${descriptor} · ${count} fit rows</span></button>`;
   }).join("");
   const selectedFamily = data.models[state.model]!.familyId;
-  requiredElement<HTMLElement>("#model-controls").innerHTML = modelFamilyIds.map((familyId) => {
+  const availableFamilies = modelFamilyIds.filter((familyId) => modelsInFamily(familyId).length > 0);
+  requiredElement<HTMLElement>("#model-controls").innerHTML = availableFamilies.map((familyId) => {
     const first = modelsInFamily(familyId)[0]!;
     const variants = modelsInFamily(familyId);
     return `<section class="model-family-row ${familyId === selectedFamily ? "active" : ""}">

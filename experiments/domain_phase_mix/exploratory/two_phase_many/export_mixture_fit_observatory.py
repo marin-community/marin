@@ -35,7 +35,7 @@ import json
 import math
 import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -98,6 +98,12 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     materialize_symmetric_sepheads_geometry_frontier_panel_300m as symmetric_sepheads,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    retained_power_law_estimator_repair_20260731 as repaired_retained_power_law,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    retained_power_law_model_20260728 as retained_power_law,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search import (  # noqa: E402
@@ -175,7 +181,11 @@ MODEL_IDS = (
     "bucket_family_power_separate_heads_family_onset",
     "bucket_family_weibull_shared_onset",
     "bucket_family_weibull_family_replay",
+    "retained_power_law",
 )
+# How many least-squares-screened shapes are rescored under the robust head. Twelve keeps a dashboard
+# cell near four minutes on a 39-bucket panel where the full grid would take over an hour.
+RETAINED_POWER_LAW_TOP_SHAPES = 12
 HIDDEN_MODEL_IDS = {
     "bucket_family_power_separate_heads_family_onset",
     "bucket_family_weibull_shared_onset",
@@ -198,6 +208,7 @@ NEW_MODEL_IDS = (
     "hpr_band",
     "bucket_family_power_separate_heads",
     "bucket_family_power_separate_heads_family_onset",
+    "retained_power_law",
     *RETAINED_GRP_MODEL_IDS,
 )
 VISIBLE_NEW_MODEL_IDS = tuple(model_id for model_id in NEW_MODEL_IDS if model_id in VISIBLE_MODEL_IDS)
@@ -216,6 +227,7 @@ MODEL_LABELS = {
     "compact_retained_state": "Compact retained state",
     "bucket_family_grp": "Bucket-resolved family GRP",
     "hierarchical_phase_bucket_replay": "Hierarchical phase replay",
+    "retained_power_law": "Retained power law",
     "crs_plus": "Compact retained state + family",
     "crs_bounded": "Compact retained state (bounded)",
     "hpr_band": "Hierarchical phase replay (band ensemble)",
@@ -236,6 +248,13 @@ MODEL_DESCRIPTIONS = {
     "bucket_family_grp": "Bucket-specific responses plus nonlinear family coverage and family repetition penalties.",
     "hierarchical_phase_bucket_replay": (
         "Family-pooled bucket utility, saturating family coverage, member replay harm, and one global phase-shift cost."
+    ),
+    "retained_power_law": (
+        "Power-law benefit in retained token share, epoch-excess damage, and a within-window concentration cost. "
+        "Retention gates early exposure on the phase contrast and a late multiplier weights the final phase, so the "
+        "schedule enters as a temporal interaction rather than a reweighted dose. Its identifiable mixed-sign head "
+        "keeps aggregate shortage and damage nonnegative while allowing fitted ordering effects in either direction. "
+        "Diagnostic only: its raw 39-bucket optimum is not a deployable policy."
     ),
     "crs_plus": (
         "Compact retained state plus a family-benefit channel and family-pooled overload above an epoch threshold."
@@ -273,6 +292,7 @@ MODEL_FAMILIES = {
     "compact_retained_state": ("grp", "GRP", "Compact retained state"),
     "bucket_family_grp": ("grp", "GRP", "Bucket-resolved family"),
     "hierarchical_phase_bucket_replay": ("grp", "GRP", "Hierarchical phase replay"),
+    "retained_power_law": ("retained_power_law", "Retained power law", "Retained power law"),
     "crs_plus": ("grp", "GRP", "Compact retained state + family"),
     "crs_bounded": ("grp", "GRP", "Compact retained state, bounded link"),
     "hpr_band": ("grp", "GRP", "Hierarchical phase replay, band ensemble"),
@@ -309,6 +329,7 @@ MODEL_CACHE_VERSIONS["crs_plus"] = "v2"
 # cache fingerprint does not otherwise observe.
 MODEL_CACHE_VERSIONS["crs_bounded"] = "v4"
 MODEL_CACHE_VERSIONS["hpr_band"] = "v1"
+MODEL_CACHE_VERSIONS["retained_power_law"] = "v2-identifiable-head-wide-late"
 LOWER_TAIL_FRACTION = 0.15
 LOWER_TAIL_MIN_COUNT = 5
 
@@ -757,6 +778,363 @@ def hierarchical_phase_replay_fit(
     config: hierarchical_grp.Config,
 ) -> hierarchical_grp.Model:
     return hierarchical_grp.fit_model(family_dataset(dataset), config, indices)
+
+
+@dataclass(frozen=True)
+class RetainedPowerLawConfig:
+    """The shape and ridge the fit-panel screen selected for the retained power law."""
+
+    shape: retained_power_law.Shape
+    l2: float
+    phase_tied: bool
+
+
+@dataclass(frozen=True)
+class RetainedPowerLawModel:
+    """A repaired retained-power-law fit with an exact phase-blind restriction."""
+
+    config: RetainedPowerLawConfig
+    intercept: float
+    aggregate_coefficients: np.ndarray
+    phase_coefficients: np.ndarray
+    geometry: retained_power_law.Geometry
+
+    def design(self, weights: np.ndarray) -> np.ndarray:
+        build_design = (
+            repaired_retained_power_law.phase_blind_design_matrix
+            if self.config.phase_tied
+            else repaired_retained_power_law.design_matrix
+        )
+        matrix, _layout = build_design(weights, self.geometry, self.config.shape)
+        return matrix
+
+    @property
+    def coefficients(self) -> np.ndarray:
+        return np.concatenate([self.aggregate_coefficients, self.phase_coefficients])
+
+    def predict(self, weights: np.ndarray) -> np.ndarray:
+        return self.intercept + self.design(weights) @ self.coefficients
+
+
+def retained_power_law_geometry(dataset: pooled.Dataset) -> retained_power_law.Geometry:
+    """Panel geometry with the phase fraction taken from the epoch multipliers.
+
+    The model's within-window intensities are ``c0*w0/alpha0`` and ``c1*w1/alpha1``, so they are equal at
+    a tied policy only when the fraction matches the multipliers. Reading a nominal 0.8 off a panel whose
+    multipliers imply 0.7981 puts a nonzero concentration gap on every tied policy.
+    """
+    _names, members, _quality = family_partition(dataset)
+    family_index = np.zeros(len(dataset.domain_names), dtype=int)
+    for index, member in enumerate(members):
+        family_index[np.asarray(member, dtype=int)] = index
+    c0 = np.asarray(dataset.c0, dtype=float)
+    c1 = np.asarray(dataset.c1, dtype=float)
+    return retained_power_law.Geometry(
+        c0=c0,
+        c1=c1,
+        phase_0_fraction=float(np.median(c0 / np.maximum(c0 + c1, 1e-12))),
+        family_index=family_index,
+    )
+
+
+def retained_power_law_shape_candidates(
+    policy_class: str,
+    geometry: retained_power_law.Geometry,
+) -> tuple[retained_power_law.Shape, ...]:
+    """Return the full RPL grid or its algebraically exact phase-blind image."""
+
+    if policy_class == SINGLE_PHASE:
+        return repaired_retained_power_law.phase_blind_shape_grid(geometry)
+    return retained_power_law.shape_grid()
+
+
+def _retained_power_law_design(
+    weights: np.ndarray,
+    geometry: retained_power_law.Geometry,
+    shape: retained_power_law.Shape,
+    phase_tied: bool,
+) -> tuple[np.ndarray, np.ndarray, repaired_retained_power_law.FeatureLayout]:
+    """Build the identifiable RPL design and its complete ridge schedule."""
+
+    build_design = (
+        repaired_retained_power_law.phase_blind_design_matrix
+        if phase_tied
+        else repaired_retained_power_law.design_matrix
+    )
+    matrix, layout = build_design(weights, geometry, shape)
+    multipliers = repaired_retained_power_law.penalty_multipliers(geometry, layout)
+    return matrix, multipliers, layout
+
+
+def select_retained_power_law_config(
+    dataset: pooled.Dataset,
+    policy_class: str,
+) -> tuple[RetainedPowerLawConfig, dict[str, Any]]:
+    geometry = retained_power_law_geometry(dataset)
+    splits = folds(dataset, hierarchical_grp.SCREEN_SEED)
+    target = np.asarray(dataset.y, dtype=float)
+    weights = np.asarray(dataset.weights, dtype=float)
+    phase_tied = policy_class == SINGLE_PHASE
+    candidates = retained_power_law_shape_candidates(policy_class, geometry)
+
+    def sweep(
+        shape_indices: Sequence[int], huber_scale: float | None
+    ) -> tuple[list[dict[str, Any]], tuple[float, retained_power_law.Shape, float] | None]:
+        rows: list[dict[str, Any]] = []
+        best: tuple[float, retained_power_law.Shape, float] | None = None
+        for shape_index in shape_indices:
+            shape = candidates[shape_index]
+            design, multipliers, layout = _retained_power_law_design(weights, geometry, shape, phase_tied)
+            if not np.all(np.isfinite(design)):
+                continue
+            for l2 in retained_power_law.RIDGE_GRID:
+                predicted = np.full(len(target), np.nan)
+                for train, test in splits:
+                    intercept, aggregate, phase = repaired_retained_power_law.solve_head(
+                        design[train],
+                        target[train],
+                        l2,
+                        multipliers,
+                        layout,
+                        huber_scale=huber_scale,
+                    )
+                    predicted[test] = intercept + design[test] @ np.concatenate([aggregate, phase])
+                rmse = float(np.sqrt(np.mean((predicted - target) ** 2)))
+                rows.append({"shape_index": shape_index, "l2": l2, "rmse": rmse})
+                if best is None or rmse < best[0]:
+                    best = (rmse, shape, l2)
+        return rows, best
+
+    # Two stages, for the same reason the hierarchical models screen before refining. This model's head
+    # is an iterated robust solve, so sweeping the whole grid under it would make a static rebuild
+    # unnecessarily slow. The screen ranks shapes under plain bounded least squares, and only the
+    # survivors are scored under the identifiable robust head that actually defines the model.
+    # A least-squares screen measures a different estimator, which has inverted a conclusion on this
+    # model before, so it is used to shortlist and never to select: the reported configuration is always
+    # the argmin of the robust stage.
+    screen_rows, _screen_best = sweep(range(len(candidates)), huber_scale=None)
+    if not screen_rows:
+        raise ValueError("retained power law produced no finite design on this panel")
+    ranked: dict[int, float] = {}
+    for row in screen_rows:
+        index = int(row["shape_index"])
+        ranked[index] = min(ranked.get(index, float("inf")), float(row["rmse"]))
+    shortlist = [
+        index for index, _rmse in sorted(ranked.items(), key=lambda item: item[1])[:RETAINED_POWER_LAW_TOP_SHAPES]
+    ]
+    rows, best = sweep(shortlist, huber_scale=retained_power_law.HUBER_SCALE)
+    if best is None:
+        raise ValueError("retained power law produced no finite design among the shortlisted shapes")
+    _rmse, shape, l2 = best
+    return RetainedPowerLawConfig(shape=shape, l2=l2, phase_tied=phase_tied), {
+        "screenSweep": screen_rows,
+        "candidateSweep": rows,
+        "screenSeed": hierarchical_grp.SCREEN_SEED,
+        "shapeCount": len(candidates),
+        "shortlistedShapeIndices": shortlist,
+        "screenProtocol": (
+            "Shapes are ranked under plain bounded least squares, then the top "
+            f"{RETAINED_POWER_LAW_TOP_SHAPES} are rescored under the model's robust head, which selects "
+            "the reported configuration. The screen never selects."
+        ),
+    }
+
+
+def retained_power_law_fit(
+    dataset: pooled.Dataset,
+    indices: np.ndarray,
+    config: RetainedPowerLawConfig,
+) -> RetainedPowerLawModel:
+    geometry = retained_power_law_geometry(dataset)
+    weights = np.asarray(dataset.weights, dtype=float)[indices]
+    target = np.asarray(dataset.y, dtype=float)[indices]
+    design, multipliers, layout = _retained_power_law_design(weights, geometry, config.shape, config.phase_tied)
+    intercept, aggregate, phase = repaired_retained_power_law.solve_head(
+        design,
+        target,
+        config.l2,
+        multipliers,
+        layout,
+    )
+    return RetainedPowerLawModel(
+        config=config,
+        intercept=intercept,
+        aggregate_coefficients=aggregate,
+        phase_coefficients=phase,
+        geometry=geometry,
+    )
+
+
+def retained_power_law_parameters(
+    model: RetainedPowerLawModel,
+    dataset: pooled.Dataset,
+) -> list[dict[str, Any]]:
+    family_names, _members, _quality = family_partition(dataset)
+    records = [
+        parameter(
+            "intercept",
+            "b_0",
+            model.intercept,
+            "BPB level before retained-share shortage, epoch damage, and phase-control terms.",
+            unit="BPB",
+        )
+    ]
+    for name, value in (
+        ("benefit exponent", model.config.shape.benefit_exponent),
+        ("benefit offset", model.config.shape.benefit_offset),
+        ("damage exponent", model.config.shape.damage_exponent),
+        ("damage threshold", model.config.shape.damage_threshold),
+        ("retention", model.config.shape.retention),
+        ("late multiplier", model.config.shape.late_multiplier),
+        ("ridge", model.config.l2),
+    ):
+        key = name.replace(" ", "_")
+        roles = {
+            "benefit exponent": "Inverse-power exponent governing diminishing benefit from retained token share.",
+            "benefit offset": "Positive retained-share floor that regularizes the inverse power near zero exposure.",
+            "damage exponent": "Power governing harm from materialized epochs above the replay threshold.",
+            "damage threshold": "Materialized-epoch onset of the replay-damage term.",
+            "retention": "Sensitivity of phase-0 survival to the signed late-minus-early mixture contrast.",
+            "late multiplier": "Endpoint value of one unit of phase-1 token share relative to its literal budget share.",
+            "ridge": "Shrinkage on bucket departures and every signed phase-control coefficient.",
+        }
+        symbols = {
+            "benefit exponent": "a",
+            "benefit offset": "E_0",
+            "damage exponent": "g",
+            "damage threshold": "T",
+            "retention": "lambda",
+            "late multiplier": "m",
+            "ridge": "lambda_L2",
+        }
+        units = {
+            "benefit offset": "token-budget share",
+            "damage threshold": "materialized epochs",
+        }
+        records.append(parameter(key, symbols[name], value, roles[name], unit=units.get(name)))
+    records.append(
+        parameter(
+            "ordering_channel",
+            "I_order",
+            float(model.config.shape.ordering_channel),
+            "One when family-pooled derivative ordering features are included; zero when ablated.",
+        )
+    )
+
+    feature_names = repaired_retained_power_law.feature_names(
+        model.geometry,
+        model.config.shape,
+        include_phase=not model.config.phase_tied,
+    )
+    for name, coefficient in zip(feature_names, model.coefficients, strict=True):
+        if name.startswith("benefit_family_"):
+            family = int(name.removeprefix("benefit_family_"))
+            records.append(
+                parameter(
+                    name,
+                    "A_C",
+                    coefficient,
+                    "Shared BPB shortage amplitude on inverse-power retained share for this family.",
+                    scope="group",
+                    group_label=family_label(family_names[family]),
+                    unit="BPB",
+                )
+            )
+            continue
+        if name.startswith("benefit_bucket_departure_"):
+            domain = int(name.removeprefix("benefit_bucket_departure_"))
+            records.append(
+                parameter(
+                    name,
+                    "delta_Ai",
+                    coefficient,
+                    "Nonnegative bucket shortage amplitude above its shared family base.",
+                    scope="domain",
+                    domain_id=dataset.domain_names[domain],
+                    unit="BPB",
+                )
+            )
+            continue
+        if name.startswith("damage_family_"):
+            family = int(name.removeprefix("damage_family_"))
+            records.append(
+                parameter(
+                    name,
+                    "B_C",
+                    coefficient,
+                    "Shared BPB replay-damage amplitude for this family.",
+                    scope="group",
+                    group_label=family_label(family_names[family]),
+                    unit="BPB",
+                )
+            )
+            continue
+        if name.startswith("damage_bucket_departure_"):
+            domain = int(name.removeprefix("damage_bucket_departure_"))
+            records.append(
+                parameter(
+                    name,
+                    "delta_Bi",
+                    coefficient,
+                    "Nonnegative bucket replay-damage amplitude above its shared family base.",
+                    scope="domain",
+                    domain_id=dataset.domain_names[domain],
+                    unit="BPB",
+                )
+            )
+            continue
+        if name == "phase_concentration":
+            records.append(
+                parameter(
+                    name,
+                    "theta_J",
+                    coefficient,
+                    "Signed response to the Jensen gap from concentrating materialized epochs within one phase.",
+                    unit="BPB / concentration gap",
+                )
+            )
+            continue
+        if name.startswith("phase_ordering_benefit_family_"):
+            family = int(name.removeprefix("phase_ordering_benefit_family_"))
+            records.append(
+                parameter(
+                    name,
+                    "u_C",
+                    coefficient,
+                    "Signed first-order phase-order response aligned with this family's benefit derivative.",
+                    scope="group",
+                    group_label=family_label(family_names[family]),
+                    unit="BPB",
+                )
+            )
+            continue
+        if name.startswith("phase_ordering_damage_family_"):
+            family = int(name.removeprefix("phase_ordering_damage_family_"))
+            records.append(
+                parameter(
+                    name,
+                    "v_C",
+                    coefficient,
+                    "Signed first-order phase-order response aligned with this family's damage derivative.",
+                    scope="group",
+                    group_label=family_label(family_names[family]),
+                    unit="BPB",
+                )
+            )
+            continue
+        if name == "phase_asymmetry":
+            records.append(
+                parameter(
+                    name,
+                    "theta_delta2",
+                    coefficient,
+                    "Signed second-order response to phase contrast, weighted by local benefit curvature.",
+                    unit="BPB",
+                )
+            )
+            continue
+        raise ValueError(f"Unknown retained-power-law feature {name!r}")
+    return records
 
 
 def hierarchical_band_candidates(
@@ -1819,6 +2197,35 @@ def fit_one_model(
 
         def fold_predict(train: np.ndarray, test: np.ndarray) -> np.ndarray:
             return hierarchical_phase_replay_fit(dataset, train, config).predict(dataset.weights[test])
+
+        full_prediction = full_model.predict(dataset.weights)
+    elif model_id == "retained_power_law":
+        config, sweep = select_retained_power_law_config(dataset, policy_class)
+        tuning = {
+            **sweep,
+            "l2": config.l2,
+            "shapeParameters": {
+                "benefitExponent": config.shape.benefit_exponent,
+                "benefitOffset": config.shape.benefit_offset,
+                "damageExponent": config.shape.damage_exponent,
+                "damageThreshold": config.shape.damage_threshold,
+                "retention": config.shape.retention,
+                "lateMultiplier": config.shape.late_multiplier,
+                "orderingChannel": config.shape.ordering_channel,
+            },
+            "shapeProtocol": (
+                "Shape and ridge are selected together on fit-panel out-of-fold error over the model's own grid. "
+                "Every reported fold refits only the identifiable bounded robust head at the selected shape."
+            ),
+            "estimatorProtocol": (
+                "Aggregate shortage and damage amplitudes are nonnegative. Schedule-sensitive columns use one "
+                "signed coefficient each, are RMS-scaled within the training fold, and all receive ridge shrinkage."
+            ),
+        }
+        full_model = retained_power_law_fit(dataset, all_indices, config)
+
+        def fold_predict(train: np.ndarray, test: np.ndarray) -> np.ndarray:
+            return retained_power_law_fit(dataset, train, config).predict(dataset.weights[test])
 
         full_prediction = full_model.predict(dataset.weights)
     elif model_id == "crs_plus":
@@ -2958,6 +3365,8 @@ def parameter_records(
         return bucket_family_parameters(model)
     if model_id == "hierarchical_phase_bucket_replay":
         return hierarchical_phase_replay_parameters(model)
+    if model_id == "retained_power_law":
+        return retained_power_law_parameters(model, dataset)
     if model_id == "crs_plus":
         return crs_plus_parameters(model, dataset, float(tuning["l2"]))
     if model_id == "crs_bounded":
@@ -3057,6 +3466,32 @@ def model_caveats(dataset: pooled.Dataset, model_id: str, policy_class: str, tar
             caveats.append(
                 "Each StarCoder corpus is a singleton family, so the family-coverage channel vanishes and the model "
                 "reduces to bucket power responses plus one replay penalty per corpus."
+            )
+    if model_id == "retained_power_law":
+        caveats.append(
+            "Diagnostic model, not promoted. In the dedicated repaired-estimator audit on StarCoder 80/20 WSD, "
+            "it predicts 0.00805 BPB of phase gain against 0.00959 observed and places the optimum 0.035 away. "
+            "Unlike a pure phase-weighted-dose model, its retained-state gate can represent a genuine two-phase "
+            "advantage."
+        )
+        caveats.append(
+            "Do not read its raw 39-bucket optimum as a policy. On the expanded 300M design its unregularized "
+            "optimum is degenerate: phase TV and maximum bucket weight both reach 1.0, while the model predicts a "
+            "phase gain far beyond any observed exact aggregate-matched contrast. The pathology survives the "
+            "identified 8-16 late-multiplier region and a grid extended through 64, so it is not a search-boundary "
+            "artifact."
+        )
+        caveats.append(
+            "On the expanded 300M audit it remains 7-8 percent worse than hierarchical phase replay on grouped "
+            "OOF RMSE and 7-10 percent worse on exact aggregate-matched contrasts. The Observatory uses the same "
+            "fit-panel-only protocol as every displayed model; those external audit figures are context, not rows "
+            "used to choose this displayed fit."
+        )
+        if policy_class == SINGLE_PHASE:
+            caveats.append(
+                "The independently fitted single-phase restriction removes every schedule-sensitive column and "
+                "uses the exact phase-blind image of the same inverse-power response family. It is a fitted "
+                "restriction of RPL, not an unrelated one-phase baseline."
             )
     if model_id == "hierarchical_phase_bucket_replay":
         caveats.append(
@@ -3224,6 +3659,22 @@ def fit_full_model(dataset: pooled.Dataset, model_id: str, tuning: dict[str, Any
             penalty_threshold=float(shape_values["penaltyThreshold"]),
         )
         return bucket_fit(dataset, indices, shape, float(tuning["l2"]))
+    if model_id == "retained_power_law":
+        shape_values = tuning["shapeParameters"]
+        config = RetainedPowerLawConfig(
+            shape=retained_power_law.Shape(
+                benefit_exponent=float(shape_values["benefitExponent"]),
+                benefit_offset=float(shape_values["benefitOffset"]),
+                damage_exponent=float(shape_values["damageExponent"]),
+                damage_threshold=float(shape_values["damageThreshold"]),
+                retention=float(shape_values["retention"]),
+                late_multiplier=float(shape_values["lateMultiplier"]),
+                ordering_channel=bool(shape_values["orderingChannel"]),
+            ),
+            l2=float(tuning["l2"]),
+            phase_tied=False,
+        )
+        return retained_power_law_fit(dataset, indices, config)
     if model_id == "crs_plus":
         shape_values = tuning["shapeParameters"]
         config = crs_plus_model.Config(
@@ -3738,6 +4189,13 @@ def cached_swarm_fit(
         model_dependencies.extend([Path(family_grp.__file__), BUCKET_FAMILY_MODEL])
     elif model_id == "hierarchical_phase_bucket_replay":
         model_dependencies.extend([Path(family_grp.__file__), Path(hierarchical_grp.__file__)])
+    elif model_id == "retained_power_law":
+        model_dependencies.extend(
+            [
+                Path(retained_power_law.__file__),
+                Path(repaired_retained_power_law.__file__),
+            ]
+        )
     elif model_id == "crs_plus":
         model_dependencies.extend([Path(family_grp.__file__), Path(crs_plus_model.__file__)])
     elif model_id == "crs_bounded":
@@ -3836,6 +4294,7 @@ def build_generic_swarm(
     metric_column: str,
     source_paths: list[Path],
     known_budget: float | None = None,
+    model_ids: tuple[str, ...] = VISIBLE_MODEL_IDS,
 ) -> dict[str, Any]:
     alpha0, alpha1 = phase_fractions(dataset)
     domains, natural, budget = domain_records(dataset, alpha0, known_budget=known_budget)
@@ -3853,7 +4312,7 @@ def build_generic_swarm(
             fit_dataset = dataset
             fit_row_indices = np.arange(dataset.n)
         policy_fit_counts[policy_class] = fit_dataset.n
-        for model_id in VISIBLE_MODEL_IDS:
+        for model_id in model_ids:
             result = cached_swarm_fit(
                 swarm_id,
                 target_id,
@@ -5154,6 +5613,10 @@ def write_bundle(output_json: Path) -> dict[str, Any]:
             metric_column="eval/uncheatable_eval/bpb",
             source_paths=[PRODUCTION_DATA, PRODUCTION_MODEL],
             known_budget=float(production_metadata["production_experiment_budget_tokens"]),
+            # RPL's 168-bucket design makes exhaustive bounded shape screening
+            # prohibitively expensive, and this model has not been scientifically
+            # audited on production. The frontend hides unavailable variants.
+            model_ids=tuple(model_id for model_id in VISIBLE_MODEL_IDS if model_id != "retained_power_law"),
         ),
     }
     bundle = {

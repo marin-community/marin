@@ -2228,3 +2228,3557 @@ Decision: **no new outcome fit may run without an active-registry row**. The
 row must name the nearest prior routes, material novelty, why the old rejection
 does not apply, and the cheapest falsification. Reparameterization or a new
 base surrogate alone is not a new route.
+
+## WSD80-SUR-046: identifiable penalized RPL head preregistered
+
+**2026-07-30 20:29 PDT; estimator repair frozen before candidate outcomes.**
+The expanded high-TPP 300M baseline protocol is
+`e30c84f654eb55e9d428eb9ee1afeac69a111d629abe45de6f96eb81db026185`.
+It contains exactly 520 observations, 280 independent
+`phase_correspondence_key` groups, 282 physically tied observations, 238
+asymmetric observations, and 238 exact aggregate-matched contrasts. Both outer
+and nested inner folds treat the correspondence key as indivisible. Eighteen of
+twenty baseline cells were complete when this entry was written; the two parent
+retained-power-law cells were still running and had not been inspected.
+
+The preregistered repair leaves RPL's retained-share state, transition, benefit
+and repetition response, nonlinear shape grid, and admissible response span
+unchanged. It changes only the estimator:
+
+```text
+parent signed pair:  b+ x + b- (-x),  b+, b- >= 0
+repaired head:       gamma x,          gamma unrestricted
+```
+
+Every signed phase pair is collapsed to one identified coefficient. Aggregate
+columns retain max-absolute fold scaling; phase controls use training-fold RMS
+scaling. Family amplitudes remain free, bucket departures remain ridge-shrunk,
+and every phase-control coefficient is ridge-shrunk. Aggregate amplitudes stay
+nonnegative while phase coefficients are signed.
+
+Nested selection is frozen as:
+
+1. retain candidates within `1.05 * min(all-RMSE)`;
+2. among those, retain candidates within `0.002 BPB` of minimum asymmetric
+   Regret@1;
+3. minimize asymmetric lower-tail RMSE, then exact-pair delta RMSE,
+   asymmetric RMSE, all-RMSE, and canonical grid order.
+
+The final candidate protocol is
+`a829181d36a9b3707b307bf802f81966905225304f94e6d6c4dc92ccb5838734`.
+The correspondence-cluster bootstrap companion was separately frozen at
+`9ee340ca38459994af38daecf477dc6468ae5a5a18b6ecb47ec74937836900c8`;
+it resamples correspondence groups within outer folds and keeps exact contrasts
+paired.
+
+Outcome-free checks passed:
+
+- direct column reconstruction proves zero numerical difference between the
+  parent and collapsed response spans on representative shapes;
+- all repaired phase-control columns are below `1e-9` on the 282 tied rows;
+- the real-data nested smoke test produced six finite candidates over two
+  shapes and three ridge values;
+- the 238 pair indices and 280 correspondence groups are preserved;
+- `pyrefly` and the repository pre-commit checks pass.
+
+Exact commands:
+
+```text
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_repaired_rpl_300m_20260731.py --prepare-only --optimizer-starts 8
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/bootstrap_expanded_300m_pareto_baseline_20260731.py --prepare-only
+```
+
+Decision: **active and preregistered**. Run both 300M targets only after the two
+parent-RPL baseline cells release their workers. Reject the repair without
+retuning if it fails the frozen high-TPP gate, fails WSD80 code representability,
+or retains unsupported broad-text phase gain.
+
+### WSD80-SUR-046 positive/negative control protocol
+
+**2026-07-30 20:43 PDT; frozen before repaired-estimator outcomes.** The
+target-specific WSD80 control harness is
+`benchmark_repaired_rpl_wsd80_controls_20260731.py`, with protocol
+`120228b2786b8b27e3577f98a30cf49a9603235d2f399c3536122c1d1d1aa422`.
+It uses the same 346-coordinate surface as WSD80-SUR-043. The panel contains 20
+tied coordinates, 326 asymmetric coordinates, and 255 asymmetric-to-tied
+contrasts that exactly preserve the experiment's nominal 80/20 aggregate.
+Physical epoch dynamics continue to use the realized 3040/3814 phase split;
+the nominal split is used only to identify the designed fibers.
+
+The three positive controls are Programming Languages, GitHub Python, and
+GitHub C++. C4 English and Falcon RefinedWeb are negative controls against an
+invented phase advantage. Each target is fitted independently with nested
+target-specific shape selection under both random and mixture-blocked folds.
+Random folds carry the frozen numerical gate because the exposed
+target-specific parent-RPL comparison used that protocol; blocked folds are
+mandatory transfer diagnostics and cannot rescue a failed random gate.
+
+The frozen per-target random-fold checks are:
+
+- interior RMSE no greater than 1.05 times target-specific parent RPL;
+- code Regret@1 no greater than 0.006 BPB and predicted phase gain at least
+  0.004 BPB;
+- broad-text Regret@1 no greater than 0.005 BPB and predicted phase gain no
+  greater than 0.005 BPB;
+- Programming-Languages continuous interior optimum within Euclidean distance
+  0.10 of the observed optimum.
+
+Static audits passed: the PEP 723 entry point prepares from a clean dependency
+environment, `pyrefly` and repository pre-commit checks pass, and a two-shape
+smoke fit produced finite held-out predictions while preserving all 255
+aggregate-matched contrasts. No full-grid repaired-head target result had been
+run when these thresholds were recorded.
+
+## Expanded 300M Pareto baseline completed
+
+**2026-07-30 21:12 PDT; frozen pre-candidate evidence.** All 20 cells of the
+expanded baseline completed under protocol
+`e30c84f654eb55e9d428eb9ee1afeac69a111d629abe45de6f96eb81db026185`.
+The correspondence-cluster bootstrap completed 4,000 draws under protocol
+`9ee340ca38459994af38daecf477dc6468ae5a5a18b6ecb47ec74937836900c8`.
+Both outer and nested inner folds keep each of the 280
+`phase_correspondence_key` groups intact; the 238 exact aggregate-matched
+contrasts remain paired under bootstrap resampling.
+
+Hierarchical phase replay is the strongest eligible OOF baseline on both
+targets:
+
+| Target | Model | All RMSE | Asymmetric RMSE | Pair-delta RMSE |
+|---|---|---:|---:|---:|
+| Uncheatable | hierarchical phase replay | 0.006800 | 0.007896 | 0.007850 |
+| Uncheatable | parent retained power law | 0.007503 | 0.008803 | 0.008984 |
+| Table-9 | hierarchical phase replay | 0.013001 | 0.015345 | 0.016902 |
+| Table-9 | parent retained power law | 0.014782 | 0.017166 | 0.019220 |
+
+The cluster bootstrap excludes zero for every HPR-minus-parent-RPL difference:
+Uncheatable differences are -0.000703, -0.000907, and -0.001134 BPB for
+all-RMSE, asymmetric RMSE, and pair-delta RMSE; Table-9 differences are
+-0.001781, -0.001822, and -0.002317 BPB. HPR-band remains reference-only and
+does not materially improve the single HPR fit.
+
+No baseline produces a defensible raw optimum. Parent RPL is the clearest
+failure: its Uncheatable optimum has phase TV 0.985, max bucket weight 0.988,
+nearest-policy TV 0.807, and predicted fiber gain 0.200 BPB; its Table-9
+optimum has phase TV 0.955, max bucket weight 0.955, nearest-policy TV 0.795,
+and predicted fiber gain 0.579 BPB. The full Uncheatable fit selects retention
+10 and late multiplier 4, both grid maxima. HPR keeps phase TV near zero but
+still optimizes the aggregate far outside empirical support, with
+nearest-policy TV about 0.61 and implausibly low predicted BPB.
+
+Decision: **the baseline is frozen and complete, but there is no incumbent
+raw-policy solution.** OOF leadership and raw-optimum credibility remain
+separate gates. Proceed with preregistered estimator repair `WSD80-SUR-046`
+without changing its equation, grid, selector, or acceptance thresholds.
+
+Artifacts:
+
+- `reference_outputs/expanded_300m_pareto_baseline_20260731/report.md`
+- `reference_outputs/expanded_300m_pareto_baseline_20260731/baseline_metrics.csv`
+- `reference_outputs/expanded_300m_pareto_baseline_20260731/baseline_pair_metrics.csv`
+- `reference_outputs/expanded_300m_pareto_baseline_20260731/baseline_raw_optima.csv`
+- `reference_outputs/expanded_300m_pareto_bootstrap_20260731/report.md`
+- `reference_outputs/expanded_300m_pareto_bootstrap_20260731/pairwise_differences.csv`
+
+## WSD80-SUR-046: identifiable penalized RPL head rejected
+
+**2026-07-30 22:07 PDT; frozen-candidate decision.** All two 300M targets and
+all ten WSD80 control cells completed under the preregistered protocols. The
+correspondence-cluster bootstrap resampled the 280
+`phase_correspondence_key` groups within outer fold for 4,000 draws, preserving
+the 238 exact aggregate-matched contrasts.
+
+The estimator repair does not clear the primary 300M gate:
+
+| Target | Model | All RMSE | Asymmetric RMSE | Pair-delta RMSE |
+|---|---|---:|---:|---:|
+| Uncheatable | hierarchical phase replay | 0.006800 | 0.007896 | 0.007850 |
+| Uncheatable | parent retained power law | 0.007503 | 0.008803 | 0.008984 |
+| Uncheatable | repaired retained power law | 0.007850 | 0.009258 | 0.009328 |
+| Table-9 | hierarchical phase replay | 0.013001 | 0.015345 | 0.016902 |
+| Table-9 | parent retained power law | 0.014782 | 0.017166 | 0.019220 |
+| Table-9 | repaired retained power law | 0.015110 | 0.017322 | 0.019467 |
+
+Relative to hierarchical phase replay, repaired RPL worsens all-RMSE by 15.4%
+and 16.2%, asymmetric RMSE by 17.2% and 12.9%, and pair-delta RMSE by 18.8%
+and 15.2% on Uncheatable and Table-9 respectively. Every one of these six
+candidate-minus-HPR loss intervals excludes zero. On Uncheatable it also
+worsens parent RPL significantly: all-RMSE `+0.000347`
+(`95% CI [0.000183, 0.000504]`), asymmetric RMSE `+0.000455`
+(`[0.000215, 0.000696]`), and pair-delta RMSE `+0.000344`
+(`[0.000078, 0.000619]`). Table-9 Regret@1 has a better point estimate than
+parent RPL, but its paired interval crosses zero and only matches HPR's point
+estimate. There is no bootstrap-supported phase-sensitive improvement.
+
+The repaired model has 99 nominal parameters. Its outer-fold active-set proxy
+ranges from 69 to 81 on Uncheatable and 67 to 71 on Table-9. All eight phase
+coefficients remain nonzero with stable signs across folds, so the failure is
+not coefficient collapse. Instead, the selected nonlinear shape is unstable
+and boundary-seeking. Both full fits choose `retention=10`,
+`late_multiplier=4`, and `ridge=1`, all at the maxima of their frozen grids.
+The three Uncheatable outer folds choose three different benefit
+exponent/offset combinations and ridge values from `0.01` to `1.0`.
+
+The raw optima are unusable:
+
+| Target | Predicted BPB | Predicted fiber gain | Phase TV | Max bucket weight | Nearest-policy TV |
+|---|---:|---:|---:|---:|---:|
+| Uncheatable | 0.764372 | 0.377306 | 0.994875 | 0.994875 | 0.817737 |
+| Table-9 | 0.620209 | 0.575609 | 0.988525 | 0.988455 | 0.775679 |
+
+The WSD80 random-fold positive controls remain representable: Programming
+Languages predicts a `0.008048` BPB phase gain and locates the optimum within
+`0.0354`, while GitHub Python and C++ predict `0.006014` and `0.007883` BPB
+gains. The same form invents `0.029430` and `0.029460` BPB gains for C4 English
+and Falcon RefinedWeb, whose observed sampled gains are zero. Blocked-region
+RMSE ratios range from 1.72 to 4.81 relative to parent RPL, so random-fold
+interpolation does not transfer across mixture regions.
+
+Decision: **reject the estimator repair without retuning.** Identifying and
+shrinking every phase coefficient does not fix RPL's response law. The model
+can express code-objective phase benefit, but it cannot condition finite
+contrast on aggregate state and target response strongly enough to suppress
+unsupported broad-target gain or prevent near-corner 39-bucket optima. Do not
+reopen this route through another ridge grid, feature scaling, signed-column
+encoding, or nested selector. The next candidate must add a materially new
+aggregate-conditioned phase mechanism with an independently bounded
+finite-contrast response.
+
+Artifacts:
+
+- `reference_outputs/repaired_rpl_300m_20260731/report.md`
+- `reference_outputs/repaired_rpl_300m_bootstrap_20260731/report.md`
+- `reference_outputs/repaired_rpl_wsd80_controls_20260731/report.md`
+- `reference_outputs/repaired_rpl_wsd80_controls_20260731/control_summary.html`
+
+## WSD80-SUR-046 independent review and bootstrap erratum
+
+**2026-07-31; independent reviews and corrected diagnostics.** Claude Opus 5
+performed separate statistical and mechanistic audits of the frozen candidate.
+Both returned **FAIL**, and neither found a reason to reverse the rejection.
+
+The statistical audit verified the 520 rows, 280 correspondence groups, 238
+exact asymmetric pairs, nested correspondence-grouped folds, and paired
+comparisons. It found two bootstrap defects: reverse-orientation comparisons
+credited exact ties as wins, and Regret resampling changed the candidate
+population by discarding multiplicity. Protocol
+`35ec63528f377f98227d41e326b2ad4d688dd5ec0880edf7dd8faa1d96519158`
+corrects both. Strict better/tied/worse probabilities now sum to one and exact
+Regret ties are reported as ties. All primary SUR-046 conclusions are
+unchanged.
+
+The mechanistic audit found an error in the wording of the original rejection.
+SUR-046 penalizes every *explicit phase-control column*, but it does not
+penalize the dominant phase-sensitive retained-share benefit channel. The same
+nonnegative amplitude multiplies aggregate benefit and the retained state, so
+the model cannot express “aggregate response present, phase response absent.”
+The estimator repair therefore did not test whether shrinking that shared
+channel fixes RPL. This is an erratum to the rationale, not a rescue of the
+candidate.
+
+The phase-blind refit under protocol
+`60bc552672b9ba1efcbf69d6794f514e824213f22d70478b63c56f948c8bc4a0`
+shows that temporal RPL channels carry real signal. Removing them worsens
+pair-delta RMSE from `0.009328` to `0.017990` on Uncheatable and from
+`0.019467` to `0.036104` on Table-9. The decisive diagnosis is therefore:
+phase information is identifiable, but RPL's retained-state transition and
+shared response law are inferior to HPR and extrapolate pathologically.
+
+The next diagnostic was frozen before inspecting its correlations. For every
+exact aggregate-matched pair, compute the retained-mass ratio
+`M=sum(S_asymmetric)/sum(S_tied)`. If observed pair deltas are unrelated to
+`M` (`|Spearman| < 0.2`) while RPL predictions track it (`|Spearman| > 0.6`),
+the gain is a retained-mass artifact and a conserved retained-share state is
+admissible for a new candidate. If observed deltas track `M`, conservation is
+contradicted; intermediate results are inconclusive.
+
+Artifacts:
+
+- `reference_outputs/repaired_rpl_300m_20260731/cc_review_reconciliation.md`
+- `reference_outputs/repaired_rpl_300m_bootstrap_20260731/report.md`
+- `reference_outputs/repaired_rpl_phase_blind_diagnostic_20260731/report.md`
+
+## WSD80-SUR-047: conserved retained-share state blocked
+
+**2026-07-31; no model fit.** The independent mechanistic review proposed
+normalizing RPL's retained state onto the simplex,
+`S_tilde_i=S_i/sum_j(S_j)`, to separate composition from an unconserved
+retained-mass multiplier. This would preserve the tied aggregate response
+exactly and prevent a uniform late shift from receiving free benefit.
+
+Nearest prior routes are `HRC`, `FOMF`, and `prior_AG` for finite conserved
+capacity, `PMVT`/`PWD` for aggregate-fiber conservation, and
+`WSD80-SUR-041` for normalized contrast. The materially new claim was
+conservation of the *post-transition retained state*, rather than conservation
+of policy aggregate, capacity, or feature scale.
+
+The no-fit falsification was frozen before outcomes under protocol
+`f2bc8f8a54db910fb91c94eebc7d767da016ae48e05a268034c890d6331b2b35`.
+For every exact aggregate-matched pair it computed
+`M=sum(S_asymmetric)/sum(S_tied)` under the frozen target-specific full-fit
+shape. Conservation was admissible only if observed pair deltas were unrelated
+to `M` (`|Spearman|<0.2`) while model-predicted deltas tracked it
+(`|Spearman|>0.6`).
+
+The result contradicts conservation on all three WSD80 code controls:
+
+| Target | Spearman(M, observed delta) | Spearman(M, predicted delta) | Decision |
+|---|---:|---:|---|
+| Programming Languages | 0.439 | 0.460 | contradicts |
+| GitHub C++ | 0.490 | 0.517 | contradicts |
+| GitHub Python | 0.512 | 0.537 | contradicts |
+| C4 English | 0.140 | 0.128 | inconclusive |
+| Falcon RefinedWeb | 0.133 | 0.125 | inconclusive |
+| 300M Uncheatable | 0.117 | 0.137 | inconclusive |
+| 300M Table-9 | 0.142 | 0.177 | inconclusive |
+
+Decision: **block before fitting.** Exact retained-mass conservation would
+remove a coordinate associated with real code-target phase response, while no
+cell satisfies the preregistered retained-mass-artifact signature. This does
+not establish retained mass as causal; it establishes that normalization is
+not justified by this diagnostic. The proposed per-family transient-fraction
+extension is also blocked because it required the conserved state.
+
+Artifacts:
+
+- `reference_outputs/retained_mass_artifact_diagnostic_20260731/report.md`
+- `reference_outputs/retained_mass_artifact_diagnostic_20260731/summary.csv`
+- `reference_outputs/retained_mass_artifact_diagnostic_20260731/pair_diagnostics.csv`
+
+## WSD80-SUR-048: counterfactual labile-fraction response blocked
+
+**2026-07-31; no outcome fit.** The proposed candidate froze an aggregate
+response \(F(a)\), reused RPL retained state \(S_i\), formed the exact tied
+counterfactual \(S_i^0(a)\), and proposed
+
+\[
+\Delta L
+=-\sum_f \phi_f\sum_{i\in f}A_i
+\left[
+\frac{S_i}{S_i+\tau}
+-\frac{S_i^0}{S_i^0+\tau}
+\right],
+\qquad 0\leq\phi_f\leq1.
+\]
+
+The intended advantages were exact zero phase response when tied, bounded
+finite-contrast response, and separate control over aggregate benefit and
+phase sensitivity. These properties are real, but the route is not new. Its
+nearest historical forms are `TEA`, `OGGTR`, `OTFSC`, `PMVT`, `MCR`,
+`prior_P`, `prior_AL`, `IFSC`, and `MCCF`; the existing
+`staged_retained_phase_control_20260730.py` already implements the same staged
+tied-counterfactual retained-control construction with a different response
+map.
+
+The second-order expansion makes the duplication explicit:
+
+\[
+\Delta L
+\simeq
+-\sum_f\phi_f\sum_{i\in f}
+A_i\frac{\tau}{(S_i^0+\tau)^2}\delta_i
++
+\sum_f\phi_f\sum_{i\in f}
+A_i\frac{\tau}{(S_i^0+\tau)^3}\delta_i^2.
+\]
+
+This is PMVT's odd transport plus even quadratic cost with their ratio fixed by
+\(\tau\). Replacing inverse-power response by \(S/(S+\tau)\) is a saturator
+change, not a new latent state, invariant, transition, or identification
+equation.
+
+Independent Claude Opus 5 review found additional blockers:
+
+- \(S_i^0=(\beta_0+m\beta_1)a_i\), so tied evidence identifies only
+  \(\tau/(\beta_0+m\beta_1)\); the saturation scale is confounded with the
+  target-selected late multiplier.
+- Reusing aggregate amplitudes \(A_i\) on a different response basis makes
+  \(\phi_f\) absorb an arbitrary scale. Its \([0,1]\) bound therefore does not
+  establish a physical labile fraction.
+- WSD80 has two singleton families with no mapping to the 39-bucket
+  `broad_text`, `tech_code`, and `reasoning` families.
+- The selected retention gate is a saturated switch over two-bucket WSD80 but
+  a soft ramp over the 39-bucket panel, so the state is not scale-covariant.
+- WSD80 antithetic pairs preserve nominal 80/20 aggregate, while the model uses
+  the realized `3040/3814` split. The aggregate backbone therefore does not
+  cancel exactly on the positive-control panel.
+
+Decision: **block before outcomes.** Do not reopen the family through another
+bounded saturator, family multiplier, or tied-counterfactual response map.
+
+The review proposed one genuinely different identification test: treat
+retained mass as a measured effective-budget coordinate and import the
+target's response slope from an orthogonal token-budget ladder rather than
+fitting a phase amplitude. A second diagnostic factors retained state into
+total mass and normalized composition, then asks whether composition retains
+phase-delta signal after controlling for mass. Both require frozen,
+outcome-independent protocols before evaluation.
+
+Artifact:
+
+- `reference_outputs/counterfactual_labile_fraction_review_20260731/report.md`
+
+## WSD80-SUR-049: effective-budget equivalence diagnostic preregistered
+
+**2026-07-31; protocol frozen before phase-pair evaluation.** SUR-047 showed
+that the retained-mass coordinate cannot simply be normalized away on WSD80
+code targets, while SUR-048 showed that fitting another phase-response scale
+would reopen already rejected counterfactual-control routes. SUR-049 instead
+tests an independently identified quantitative hypothesis:
+
+\[
+\Delta L_{\mathrm{budget}}
+=s_{\mathrm{token}}
+\log\left(M_{\mathrm{asym}}/M_{\mathrm{tied}}\right).
+\]
+
+Here \(M_{\mathrm{asym}}/M_{\mathrm{tied}}\) is frozen from the exposed
+target-specific SUR-046 retained-state fit. The response scale
+\(s_{\mathrm{token}}\) is not estimated from asymmetric-policy outcomes. It is
+the equally weighted mean of six BPB-versus-log-materialized-token slopes,
+each fitted at one tied aggregate using the independent 1B, 2B, 4B, and 8B
+fixed-model, fixed-simulated-epoch token ladder.
+
+The nominal WSD80 fibers use an exact `0.8/0.2` design split, while training
+used the realized `3040/3814` boundary. The diagnostic therefore subtracts
+the tied-only piecewise-linear estimate of
+\(F(a_{\mathrm{asym,real}})-F(a_{\mathrm{tied,real}})\) before evaluating the
+phase delta. The primary subset contains nominal aggregates in the token
+ladder's `0.10--0.35` support; all phase pairs are secondary.
+
+Frozen protocol:
+`8e8835118fdec7468595adb43e9fde29c43c851141dd9f1ad86468f5c093d528`.
+Its gate requires:
+
+1. all six independently estimated token slopes are negative;
+2. maximum leave-one-aggregate relative slope change is at most `0.25`;
+3. the `20,000`-draw paired-bootstrap 95% lower bound for RMSE improvement
+   over the zero-phase null is positive;
+4. the calibration-slope interval contains one and excludes zero; and
+5. absolute bias is no worse than the zero-phase null.
+
+A pass supports effective-budget equivalence only for the WSD80
+Programming-Languages development panel. It does not establish retained mass
+as causal or provide a 39-bucket surrogate. A failure rejects this
+parameter-free equivalence but does not establish retained mass as irrelevant.
+
+Artifacts:
+
+- `diagnose_effective_budget_equivalence_20260731.py`
+- `reference_outputs/effective_budget_equivalence_20260731/protocol.json`
+
+### SUR-049 outcome: quantitative equivalence rejected
+
+The frozen diagnostic ran exactly once without adaptation. Its externally
+estimated token response was coherent: all six aggregate-specific slopes were
+negative, their equally weighted mean was `-0.062287` BPB per log materialized
+token, and the maximum leave-one-aggregate relative change was only `0.040`.
+The phase prediction nevertheless pointed in the wrong direction.
+
+| Subset | Pairs | Zero-phase RMSE | Effective-budget RMSE | Improvement | Calibration slope | Spearman | Sign accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| primary aggregate support | 104 | 0.069218 | 0.118593 | -0.049376 | -0.909 | -0.705 | 0.269 |
+| all pairs | 255 | 0.091633 | 0.130695 | -0.039062 | -0.913 | -0.439 | 0.400 |
+
+The primary RMSE-improvement bootstrap interval was
+`[-0.057968,-0.041206]` BPB and the calibration-slope interval was
+`[-1.217,-0.628]`. Absolute bias also worsened. The nominal-versus-realized
+aggregate correction was not responsible: its mean absolute size was only
+`0.000192` BPB, and the Spearman correlation between log retained mass and
+observed pair delta changed only from `0.706` before correction to `0.705`
+after correction.
+
+Decision: **reject effective-budget equivalence.** Larger RPL retained mass is
+associated with worse observed asymmetric-policy performance, whereas more
+real training tokens lower BPB. Retained mass therefore cannot be interpreted
+as extra useful budget. This does not make the coordinate irrelevant: it may
+be a proxy for even asymmetry damage. Do not repair the inversion by fitting a
+free sign or scale to these exposed pairs.
+
+The next admissible no-fit question is whether normalized retained-state
+composition carries phase-order signal after conditioning on total retained
+mass. It must be tested on both high-TPP 300M targets under a frozen protocol
+before introducing a composition transition into a fitted surrogate.
+
+Additional artifacts:
+
+- `reference_outputs/effective_budget_equivalence_20260731/report.md`
+- `reference_outputs/effective_budget_equivalence_20260731/summary.csv`
+- `reference_outputs/effective_budget_equivalence_20260731/pair_predictions.csv`
+- `reference_outputs/effective_budget_equivalence_20260731/effective_budget_predicted_vs_observed.html`
+
+## WSD80-SUR-049 audit and WSD80-SUR-050 block
+
+**2026-07-31; post-outcome audit plus outcome-free admissibility review.**
+The frozen SUR-049 rejection remains valid, but its mechanistic interpretation
+and uncertainty statement required correction. A bounded, read-only Claude
+Opus 5 review (`700f34fd-a6a1-4318-82f0-04a405cad50a`) inspected the source
+protocol, implementation, token slopes, and all 255 pair rows without accessing
+any `targeted_pairwise` path. The row-level claims and cluster uncertainty were
+then independently reproduced with:
+
+```bash
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_sur049_retained_composition_20260731.py
+```
+
+The audit found:
+
+1. `M_tied` is constant at `1.6088096487` for every tied policy, so
+   `log(M_asym/M_tied)` is only a shifted asymmetric-mass coordinate. The tied
+   leg removes no nuisance.
+2. Six nearly fixed-mass predictions span only `0.000851` BPB while their
+   observed phase deltas span `0.146319` BPB, ordered primarily by aggregate.
+3. On the aggregate-`0.18` fiber containing the observed WSD80 optimum,
+   retained mass and phase delta have Spearman `-0.040`. Rows with almost equal
+   mass have opposite-sign deltas. On the aggregate-`0.30` fiber, the
+   correlation is `0.934`, so mass behaves like even damage only there. It is
+   not a stable state coordinate across aggregates.
+4. The original IID pair bootstrap ignores repeated tied controls and smooth
+   within-fiber dependence. Cluster bootstraps over nine rounded aggregates and
+   nine tied controls give RMSE-improvement intervals
+   `[-0.063646,-0.019540]` and `[-0.063646,-0.019685]`. The rejection survives,
+   but the original interval overstated precision.
+5. The frozen protocol text says that mismatch correction uses a `1B`
+   tied-only curve, while the implementation correctly uses tied rows from the
+   complete WSD80 panel. The protocol remains byte-for-byte frozen; the
+   discrepancy is recorded in `protocol_erratum.json`.
+
+Decision: retain only the narrow SUR-049 conclusion that retained mass is not
+quantitatively equivalent to extra useful training budget on the WSD80
+Programming-Languages panel. Withdraw the post-outcome suggestion that it may
+be a generally valid asymmetry-damage proxy.
+
+The proposed follow-up,
+
+\[
+M=\sum_i S_i,\qquad \pi_i=S_i/M,
+\]
+
+is recorded as **WSD80-SUR-050, blocked before fit**. It has no material
+novelty: `pi` is SUR-047's normalization of the same fitted RPL state. At fixed
+bucketwise aggregate, `S` is a deterministic function of the 38-dimensional
+phase contrast, so `(M,pi)` supplies no separately intervened coordinates.
+Conditioning on aggregate reduces the proposal to the exposed PMVT/PWD
+aggregate-fiber equation; omitting aggregate leaves the measured `0.146319`
+BPB confound. The features also depend on retention and late multiplier
+selected on these outcomes at grid maxima, while SUR-046 already establishes
+that the residual temporal block carries pair signal. A positive result would
+therefore be nearly guaranteed without identifying mass, composition, or the
+transition law.
+
+Reopen only with temporal mass and composition states that are separately
+physically measured or independently identified, have units covariant under
+bucket refinement, and retain the same meaning in WSD80 and the 39-bucket
+panel.
+
+Artifacts:
+
+- `audit_sur049_retained_composition_20260731.py`
+- `reference_outputs/sur049_retained_composition_audit_20260731/report.md`
+- `reference_outputs/sur049_retained_composition_audit_20260731/summary.json`
+- `reference_outputs/sur049_retained_composition_audit_20260731/protocol_erratum.json`
+
+## WSD80-SUR-051 preregistration: HPR/RPL phase-block attribution
+
+**2026-07-31; outcome-free diagnostic.** The expanded 300M baseline leaves a
+specific unresolved discrepancy. HPR predicts exact aggregate-matched phase
+contrasts better than RPL on both targets, while phase-blind RPL ablation
+already proves that the panel contains identifiable phase signal. Further RPL
+retuning and aggregate-conditioned phase corrections are closed routes.
+
+`WSD80-SUR-051` therefore introduces no candidate model. It freezes the
+baseline outer folds and each fold's selected nonlinear configuration, then
+decomposes OOF exact-pair deltas into physically named response blocks. Each
+block is also removed with the original linear head refit on the outer training
+rows. This separates exact algebraic contribution from unique predictive
+necessity under collinearity.
+
+The diagnostic may motivate one new mechanism only if a non-TV physical block
+worsens refit-omission pair RMSE on both targets, is fold-stable, clears a
+paired-bootstrap gate on at least one target, has a common directional
+interpretation, and has a meaningful WSD80 analogue. Diffuse attribution,
+cross-target instability, or an advantage carried only by global policy TV is
+a negative result and does not license an HPR/RPL hybrid.
+
+Frozen protocol:
+
+- `reference_outputs/hpr_rpl_phase_block_attribution_20260731/preregistration.md`
+
+**Pre-outcome correction.** The reconstruction invariant rejected physical
+block attribution for the original RPL head before any block result was
+produced. Its unpenalized duplicate `x,-x` columns are non-identifiable enough
+that a different matrix-summation order moves the Table-9 block total by
+`2.0e-4` BPB. The diagnostic RPL arm now uses the previously frozen
+`WSD80-SUR-046` identifiable head and selections. That estimator preserves the
+RPL state and response span while assigning one penalized signed coefficient
+per phase feature. HPR and its expanded-baseline folds remain unchanged.
+
+## WSD80-SUR-051 decision and WSD80-SUR-052 preregistration
+
+**2026-07-31; completed diagnostic and frozen follow-up.** SUR-051 reproduced
+every frozen OOF prediction to `2.22e-16` and found two numerically eligible
+HPR blocks rather than one isolated mechanism. Removing and refitting without
+the retained-bucket benefit worsens exact-pair RMSE by `0.005914` on
+Uncheatable and `0.009591` on Table-9. That block is the full retained-state
+spine, however: it bundles transition, response, and hierarchical amplitudes.
+Family-member replay also passes the numerical rule at `0.000080` and
+`0.000657`, but the Uncheatable interval reaches zero and its WSD80 singleton
+analogue is inseparable from family overexposure.
+
+Global phase TV is necessary for pair RMSE (`0.002709/0.003554`) but explains
+only `0.5%/0.6%` of pair covariance. It is a generic even-cost correction, not
+a phase-order mechanism. SUR-051 is therefore a completed negative attribution
+for model promotion and does not license an HPR/RPL hybrid.
+
+Before any crossover outcome is computed, `WSD80-SUR-052` freezes a
+diagnostic-only `2 x 2` comparison of HPR versus RPL retained state and HPR
+power versus RPL inverse-power response. It replaces only HPR's retained-bucket
+block, preserves all other HPR columns and the frozen common folds, and matches
+alternative column scales on training rows without using targets. A component
+can motivate a new route only if it explains at least half the parent
+HPR-versus-RPL pair-RMSE gap on both targets with the frozen cross-target,
+fold-sign, bootstrap, and WSD80-analogue conditions.
+
+Frozen protocol:
+
+- `reference_outputs/retained_state_response_crossover_20260731/preregistration.md`
+
+## WSD80-SUR-052 decision: no component graft is licensed
+
+**2026-07-31; frozen crossover completed.** The diagnostic ran with 10,000
+paired bootstrap resamples under protocol
+`54815b82c68f2abadb70b024efbc4d50c84b56bd51941394988778685ba556c1`.
+The exact HPR control reproduced its persisted OOF predictions to
+`2.22e-16`.
+
+| Target | Factor | Main effect | 95% interval | Positive folds | Frozen half-gap |
+|:--|:--|--:|:--|--:|--:|
+| Uncheatable | HPR state | +0.000899 | [+0.000395, +0.001398] | 3/3 | 0.000567 |
+| Table-9 | HPR state | +0.001082 | [+0.000341, +0.001868] | 3/3 | 0.001159 |
+| Uncheatable | HPR link | +0.001051 | [+0.000540, +0.001559] | 3/3 | 0.000567 |
+| Table-9 | HPR link | +0.000325 | [-0.000319, +0.001048] | 1/3 | 0.001159 |
+
+The HPR retained state is genuinely useful, but it misses the preregistered
+Table-9 magnitude gate by `0.000077` BPB. The HPR response link is not stable
+on Table-9 and reverses slightly under the RPL state (`-0.000075` BPB).
+State-by-link interactions are significantly negative on both targets
+(`-0.000668/-0.000800`), so the individual advantages diminish rather than
+add when crossed.
+
+Decision: **complete SUR-052 as a negative attribution.** Neither component
+licenses a new graft, and the Table-9 threshold must not be relaxed after the
+near miss. The literal factorial result does not by itself establish that
+HPR's state and response are intrinsically inseparable. The next route must
+introduce a materially new temporal state or response invariant identified
+independently of these crossover outcomes.
+
+Artifacts:
+
+- `diagnose_retained_state_response_crossover_20260731.py`
+- `reference_outputs/retained_state_response_crossover_20260731/report.md`
+- `reference_outputs/retained_state_response_crossover_20260731/decision_gate.csv`
+- `reference_outputs/retained_state_response_crossover_20260731/state_response_crossover.html`
+
+### Post-outcome identification audit
+
+A bounded read-only Claude Opus 5 review, run through the verified subscription
+with `ANTHROPIC_API_KEY` removed and `Agent` explicitly disabled, found two
+limitations that were independently reproduced:
+
+1. the HPR and RPL state arms use different late multipliers
+   (`4.982800` versus `4.000000`), so the state contrast does not isolate the
+   gate argument; and
+2. alternative columns were matched by uncentered RMS, while HPR's ridge head
+   centers the design before penalization.
+
+The native-shape diagonal also has an estimator advantage over both crossed
+cells, so the significantly negative interaction cannot establish intrinsic
+state-link inseparability. The original implementation is faithful to its
+literal preregistration and its no-pass decision remains valid. The stronger
+mechanistic interpretation is withdrawn.
+
+`WSD80-SUR-053` is frozen as a closure diagnostic, not a candidate. It keeps
+HPR's link and late multiplier fixed, compares the HPR absence gate with the
+RPL signed-contrast gate using training-only centered RMS scaling, and includes
+a local-slope-matched contrast-gate control. It retains the original
+`0.000567/0.001159` half-gap thresholds. A pass can preserve HPR's existing
+gate as an empirical baseline; it cannot promote a new route.
+
+Frozen protocol:
+
+- `reference_outputs/hpr_absence_gate_isolation_20260731/preregistration.md`
+
+### WSD80-SUR-053 decision
+
+**2026-07-31; frozen closure diagnostic completed.** Protocol
+`a10790f30a82f018bd5d8ee5703c0f02483d734bab755a7764ec47daa819e93d`
+reproduced HPR OOF predictions within `2.22e-16`.
+
+With HPR's late multiplier held common and alternative columns matched by
+training-fold centered RMS, replacing HPR's absence gate with the native-rate
+RPL contrast gate worsened exact-pair RMSE by:
+
+- `+0.000816` BPB on Uncheatable, 95% interval
+  `[+0.000228,+0.001468]`, positive in `3/3` folds; and
+- `+0.000886` BPB on Table-9, 95% interval
+  `[+0.000212,+0.001579]`, positive in `3/3` folds.
+
+The effect is real but misses the unchanged Table-9 threshold of `0.001159`
+BPB. The slope-matched contrast gate is worse on both targets
+(`+0.001341/+0.002127`) but was frozen as interpretive only and cannot change
+the decision.
+
+Decision: **complete SUR-053 as negative and close retained-state component
+attribution.** Preserve HPR as an empirical baseline; do not reopen the
+absence gate through another rate, late multiplier, scaling rule, or response
+graft. The corrected diagnostic licenses no candidate.
+
+Artifacts:
+
+- `diagnose_hpr_absence_gate_isolation_20260731.py`
+- `reference_outputs/hpr_absence_gate_isolation_20260731/report.md`
+- `reference_outputs/hpr_absence_gate_isolation_20260731/decision_gate.csv`
+- `reference_outputs/hpr_absence_gate_isolation_20260731/absence_gate_isolation.html`
+
+## Final shared-surrogate decision
+
+**2026-07-31; WSD80-SUR-054 registry-exhaustion audit.** The 99-route
+historical registry and 32-entry current registry were re-audited after the
+SUR-051--053 attribution sequence. No untested endpoint-state proposal
+survives the novelty boundary. Common scalar temporal kernels collapse
+algebraically to one effective phase multiplier (`NG-LK`), affine scalar
+endpoint dynamics have a tied reachable-set equivalent (`NG-AES`), and the
+registered nonlinear fast/slow, path, coverage, replay, and consolidation
+families have already failed their shape, identification, transfer, or
+raw-optimum gates.
+
+The empirical result is a split decision:
+
+- hierarchical phase replay remains the strongest 300M exact-contrast
+  baseline (`0.007850/0.016902` pair RMSE on Uncheatable/Table-9), but its raw
+  optima are essentially tied and it has not solved the desired two-phase
+  policy-selection problem;
+- repaired retained power law preserves the WSD80 code-target advantage
+  (`0.008048` predicted versus `0.009594` observed, optimum distance
+  `0.035355`) but invents about `0.0294` BPB of phase gain on each broad-text
+  negative control and selects near-corner 300M raw optima.
+
+No new model clears the frozen acceptance gate. Do not submit a training
+validation from this drive. Reopening requires a separately measured temporal
+state or an intervention that distinguishes path-dependent dynamics from
+endpoint exposure summaries, not another gate, multiplier, coefficient grid,
+or response-link swap.
+
+Final synthesis:
+
+- `reference_outputs/two_phase_surrogate_final_synthesis_20260731/report.md`
+- `reference_outputs/two_phase_surrogate_final_synthesis_20260731/acceptance_gate.csv`
+- `reference_outputs/two_phase_surrogate_final_synthesis_20260731/decision.json`
+
+## Adversarial audit of the negative decision
+
+**2026-07-31; WSD80-SUR-055 adversarial audit.** The negative decision was
+re-derived from the persisted source predictions rather than from the synthesis
+prose. It **survives**, and the strongest supporting evidence is observational
+rather than model-comparative. Two of the disqualifiers attached to repaired RPL
+do not survive, and one gate evidence string overstates its finding.
+
+### The sharpest counter-hypothesis, refuted
+
+Exact-pair `delta_rmse` is the gate's primary phase-sensitive diagnostic, and HPR
+wins it while predicting near-tied optima. That combination is the signature of a
+predictor shrunk toward zero, which under a squared-error metric beats an
+honest-magnitude predictor with any noise. If true, the gate would have rewarded
+the absence of a phase response.
+
+It is false. Against the null predictor (predict zero delta), whose RMSE is the
+observed delta RMS:
+
+| target | null RMSE | HPR | ratio | amplitude ratio | slope obs~pred |
+|:--|--:|--:|--:|--:|--:|
+| uncheatable | 0.017990 | 0.007850 | 0.436 | 0.881 | 1.021 |
+| table9 | 0.036104 | 0.016902 | 0.468 | 0.800 | 1.109 |
+
+HPR predicts deltas at 80-88% of observed amplitude with calibration slope near
+one, explaining roughly 80% of delta variance. Repaired RPL is the *more* shrunk
+of the two on Table-9 (0.732). The diagnostic is sound.
+
+### The decisive fact: no two-phase advantage exists in this design
+
+| target | best tied | best asymmetric | asymmetric policies beating best tied |
+|:--|--:|--:|--:|
+| uncheatable | 0.951105 | 0.955440 | **0/238** |
+| table9 | 0.982774 | 0.988999 | **0/238** |
+
+Provenance checked: the winning tied rows are physically trained
+`single_phase_exposure_average` runs (`singleavg_run_*`) from the same source
+experiment as the two-phase runs, not constructed counterparts. At matched
+aggregate the phase effect is a coin flip (117/238 and 123/238 asymmetric arms
+beat their own counterpart).
+
+HPR's near-tied raw optimum is therefore the **empirically correct answer**, not
+a deficiency. The synthesis frames it as HPR "not solving" two-phase selection;
+on this design there is nothing to solve, and a model that reported a large gain
+would be wrong.
+
+### The mechanism, measured on both panels
+
+Phase benefit is monotone in aggregate suboptimality and crosses zero mid-range.
+
+| aggregate quintile | tied BPB | mean delta (unch.) | two-phase wins |
+|:--|--:|--:|--:|
+| 0 best | 0.973 | +0.0138 | 17% |
+| 2 | 0.997 | -0.0000 | 50% |
+| 4 worst | 1.023 | -0.0108 | 69% |
+
+Spearman(tied BPB, delta) = `-0.467` / `-0.497`, p = 2.6e-14 / 2.8e-16. The
+best-decile splitting penalty is `+0.0119`/`+0.0310` BPB, Wilcoxon p = 1e-4,
+paired and therefore robust to the absence of replicates (the design has 520
+distinct coordinates and zero repeats, so it carries no internal noise estimate).
+
+The same law holds on StarCoder, where `g(a)` is exactly zero at the best tied
+aggregate `a=0.30` and rises monotonically away from it. Spearman(excess, gain)
+is `+0.943`/`+0.829`/`+0.976` on uncheatable/table9/WSD80.
+
+What separates the panels is the ratio of achievable gain to the aggregate
+penalty it costs:
+
+- 300M: ratio 0.50-0.71 throughout; maximum net `-0.004334`/`-0.006225`. Tied
+  always wins.
+- WSD80: ratio 0.21-0.75 for every `a >= 0.35`, but `1.935` at `a=0.18`, giving
+  net `+0.009593`. The entire observed two-phase advantage comes from one
+  aggregate.
+
+Excess magnitude alone does not explain it: `a=0.18` (excess 0.0103) yields gain
+0.0199 while `a=0.35` (excess 0.0081) yields 0.0017, a twelve-fold difference at
+comparable excess. The distinguishing feature is direction - `a=0.18` is *below*
+the tied optimum with best contrast `+0.400` (late-heavy), `a=0.35` is above it
+with `-0.104`. That directional marginal-value structure is already what RPL's
+`marginal_phase_block` encodes, so it is not a new mechanism.
+
+### Two disqualifiers that do not survive
+
+**1. The broad-text false gains are protocol-dependent by an order of magnitude.**
+
+| target | random folds | blocked folds | frozen threshold |
+|:--|--:|--:|--:|
+| C4 English | 0.029430 | 0.003185 | 0.005 |
+| Falcon RefinedWeb | 0.029460 | 0.002973 | 0.005 |
+
+Under blocked folds repaired RPL **passes** the negative control, and improves on
+the original RPL's 0.0266. `primary_protocol: random` was frozen in advance with a
+documented rationale (the earlier RPL audit reported only random-fold refits), so
+this is not a post-hoc inconsistency and is not reported as one. It does mean the
+finding is a random-fold overfitting symptom - neighbours leak across folds, the
+surface sharpens, the optimizer runs to a corner - rather than a property of the
+functional form. The primary 300M gate uses grouped folds.
+
+**2. The late multiplier is pinned at its grid maximum in 6 of 6 folds.**
+
+| target | fold 0 | fold 1 | fold 2 |
+|:--|:--|:--|:--|
+| uncheatable | ret 10 MAX, late 4 MAX, ridge 0.01 | ret 5, late 4 MAX, ridge 0.01 | ret 10 MAX, late 4 MAX, ridge 1 MAX |
+| table9 | ret 5, late 4 MAX, ridge 1 MAX | ret 10 MAX, late 4 MAX, ridge 1 MAX | ret 10 MAX, late 4 MAX, ridge 1 MAX |
+
+`LATE_MULTIPLIERS = (1.0, 2.0, 4.0)` was set on 2026-07-29 from sweeps on the
+**delphi_3e18** panel, where 8/16/32 measured worse. The repaired estimator calls
+`parent.shape_grid()` and inherits it; it was never validated at 300M. A parameter
+at its bound in every fold is not identified within the searched range, so both
+the "15-16% worse than HPR" comparison and the near-corner raw optimum are
+measured at a constrained optimum. An extended-range re-fit is running as an audit
+of the existing decision, writing to `audit_late_boundary_300m_20260731`; the
+frozen artifacts are untouched.
+
+**3. Minor: the gate evidence string overstates the boundary finding.**
+`acceptance_gate.csv` states repaired RPL "selects retention=10, late_multiplier=4,
+and ridge=1 at screened maxima on both targets". Only the late multiplier is
+unanimous; retention is 5 in two folds and ridge is 0.01 in two folds.
+
+### Audit verdict
+
+The decision stands: no candidate should be promoted, and no training validation
+should be submitted. The negative result is stronger than stated, because the
+governing fact is observational - zero of 238 exact contrasts beat the best tied
+policy - rather than a matter of which model fit better. Correcting the two
+unsound disqualifiers does not change it, since a model predicting 0.20-0.58 BPB
+of two-phase gain is wrong regardless of how its multiplier grid was chosen.
+
+The reopening question is also sharper than "which temporal state". It is: what
+sets the ratio of achievable phase gain to aggregate penalty, and why is it near
+2 at StarCoder `a=0.18` and at most about 0.75 everywhere else on both panels?
+A trajectory panel that varies phase-boundary placement at fixed endpoint
+exposure should be designed to measure that ratio directly, at aggregates both
+below and above the tied optimum, because the direction of departure and not its
+magnitude is what distinguishes the one aggregate where two-phase wins.
+
+### Late-multiplier boundary audit, completed
+
+`audit_late_boundary_300m_20260731`, extended `LATE_MULTIPLIERS = (1,2,4,8,16)`,
+2700 candidates, protocol otherwise identical to the frozen repaired-RPL run.
+
+| target | metric | frozen (late<=4) | audit (late<=16) | HPR |
+|:--|:--|--:|--:|--:|
+| uncheatable | all_rmse | 0.007850 (+15.4%) | 0.007353 (+8.1%) | 0.006800 |
+| uncheatable | pair_rmse | 0.009328 (+18.8%) | 0.008628 (+9.9%) | 0.007850 |
+| table9 | all_rmse | 0.015110 (+16.2%) | 0.014008 (+7.7%) | 0.013001 |
+| table9 | pair_rmse | 0.019467 (+15.2%) | 0.018066 (+6.9%) | 0.016902 |
+
+Three conclusions.
+
+**The frozen gate evidence overstated the deficit.** Fairly tuned, repaired RPL
+is 7-10% worse than HPR rather than 15-16%. It still fails the 5% grouped-OOF
+tolerance, so the verdict is unchanged, but the margin is roughly half what was
+reported and the "15.4%/16.2%" figures should not be quoted without this caveat.
+
+**The late multiplier is unidentified.** It selects 16.0 in 5/6 folds, having
+selected 4.0 in 6/6 under the previous ceiling: it saturates whatever bound is
+offered. This is the empirical counterpart of the theoretical `NG-LK` result that
+a common scalar temporal kernel collapses to one effective phase multiplier. The
+endpoint design cannot pin it, which is precisely the quantity the proposed
+trajectory panel exists to measure. Extending the grid further is pointless;
+identification has to come from intermediate evaluations, not a wider search.
+
+**The corner optimum is intrinsic, not a search artifact.** It persists and
+slightly worsens under the extended grid, phase TV `0.994875` to `0.995566` and
+maximum bucket weight `0.994875` to `1.000000` on uncheatable, with predicted
+fiber gain `0.296724` against a maximum *observed* achievable gain of about
+`0.049` anywhere in the 238 exact contrasts. Correcting the multiplier range does
+not rehabilitate the raw surface, which is the outcome the charter's optimization
+audit is meant to detect.
+
+The negative decision is therefore confirmed on all three counts, with one piece
+of its supporting evidence corrected and one of its theoretical claims upgraded
+from algebraic argument to measured fact.
+
+### Correction: the late multiplier is identified, and is not an offset proxy
+
+The boundary-audit entry above concluded that the late multiplier "saturates
+whatever bound is offered" and is therefore unidentified from endpoint data.
+**That conclusion was wrong**, and is corrected here. Two boundary hits were read
+as a monotone likelihood; they are not.
+
+Holding every other parameter at the shape the frozen run selected and sweeping
+the multiplier over `(1,2,4,8,16,32,64)` on the correspondence folds:
+
+| target | sweep | late 1 | best | argmin | late 64 |
+|:--|:--|--:|--:|--:|--:|
+| uncheatable | A: offset fixed 0.01 | 0.008728 | 0.007277 | 8 | 0.008432 |
+| uncheatable | B: offset = 0.01 x late | 0.008728 | 0.007194 | 8 | 0.007426 |
+| table9 | A: offset fixed 0.01 | 0.016173 | 0.014829 | 8 | 0.016693 |
+| table9 | B: offset = 0.01 x late | 0.016173 | 0.013990 | 16 | 0.014058 |
+
+The likelihood turns over. The multiplier has an interior optimum near 8-16 on
+both targets under both sweeps, and 64 is clearly worse than 8. The full-grid
+selections landed on 4 and then 16 because the joint criterion trades the
+multiplier against the other shape axes, not because the surface is monotone;
+4 was genuinely below the optimum and 16 sits at it.
+
+Sweep B is the point of the diagnostic. The multiplier enters only through
+`S = survival*beta0*w0 + late*beta1*w1` with `benefit = (S + E0)**-a`, so raising
+it both suppresses phase-0 exposure and drives the effective offset `E0/late`
+toward zero. Tying `E0` to the multiplier closes the offset channel; exact
+scale-equivalence would additionally require scaling `beta0`, which the design
+fixes, so the two channels do separate. Closing the offset channel does not
+remove the gain, it slightly enlarges it: `-17.6%/-13.5%` against `-16.6%/-8.3%`.
+
+**The multiplier is therefore a real effect, not a reparameterization.** Early
+exposure carries roughly eight to sixteen times less predictive weight than late
+exposure at 300M, and that ratio is estimable from endpoint data alone.
+
+This also corrects how `NG-LK` should be cited. The algebraic collapse of a
+common scalar temporal kernel to one effective phase multiplier is real, and the
+resulting scalar *is* identified by this design, so "trajectories are needed to
+identify the multiplier" is not the argument. The argument is that one scalar
+cannot separate retention, forgetting, within-window repetition, and
+optimizer-time evolution, which all collapse into it. Identifiability of the
+scalar is not identifiability of the mechanism, and only the second is what a
+trajectory panel buys.
+
+A confirmation run under the full nested selection with the multiplier grid
+extended to 64 is in `audit_late_interior_300m_20260731`; if the corrected
+reading is right it should select an interior value rather than the ceiling.
+
+**Confirmation, grid extended to 64.** The corrected reading holds. Selections
+are interior and identical to the ceiling-16 run: `late=16` in 5/6 folds and
+`late=8` in the remaining fold on both targets, with the ceiling at 64 unused.
+Nested metrics are unchanged, `all_rmse` `+8.1%/+7.7%` and `pair_rmse`
+`+9.9%/+6.9%` against HPR, so those figures are now stable under any further
+widening and are the final fair comparison.
+
+The raw optimum moved the wrong way. On uncheatable it is now fully degenerate,
+phase TV `1.000000` and maximum bucket weight `1.000000`, a policy placing an
+entire phase on one bucket; Table-9 is unchanged at `0.966940/0.999799`. With the
+multiplier identified at an interior value and the grid demonstrably wide enough,
+the corner optimum can no longer be attributed to a constrained search. It is
+intrinsic to the form, which is what the charter's optimization audit exists to
+detect and is sufficient on its own to refuse promotion.
+
+Net effect of the whole audit on the frozen decision: unchanged in outcome, with
+one evidence figure corrected downward (15-16% to 8%), one disqualifier shown to
+be protocol-dependent (broad-text false gains pass under blocked folds), one of
+my own intermediate claims retracted (the multiplier is identified, not
+saturating), and the strongest supporting evidence relocated from model
+comparison to the observational fact that 0/238 exact contrasts beat the best
+tied policy.
+
+## 2026-07-31: physically tied phase-blind RPL aggregate-spine audit
+
+The aggregate-first charter requires rejecting a phase-blind spine before any
+temporal state is added if it cannot fit tied policies and optimize plausibly.
+`WSD80-SUR-063` therefore isolated repaired RPL's aggregate restriction:
+
+\[
+A(w)=b+\sum_i a_i(w_i+e_0)^{-p}
+     +\sum_i d_i\max(E_i(w)-\tau,0)^q.
+\]
+
+Only 282 physically tied 300M policies entered the fit. Five outer
+correspondence-grouped folds and three inner grouped folds nested nonlinear-shape
+and ridge selection. Raw tied optimization used no KL penalty, trust region,
+support term, or output calibration. The frozen protocol hash is
+`e4fce3b2bc4659306a6920f73beb77d6b37b01dc3742adab1d78733ef6b4d371`.
+
+Command:
+
+```bash
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_phase_blind_rpl_tied_spine_20260731.py --workers 8
+```
+
+| target | OOF RMSE | frozen reference | relative | raw predicted | observed tied frontier | nearest support TV | near-zero buckets |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| Uncheatable | 0.005588 | 0.004713 | +18.6% | 0.888506 | 0.951105 | 0.537 | 18 |
+| Table-9 | 0.013017 | 0.010357 | +25.7% | 0.854732 | 0.982774 | 0.570 | 20 |
+
+The raw optimum is not stable enough to rescue the form. Median fold-to-full L1
+is `0.208/0.252` and conditional group-bootstrap median L1 is `0.293/0.186`.
+Outer folds also disagree on the benefit exponent, offset, and ridge.
+
+**Decision: rejected before temporal modeling.** Literal materialized-epoch
+damage prevents the most extreme replay dose, but it cannot constrain mixture
+composition. Independent bucket and family benefits still accumulate into
+unsupported aggregate gains, yielding sparse optima more than 0.53 TV outside
+the observed panel. Do not reopen with another offset, exponent, ridge, damage
+threshold, or bounded scalar output link. The next aggregate candidate must
+couple bucket contributions through a materially new production mechanism.
+
+Artifacts:
+
+- `reference_outputs/phase_blind_rpl_tied_spine_20260731/report.md`
+- `reference_outputs/phase_blind_rpl_tied_spine_20260731/analysis.md`
+- `reference_outputs/phase_blind_rpl_tied_spine_20260731/tied_spine_diagnostics.html`
+
+## 2026-07-31: intervention-identified benchmark-production preregistration
+
+`WSD80-SUR-064` tests the next admissible aggregate mechanism without first
+fitting another nonlinear response. The 78 central proportional log tilts form
+39 antithetic pairs and span the 38-dimensional tangent space of the 39-bucket
+simplex. For each named benchmark component, the diagnostic estimates
+
+\[
+d_i=\frac{L_i(+\alpha)-L_i(-\alpha)}{2\alpha},\qquad
+d=Aq,
+\]
+
+using only those tilts. The transfer map is then frozen and tested on the 39
+full domain deletions, which are a distinct finite-move intervention class.
+The nearly saturated in-sample directional fit is explicitly non-evidence.
+
+This is not prior Q's collection of endpoint-fitted component heads and not
+prior D's anonymous latent factorization: the factors are observed benchmark
+components and the bucket transfer map is identified from named interventions.
+The deletion panel is not used for fitting, calibration, or hyperparameter
+selection.
+
+Coverage preflight passed before freezing:
+
+- 78 complete central log-tilt rows and 39 complete deletion rows;
+- all policies are physically tied and all weights sum to one;
+- 11 proportional controls for anchor and noise estimation;
+- seven complete Uncheatable components, reconstructing the aggregate within
+  `1.14e-7` BPB on untouched deletions;
+- 51 complete Table-9 components, whose unweighted mean is exact.
+
+Protocol hash:
+`6fe95816365d2ed036cf3112e7c731c919388abd0d0eed35e885eedf98dc61d8`.
+
+Command after preregistration:
+
+```bash
+env PYTHONPATH=. uv run experiments/domain_phase_mix/exploratory/two_phase_many/diagnose_intervention_identified_component_transfer_20260731.py --mode evaluate
+```
+
+Both aggregate targets and their component-support summaries must pass. A pass
+licenses a bounded benchmark-production aggregate model; it does not license a
+temporal state or promote a full surrogate. A failure blocks this route before
+new nonlinear flexibility is introduced.
+
+## 2026-07-31: intervention-identified benchmark production does not transfer on both targets
+
+The frozen `WSD80-SUR-064` evaluation completed without changing the transfer
+map, deletion panel, component definitions, or decision thresholds. The local
+map was estimated from the 78 central log tilts and evaluated on the 39 full
+domain deletions.
+
+| target | deletion RMSE | anchor-null RMSE | RMSE improvement | Spearman | sign accuracy | observed-on-predicted slope | frozen gate |
+|:--|--:|--:|--:|--:|--:|--:|:--|
+| Uncheatable | 0.001962 | 0.004851 | 59.6% | 0.684 | 0.744 | 1.192 | pass |
+| Table-9 | 0.007180 | 0.009803 | 26.8% | 0.404 | 0.718 | 0.923 | fail |
+
+The Uncheatable map is a real identification result: all seven component
+gradients survive BH correction, every component has positive deletion
+Spearman, and the domain-bootstrap RMSE-improvement interval is `[0.176,0.682]`.
+Table-9 is not comparably stable. Only `31/51` component gradients survive the
+same correction, median component deletion Spearman is `0.202`, and the
+domain-bootstrap aggregate RMSE-improvement interval is `[-0.203,0.525]`.
+The point estimate improves over the null, but it does not establish transfer
+to finite deletions under the preregistered rule.
+
+**Decision: reject the shared route before nonlinear fitting.** Both targets
+were mandatory, so the successful Uncheatable arm does not license a shared
+benchmark-production aggregate model. In particular, do not fit a nonlinear
+response, deletion calibration, latent factor, or component selection rule to
+repair Table-9 after observing its deletion outcomes. The result instead says
+that local named-component transfer is target-dependent: it is sufficient for
+the seven-component Uncheatable macro and too heterogeneous for the 51-component
+Table-9 macro under the available interventions.
+
+Artifacts:
+
+- `reference_outputs/intervention_identified_component_transfer_20260731/report.md`
+- `reference_outputs/intervention_identified_component_transfer_20260731/aggregate_metrics.csv`
+- `reference_outputs/intervention_identified_component_transfer_20260731/component_metrics.csv`
+- `reference_outputs/intervention_identified_component_transfer_20260731/decision.json`
+
+## 2026-07-31: unique-evidence demand allocation preregistration
+
+`WSD80-SUR-065` tests a composition-coupled aggregate production law before
+another endpoint fit is allowed. For tied aggregate weights, physical epochs
+`E_i` and proportional pool mass `p_i` define exact materialized unique evidence
+
+\[
+m_i=p_i\min(E_i,1),\qquad U=\sum_i m_i,
+\]
+
+and a prior-smoothed evidence composition
+
+\[
+s_i=\frac{m_i+\epsilon p_i}{U+\epsilon}.
+\]
+
+The proposed aggregate response is
+
+\[
+A(w)=b+M D_{\mathrm{KL}}(q\Vert s(w))
+       +h\{E_{\mathrm{total}}-U(w)\},
+\]
+
+where `q` is a target-specific benchmark-demand distribution, `M` and `h` have
+BPB units, and all other quantities are dimensionless. In the linear head this
+is represented by nonnegative `a_i=M q_i` on `-log s_i`; `M=sum_i a_i` and
+`q_i=a_i/M` remove the amplitude/distribution symmetry. The lower bound follows
+from nonnegativity of KL and repeated mass. Unlike an additive bucket-benefit
+spine, surplus evidence in one bucket changes the normalized allocation and
+cannot contribute an independent unbounded credit.
+
+Nearest prior routes are `prior_B`, `prior_AH`, `prior_K`, `prior_L`, `prior_AN`,
+and `HRC`. The material change is that unique coverage and target support are
+not auxiliary features added to an additive response: conserved evidence
+quantity and composition are the entire production state. This is still only a
+candidate mechanism. A normalized amplitude is not by itself novel, and the
+route is blocked unless its implied curvature transfers independently.
+
+The frozen cheapest falsification uses the 39 physically tied antithetic
+proportional log-tilt pairs. Only pair-odd effects select the prior pseudocount,
+ridge, and demand amplitudes. The pair-even effects relative to the mean of 11
+proportional controls are not used for selection and test the production law's
+implied curvature. Both Uncheatable and Table-9 must pass; in-sample odd fit is
+declared non-evidence. A failure blocks further tied-panel fitting rather than
+inviting another pseudocount, occupancy exponent, or output link.
+
+### Frozen result: rejected before endpoint fitting
+
+Protocol `d39c727b7166e53d8605940778cd5036b80ab7c2451fae5ce64f025af4f63f28`
+selected the shared interior pseudocount `epsilon=0.03` using pair-odd outcomes
+only. The result fails in the same direction on both targets:
+
+| target | odd CV RMSE | odd zero RMSE | odd improvement | even RMSE | even zero RMSE | even improvement | even Spearman | sign accuracy | calibration slope |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| Uncheatable | 0.002903 | 0.002912 | +0.3% | 0.001407 | 0.000963 | -46.0% | -0.271 | 0.359 | -1.11 |
+| Table-9 | 0.006091 | 0.006012 | -1.3% | 0.004474 | 0.003693 | -21.1% | -0.308 | 0.462 | -1.72 |
+
+The global repeated-mass coefficient is numerically zero on both targets. The
+independently implied even curvature is not merely weak: it is anti-correlated
+with the measured curvature and has the wrong calibration sign. Uncheatable's
+bootstrapped demand direction is also unstable (median cosine `0.759`, below the
+frozen `0.8` gate); Table-9 demand stability cannot rescue the failed parity
+prediction.
+
+**Decision: reject before the 282-row tied endpoint fit.** Conserved unique
+evidence and target-demand cross-entropy do not supply the missing aggregate
+production law. Do not reopen through another pseudocount, occupancy exponent,
+ridge, replay feature, bounded output link, or direct endpoint fit. The failure
+also sharpens the search: the needed compositional coupling cannot be a static
+normalization of independently accumulated bucket evidence.
+
+Artifacts:
+
+- `reference_outputs/unique_evidence_demand_allocation_20260731/report.md`
+- `reference_outputs/unique_evidence_demand_allocation_20260731/aggregate_metrics.csv`
+- `reference_outputs/unique_evidence_demand_allocation_20260731/pair_predictions.csv`
+- `reference_outputs/unique_evidence_demand_allocation_20260731/odd_to_even_transfer.html`
+
+## 2026-07-31: odd-only Fisher-Rao demand overlap is structurally underidentified
+
+`WSD80-SUR-066` proposed the bounded aggregate law
+
+\[
+B(w,q)=\sum_i\sqrt{q_iw_i},\qquad
+A(w)=b+M\{1-B(w,q)\}+hR(w),
+\]
+
+where `q` is a target-demand distribution and `R(w)` is exact repeated
+materialized mass. Writing `a_i=M sqrt(q_i)` gives a convex linear head on
+`-sqrt(w_i)` with `a_i>=0`; `M=||a||_2` and
+`q_i=a_i^2/||a||_2^2`. Unlike the old Power-Ridge baseline, this law has no
+free signed linear terms. Without replay its unique raw optimum is `w=q`, and
+the deficit `1-B` is bounded on the simplex.
+
+The first proposed estimator used only the 39 pair-odd effects from the central
+proportional log tilts to identify 39 demand amplitudes and one replay
+amplitude. A frozen no-outcome rank audit blocked that estimator:
+
+- `39` antithetic directions;
+- `40` mechanistic coefficients;
+- scaled design rank `39` and nullity `1`;
+- nonzero singular-value condition number `1.740`.
+
+The exact null direction mixes the replay coefficient with all 39 demand
+amplitudes. Ridge would choose a unique numerical solution, but it would not
+identify `q` or `h`; bootstrap stability under the same penalty would not fix
+that structural defect. No target outcome was evaluated. Protocol
+`0897a62db7187fdaa1407ccea9f7a9b7ca69d4c437d5a978d83feab55845ca90`
+therefore hard-blocks `--mode evaluate`.
+
+Artifacts:
+
+- `reference_outputs/fisher_rao_demand_overlap_20260731/protocol.json`
+- `reference_outputs/fisher_rao_demand_overlap_20260731/preflight.json`
+- `reference_outputs/fisher_rao_demand_overlap_20260731/design_decision.json`
+
+## 2026-07-31: tied-identified Fisher-Rao aggregate preregistration
+
+`WSD80-SUR-067` preserves the same production law but uses the data source
+specified by the aggregate-spine objective. All coefficients and
+hyperparameters are fit only on the `282` physically tied 300M policies:
+
+\[
+A(w)=c-\sum_i a_i\sqrt{w_i}+hR(w),\qquad a_i\ge0,\ h\ge0.
+\]
+
+Here `c=b+M`, `M=||a||_2`, and `q_i=a_i^2/M^2`. Mixture weights, materialized
+epochs, overlap, and replay mass are dimensionless; `c`, `a_i`, `M`, and `h`
+have BPB units. There is no continuous parameter symmetry after recovering
+`M` and `q`, and the raw tied optimization is convex. The 39 proportional
+antithetic pairs do not fit or select any parameter; they are an external test
+of local odd and even geometry.
+
+Nearest routes are old Power-Ridge, `prior_L`, `SUR-059`, `SUR-063`, `SUR-065`,
+and `SUR-066`. The material novelty relative to Power-Ridge is not the square
+root itself: it is the removal of free signed linear terms and the restriction
+to one normalized nonnegative demand distribution plus literal replay. Relative
+to `SUR-065`, the production invariant changes from KL mismatch in normalized
+unique evidence to bounded Bhattacharyya overlap in the mixture allocation.
+
+The frozen evaluation will use five correspondence-grouped outer folds and
+three grouped inner folds. Ridge is selected only from
+`{0, 1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100}` by inner tied-policy RMSE. Both
+Uncheatable and Table-9 are mandatory. Promotion to temporal-state work
+requires all of the following:
+
+1. tied grouped-OOF RMSE within `5%` of the frozen independently fitted
+   one-phase references (`0.0047134` Uncheatable and `0.0103573` Table-9);
+2. external antithetic odd RMSE improvement at least `20%` over zero;
+3. external even RMSE improvement at least `5%`, paired-bootstrap lower bound
+   nonnegative, Spearman at least `0.25`, and sign accuracy at least `0.60`;
+4. a raw optimum no more than `0.02` BPB below the best observed tied policy,
+   nearest aggregate TV at most `0.20`, maximum bucket weight no more than
+   `0.05` above observed support, and maximum epochs no more than `1.25x`
+   observed support;
+5. outer-fold and group-bootstrap optimum median L1 at most `0.25` and maximum
+   L1 at most `0.75`, with median cross-fold demand cosine at least `0.80`.
+
+The exact metric definitions, source hashes, folds, and bootstrap seeds will be
+sealed in `protocol.json` before any candidate result is generated. Failure
+cannot be repaired with signed coefficients, free linear terms, another power,
+output calibration, a trust region, or deployment regularization.
+
+### Frozen result: rejected
+
+Protocol `97fd00958363566547ce98b82e137224a75639482deb460367e4e749f954f7aa`
+was evaluated unchanged. The demand direction is highly stable across folds,
+but the production law fails both mandatory targets:
+
+| target | tied OOF RMSE | relative to reference | pair-odd improvement | pair-even improvement | even Spearman | even sign accuracy | raw support TV | frontier optimism |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|
+| Uncheatable | 0.009553 | +102.7% | 47.8% | 18.9% | 0.310 | 0.590 | 0.419 | 0.068 BPB |
+| Table-9 | 0.015370 | +48.4% | 34.4% | 6.6% | 0.216 | 0.487 | 0.435 | 0.133 BPB |
+
+The pair-even point estimates improve on zero, but both bootstrap lower bounds
+are negative and the preregistered rank/sign gates fail. Exact replay harm
+collapses to numerical zero on both targets. The raw optima are stable across
+folds and conditional group bootstraps, yet remain far outside empirical
+support and substantially below the observed tied frontiers. This is therefore
+stable structural misspecification, not an optimizer or variance problem.
+
+**Decision: reject the aggregate route and do not proceed to a temporal-state
+fit.** A sum of independent square-root bucket credits does not adequately
+price substitution among 39 buckets. Do not reopen through signed or linear
+credits, another power, ridge, output calibration, a trust region, or
+deployment regularization.
+
+Artifacts:
+
+- `reference_outputs/fisher_rao_tied_spine_20260731/protocol.json`
+- `reference_outputs/fisher_rao_tied_spine_20260731/report.md`
+- `reference_outputs/fisher_rao_tied_spine_20260731/metrics.csv`
+- `reference_outputs/fisher_rao_tied_spine_20260731/decision.json`
+
+## 2026-07-31: component-observed phase-local relaxation preregistration
+
+The prior trajectory audit cached only aggregate Uncheatable BPB, but the raw
+W&B histories contain the seven constituent component BPBs at every one of the
+same checkpoints. `WSD80-SUR-068` uses these as a new independent observable to
+test a phase-local relaxation law before another endpoint phase model is
+allowed.
+
+For an exact aggregate-matched asymmetric/tied pair, let `d0_c` be component
+`c`'s observed BPB difference immediately before the phase switch. If the
+component response relaxes toward the current phase's local equilibrium, then
+
+\[
+d_c(s)=d_{1,c}+(d_{0,c}-d_{1,c})\exp(-\lambda s),
+\qquad
+d_{1,c}=-\frac{\beta_0}{\beta_1}\gamma d_{0,c}.
+\]
+
+Here `s` is phase-1 progress, `lambda` is a dimensionless relaxation rate, and
+`gamma` is the late-versus-early equilibrium-response ratio. The factor
+`beta0/beta1` is fixed by aggregate preservation, not fitted. Both parameters
+are shared across all seven components. The tied restriction is exact because
+`d0_c=0` implies `d_c(s)=0` for all `s`.
+
+This is distinct from SUR-060/061: their competence ODEs generated a latent
+state from bucket exposure and mapped it to one aggregate target. SUR-068 first
+tests the transition directly against observed component states. It is also
+distinct from RPL's endpoint-selected late multiplier: `gamma` and `lambda`
+are selected only from component trajectories ending by step 21000.
+
+The frozen first stage reserves step 22000 and the final step 22887, uses no
+aggregate Uncheatable value for parameter selection, and leaves Table-9 and
+WSD80 untouched. Correspondence-grouped folds and leave-one-component-out fits
+must show stable interior parameters. At the untouched step 22000, component
+and aggregate predictions must improve both zero-effect and persistence nulls,
+with stable rank, sign, and calibration. The final aggregate endpoint must
+approach HPR's exact-pair RMSE without refitting. A pass identifies only the
+relaxation law; it does not identify the policy-to-equilibrium map or license a
+full surrogate.
+
+Failure cannot be repaired with component-specific rates, free time
+calibration, endpoint tuning, bucket-resolved response fields, or an additional
+timescale.
+
+### Frozen result: rejected
+
+Protocol `5f21792b08844e9167a22b51de728f99576a57b59eef95c2b23cef5f155d0768`
+was evaluated unchanged after three pre-fit protocol errata. The errata corrected
+JSON canonicalization, replaced sampled W&B history with exhaustive
+`scan_history`, and froze exact complete-case sets after a missingness-only
+audit. No parameter was fit and no BPB outcome was inspected before the final
+protocol was sealed.
+
+The selected shared parameters are interior and stable:
+
+- late-equilibrium multiplier `gamma = 0.172162`;
+- relaxation rate `lambda = 11.517264` per normalized phase-1 duration;
+- fold CVs `0.0326` and `0.0219` for `gamma` and `lambda`;
+- leave-component-out CVs `0.0971` and `0.0397`.
+
+Despite that stability, the transition misses the frozen magnitude and endpoint
+gates:
+
+| scope | RMSE | zero improvement | Spearman | slope | amplitude ratio | bias |
+|:--|--:|--:|--:|--:|--:|--:|
+| fit-step component OOF | 0.02692 | 12.6% | 0.691 | 1.269 | 0.503 | -0.01056 |
+| step-22000 components | 0.02626 | 18.1% | 0.734 | 1.222 | 0.572 | -0.00864 |
+| step-22000 aggregate | 0.01531 | 13.4% | 0.761 | 1.512 | 0.626 | -0.00848 |
+| final components | 0.02623 | 16.5% | 0.724 | 1.138 | 0.584 | -0.00822 |
+| final aggregate | 0.01540 | 12.8% | 0.731 | 1.484 | 0.618 | -0.00816 |
+
+The transition substantially improves on persistence and recovers much of the
+phase-order rank, but it systematically predicts too-negative endpoint deltas
+and only about 60% of the observed aggregate amplitude. Component behavior is
+not a scalar rescaling of the pre-switch difference: Wikipedia is the clearest
+counterexample, worsening the zero predictor by `20.9%` at step 22000 and
+`52.3%` at final, while code and arXiv components retain useful rank signal.
+
+**Decision: reject the shared scalar relaxation law.** This is structural
+misspecification, not parameter instability. Reopen only if an independently
+observed state explains component-specific late equilibria and the common
+aggregate bias. Component-specific rates, free time calibration, endpoint
+tuning, bucket-response fields, and extra exponential timescales are not
+admissible repairs.
+
+Artifacts:
+
+- `reference_outputs/component_phase_relaxation_20260731/protocol.json`
+- `reference_outputs/component_phase_relaxation_20260731/report.md`
+- `reference_outputs/component_phase_relaxation_20260731/metrics.csv`
+- `reference_outputs/component_phase_relaxation_20260731/component_metrics.csv`
+- `reference_outputs/component_phase_relaxation_20260731/holdout_predictions.csv`
+- `reference_outputs/component_phase_relaxation_20260731/phase_local_relaxation.html`
+
+## 2026-07-31: SUR-069/070 identify a policy-computable switch transient
+
+SUR-069 tested a state that was observed independently of endpoint BPB: the
+asymmetric-minus-tied jump in total gradient norm and training loss immediately
+across the 300M phase boundary. On 229 complete exact pairs, the gradient shock
+predicts the common residual left by SUR-068 at steps 19000 and 20000
+(`Spearman=0.340/0.250`; zero-predictor RMSE improvement `25.3%/21.6%`). The
+association decays toward final. Static TV, KL, JS, Hellinger, and Fisher
+coordinates have near-zero shock rank, so this does not license another global
+divergence penalty.
+
+SUR-070 then froze a policy-input map under protocol
+`b1d76f86d7ebe0dabfc6e5ae7f7b2c76049884873b05d1291d32db65128a2c3e`. For
+each predeclared family `f`, its new state is counterfactual late
+unfamiliarity:
+
+```text
+U_f = sum_{i in f} (wbar_i * ebar0_i - w1_i * e0_i).
+```
+
+`U_f` is the phase-0 materialized exposure expected under the tied late
+distribution minus the exposure expected under the actual phase-1
+distribution. It has epoch units, is exactly zero for tied policies, and has no
+fitted bucket parameter. Family mass shift controls static phase-1 composition;
+a separate late-static arm adds phase-1 repetition intensity.
+
+Under five outer mixture-space blocks with nested ridge selection, the simpler
+family-shift plus unfamiliarity block reaches OOF Spearman `0.748` for gradient
+shock and `0.912` for training-loss shock, improving train-fold-mean RMSE by
+`34.6%` and `62.9%`. All family unfamiliarity coefficients have the expected
+positive sign in all five folds. The nominal full block beats the late-static
+control in every fold with paired-bootstrap RMSE-difference intervals
+`[-0.0691,-0.0455]` and `[-0.1950,-0.1407]`, proving that prior phase-0 state
+adds information beyond static late-batch composition and repetition. Late
+repetition itself worsens both targets relative to the simpler cross-phase
+block and is rejected.
+
+Without fitting an endpoint amplitude, OOF predicted gradient shock retains
+the observed shock's smooth-target residual rank at steps 19000 and 20000:
+`Spearman=0.376/0.202`, or `111%/81%` rank retention. By step 22000 and final,
+the rank falls to `0.056/0.053`, consistent with a transient rather than a
+persistent endpoint state.
+
+**Decision:** SUR-069 and SUR-070 are positive identification diagnostics, not
+surrogates. The surviving state is family shift plus counterfactual late
+unfamiliarity; the late-repetition channel is removed. The next admissible test
+is a frozen bounded transition whose rate and response are selected only from
+pre-22000 smooth-target dynamics. No endpoint correction or aggregate-spine
+change is licensed.
+
+The shock outcomes and SUR-068 residual trajectories were exposed during this
+development round. Any result here remains provisional and requires a future
+untouched confirmation design.
+
+Artifacts:
+
+- `reference_outputs/switch_gradient_shock_20260731/report.md`
+- `reference_outputs/policy_predictable_switch_shock_20260731/protocol.json`
+- `reference_outputs/policy_predictable_switch_shock_20260731/report.md`
+- `reference_outputs/policy_predictable_switch_shock_20260731/metrics.csv`
+- `reference_outputs/policy_predictable_switch_shock_20260731/transfer_metrics.csv`
+- `reference_outputs/policy_predictable_switch_shock_20260731/policy_predictable_switch_shock.html`
+
+## 2026-07-31: SUR-071 rejects exponential persistence of switch shock
+
+SUR-071 froze the minimal transition
+
+```text
+h_p(s) = q_p exp(-lambda s)
+r_p(s) = a h_p(s)
+```
+
+where `q_p` is SUR-070's blocked-OOF cross-phase prediction of the observed
+gradient shock. The nonnegative BPB amplitude `a` and dimensionless decay rate
+`lambda` were fit only on common SUR-068 residuals at steps 19000--21000. Step
+22000 and final were applied without refitting.
+
+The shock state is useful relative to no correction: pooled fit-step OOF RMSE
+improves the zero residual by `15.5%`. The exponential transition itself is not
+identified. The static-shock ablation is significantly better on the fit
+window, with dynamic-minus-static RMSE bootstrap interval
+`[+0.000015,+0.000054]` and only one of five outer-fold wins. Two folds select
+exactly zero decay. The full decay rate is `0.160`, corresponding to a half-life
+of `4.33` entire phase-1 durations, effectively static over this schedule.
+
+The tiny fitted decay happens to avoid some static-shock harm at step 22000 and
+final, but those outcomes were already exposed and cannot rescue the failed fit
+identification. The result distinguishes a policy-predictable boundary
+diagnostic from a durable temporal state: the former is real, while the latter
+is not established.
+
+**Decision:** reject SUR-071. Do not add another exponential, persistent
+offset, component-specific rate, or endpoint-selected calibration. A durable
+state now requires a new independently observed quantity or a switch-time
+intervention.
+
+Artifacts:
+
+- `reference_outputs/shock_initiated_transient_20260731/protocol.json`
+- `reference_outputs/shock_initiated_transient_20260731/report.md`
+- `reference_outputs/shock_initiated_transient_20260731/metrics.csv`
+- `reference_outputs/shock_initiated_transient_20260731/shock_initiated_transient.html`
+
+## 2026-07-31: family-anisotropic Hellinger aggregate preregistration
+
+`WSD80-SUR-072` reopens the rejected Fisher-Rao aggregate route only through a
+family-specific metric tensor. It does **not** restore the old Power-Ridge
+model's 39 free signed linear terms. In an identified zero-sum family gauge,
+
+\[
+A(w)=c+\sum_f k_f W_f-\sum_i a_i\sqrt{w_i}+hR(w),
+\qquad a_i\ge0,\ h\ge0,\ \sum_f k_f=0.
+\]
+
+For a scalar gauge shift `lambda > -min_f k_f` satisfying
+
+\[
+\sum_i\left\{\frac{a_i}{2(k_{f(i)}+\lambda)}\right\}^2=1,
+\]
+
+define `K_f=k_f+lambda` and
+`q_i={a_i/[2K_{f(i)}]}^2`. The response is then, up to its intercept,
+
+\[
+A(w)=b+\sum_f K_f\sum_{i\in f}
+       \left(\sqrt{w_i}-\sqrt{q_i}\right)^2+hR(w).
+\]
+
+Thus the two new coefficients are the identifiable anisotropy of a bounded
+Hellinger bowl across the predeclared `broad_text`, `reasoning`, and
+`tech_code` families. The isotropic restriction `k_f=0` is exactly
+`WSD80-SUR-067`. The raw optimization remains convex. A fit that cannot recover
+positive `K_f`, that zeros any bucket amplitude, or that loses this mapping in
+any outer fold is an algebraic failure rather than an invitation to reinterpret
+the family slopes.
+
+Protocol
+`d2f72f62d064b7d661662f53c3bd88af3b44ff8d55c25b10afe8bdd2fea204b7`
+was frozen before target evaluation. The tied design has rank `43` for `43`
+nominal parameters on both targets. No asymmetric row or proportional
+intervention outcome enters fitting or selection. In addition to the inherited
+SUR-067 OOF, external odd/even, raw-optimum, and stability gates, both targets
+must beat the isotropic ablation with a correspondence-cluster bootstrap upper
+bound no greater than zero and at least four of five outer-fold wins.
+
+Artifacts:
+
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/protocol.json`
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/preflight.json`
+
+## 2026-07-31: family-anisotropic Hellinger aggregate result
+
+`WSD80-SUR-072` is rejected under frozen protocol
+`d2f72f62d064b7d661662f53c3bd88af3b44ff8d55c25b10afe8bdd2fea204b7`.
+The result is structural rather than an optimization or identifiability failure.
+The positive-curvature Hellinger-bowl mapping exists in the full fit and every
+outer fold, and the learned family-demand directions are stable, but the model
+does not improve its isotropic ablation and remains severely overoptimistic.
+
+For Uncheatable, OOF RMSE is `0.009848`, `+108.9%` relative to the
+`0.004713` reference and `+0.000154` relative to SUR-067. The paired-bootstrap
+candidate-minus-ablation interval is `[-0.000091,+0.000420]`, with only one of
+five fold wins. For Table-9, OOF RMSE is `0.015776`, `+52.3%` relative to the
+`0.010357` reference and `-0.000033` relative to SUR-067; its interval is
+`[-0.000415,+0.000378]`, with four of five wins. Neither target clears the
+ablation gate.
+
+The raw optima are still unsupported. Their support TV distances are
+`0.394`/`0.463` and their optimism is `0.062`/`0.146` BPB for
+Uncheatable/Table-9. Only `36/39` and `37/39` bucket amplitudes remain active,
+and the replay coefficient collapses to numerical zero. The external
+aggregate-preserving intervention audit also fails its even-effect sign and
+uncertainty gates.
+
+**Decision:** family anisotropy is identified but is not the missing bounded
+aggregate mechanism. Do not reopen this route through another family basis,
+metric tensor, curvature grid, free bucket linear terms, output link, trust
+region, or deployment regularization. A successor needs an independently
+measured composition-production state or a materially different bounded
+coupling with an externally falsifiable finite-move prediction.
+
+Artifacts:
+
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/report.md`
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/metrics.csv`
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/raw_optima.csv`
+- `reference_outputs/family_anisotropic_hellinger_spine_20260731/fold_parameters.csv`
+
+## 2026-07-31: intervention-identified signed dose potential preregistration
+
+`WSD80-SUR-073` moves aggregate-spine identification to the independent tied
+conditional epoch-dose intervention. For proportional weights `p_i` and
+relative materialized dose `r_i=w_i/p_i`, the target-specific response is
+
+\[
+A(w)=b+\sum_i p_i g_i(r_i-1)
+     +\sum_f K_f\sum_{i\in f}p_i\Phi_q(r_i),
+\qquad p^\top g=0,\quad K_f\ge0.
+\]
+
+`Phi_q` is the finite-at-zero convex Cressie-Read generator. The signed local
+bucket utility `g`, generator order `q`, global-versus-family curvature, and
+ridge are selected only on the complete 60M intervention panel through x16.
+The x32 rows are extrapolation-only. The complete Delphi intervention panel
+remains sealed unless both 60M target gates pass; 300M receives only the frozen
+form, with strict source-potential transfer and coefficient-refit results
+reported separately.
+
+The final parent protocol is
+`5cb1b104ae8b9c954418bdfa88e4ffe3c531c4c42f21d4ffda53e4620e089dc5`.
+The initial staged evaluator protocol was
+`4301321360d73aa8763db16741f37551ac35b56965ac6a2c3df6a2fa91bdaf74`.
+Before complete materialization it was superseded by evaluator-v2 protocol
+`4ae9eafb2cf0a9e076ffe4fc69b19c1c3645eecc1eadaf65b2b03cfbeae1d0d3`.
+V2 changes only training-run identity and exact-final-step persisted-metric
+recovery; equations, candidate grid, folds, gates, and selection are unchanged.
+Rerunning preparation reproduced its serialized file hash
+`36ddba9caa76fd9dad3f0a79a6dba41985760634034c51161a1bc1360ca7fce6`.
+The data-use ledger preserves both superseded pre-outcome protocols and records
+that no full 60M, Delphi, or 300M outcome was materialized during protocol
+development.
+
+Algebraic preflight finds all eight candidate designs full rank over 277 tied
+policies, with 38 identified utility directions and maximum gauge error
+`1.69e-17`. A synthetic family-entropy target selected the true `q=0` family
+form, recovered minimum curvature `0.0100`, and converged from all eight raw
+optimizer starts with objective spread `2.13e-13`. The positive affine transfer
+map and failed-gate sealing behavior also reproduced exactly. Black, Ruff,
+Pyrefly, and targeted repository pre-commit checks pass.
+
+The frozen 300M optimization gate now rejects a raw optimum if any of the
+following holds: nearest-support TV exceeds `0.35`, maximum bucket weight
+exceeds `0.30`, median bootstrap TV exceeds `0.10`, any selected curvature is
+inactive, or optimism relative to the best observed tied policy exceeds two
+candidate OOF RMSEs. These are model-form falsification gates, not deployment
+regularization.
+
+Artifacts:
+
+- `reference_outputs/intervention_identified_signed_dose_potential_20260731/protocol.json`
+- `reference_outputs/intervention_identified_signed_dose_potential_20260731/evaluation_protocol.json`
+- `reference_outputs/intervention_identified_signed_dose_potential_20260731/data_use_ledger.csv`
+
+## 2026-07-31: SUR-073 materialization remains sealed on incomplete coverage
+
+The first permitted 60M materialization attempt stopped before fitting or
+selection because `19/277` policies lacked a complete paired target record.
+Sixteen named gaps were native Table-9 evaluations that the live parent was
+still computing. Three policies had no finite training outcome available from
+the materializer: `p000_proportional_anchor`, `p241_d34_m0p25`, and
+`p248_d35_m0`. No `observations_60m.csv` or `selected_60m.json` was written,
+and Delphi outcomes remain sealed.
+
+Iris showed both full parents running with zero logical failures and two
+recovered worker preemptions. Live logs showed the missing 60M Table-9 tasks
+advancing. The incomplete attempt is therefore an availability check, not a
+candidate result; rerun materialization only after all 277 policies have
+finite Uncheatable and Table-9 outcomes.
+
+Artifact:
+
+- `reference_outputs/intervention_identified_signed_dose_potential_20260731/materialization_missing_60m.json`
+
+The recovery audit found two distinct provenance defects. The proportional
+anchor carries the exact `p000_proportional_anchor` tag but uses an underscore
+display-name convention. Two preempted runs, `p241_d34_m0p25` and
+`p248_d35_m0`, have complete step-4576 `eval_metrics.jsonl` records in their
+declared checkpoint roots despite missing W&B final summaries. Evaluator v2
+matches the exact tag first and recovers only the manifest's exact expected
+final step. Every retry must still agree within `1e-10` BPB.
+
+## 2026-07-31: SUR-074 persistent radial parameter displacement preregistration
+
+SUR-071 rejected the hypothesis that the policy-predicted boundary gradient
+shock itself persists as an exponential endpoint state. The W&B histories also
+contain an independently logged quantity that had not been evaluated across
+exact pairs: `params/norm/total`. SUR-074 tests whether phase 1 instead creates
+a durable radial parameter displacement relative to the exact tied run.
+
+For pair `p`, define
+
+```text
+n_p(s) = log(||theta_2p(s)||_2) - log(||theta_tied(s)||_2)
+d_p(s) = n_p(s) - median_pre_switch[n_p].
+```
+
+The transition is normalized by terminal phase progress:
+
+```text
+d_p(s) = q_p g_k(s)
+g_k(s) = (1 - exp(-k s)) / (1 - exp(-k)),  g_0(s) = s.
+```
+
+The shared saturation rate is selected only from parameter telemetry through
+step 21000; step 22000 and the final logged parameter norm are temporal
+holdouts. The terminal state `q_p` is mapped from the already predeclared
+SUR-070 family-shift and counterfactual-late-unfamiliarity features under its
+frozen mixture blocks. One signed response scale is fit on common smooth-target
+residuals at steps 19000--21000. Step 22000 and the final BPB endpoint are
+falsification rows, with zero and static-terminal-state ablations.
+
+Protocol
+`d0ccee45eec68c292b8748f25742ee905d373a0b08016ad0b8edfb732214b741`
+was frozen before any asymmetric-minus-tied parameter-norm trajectory was
+materialized. Before freeze, only the W&B history-key availability and unpaired
+parameter-norm range of one one-phase run were inspected. This is exposed
+development evidence and cannot confirm a surrogate.
+
+Artifact:
+
+- `reference_outputs/persistent_parameter_displacement_20260731/protocol.json`
+
+## 2026-07-31: SUR-074 identifies durable radial displacement but rejects it as a performance state
+
+SUR-074 fails its frozen development gate under protocol
+`d0ccee45eec68c292b8748f25742ee905d373a0b08016ad0b8edfb732214b741`.
+The parameter trajectory itself is strongly identified. The shared transition
+selects the interior saturation rate `k=2` in all five outer omissions,
+improves fit telemetry by `23.1%` over the linear-displacement ablation, and
+beats linear on both step-22000 and final-telemetry holdouts. State rank is
+extremely persistent from step 21000 to 22000 (`Spearman=0.978`).
+
+The state is not sufficiently policy-predictable or performance-relevant.
+Adding counterfactual late unfamiliarity to family shift improves the OOF
+policy map in `5/5` folds with bootstrap RMSE-difference interval
+`[-0.003280,-0.000370]`, but absolute prediction reaches only
+`Spearman=0.206` and `5.4%` improvement over zero. More importantly, the
+dynamic BPB response is significantly worse than its static-state ablation
+(`dynamic-static` RMSE interval `[+0.000102,+0.000441]`). It worsens the zero
+predictor by `8.4%` at step 22000 and `15.6%` at final, with final
+`Spearman=-0.159`.
+
+**Decision:** reject scalar radial parameter displacement as the temporal
+performance state. It is a genuine durable optimizer coordinate, but its
+direction in parameter space matters and total norm discards that direction.
+Do not repair this route with per-layer response coefficients, another
+timescale, endpoint calibration, or a larger grid. A reopen requires an
+independently observed directional state or a switch-time intervention.
+
+Artifacts:
+
+- `reference_outputs/persistent_parameter_displacement_20260731/report.md`
+- `reference_outputs/persistent_parameter_displacement_20260731/acceptance_gate.csv`
+- `reference_outputs/persistent_parameter_displacement_20260731/policy_metrics.csv`
+- `reference_outputs/persistent_parameter_displacement_20260731/response_metrics.csv`
+- `reference_outputs/persistent_parameter_displacement_20260731/persistent_parameter_displacement.html`
+
+## 2026-07-31: SUR-075 architecture-relative parameter redistribution preregistration
+
+SUR-074 established that the scalar parameter-norm radius is durable but not a
+performance state. W&B also logs 110 per-tensor parameter norms. SUR-075 removes
+the global radius and asks whether phase schedules induce one stable, signed
+redistribution direction among eleven predeclared architecture modules:
+
+```text
+u_pg(s) = log(||theta_2p,g|| / ||theta_2p,total||)
+          - log(||theta_tied,g|| / ||theta_tied,total||)
+d_pg(s) = u_pg(s) - median_pre_switch[u_pg].
+```
+
+The groups are embeddings, both layer-normalization positions, attention
+Q/K/V/O, MLP gate/up/down, and final normalization. One uncentered principal
+direction is learned from the step-21000 telemetry matrix only. Projected
+scores follow the same normalized bounded transition family as SUR-074, with
+the shared rate selected from telemetry through step 21000. Step 22000 and the
+final parameter telemetry are temporal holdouts. A nested policy map uses the
+frozen SUR-070 mixture blocks and telemetry scores only. One signed response
+scale is fit on prefinal common smooth-target residuals; step 22000 and final
+BPB are falsification rows.
+
+The construction deliberately forbids per-module BPB response coefficients,
+additional telemetry directions, endpoint-selected centering or component
+count, another timescale, persistent offsets, calibration, and post-outcome
+grid changes. Multiplying every parameter norm by a common factor leaves the
+state invariant, and a tied policy compared with itself has zero state.
+
+Protocol
+`6d924276c9597ef506d723810e703cdde96a955e41cef4c45ac6ee658a70ee8b`
+was frozen before inspecting any asymmetric-minus-tied module-relative
+trajectory, telemetry principal direction, explained energy, or relationship
+to BPB. Before freeze, only W&B key names, key counts, and the existence of 110
+per-tensor norms were inspected. A pass licenses one directional state for a
+nested surrogate ablation after aggregate-spine selection; a failure closes
+current parameter-norm telemetry and leaves switch-time intervention as the
+next admissible identification route.
+
+Artifact:
+
+- `reference_outputs/architecture_relative_parameter_state_20260731/protocol.json`
+
+## 2026-07-31: SUR-075 finds a stable directional state that is anti-predictive of BPB
+
+SUR-075 fails the frozen development gate under protocol
+`6d924276c9597ef506d723810e703cdde96a955e41cef4c45ac6ee658a70ee8b`.
+This is not an identification or policy-map failure. The first telemetry-only
+direction explains `89.7%` of module-relative displacement energy. Its minimum
+outer-fold cosine is `0.998`, its bootstrap cosine lower bound is `0.999`, and
+the selected interior saturation rate is `k=1` in all five folds. The bounded
+transition improves telemetry fit over linear by `26.6%`, remains better at
+both telemetry holdouts, and preserves rank from step 21000 to 22000 at
+`Spearman=0.989`. The policy-input map is also strong: OOF `Spearman=0.893`
+and `49.4%` RMSE improvement over the zero-state predictor.
+
+The smooth-target response nevertheless fails every magnitude and transfer
+gate. The dynamic correction worsens the zero predictor by `1.4%` on its
+prefinal fit rows, `7.9%` at step 22000, and `8.4%` at final. It is significantly
+worse than the static-state ablation, with paired-bootstrap dynamic-minus-static
+RMSE interval `[+0.000004,+0.000293]`, and final rank is reversed
+(`Spearman=-0.362`). All five response folds choose the same negative sign, so
+the failure is stable rather than a sign convention or optimizer accident.
+
+The telemetry direction is almost entirely final-normalization redistribution:
+the final-norm loading is `0.996`; every main attention and MLP matrix has a
+loading near `-0.025`. This is a real, durable, policy-computable optimizer
+coordinate, but it tracks architecture rescaling rather than the missing
+terminal performance state.
+
+**Decision:** reject SUR-075 and close current parameter-norm telemetry. Do not
+post-hoc exclude final norm, add a second principal direction, fit per-module
+BPB coefficients, change centering or grids, or recalibrate the endpoint. The
+next admissible temporal identification route is a switch-time intervention.
+
+Artifacts:
+
+- `reference_outputs/architecture_relative_parameter_state_20260731/report.md`
+- `reference_outputs/architecture_relative_parameter_state_20260731/acceptance_gate.csv`
+- `reference_outputs/architecture_relative_parameter_state_20260731/direction_loadings.csv`
+- `reference_outputs/architecture_relative_parameter_state_20260731/policy_predictions.csv`
+- `reference_outputs/architecture_relative_parameter_state_20260731/response_predictions.csv`
+- `reference_outputs/architecture_relative_parameter_state_20260731/architecture_relative_parameter_state.html`
+
+## 2026-07-31: fixed-model scale-specific tied fibers locally support fiber optimality
+
+The completed 132-run StarCoder 80/20 WSD panel tests aggregate-held phase
+fibers at 1B, 2B, 4B, and 8B materialized tokens. The fixed model has about
+157.5M total parameters, so the ladder spans total-parameter TPP 6.35, 12.70,
+25.40, and 50.79. Each fiber uses
+
+```text
+p0 = a - 0.2 d
+p1 = a + 0.8 d
+```
+
+and therefore holds the 80/20 aggregate `a` exactly fixed. The reference seed
+samples `d` from -0.25 to +0.25; `d=-0.20, 0, +0.20` receive four additional
+joint-randomness seeds. Forty-three W&B runs had stale intermediate summaries
+despite completed checkpoints, so their final values were recovered from
+persisted `checkpoints/eval_metrics.jsonl`; all 138 observations are complete.
+
+For each anchor, the sign at `|d|=0.20` was selected using only the reference
+seed and then evaluated on the four fresh seeds. At the tested anchors nearest
+the local-quadratic tied-optimum estimates, no replicated improvement is
+detected:
+
+| tokens | tested `a` | estimated tied optimum | fresh mean two-phase - tied BPB | 95% CI |
+|---:|---:|---:|---:|---:|
+| 1B | 0.30 | 0.2865 | +0.000978 | [-0.003734, +0.005691] |
+| 2B | 0.40 | 0.3847 | +0.000329 | [-0.005624, +0.006283] |
+| 4B | 0.55 | 0.5336 | +0.001264 | [-0.000972, +0.003501] |
+| 8B | 0.75 | 0.7290 | -0.000032 | [-0.002222, +0.002158] |
+
+All four one-sided Holm-adjusted p-values are 1.0. Thus the panel does not
+contradict, and locally supports, the hypothesis that no policy on the globally
+optimal tied policy's fiber improves on that tied policy. It does not prove the
+global statement: only `|d| <= 0.25` was sampled, only `|d|=0.20` was repeated,
+and the population tied optimum is estimated rather than known.
+
+The important exception is the 2B `a=0.35` measured-grid anchor. Its
+reference-selected `d=+0.20` improves by -0.003860 BPB on the four fresh seeds
+(95% CI [-0.006175, -0.001545], one-sided p=0.00653, Holm p=0.0261 across the
+four measured-grid anchors). All four fresh seeds improve. Because `a=0.35` is
+off the estimated tied optimum and tied `a=0.35` versus `a=0.40` is itself
+indistinguishable at five seeds, this is evidence that phase gain depends on
+the aggregate. It supports the profile view: a globally best two-phase policy
+may lie on another aggregate's fiber even if the tied optimum's own fiber is
+locally null.
+
+Artifacts:
+
+- `reference_outputs/starcoder_wsd80_scale_specific_tied_fibers_20260731/results_20260731/report.md`
+- `reference_outputs/starcoder_wsd80_scale_specific_tied_fibers_20260731/results_20260731/scale_tied_fibers.html`
+- `reference_outputs/starcoder_wsd80_scale_specific_tied_fibers_20260731/results_20260731/fresh_seed_confirmation.csv`
+- `reference_outputs/starcoder_wsd80_scale_specific_tied_fibers_20260731/results_20260731/hypothesis_verdict.json`
+
+## 2026-07-31: erratum — the 2B fiber result rejects a hard fiber-optimality constraint
+
+The preceding interpretation put too much weight on the local-quadratic point
+estimate `a*=0.3847` and incorrectly described the overall evidence as locally
+supporting fiber optimality. The corrected conclusion separates three claims:
+
+1. The literal statement about the exact population tied optimum remains
+   unresolved because that optimum and its complete feasible fiber are not
+   observed.
+2. The finite-grid version is contradicted at 2B. The reference-seed tied-grid
+   minimum is `a=0.35`, and `d=+0.20` improves it by `0.003860` BPB over four
+   fresh seeds (95% CI for two-phase minus tied
+   `[-0.006175,-0.001545]`, Holm `p=0.0261`). All four fresh seeds improve; all
+   five seeds improve when the sign-selection seed is included, with mean gain
+   `0.003215` BPB.
+3. A robust tied-optimal-set version is also contradicted. The tied difference
+   `L(a=0.40)-L(a=0.35)` is `-0.000152` BPB over five matched seeds, with 95% CI
+   `[-0.002140,+0.001836]` and `p=0.842`. The data cannot distinguish the two
+   anchors, so dismissing `a=0.35` as off-optimum is unsupported. In a
+   post-hoc matched comparison, the asymmetric `a=0.35,d=+0.20` policy
+   also beats tied `a=0.40` in all five seeds by `0.003063` BPB (95% CI
+   `[0.002188,0.003938]` as a positive gain), so it beats both measured tied
+   candidates bracketing the quadratic estimate. This cross-anchor comparison
+   strengthens interpretation but is not the multiplicity-adjusted primary
+   test.
+
+The repeated `|d|=0.20` tests at 1B, 4B, 8B, and 2B `a=0.40` do not detect
+improvements. These are radius-specific null results, not evidence for a
+universal statement over an unknown optimum's whole fiber. At 2B `a=0.40`, the
+reference seed also favors `+d` at `|d|=0.05,0.10,0.15,0.20`; only the last
+radius was repeated, where the mean effect is null.
+
+**Revised decision:** do not encode “the optimal tied policy is fiber-optimal”
+as a hard surrogate constraint. It remains a valid implication of a globally
+sufficient phase-weighted-dose model with tied reachability, and can be used as
+a falsifiable local null or soft prior. Empirically, phase response must remain
+aggregate-conditioned and able to improve policies inside the tied-optimal
+uncertainty set.
+
+## 2026-07-31: SUR-076 switch-time intervention is blocked before training
+
+The switch-time design was revised after the 2B fiber counterexample so its
+direct response could represent a gain inside the tied-optimal uncertainty
+region:
+
+```text
+Delta L = {theta_0 + theta_1(a - 0.35)} d_x + theta_2 d_x^2.
+```
+
+The phase-weighted-potential response remains only a constrained null. The
+five-anchor design contains 115 unique policies and 290 observations, including
+32 antithetic pairs, fixed-phase-0 and fixed-phase-1 arms, three asymmetric
+seeds, and six tied-spine seeds. Protocol
+`128af6a1a9c61e259da64b2fd44bf736e64d79df040b434b8251bae6c923813b`
+passes source-hash validation, launcher dry-run, compile/lint, and a noiseless
+end-to-end synthetic seal. The synthetic workflow recovers each response
+restriction and blocks refitting after endpoint unseal.
+
+This is not enough to launch. Fresh independent mechanistic and statistical
+Opus 5 reviews both returned `REVISE`. The decisive failures are scientific:
+
+- transition licensing gives half its weight to pre-switch rows, where a
+  bounded dynamic state is also a static saturating exposure response and the
+  static switch null is identically zero;
+- three late switch folds have no post-switch transition observations, while a
+  fourth has one;
+- one tied-control run is shared across every coordinate at one anchor/seed,
+  and leave-switch folds leak that persistent offset into the
+  aggregate-conditioned response;
+- response heads are nested but treated as competing forms, aggregate is
+  nearly confounded with contrast magnitude, and the feature gate can be
+  carried by the even column while signed columns remain aliased;
+- arbitrarily slow or infinite relaxation and boundary rates can pass;
+- the endpoint summary averages antithetic signs and therefore estimates the
+  even response rather than the signed gain;
+- the three-seed MDE is `0.008600` BPB versus the replicated `0.003860` BPB
+  effect, and the twelve-cluster residual bootstrap omits selection variance.
+
+The matched existing-data interaction between the `a=0.35` and `a=0.40`
+`d=+0.20` effects is `-0.003272` BPB with 95% CI
+`[-0.007720,+0.001176]` and `p=0.111`. Thus the gain at `a=0.35` is
+established, but aggregate conditioning remains a hypothesis; it must compete
+with an aggregate-invariant signed ablation.
+
+**Decision:** block SUR-076 before training. A successor requires
+post-switch-only licensing, seed-clean outer predictions, shape-matched static
+equilibrium and decaying switch-shock nulls, finite observed relaxation with an
+interior rate, column-wise signed-feature separation, matched contrast
+magnitudes at separated anchors, direct odd/even estimands, and an enforced
+full-pipeline synthetic null/power audit. No job was submitted.
+
+Artifact:
+
+- `reference_outputs/switch_time_intervention_design_20260731/independent_review_decision.md`
+
+## 2026-08-04: cross-cell total-TPP diagnostic, with superseded interpretation
+
+The initial preregistered interpretation below is retained for traceability.
+The post-outcome adversarial correction later in this entry supersedes the
+claim that total TPP is licensed as a moderator.
+
+`WSD80-SUR-077` tested whether the missing cross-cell phase coordinate is tied
+to model size, token horizon, or their ratio. The diagnostic fits each held
+cell's aggregate response from its tied diagonal, excludes that cell's untied
+outcomes from phase-law fitting and selection, and selects the clock family and
+ridge inside nested leave-cell-out folds. The phase residual uses the same
+low-dimensional odd/even basis in every cell. This is an exposed development
+diagnostic, not a deployable model.
+
+Protocol
+`a38cd81d4616dd9888f6e824569dbc93d66d85c0a94e52079bcf2c66b478a29d`
+passes every frozen licensing gate:
+
+- the nested clock selector beats the scale-blind LR-dose-plus-Taylor baseline
+  in all ten held cells, with exact one-sided sign-flip `p=1/1024`;
+- mean cell RMSE falls from `0.046737` to `0.026042` BPB;
+- total TPP is selected in nine of ten outer folds, while joint `D,N` is
+  selected once;
+- the descriptive direct total-TPP fit reaches `0.021877` mean cell RMSE.
+
+The result is not sufficient for promotion. The nested selector still has an
+observed-on-predicted slope of `0.414` (`0.503` for the direct total-TPP fit),
+mean qualified optimum-coordinate error `0.106`, and RMSE `0.181521` on the
+highest-token fixed-`N` cell. TPP is also constant within one 300M panel, so it
+cannot identify the 39-bucket phase law there. The allowed conclusion is only
+that one later mechanistic candidate may let total TPP moderate a physical
+transition or response. Track indicators, per-cell heads, learned clock
+exponents, and direct TPP output calibration remain forbidden.
+
+Artifacts:
+
+- `reference_outputs/wsd80_crosscell_phase_control_v3_20260804/protocol.json`
+- `reference_outputs/wsd80_crosscell_phase_control_v3_20260804/report.md`
+- `reference_outputs/wsd80_crosscell_phase_control_v3_20260804/phase_model_metrics.csv`
+- `reference_outputs/wsd80_crosscell_phase_control_v3_20260804/structured_holdout_cell_metrics.csv`
+
+### Post-outcome adversarial correction
+
+Independent Opus 5 review identified that the frozen gate compares against
+`lr_dose_plus_taylor`, which is itself worse than predicting zero phase effect.
+A separate audit preserves the original preregistration and reaches a narrower
+conclusion:
+
+- the selector beats zero phase in 9/10 cells, but the exact one-sided
+  sign-flip test is `p=0.204102` because the single loss is large;
+- pooled RMSE is `0.058022` versus `0.045117` for zero phase, a `+28.6%`
+  regression;
+- on `r3_increase_d_h0640_s28260`, selector RMSE is `0.181521` versus
+  `0.053074` for zero phase, and its support-boundary optimum predicts
+  `0.317702` BPB gain versus the `0.005721` reference, a `55.5x`
+  over-prediction;
+- total and non-embedding TPP are not distinguished by paired cell evidence
+  (two-sided sign-flip `p=0.117188`); and
+- total TPP is strongly aliased with materialized tokens (`rho=0.932`), model
+  size (`rho=-0.721`), optimizer steps (`rho=0.932`), and non-embedding TPP
+  (`rho=0.891`).
+
+**Revised decision:** `WSD80-SUR-077` is mixed evidence that a scale coordinate
+matters, not a license to encode total TPP. A matched-overlap experiment must
+separate `N`, `D`, data reuse, optimizer steps, and TPP before a clock enters a
+surrogate. The proposed HPR/late-unfamiliarity composite is blocked: it reopens
+SUR-048/SUR-053, `U_f` has already failed endpoint persistence in
+SUR-071/074/075, SUR-073's sealed aggregate gate is unresolved, and TPP is
+constant on the mandatory 300M panel.
+
+Artifact:
+
+- `reference_outputs/wsd80_crosscell_phase_control_adversarial_audit_20260804/report.md`
+
+## 2026-08-04: intervention power replaces another endpoint-form iteration
+
+Independent Opus 5 review blocked the proposed aggregate-potential plus
+HPR/late-unfamiliarity composite. It reopens SUR-048 and SUR-053, uses SUR-070's
+boundary transient despite failed endpoint persistence in SUR-071/074/075,
+depends on unresolved SUR-073, and cannot identify a TPP coefficient within
+the primary 300M panel. Endpoint-only phase-state iteration is therefore paused.
+
+An outcome-free power audit under protocol
+`29202828e23fda8cd5662f53700226855b5f7433a90fb9b26cdffb9bebf5fd69`
+uses only exposed WSD80 repeats and architecture metadata. It corrects a prior
+description: the measured fiber had 63 reference-seed coordinates, but only 11
+coordinates with five seeds. Direct odd/even noise comes from 10 complete
+antithetic triples with five same-seed observations each.
+
+| estimand | pooled-RMS SD | maximum SD | repeats for 0.0039 | repeats for 0.0020 |
+| --- | ---: | ---: | ---: | ---: |
+| odd | 0.001363 | 0.001914 | 5 | 10 |
+| even | 0.001996 | 0.002904 | 7 | 19 |
+| better-orientation net | 0.002734 | 0.004439 | 13 | 41 |
+
+Two designs fit the 200-run envelope without pretending that existing raw
+minima identify a clock:
+
+- `I2`: three matched-clock cells, each tied/+d/-d with 20 seeds, for 180
+  runs. Worst-observed-noise MDEs are 0.001264 odd, 0.001918 even, and 0.002932
+  BPB net. The h896 cells separately match the h640 base on total and
+  non-embedding TPP, but token horizon remains aliased with optimizer steps
+  unless batch size is also intervened on.
+- `I3`: two aggregates, three switch times, antithetic arms, and 13 seeds, for
+  182 runs. Its worst-observed-noise net MDE is 0.003759 BPB, sufficient for
+  the replicated 0.0039-BPB effect but not a 0.002-BPB net effect.
+
+**Decision:** no new experiment or surrogate is submitted. First obtain an
+independent review of the estimands, remaining clock aliases, and allocation.
+`Phi(TPP)` may enter a future model only if a matched intervention predicts a
+held cell's phase-gain magnitude and optimum location; otherwise `Phi=1`.
+
+Artifacts:
+
+- `reference_outputs/two_phase_intervention_power_20260804/protocol.json`
+- `reference_outputs/two_phase_intervention_power_20260804/report.md`
+- `reference_outputs/two_phase_intervention_power_20260804/noise_estimates.csv`
+- `reference_outputs/two_phase_intervention_power_20260804/design_envelopes.csv`
+
+## 2026-08-04 02:37 PDT: intervention power v2 blocks both proposed protocols
+
+The preceding power result remains as an audit trail but is superseded for
+design decisions. Independent Opus 5 review found that it used a biased net
+estimand and powered condition levels rather than the between-condition changes
+needed to identify a transition or clock.
+
+Protocol
+`33b02c0b289fc44ca6c8596c191ca95028d8df2314688e6c472f4e85461eaaf6`
+repairs those defects without reading a sealed endpoint panel or fitting a
+surrogate:
+
+- primary estimands are same-seed odd ordering effect and even asymmetry cost;
+  `min(L(+d),L(-d))-L(0)` is descriptive only because the per-seed minimum is
+  downward biased near a null;
+- ten complete antithetic triples contain eight independent tied-control
+  clusters; the three closest design-neighborhood triples provide 12 variance
+  degrees of freedom;
+- design-neighborhood odd/even SDs are `0.001615` and `0.001810` BPB, with 95%
+  upper limits `0.002447` and `0.002742`;
+- between-condition power assumes crossed seeds but zero covariance and thus
+  multiplies single-condition SD by `sqrt(2)`;
+- effect targets are `0.0039`, `0.0028`, and `0.001545` BPB, evaluated under
+  point, 80%, and 95% variance upper limits; and
+- the WSD80 gate now names `mixture_blocked_folds`, uses the existing `0.005`
+  broad-text threshold, and the 300M gate explicitly allows a near-tied optimum
+  because zero of 238 trained asymmetric policies beats the best trained tied
+  policy on either target.
+
+The repaired design envelopes are negative:
+
+| design | runs | estimated FLOPs | 95%-UCL odd MDE | 95%-UCL even MDE | decision |
+| --- | ---: | ---: | ---: | ---: | --- |
+| low-TPP I2 clock triangle | 180 | `5.08e20` | 0.002286 | 0.002561 | wrong TPP regime (`4.77-7.83`) |
+| total-TPP-30 I2 triangle | 180 | `3.20e21` | 0.002286 | 0.002561 | two sufficiency contrasts, no held-cell scale law |
+| I3 two-anchor, three-switch | 182 | `3.44e20` | 0.002930 | 0.003284 | does not power both components at 0.0028 |
+
+**Decision:** no experiment or new model term is licensed. I3 precedes I2
+because it can identify `Psi`; a clock can only moderate an already identified
+response. Freeze a new I3 allocation only if it powers both odd and even
+between-switch contrasts at a shrunken effect under a variance upper bound.
+Defer I2 and any `Phi(TPP)` term.
+
+Exact command:
+
+```sh
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/plan_two_phase_intervention_power_20260804.py
+```
+
+Artifacts:
+
+- `reference_outputs/two_phase_intervention_power_v2_20260804/protocol.json`
+- `reference_outputs/two_phase_intervention_power_v2_20260804/report.md`
+- `reference_outputs/two_phase_intervention_power_v2_20260804/noise_estimates.csv`
+- `reference_outputs/two_phase_intervention_power_v2_20260804/power_table.csv`
+- `reference_outputs/two_phase_intervention_power_v2_20260804/design_envelopes.csv`
+
+## 2026-08-04 02:48 PDT: oriented-gain correction closes the 200-run envelope
+
+The 02:37 power entry is superseded for design decisions. A second Opus 5
+review found that its effect sizes came from a preselected oriented gain while
+its headline MDEs described odd and even components. Those quantities are not
+interchangeable: a gain change can be split across both components. The review
+also identified that all repeated coordinates reuse the same five seeds, so 12
+coordinate-level variance degrees of freedom were too optimistic.
+
+Protocol
+`4094db303623fd9b37861c5ca75d78d2c945ccf6355860dbb8871115fc5fa65f`
+adds a precommitted `+d` oriented-gain estimand, keeps per-seed oracle orientation
+descriptive, distinguishes level from between-condition power, and emits every
+required allocation. Seed-block variance bounds now use four degrees of freedom.
+
+The design-neighborhood SDs are `0.001615` odd, `0.001810` even, and `0.002882`
+BPB precommitted oriented gain. For the 182-run I3 design, oriented-gain MDE is
+`0.003451` under the point variance estimate, `0.005374` under its 80% upper
+limit, and `0.008186` under its 95% upper limit. At the `0.0028` sensitivity
+target, the fixed two-anchor, seven-arm layout requires 266, 602, or 1,344 runs,
+respectively. No allocation in the current 200-run envelope passes even the
+point-variance target.
+
+The evidence behind the effect target is also weaker than the earlier shorthand
+implied: the selected `0.0039`-BPB gain has Holm `p=0.0261` over four primary
+anchors but `p=0.1194` over all twelve repeated arms. The `0.0028` target is a
+design sensitivity point rather than an inferential bound. Observed gain
+magnitudes do not identify the scientifically relevant odd/even change across
+switch times.
+
+**Decision:** no intervention, surrogate, or `Phi(TPP)` term is licensed. I3
+still precedes I2, but proceeding now requires an explicit choice: raise the run
+budget or reduce the number of anchors/switch times and accept the corresponding
+loss of aggregate conditioning or transition-shape identification. Either is a
+new protocol, not a repair to the 182-run layout.
+
+Additional artifact:
+
+- `reference_outputs/two_phase_intervention_power_v2_20260804/required_allocations.csv`
+
+Independent Opus 5 final review returned `PASS` after reproducing the variances,
+upper limits, every allocation row, run/FLOP arithmetic, and the 200-run
+conclusion. The review notes one conservative assumption: same-seed differences
+between switch conditions cancel the shared tied control, while the audit uses
+policy-minus-tied SD with zero cross-condition covariance. That can overstate
+the required runs, but the archive contains no paired cross-switch repeats from
+which to estimate the covariance. It therefore remains a caveat for a new
+protocol rather than a license to reduce the allocation. At the unshrunk
+selected `0.0039`-BPB point effect, 154 runs would fit; infeasibility follows
+from the preregistered `0.0028` shrinkage target and conservative uncertainty
+policy.
+
+## 2026-08-04 03:59 PDT: 300M design identifies local run noise, not an unrestricted phase field
+
+`WSD80-SUR-079` is complete under protocol
+`3f3fb7c71cdac90af9b6089ccd8dae192b81d0e9b709897170838e38a3bfe07c`.
+It introduces no surrogate and reads no sealed outcomes.
+
+The existing proportional panel contains 11 independent runs at one tied
+coordinate. Their endpoint SD is `0.001127` BPB on Uncheatable and `0.003330`
+BPB on Table-9, with 95% one-sided upper limits `0.001796` and `0.005305`.
+These are total run-level SDs: the sweep changes initialization, data order,
+and simulated-epoch subset membership together. It does not decompose those
+sources or identify how variance changes with policy. HPR all-RMSE is
+`6.03`/`3.90` of the corresponding local SD, so its total error is not at this
+measured floor; the uncertainty of a 5% model difference still requires a
+paired or bootstrap comparison rather than a single-run SD ratio.
+
+The expanded panel has 520 rows but 518 policy coordinates. Proportional
+duplicates contain copied 11-run reference means. UniMax supplies one physical
+cross-pipeline tied-neutrality comparison per target, at `-0.13` and `-1.00`
+proportional run-level SD.
+
+The phase-design result is a partial negative. All 238 asymmetric rows have
+distinct full 39-bucket aggregates and one contrast each. The unrestricted
+bilinear design has 1,482 columns and rank 237, so aggregate conditioning and
+phase direction cannot be separated nonparametrically. The imposed
+family-conditioned design is numerically full rank `114/114`; its family-mass
+basis is locally dense (median nearest-neighbor L1 `0.0084`, 142 unordered
+pairs below `0.01`). The audit therefore does not reject a preregistered
+low-rank or family-conditioned operator. It records that such a restriction is
+a model assumption whose synthetic recovery has not yet been tested.
+
+Aggregate and contrast subspaces are more coupled than random row pairing:
+squared canonical-correlation energy is `12.452`, versus permutation-null
+median `6.077` and 97.5% quantile `6.466` (`p<=0.0025`, the 400-draw resolution
+limit). Simplex feasibility contributes to this coupling; it does not identify
+a causal phase mechanism.
+
+Independent Opus 5 review first found and blocked the run-variance provenance
+mislabel, then returned `PASS` after the implementation, report, plan, CSVs,
+and decision JSON were corrected and regenerated. No surrogate is promoted.
+Reopen phase-model construction only with a frozen low-rank recovery audit or
+multiple independent, preferably antithetic, directions at shared aggregates.
+
+Artifacts:
+
+- `reference_outputs/three_hundred_m_phase_identifiability_20260804/report.md`
+- `reference_outputs/three_hundred_m_phase_identifiability_20260804/decision.json`
+- `reference_outputs/three_hundred_m_phase_identifiability_20260804/cc_review.md`
+
+## 2026-08-04 04:03 PDT: aggregate-conditioned rank-one route requires recovery audit
+
+The post-SUR-079 proposal \(R(\bar w,\delta)=(u^\top\delta)(v^\top h(\bar w))\)
+does not yet license a new fit. It shares the broad first-order
+tangent-bilinear class with the legacy phase-specific state interaction, but
+neither model contains the other without additional assumptions. The
+gradient-tied sibling was already rejected as SUR-013, while the
+aggregate-independent contrast-SVD restriction was tested by low-rank order
+DSP.
+
+The empirical failures are not marginal. On the corrected 107-policy WSD80
+surface, LPSI has nested RMSE `0.063965` and places its optimum `0.179` from the
+observed optimum. Rank-16 low-rank order DSP gives 300M OOF RMSE
+`0.009986/0.019874` and exact-pair delta RMSE about `0.0130/0.0256` BPB. The
+corrected WSD LPSI matrix itself is fold-stable; the cross-surface stability
+failure came from cosine 50/50. The current 300M one-direction-per-aggregate
+design still provides no physical state or rank-restricted recovery result.
+
+Recorded `WSD80-SUR-080` as `completed_historical_audit_recovery_pending`.
+Independent Opus 5 review passed the no-endpoint-fit decision but found the
+original containment and provenance claims too strong. The next licensed local
+step is a frozen outcome-free recovery audit. Even a pass cannot license free
+outcome-selected factors. The sealed SUR-073 aggregate gate remains pending
+scheduler capacity and is not affected by this decision.
+
+Artifact:
+`reference_outputs/aggregate_conditioned_low_rank_route_audit_20260804/report.md`.
+
+## 2026-08-04 05:03 PDT: rank-one phase-field recovery fails the both-target gate
+
+`WSD80-SUR-081` completed under frozen protocol
+`b794b5d8f4e9874e8f34bd087416c40e6f615ae44d1d8355b8f60e2ee7d5e8bb`.
+The audit used the actual 238 asymmetric 300M policy rows but no endpoint
+targets. It simulated rank-one response fields in the full 38-by-39 tangent
+basis and the 38-by-3 predeclared-family basis, then evaluated held-fold
+recovery under the measured 11-run proportional endpoint-noise levels.
+
+One pre-run implementation was invalidated before outcomes: its ALS convergence
+test compared infinity with infinity and stopped after one update. The frozen
+scientific protocol was unchanged; the superseded implementation hash and
+`outcomes_generated=false` record are preserved. The corrected executable
+passed repository checks and recovered an independent synthetic rank-one matrix
+to machine precision before a new implementation hash was frozen.
+
+Exact commands:
+
+```bash
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_rank_one_phase_field_recovery_20260804.py prepare
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_rank_one_phase_field_recovery_20260804.py run
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/summarize_rank_one_phase_field_recovery_20260804.py
+```
+
+Both bases pass local-rank and noiseless gates. Both pass the primary
+Uncheatable-noise gate and fail the primary Table-9 gate:
+
+| Basis | DOF | U noise median signal-RMSE ratio | T9 noise median ratio | T9 decision |
+|---|---:|---:|---:|---|
+| predeclared family masses | 40 | 0.167 | 0.506 | fail; frozen maximum 0.500 |
+| full tangent | 76 | 0.311 | 1.599 | fail |
+
+At Table-9 noise, full-field random and nominal geometry-stress medians are
+`1.526` and `1.759`; family medians are `0.503` and `0.528`. The failure is not
+confined to a small stress subset. Both bases recover a synthetic 0.010-BPB
+signal, but the primary 0.0039-BPB gate remains failed.
+
+Independent Claude Opus 5 was invoked read-only through subscription OAuth with
+`ANTHROPIC_API_KEY` removed, `Agent` disabled, and maximum effort. The pre-run
+review returned `PASS` with mandatory caveats about pooled stress gates,
+dependent fold rows, homoscedastic noise, and synthetic rank-one truth. The
+post-run review returned `PASS` on the negative interpretation and explicitly
+rejected threshold relaxation, basis shrinkage, lower assumed noise, and more
+factor draws.
+
+**Decision:** no endpoint model is promoted. The free full field is closed
+under the current design and binding Table-9 noise. The family basis is a
+numerical near miss on synthetic truth, not a physically identified mechanism.
+No new local model iteration is licensed. Return the active queue to the sealed
+SUR-073 intervention-identified signed-dose potential.
+
+At 05:03 PDT, all 12 SUR-073 60M Table-9 recovery children remain pending for
+scheduler capacity: each needs 104 CPU cores while 103 are available. The
+parent is running with no logical failure and is left untouched.
+
+Artifacts:
+
+- `reference_outputs/rank_one_phase_field_recovery_20260804/report.md`
+- `reference_outputs/rank_one_phase_field_recovery_20260804/posthoc_analysis.md`
+- `reference_outputs/rank_one_phase_field_recovery_20260804/decision.json`
+
+## 2026-08-04 06:32 PDT: paper-inspired exponent route is rejected after asymptote falsification
+
+Reviewed Su's *Deconstructing Scaling Laws: Optimization, Architecture, and
+Data* from the supplied PDF and the identical local source archives for
+arXiv:2605.01640, *Prescriptive Scaling Laws for Data Constrained Training*.
+The two arXiv archives have SHA256
+`9b83809391859ed58fb61044fde23f2c4cf6ce5f49f39fde0545babe040b6c9d`.
+
+Su's coefficient-versus-exponent argument is a universality prior rather than
+a theorem: ordinary engineering changes should usually move coefficients
+because an exponent change implies an asymptotically unbounded advantage. The
+repeated-data paper does not enforce that prior. Its most general penalty is
+
+\[
+P R_D^\delta (N/U_D^\gamma)^\kappa,
+\]
+
+and fitted penalty exponents change materially between standard and strong
+weight decay. Its contribution is aggregate capacity-normalized repetition
+damage, not early-versus-late phase order.
+
+The direct transplant is closed as `WSD80-SUR-083` before endpoint fitting.
+Physical repeats are aggregate-only on a fixed-aggregate fiber; at one fixed
+scale the capacity factor is absorbed into amplitude. Fitting it here would
+reopen SUR-019/026/077 without a new identified state.
+
+The exposed CC proposal that policy changes the token-horizon exponent was
+audited under frozen protocol
+`8be8aebaf8dd6b7655ade3cc9ea2b95c674fcdad84bd33662a33a842ffea972e`.
+The shared-floor implementation passed all frozen development gates. Stage-1
+warm-start highest-rung RMSE was `0.007153` for recency versus `0.020273`
+aggregate-only; Stage 3 was `0.005260` versus `0.022929`. This does not create a
+single-horizon surrogate because the held policy contributes its first three
+outcomes and \(D^{-\gamma(z)}\) is absorbed into amplitude at fixed \(D\).
+
+Independent Opus 5 returned `BLOCK/C`. It found that only five Stage-1
+coordinates distinguish early from late weighting, `(0.02,0.82)` carries about
+71% of that leverage, and the decisive policy-floor comparison is dominated by
+a tied proportional coordinate. The frozen implementation's global floor cap
+prevents high-loss policies from having admissible higher asymptotes.
+
+A post-hoc companion now gives every policy an independently bounded floor and
+amplitude. Results:
+
+| panel | split | aggregate RMSE | recency RMSE |
+| --- | --- | ---: | ---: |
+| Stage 1 | held policy | 0.006834 | 0.006438 |
+| Stage 1 | held aggregate | 0.007024 | 0.006692 |
+| Stage 3 | held policy | 0.006880 | 0.007223 |
+| Stage 3 | held aggregate | 0.006380 | 0.006484 |
+
+Full-fit late fractions collapse to `2.3e-13` and `0.0049`. A floor-free
+difference-profile diagnostic handles the non-geometric token ladder exactly.
+Within Stage-3 aggregate fibers, its Spearman ordering under the exposed
+late-recency state is `+0.8,-0.2,-0.2,-0.4`; aggregate-to-curve-shape ordering
+survives, but late-recency curve-shape ordering does not.
+
+**Decision:** `WSD80-SUR-082` is `completed_negative_no_model_promoted`.
+Preserve aggregate share as a descriptive rung moderator only. It does not
+reopen a clock/exponent surrogate and does not alter the active SUR-073 queue.
+
+Commands:
+
+```bash
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_policy_scaling_exponent_20260804.py
+uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_policy_scaling_exponent_posthoc_20260804.py
+./infra/pre-commit.py experiments/domain_phase_mix/exploratory/two_phase_many/audit_policy_scaling_exponent_posthoc_20260804.py
+```
+
+Artifacts:
+
+- `reference_outputs/policy_scaling_exponent_audit_20260804/preregistration.md`
+- `reference_outputs/policy_scaling_exponent_audit_20260804/report.md`
+- `reference_outputs/policy_scaling_exponent_audit_20260804/opus5_prerun_review.md`
+- `reference_outputs/policy_scaling_exponent_audit_20260804/opus5_postrun_review.md`
+- `reference_outputs/policy_scaling_exponent_audit_20260804/posthoc/report.md`
+- `reference_outputs/policy_scaling_exponent_audit_20260804/final_synthesis.md`
+
+## 2026-08-06: multi-target shared-state round, settled findings
+
+Round objective: find a simple mechanistic parametric surrogate that selects good
+two-phase optima, and test whether several BPB metrics measured on the same
+checkpoints identify a shared latent transition better than independent per-metric
+fits.
+
+Preregistration frozen before any fit:
+`reference_outputs/multitarget_interference_evidence_20260806/preregistration.md`,
+with an amendment log recording every post-freeze change and whether it was made
+before or after seeing an outcome. Routes `WSD80-SUR-084` through `WSD80-SUR-088`
+were each appended to the active registry before their model was fitted, each with
+a pre-run prediction serving as its falsification test.
+
+### The multi-target route is closed by the evidence, not by a candidate
+
+`WSD80-SUR-085`. After projecting out a phase-blind aggregate response (per-bucket
+total materialized epochs plus over-exposure), the 29 WSD80 BPB metrics have a
+residual correlation matrix with entropy effective rank `1.3455` and equicorrelation
+effective label count `1.1039`. Mean off-diagonal correlation is `0.9025`; the first
+two eigenvectors carry `92.2%` and `7.3%` of residual energy and no other carries
+more than `0.27%`. For pinning a shared nonlinear parameter these metrics are worth
+about one independent label, not 29.
+
+The textbook GLS information ratio is recorded but not used: it returns `1.71e11`
+with a pseudo-inverse and `1.76e8` with a truncated eigen-inverse. A quantity that
+moves three orders of magnitude with the choice of inverse is not measuring
+anything; the correlation matrix has condition number `3.21e14`. The redundancy is
+in the signal as well as the noise, with median sensitivity alignment `0.9994` and
+every metric loading with the same sign.
+
+This is a property of the panel, so it closes the route without needing a winner.
+
+### Aggregation, verified before any label was built
+
+`eval_uncheatable_eval_macro_bpb` is the flat mean of its 7 components to `1.19e-07`.
+`table9_macro_bpb` is not the flat mean of the 47 leaves in the packet (max error
+`0.0480`); it is the unweighted mean of 51 components, confirmed against
+`marin.evaluation.olmo_base_eval.aggregate`. Deriving
+`mmlu_bucket_mean = (51*macro - sum of 47 leaves)/4` gives `[1.2457, 1.7098]`, inside
+the observed leaf range, and makes the macro an exact linear functional of
+predictions (`1.11e-16`). Uncheatable components exist on 280 of 520 rows; the other
+240 contribute the macro as an observation of the mean of unobserved components. No
+row contributes both a component and the aggregate containing it.
+
+### Three interference laws, three distinct failures
+
+Common properties, verified algebraically before fitting: zero interference reduces
+every variant to a function of total materialized epochs (`2.2e-16`), so the
+phase-weighted-dose null is nested exactly and is reachable inside the frozen grid.
+Synthetic recovery under measured training-seed noise returns the true transition in
+40 of 40 draws for all three truths, including recovering a phase-blind truth as
+exactly zero interference.
+
+`WSD80-SUR-084`, absolute interference `h = exp(-mu*beta1*(1-w1))`: unidentified.
+Both nonlinear parameters selected opposite grid boundaries in 29/29 metrics under
+both protocols and both fitting modes, so the preregistered non-identification stop
+applies and the grid was not extended. The diagnosis generalizes: the law is not
+tied-neutral, so the rate is identified from the strongly measured tied aggregate
+curvature rather than from the weak phase contrast, and the phase prediction is
+inherited from a parameter fitted to something else. The degenerate corner collapses
+the state to phase-1 exposure only and over-predicts the Programming-Languages gain
+6.6-fold (`0.06296` against observed `0.009594`), with optimum distance `0.0990`,
+Regret@1 `0.005936`, and broad-text predicted gains `0.0201`/`0.0206`.
+
+`WSD80-SUR-086`, share-drop retention `h = exp(-mu*beta1*max(0, w0-w1))`: exactly
+tied-neutral (`0.00e+00`), which is the intended repair and works, and structurally
+incapable of producing a gain. On a simplex every share that rises is exactly some
+other share that falls, so a one-sided penalty can only subtract from whichever
+bucket is de-emphasized late. Derived before fitting; measured predicted gain
+`-8.98e-06` with a tied predicted optimum in all four cells.
+
+A finding independent of the law fell out of that cell: where the phase channel is
+provably inert, interior OOF RMSE is `0.0546` to `0.1268` against repaired RPL
+`0.0076`, localizing the binding error to the aggregate backbone.
+
+`WSD80-SUR-088` therefore replaced the exponential acquisition curve with its exact
+nested generalization `1 - (1 + rho x / nu)^-nu`, verified before fitting to preserve
+tied neutrality, the zero-interference nesting, and boundedness at every grid value,
+with `nu = 1e7` reproducing the exponential to `2.7e-08`. It works: fitted on the 20
+tied WSD80 coordinates alone, the backbone reaches RMSE `0.007906` against the
+panel's training-seed sigma `0.004633`, about `1.7` seed sigma. The selected
+curvature is `nu = 0.25`, the grid minimum, so the data wants a more strongly
+power-law approach than this grid allows.
+
+`WSD80-SUR-087`, two-sided recency exposure `kappa = exp(-mu*beta1*(w0-w1))` acting
+on exposure rather than acquired mass: the only law in the family that is both
+tied-neutral and able to move a fixed-aggregate contrast in either direction. Nested
+results are recorded in the follow-up entry.
+
+### Two self-corrections
+
+The near-universal binding of the head's non-negativity constraint (93-100% of
+targets on both panels) was first read as a sign-convention misspecification. That
+is wrong. Relaxing the constraint to signed amplitudes changes nothing: same selected
+shape, same interior OOF RMSE (`0.044393`), same amplitudes (`[0.6549, 0.6374]`). The
+actual cause is that the head carries a family-level column and per-bucket departure
+columns for the same evidence, and the family column is the exact mean of its members
+(verified to `0.0`). The design is rank-deficient by exactly the number of families:
+WSD80 `346 x 7` has rank 4, 300M `520 x 46` has rank 43. The unconstrained solve is
+therefore non-unique and the binding measured nothing. Fitted values are unaffected,
+so every RMSE, gate, and optimum stands; fitted amplitudes are not interpretable. The
+parameterization should carry departures as within-family contrasts summing to zero.
+
+The panel is 346 measured coordinates, not the 166 the loader docstring claims; the
+docstring is stale relative to the data it loads. Corrected in the preregistration
+and report.
+
+### The structural result worth keeping
+
+Within this evidence-state family, tied-neutrality of the retention law and the
+ability to represent a two-phase gain are in tension. A law that is not tied-neutral
+lets the rate be identified from aggregate curvature and then dictates an unfitted
+phase prediction. A one-sided tied-neutral law can only subtract and cannot produce a
+gain on a fixed-aggregate fiber. Escaping both requires abandoning the reading of the
+factor as a survival probability. Any future retention proposal should be checked
+against these two conditions algebraically before anything is fitted; both checks are
+seconds of work and both were decisive here.
+
+### Commands
+
+```bash
+uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_multitarget_interference_evidence_20260806 audit
+uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_multitarget_interference_evidence_20260806 wsd80
+uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_multitarget_interference_evidence_20260806 panel300m
+uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.diagnose_multitarget_ile_20260806 all
+```
+
+Artifacts: `reference_outputs/multitarget_interference_evidence_20260806/`.
+
+## 2026-08-06 (later): independent review overturns two conclusions from the round above
+
+An independent Codex review (GPT-5.6 Sol, maximum reasoning, read-only, subscription
+OAuth with the platform key removed) was run over the round's code and artifacts.
+Eight of its nine substantive findings reproduce against the code; one does not. Two
+of this session's stated conclusions do not survive.
+
+### Overturned
+
+**`WSD80-SUR-085` is withdrawn, not closed.** The pre-fit audit that closed the
+multi-target route measured the wrong estimand. Residuals after a phase-blind
+projection still contain shared phase response and shared benchmark structure, so
+their correlation is not an observation-noise correlation, and shared signal is what
+makes joint fitting work rather than what makes it fail. Re-estimated by demeaning
+within each of the 11 replicated WSD80 coordinates (55 runs, 44 degrees of freedom):
+entropy effective rank `6.8636` and equicorrelation effective labels `3.4625`, against
+the `1.3455` and `1.1039` reported above. The metrics are worth about three and a half
+independent labels, not one, implying up to a `1.86x` reduction in the shared
+parameter's standard error.
+
+The empirical reading was also wrong, through my own error: the joint-versus-independent
+summary filtered to random folds only. Under **blocked** folds, joint fitting lowers
+out-of-fold RMSE on all three code targets for all three laws, by `0.0168` to `0.0954`
+BPB, every interval excluding zero at `p = 0.000`. And the registered gate asks for
+improvement in *selection or gain* diagnostics while the harness bootstraps RMSE, so
+the gate was never evaluated at all. The route is reopened.
+
+**`WSD80-SUR-086`'s structural claim is falsified as stated.** "A one-sided retention
+law cannot produce a fixed-aggregate gain" holds only while every bucket's net evidence
+coefficient stays non-negative. The head bounds family amplitudes below at zero but
+lets bucket departures range over `[-50, 50]`, so a departure can drive the net
+negative and the subtraction becomes a gain. Of 58 metric-protocol cells, 4 do exactly
+that; `twitterAAE_HELM_fixed` under blocked folds reaches net `-0.0579` with a
+fixed-aggregate gain of `+0.021627` BPB. On the primary target the net coefficients are
+`[0.5011, 0.7261]` and the fiber gain is exactly `0.000000`, which is why the
+primary-target tables still show no gain. The claim is conditional, not structural.
+
+### The 300M stage is withdrawn entirely
+
+Two independent defects, either of which invalidates it. Nested prediction fills a row
+only where that label is observed, so the 240 rows carrying the Uncheatable macro but
+not its components left every component prediction unset and the reconstruction
+averaged them into `NaN` on `240/520` rows; the separately fitted macro head was never
+used to constrain the component heads as the preregistration described. And the
+comparison target was wrong: the published HPR reference is computed on
+`eval_uncheatable_eval_bpb` while the stage reconstructs
+`eval_uncheatable_eval_macro_bpb`, which differ by up to `0.004774` BPB, more than the
+gate's own `0.002` slack. The frozen pair gate was additionally never evaluated because
+no HPR residual vector is ever constructed. The run was killed on discovery and no 300M
+number is reported.
+
+### Narrowed
+
+The absolute law's boundary selection holds for joint full fits (`29/29`, both
+protocols) and for independent full fits at `27/29` random and `26/29` blocked, but the
+registered rule is a majority of *folds*. Under random folds it fires; under blocked
+folds it does not (`0/29` joint, `2/29` independent). The non-identification is
+protocol-dependent.
+
+### Rejected
+
+The review's objection that the WSD80 panel should be 166 coordinates rather than 346
+does not hold. The published repaired-RPL reference itself reports `346` rows and `284`
+interior rows, identical to this round. The `166` figure is a stale loader docstring,
+not the reference protocol.
+
+### Unaffected
+
+The WSD80 gate table, the eight-fiber profile, the algebraic properties, the
+aggregation audit, the rank-deficiency finding, and the boundary-optimum count stand as
+measured. All three laws still fail every positive-control WSD80 gate, and the fiber
+profile remains the round's strongest evidence: only the absolute law reproduces the
+observed contrast sign change, and it invents a `+0.196` BPB gain at high aggregate
+where none exists.
+
+### Fixes applied
+
+Bootstrap p-values are capped at one (eight rows previously reported `2.0`). Exact-pair
+scoring now applies the asymmetry filter and builds `238` pairs, matching the reference.
+The Uncheatable macro reconstruction raises instead of propagating `NaN`. The HPR
+reference now records the column each number was computed on. The 300M module carries a
+withdrawal notice describing the redesign it needs.
+
+Artifact: `reference_outputs/multitarget_interference_evidence_20260806/report.md`
+section 0 records every finding, the verification, and what survives.
+
+## 2026-08-06 (final): the registered multi-target gate, evaluated at last
+
+The review showed the harness had bootstrapped out-of-fold RMSE while the registered
+gate asks about selection and gain diagnostics, so the gate had never been tested. The
+harness now persists per-row out-of-fold predictions and the selected curvature, and
+`diagnose_multitarget_ile_20260806.py gate` runs the registered quantity: a paired
+bootstrap of Regret@1 and Regret@5 over interior rows, 4000 draws, identical draws
+across fitting modes.
+
+**The letter of the gate is met; the substance is not.** Four diagnostics improve
+beyond uncertainty, clearing the "at least two" bar. All four sit on the absolute law,
+which fails every representability gate in this round. All four are under random folds
+only. All four are on the two GitHub controls and never on the primary target, where
+the difference is exactly `0.000000`. And `k=1` and `k=5` on one target are not
+independent diagnostics, so four cells are really two targets.
+
+Under blocked folds the same absolute law is significantly **worse** jointly on GitHub
+C++ (`+0.018030`, CI `[0.001170, 0.030883]`), as is share-drop (`+0.169871`, CI
+`[0.034526, 0.214896]`). For the recency law — the only mechanism in the family that is
+both tied-neutral and two-sided — not one diagnostic improves and three are worse.
+
+**The result worth carrying forward is the divergence.** Sharing the nonlinear shape
+improves out-of-fold RMSE on every code target for every law under blocked folds, by
+`0.017` to `0.095` BPB with every interval excluding zero. Under those same folds it
+leaves selection regret unchanged or makes it significantly worse. Predicting every
+policy better on average and choosing a better policy are different objectives, and on
+this panel they point in opposite directions.
+
+That reconciles the two readings this round produced. The corrected information audit
+is right that the metrics carry real independent information — about `3.46` effective
+labels, not the `1.10` first reported. Sharing does exploit it. It simply spends that
+information on pooled fit rather than on the optimum region, which is the thing the
+surrogate exists to get right. The same fit-versus-selection divergence appeared
+earlier for the phase channel itself, so it is a property of this panel and this loss,
+not of one estimator choice.
+
+`WSD80-SUR-085` closes as `completed_negative_gate_met_in_letter_not_substance`.
+Reopen only with a selection-aware estimator that shares the nonlinear shape under a
+loss targeting the optimum region rather than pooled squared error.
+
+Artifacts: `reference_outputs/multitarget_interference_evidence_20260806/wsd80_registered_gate.txt`
+and `wsd80_out_of_fold_predictions.csv`.
+
+## 2026-08-06 (continued): the one-index family is refuted wholesale, and a two-index family is the best candidate yet
+
+### Why all three laws failed, in one sentence
+
+`WSD80-SUR-084`, `086` and `087` each modify a single exposure index. Any such model
+is refuted without fitting: if loss depends on the policy only through one index, a
+two-phase policy shares its index value with some tied policy and therefore its
+predicted loss, so it can never beat the best tied policy. WSD80 measures a `+0.009594`
+BPB gain over the entire tied class (best tied `0.945062` at `(0.30, 0.30)`, best
+overall `0.935468` at `(0.10, 0.50)`). One index cannot produce that, whatever form it
+takes. The three separate diagnoses were all downstream of this.
+
+### `WSD80-SUR-089`: two exposure indices with different memory horizons
+
+`E_k,i = (1 - phi_k) w0_i + phi_k w1_i` for a slow and a fast horizon. The tied class is
+exactly the diagonal `E_slow = E_fast`, so an off-diagonal minimum is a gain no constant
+mixture can match; `phi_slow = phi_fast` collapses to the one-index null exactly
+(verified `0.00e+00`, as is tied agreement of the two indices).
+
+Registered before fitting. The registered falsification did not fire: the horizons come
+out well separated, `slow = 0.55` and `fast = 1.00`, not collapsed.
+
+It is the best candidate the project has produced. Interior OOF RMSE `0.008500` against
+repaired RPL `0.007575`, where the three one-index laws gave `0.028` to `0.055`. The
+fiber profile is the reason to take it seriously: predicted contrast changes sign at
+exactly `a = 0.30`, the measured tied optimum, tracks the observed contrast within
+`0.052` on seven of eight fibers, and its predicted fiber gains track the observed ones
+to mean absolute error `0.0064` across a range spanning `0.000` to `0.243`.
+
+It is still not promotable. Global gain `0.016004` against observed `0.009594` (error
+`0.006410`, limit `0.004439`); optimum distance `0.1180` against limit `0.05`; Regret@1
+`0.006290` against limit `0.004842`. The model places its optimum at aggregate `0.105`
+where the data says `0.18`, so the residual error is in the aggregate backbone at low
+aggregate rather than in the phase mechanism.
+
+Provenance caveat: the horizon grid was corrected after an initial fit pinned `slow` at
+an arbitrary `0.45` cap. Under the original grid the gain gate passed (`0.006615`,
+error `0.002979`); under the corrected grid it fails (`0.016004`). The earlier pass was
+a grid artifact and is not claimed.
+
+### A refuted refinement, recorded because it looked obvious
+
+The natural next step was to fit in the order the charter prescribes: aggregate backbone
+on the tied diagonal first, then the phase split on top, so the asymmetric rows cannot
+drag the backbone. Implemented and measured, it is **worse** on every gate: gain
+`+0.062295`, optimum distance `0.1389`, in-sample interior RMSE `0.011585` against the
+joint fit's `0.008500` out-of-fold. With the backbone frozen the split amplitudes go to
+`1.83` and `1.86` and the phase channel over-fires; the joint fit's ridge at `1.0` was
+doing real work restraining it. Staging the estimator is not the fix.
+
+### One more correction to this session's own record
+
+The report previously said the absolute law "invents a `+0.196` BPB gain at `a = 0.80`
+where the observed advantage is nil." That was asserted without measuring the observed
+fiber gains. They were measured afterwards and grow steeply with aggregate:
+`+0.019855`, `0.000000`, `+0.001736`, `+0.003957`, `+0.039522`, `+0.069623`,
+`+0.137447`, `+0.243284`. The real advantage at `a = 0.80` is `+0.243`, so that law
+under-predicts there. Its actual failure is at low aggregate and in placing the sign
+change at the wrong aggregate. Corrected in place.
+
+## 2026-08-06 (continued): the blocker moves from the phase mechanism to the aggregate response
+
+`WSD80-SUR-090` added one shared exponent to the over-exposure term of SUR-089, on a
+measured diagnosis rather than a guess: the tied diagonal is well sampled below the
+optimum (11 of 20 coordinates below `w = 0.30`, 9 in `[0.05, 0.25]`), so the backbone
+was misfit rather than underdetermined, and its residuals over-predicted loss at
+`w = 0.30, 0.35, 0.40` by `+0.0109`, `+0.0111`, `+0.0132` BPB, or 2.4 to 2.9 seed sigma,
+while staying small elsewhere.
+
+Half the registered signature fired. Superlinear damage does sharpen the bowl: tied RMSE
+improves from `0.007906` to `0.006198`, that is `1.71` to `1.34` seed sigma, and the
+optimum-region residuals fall to `+0.0072`, `+0.0061`, `+0.0075`, or `1.3` to `1.6`
+sigma.
+
+The decisive half did not. `tau` selects `3.0`, the grid maximum, which is the
+registered boundary stop, and the three residuals remain the **same sign** and above one
+seed sigma. A systematic same-sign residual across the entire optimum region is a shape
+error the family cannot absorb, not noise. Per the registered reopen condition that
+means the aggregate response family is wrong rather than mis-parameterized. The grid was
+not extended and the route is closed.
+
+**Where this leaves the programme.** The phase question and the aggregate question have
+now separated cleanly, which they had not before:
+
+- The phase mechanism is essentially solved by two exposure indices. Its fiber profile
+  changes sign at exactly the measured tied optimum and tracks observed fiber gains to
+  `0.0064` mean absolute error across a range spanning `0.000` to `0.243`.
+- The binding constraint is the aggregate response. A saturating benefit minus a power
+  damage term cannot reproduce the observed tied bowl near its minimum, and giving the
+  damage a free exponent does not fix it.
+
+That is exactly the problem `WSD80-SUR-073`, the intervention-identified signed dose
+potential, exists to solve, and it remains the only active aggregate candidate. Its
+frozen 60M both-target gate has to resolve before anything downstream of it can be read.
+A promotable model now plausibly needs SUR-073's aggregate backbone carrying SUR-089's
+two-timescale phase structure — but that composition must not be fitted until SUR-073
+passes its own gate on its own evidence, which is the sealed leg this session is not
+permitted to open.
+
+## 2026-08-06 (continued): the aggregate form is not the problem, and the overshoot is corner optimism
+
+`WSD80-SUR-091` replaced the bounded evidence state with a divergent inverse-power
+benefit, the same form the incumbent RPL uses, on the structural argument that a state
+bounded in `[0,1)` cannot reproduce a tied response that diverges as the code share goes
+to zero (`1.5935` BPB at `w = 0` against a `0.9451` minimum).
+
+It does not fix the bowl. Tied RMSE `0.006634`, that is `1.43` seed sigma, against
+`0.006198` and `1.34` sigma for the bounded state it replaced, so slightly worse. `tau`
+pins at the grid maximum again. The residuals at `w = 0.30, 0.35, 0.40` remain `+0.0069`,
+`+0.0072`, `+0.0099` and still share one sign.
+
+Two structurally different benefit families, bounded-saturating and divergent
+inverse-power, each with a free damage exponent, fail in the same way. The registered
+reopen condition therefore fires: **the aggregate problem is not the functional form**,
+and no further aggregate variant is licensed from this panel alone.
+
+### A hypothesis of mine, refuted by measurement
+
+The natural reading of the SUR-089 gain overshoot was that an inflated tied comparator
+was inflating the gain: the backbone over-predicted loss at the tied optimum by about
+`+0.007`, and the overshoot was `+0.006410`, which matched suspiciously well.
+
+Measured directly, that is wrong and wrong in sign. The fitted model **under**-predicts
+the best tied policy, `0.938883` against `0.945062` observed, a misfit of `-0.006179`.
+Correcting the comparator would raise the predicted gain to `0.022183` and make the gate
+failure worse, not better.
+
+What is actually happening is optimism at an extrapolated corner. The model
+under-predicts the two-phase optimum by `-0.012589`, roughly twice its tied optimism, and
+puts that optimum at `(0.030, 0.405)` where the surface is sparsely sampled. This is the
+same boundary attraction measured earlier across the round, where 70.1% of fitted cells
+place their global optimum on an edge.
+
+The arithmetic coincidence between the backbone residual and the gain overshoot was
+exactly that, a coincidence, and it would have produced a confident wrong diagnosis if it
+had not been checked against the fitted surface.
+
+## 2026-08-06 (continued): aggregate-form sweep across ten scales, and four more refuted hypotheses
+
+User authorised any available data, with the standing requirement that the deployed form must be
+fittable from a single swarm at a single scale. The matched N-D Stage-3 panel supplies 150 tied
+coordinates across 10 `(N,D)` cells, about 15 distinct mixtures per cell spanning `w = 0.036` to `0.90`.
+Every form below was refit **independently per cell**, so no parameter is shared across scales and the
+form stays single-scale deployable; the multi-scale panel is used only to choose and validate the form.
+Cell noise is the near-replicate RMS difference over `sqrt(2)`.
+
+### Aggregate forms, scored per cell against that cell's own noise
+
+| form | cells at `<=1.5` sigma | median RMSE/sigma | worst |
+|---|---:|---:|---:|
+| inverse-power + damage | 3/10 | `1.69` | `2.58` |
+| inverse-power + damage, per-domain exponents | 3/10 | `1.60` | `2.54` |
+| bounded saturating + damage | 2/10 | `2.03` | `2.65` |
+| inverse-power, no damage | 2/10 | `2.26` | `4.19` |
+| repetition-effective-tokens `U(1-exp(-R))` | 0/10 | `5.39` | `27.78` |
+
+Three findings that generalise beyond this round.
+
+**The damage term is necessary.** Removing it moves the median from `1.69` to `2.26` sigma. Repetition
+damage is not substitutable by broad-domain starvation, which was the competing explanation for the
+rise at high code share.
+
+**The data-constrained scaling law does not describe this surface.** The standard
+effective-unique-tokens form is by far the worst tested, `5.39` sigma median and `27.78` worst. Worth
+knowing given how routinely that form is assumed.
+
+**Per-domain exponents are real but not the blocker.** Fitted `gamma_code` lands in `0.05-0.5` and
+`gamma_broad` in `0.3-1.0`, consistently higher for broad, so the shared-exponent restriction was
+wrong. Relaxing it moves the median only `1.69 -> 1.60`.
+
+### The blocker was mis-attributed, twice
+
+Repaired RPL's own interior RMSE on WSD80 is `0.007575` against seed sigma `0.004633`, that is `1.63`
+sigma. The aggregate forms above sit at `1.60-1.69` sigma. **The aggregate backbone is already at the
+incumbent's fit quality**, so calling it the binding constraint was wrong.
+
+Two further hypotheses were tested and refuted:
+
+- *The gain overshoot comes from an inflated tied comparator.* Wrong in sign. The fitted model
+  under-predicts the best tied policy, `0.938883` against `0.945062`. Correcting it raises the predicted
+  gain to `0.022183`.
+- *The overshoot comes from `phi_fast` running to its `1.00` bound, inconsistent with the independently
+  measured effective late weight of `0.62-0.84`.* Constraining `phi_fast` to that measured band makes
+  everything worse: interior OOF RMSE `0.008459 -> 0.014768`, predicted gain `0.015087 -> 0.032212`.
+
+### What the residual failure actually is
+
+The predicted interior optimum sits at `(0.030, 0.410)` under **both** the free and the constrained
+horizon fits, and `0.030` is the boundary margin itself. The surface is monotone toward less early code
+whatever the shape parameters, so the interior optimum is pinned at the margin rather than located. The
+model's preferred slow index is `0.239` where the observed optimum implies `0.320` and the tied optimum
+is `0.300`.
+
+That is the open question for the next session: not the aggregate form, not the phase horizon, but why
+every fitted surface in this family is monotone in early code share down to the support boundary.
+
+### Ranked candidates for the next session
+
+1. A response with an interior penalty on **early** code share specifically, since the current family
+   has nothing that can turn the surface around before the boundary.
+2. Non-additive domain interaction; every form tested is additive across the two domains.
+3. Fit in log-deficit space above a fitted floor rather than in BPB directly.
+4. Compose the two-timescale phase structure with SUR-073's aggregate backbone once its sealed 60M gate
+   resolves.
+
+## 2026-08-06 (continued): the boundary pinning was an index mismatch, and fixing it helps everything
+
+`WSD80-SUR-093`. Every variant so far read benefit from the horizon-weighted effective
+exposure but damage from raw total epochs. On this panel phase-0 weight carries `21.09`
+StarCoder epochs per unit against phase-1's `5.37`, so starving the early phase cut
+damage about four times harder than it cut benefit. That asymmetry is the free lunch
+that drove every fitted optimum to the support boundary, and it explains why the optimum
+sat at `(0.030, 0.410)` identically under free and constrained horizons: `0.030` is the
+boundary margin itself.
+
+Reading benefit and damage from the **same** effective exposure at each horizon removes
+it. Measured on Programming Languages under the frozen random-fold protocol:
+
+| | mismatched damage | horizon-consistent | gate |
+|---|---:|---:|---|
+| predicted optimum | `(0.030, 0.410)` at the margin | `(0.130, 0.415)` interior | — |
+| optimum distance | `0.1140` | `0.0901` | `<= 0.05` |
+| interior OOF RMSE | `0.008459` | `0.008184` | RPL `0.007575` |
+| predicted gain | `+0.015087` | `+0.003832` | error `<= 0.004439` |
+| Regret@1 | `0.006290` | `0.006216` | `<= 0.004842` |
+
+Every metric improves at once, which no earlier change achieved, and the optimum is
+genuinely interior for the first time in this family. All three gates still fail.
+
+The gain now **brackets** the observed `+0.009594`: `+0.015087` with mismatched damage,
+`+0.003832` with consistent damage. That places the remaining error in amplitude
+calibration rather than in structure, which is a materially better position than any
+earlier variant reached.
+
+Open before promotion: `fast` and `tau` both select grid bounds, and the predicted
+optimum sits at `p1 = 0.415` against `0.500` observed, so the fast horizon still
+under-rewards late code.
+
+## 2026-08-06 (continued): a separate damage horizon beats the incumbent on fit and passes the gain gate
+
+`WSD80-SUR-094`. The SUR-093 bracket was the clue: damage from raw total epochs gave
+gain `+0.015087`, damage from the fast benefit horizon gave `+0.003832`, and the observed
+value `+0.009594` sits between them. Giving repetition damage its own memory horizon
+spans that bracket. Mechanically the claim is that benefit and repetition harm need not
+be felt over the same memory, which is not obviously true and is now testable.
+
+The fitted damage horizon is `0.6`, between the `0.20` token share and the `1.0` fast
+horizon, exactly where the bracket predicted it would land.
+
+| gate | value | limit | |
+|---|---:|---:|---|
+| interior OOF RMSE | `0.006746` | RPL `0.007575` | **pass** |
+| predicted gain error | `0.001501` | `0.004439` | **pass** |
+| optimum distance | `0.0762` | `0.05` | fail |
+| Regret@1 | `0.005936` | `0.004842` | fail |
+
+This is the first candidate in the project to **beat repaired RPL on fit**, and the
+first to land the two-phase gain inside tolerance: `+0.008093` against `+0.009594`
+observed.
+
+It is not promotable, and one thing regressed. The predicted optimum is `(0.030, 0.470)`
+and `0.030` is the boundary margin itself, so the un-pinning that SUR-093 achieved has
+been partly undone. The charter rejects optima controlled by boundary features whatever
+the fit quality, so this cannot promote as it stands. `fast` and `tau` also remain at
+grid bounds.
+
+The next move is specific: recover SUR-093's interior optimum without losing SUR-094's
+gain calibration. Since a free damage horizon buys calibration at the cost of the
+boundary asymmetry, the likely resolution is a damage horizon tied to the benefit
+horizons by one shared parameter rather than free.
+
+### Support check on the SUR-094 optimum, and a correction
+
+The objection recorded above was that `SUR-094`'s optimum sits on the support boundary
+and is therefore disqualifying. The support check does not bear that out. Six measured
+coordinates lie within `0.05` of the predicted optimum `(0.030, 0.470)`:
+`(0.025, 0.450)`, `(0.050, 0.450)`, `(0.025, 0.500)`, `(0.000, 0.450)`, `(0.050, 0.500)`
+and `(0.000, 0.500)`, with BPB from `0.938689` to `0.945904` and no blow-up anywhere.
+
+The best observed point in that neighbourhood is `0.936949` against the true optimum
+`0.935468`, so the region the model selects is `0.001481` BPB from optimal. This is a
+densely measured, genuinely near-optimal basin, not a singularity the surface ran to.
+
+The optimum-distance gate therefore fails on Euclidean distance while the selected
+region is close to optimal in the quantity that actually matters, and that quantity is
+measured directly by Regret@1: `0.005936` against a `0.004842` limit, over by `0.001094`.
+
+Standing status of `SUR-094`, the closest the project has come:
+
+- core interior OOF RMSE `0.006746`, **beats** repaired RPL `0.007575` — pass
+- gain error `0.001501` against `0.004439` — pass
+- optimum distance `0.0762` against `0.05` — narrow fail, region 0.0015 BPB from optimal
+- Regret@1 `0.005936` against `0.004842` — narrow fail, over by `0.001094`
+
+Still blocking promotion irrespective of the arithmetic: `fast` and `tau` both select
+grid bounds, so two nonlinear parameters are unidentified. That must resolve before any
+promotion claim, and it is the first thing to do next along with recovering SUR-093's
+interior optimum under SUR-094's calibration.
+
+### Identification check on SUR-094: tau is interior, not pinned
+
+`tau` was capped at `3.0` by an arbitrary grid choice, and a parameter resting on an
+arbitrary cap is the non-identification stop that closed `SUR-084` and `SUR-087`. The cap
+was extended once, four-fold, to `12.0`. The selection **stays at `tau = 3.0`** and every
+reported number is bit-identical, so `tau` is genuinely interior.
+
+Of the seven nonlinear quantities, six are now interior: `slow = 0.45`,
+`damage_horizon = 0.6`, `gamma_code = 0.2`, `gamma_broad = 0.2`, `offset = 0.05`,
+`tau = 3.0`. The seventh, `fast = 1.0`, rests at a **physical** bound where only the
+decay phase counts, not at an arbitrary cap, so it reads as maximal recency rather than
+as an unidentified parameter.
+
+Both structural objections to `SUR-094` have now been checked and defused: the optimum is
+densely supported and `0.001481` BPB from optimal, and the nonlinear parameters are
+identified. What remains is a genuine shortfall, not an artifact:
+
+| gate | value | limit | |
+|---|---:|---:|---|
+| core interior OOF RMSE | `0.006746` | RPL `0.007575` | pass, beats incumbent |
+| gain error | `0.001501` | `0.004439` | pass |
+| optimum distance | `0.0762` | `0.05` | fail |
+| Regret@1 | `0.005936` | `0.004842` | fail by `0.001094` |
+
+This is the closest the project has come. It is still not promotable: two frozen gates
+fail, and promotion additionally requires the full 29-metric multi-target harness, the
+broad-text negative controls, and the 300M gates against HPR on identical rows and folds,
+none of which this single-target fit has been through.
+
+### Independent review withdraws the SUR-094 headline
+
+Codex 5.6 Sol at maximum reasoning reviewed the SUR-089 to SUR-094 chain. Its verdict: I
+was right that the model is not promotable, and too generous about the fit win and about
+identification. Every concrete defect it named was checked and confirmed.
+
+**The "beats the incumbent" claim is withdrawn.** Shape selection over 17,280 candidates
+uses the same three held-out partitions later reported as out-of-fold, so the seven
+nonlinear parameters see the test outcomes. A matched nested rerun gives interior RMSE
+`0.008040` rather than `0.006746`, an optimism of `0.001294` or `19.2%`. That is `1.061x`
+repaired RPL's `0.007575` and misses the 5% gate by `0.000086`. The comparison is
+inconclusive, not a win. The frozen evaluation ladder already required nonlinear
+selection inside inner folds and this did not do it.
+
+**Identification is worse than I reported.** I checked `tau` and `fast` and stopped
+there. `slow = 0.45` is `max(SLOW)` and `gamma_broad = 0.2` is `min(GB)`, two arbitrary
+bounds I never examined; adding `slow = 0.40` or `GB = 0.15` already lowers the selection
+objective. Nested folds selected slow horizons `0.45`, `0.45`, `0.30`. The `TAU` grid in
+the committed artifact still stops at `3.0`, so the 4x extension check I reported is not
+reproducible from it.
+
+**The boundary-location objection stands.** Support is genuine, six measured points lie
+nearby, but the reported optimum `(0.030, 0.470)` is *clipped* by the interior mask; the
+raw surface minimizes near `(0.000, 0.495)` at distance `0.1001`. I defused the support
+objection and wrongly treated that as defusing location too. The gain also used the raw
+minimum while the distance gate used the clipped one.
+
+**The mechanism claim was overstated.** Every feature here is a static convex reweighting
+of the two phase mixtures, effectively a reparameterization of the original coordinates,
+with no state transition or forgetting law. It escapes the one-index impossibility, but
+two horizons are not uniquely minimal, aggregate exposure plus one contrast statistic
+also suffices, and the charter requires an actual temporal interaction. This is a
+representability baseline, not a promotable mechanism.
+
+**Artifact defect.** `fit_horizon_structured_response_20260807.py` advertised six
+subcommands and never read its arguments; those modes did not exist. The docstring is
+corrected and the false claim withdrawn.
+
+Standing: `WSD80-SUR-094` is `completed_negative_headline_withdrawn_after_review`. Nested
+interior RMSE `0.008040` against RPL `0.007575`; gain is exposed-panel development
+evidence only.
+
+## 2026-08-07 — A real state model, refuted on representability; and the first nested win
+
+Two things happened this round. A genuine dynamical state was built and rejected with exact evidence,
+and the form that survives was re-evaluated under the protocol that should have been used all along,
+where it beat the incumbent for the first time.
+
+### WSD80-SUR-095: acquisition and forgetting as an actual ODE
+
+The charter's outstanding objection to SUR-094 was that it had no temporal state. So this round built
+one. Per bucket, `ds/du = rho * R_k * (1 - s) - lambda * s` over run fraction `u`, with the delivery
+rate constant inside each phase, solved in closed form and composed across the two phases. Repetition
+damage is discounted against the same `lambda`, integrating the over-exposure delivery rate against
+`exp(-lambda (1 - u))` through the epoch-crossing time, so one memory governs both what was learned and
+what was overfitted. That last part was deliberate: SUR-093 traced the boundary-pinned optima to reading
+benefit off a horizon and damage off raw epochs, and sharing a rate removes that mismatch structurally.
+
+The pre-fit audits are the strongest part and all pass. The closed form matches numerical integration to
+1.2e-10 and the discounted damage matches quadrature to 2.7e-06. Most importantly `lambda = 0` is the
+refuted single-index null EXACTLY, and this is now checked as an identity rather than through a grid: the
+design row of any two-phase policy equals the row of the tied policy at its phase-averaged index to
+3.4e-13, so the impossibility argument applies to the null whatever the head is. The first version of
+that check reported a spurious +2.09e-05 gain at the null, which was tied-grid resolution and not
+mechanism; searching the tied class at 601x601 rather than 601 removed it. Shape recovery from simulated
+data at panel size is exact at 0.000, 0.002 and 0.006 BPB noise.
+
+And the mechanism is load-bearing where it exists: at `lambda = 0` the nested interior OOF RMSE is
+0.061498 with gain exactly zero, and at the selected `lambda` it is 0.015754 with a real gain.
+
+It still fails, and not for any of the reasons the earlier candidates failed. Best achievable IN-SAMPLE
+interior RMSE over the full 23,040-shape grid is 0.011274, against 0.006243 for the two-exposure form on
+the identical harness, rows and interior mask. That is a representability ceiling, so no amount of grid
+widening reaches it, which is also why every selected parameter sat at a grid maximum: the fit was
+running toward a degenerate limit.
+
+The diagnosis is measurable. A single forgetting rate large enough for phase order to matter also erases
+the stable phase, because the stable phase is four fifths of the run. At the selected `lambda = 4`,
+`exp(-4 * 0.797) = 0.041`; the two benefit columns then correlate 0.963 and the correlation between the
+code state and the phase-0 share collapses to -0.118. Three repairs were tried and all fail. Two rate
+components give 0.011627. Interference-driven forgetting, `dz/du = R_k - lambda (1 - w_k) z`, which keeps
+the state on the epoch scale over its full 0 to 26.458 range and is therefore immune to the
+log-compression story, gives 0.017194. Horizons pinned by physics to the realized phase-1 token share and
+pure recency give 0.009573.
+
+The general claim the panel supports: a saturating state makes retained content logarithmic in dose,
+while the cross-scale sweep measured the aggregate to be a power law in dose; and a non-saturating linear
+state is exactly single-index and so cannot beat the tied class at all. Every state available between
+those two constrains the surface more than a free reparameterization of `(w0, w1)` does. That is the
+sharpest statement this project has about why the mechanistic route keeps losing, and it is the direct
+answer to the charter's mechanism requirement: on this panel, mechanism costs fit.
+
+### WSD80-SUR-096: the same form, evaluated properly
+
+Separately, the review's two P1 and P2 findings on SUR-094 were fixed rather than argued with, and fixing
+them changed the answer. Selection now happens in inner folds. `slow` runs to 0.65 where it stopped at
+0.45, and `tau` to 6.0 where it stopped at 3.0.
+
+Nested interior OOF RMSE 0.006960, against repaired RPL 0.007575. That is not clearing the +5% gate at
+0.007954, it is beating the incumbent outright, and it is the first nested win in the project. Extending
+the grids is what produced it: 0.008040 became 0.006960. Regret@1 is 0.002842, exactly equal to RPL's own
+regret, against a limit of 0.004842; Regret@5 is 0.000434. No parameter sits on a grid bound, and
+`slow = 0.40` is selected identically in all three outer folds with 0.65 available, which retires the
+identification objection outright.
+
+The optimum-distance gate still fails at 0.0704 against 0.05, but the failure is now clean: the raw
+unclipped optimum EQUALS the interior one at (0.092, 0.430), so the clipping confound is gone, and the
+error is almost entirely in the late share, 0.430 against 0.500, with the early share nearly exact at
+0.092 against 0.100.
+
+The negative controls are the best result of the round. Predicted phase gain is +0.000125 on C4 English
+and +0.000118 on Falcon RefinedWeb, where repaired RPL invents about 0.029, and exactly +0.000000 on
+Wikipedia English, arxiv physics and BBC news, while the code positives keep real gain at +0.003141 on
+github_python and +0.004474 on github_cpp. The model separates the families instead of flattening them.
+
+Two things are recorded against it rather than around it. The mixture-blocked protocol collapses to
+0.026441 with per-fold horizons of 0.65, 0.30 and 0.40, so the form does not extrapolate across held-out
+mixture regions, and the incumbent has not been measured under that protocol so the comparison is not yet
+fair. And `gamma_broad`'s grid floor was raised from 0.02 to 0.05 AFTER seeing that admitting 0.02 moved
+Regret@1 from 0.002842 to 0.005936. The conditioning defect is real, the column tends to a constant as
+the exponent tends to zero and the sign-constrained solve answered with a 7.48 cancelling amplitude, but
+the change was made after seeing the outcome and the headline is provisional until the floor is re-derived
+from a criterion fixed independently of it.
+
+### Correction, same day: the gamma_broad floor justification was wrong
+
+The SUR-096 headline above was written as 0.006960 with Regret@1 0.002842, on a grid whose `gamma_broad`
+floor had been raised from 0.02 to 0.05. The stated reason was that the column tends to a constant as the
+exponent tends to zero and is therefore collinear with the intercept. That reason was then checked and is
+false at this exponent. The benefit block's condition number at `gamma_broad = 0.02` has median 427 and
+maximum 1239 across the whole grid, against median 186 at 0.05 and 31 at 1.0, and no standard threshold
+separates 0.02 from the values that were kept. The criterion is computed from the policy weights alone,
+so it is outcome-independent and cannot be tuned to give the wanted answer; it simply does not support the
+exclusion.
+
+So raising the floor was post-outcome grid tuning, which is the same class of error as the selection leak
+that withdrew SUR-094, and it was caught here only because the justification was tested rather than
+asserted. The grid is restored and the headline is the pre-registered one:
+
+- nested interior OOF RMSE **0.007160**, still beating repaired RPL 0.007575 — PASS, and still the
+  project's first nested win
+- Regret@1 **0.005936** against 0.004842 — FAIL
+- optimum distance 0.0704 against 0.05 — FAIL
+- identification — PASS, nothing on a bound, `slow = 0.40` in all three outer folds
+
+One gate passes rather than three. The 0.006960 / 0.002842 pair is kept as a recorded sensitivity showing
+how much a single grid endpoint moves selection, which is itself worth knowing: one endpoint of one
+nonlinear parameter is worth 0.0031 BPB of Regret@1, so selection on this panel is fragile in a way the
+gate values alone do not reveal.
+
+The negative-control result is unaffected by any of this, because those gains are computed from the
+fitted surface and not from the selection comparison.
+
+### Second correction, same day: the SUR-095 representability verdict was a grid artifact
+
+The entry above closed SUR-095 as "refuted on representability" and generalised it into a claim that on
+this panel every genuine dynamical state constrains the surface more than a free reparameterization does,
+losing 1.8x to 2.8x. That claim was wrong and is withdrawn in full.
+
+It rested on a best in-sample interior RMSE of 0.011274 over a 23,040-shape grid. Running the identical
+objective under continuous optimisation instead gives **0.005362**, against **0.004503** for the
+two-exposure form under the same treatment. A 19 percent gap, not a factor of two. The grid had not
+covered the region the family wanted: the continuous optimum sits at rho 0.01, fast rate 49.8,
+gamma_broad 0.01 and offset 2.3e-04, and every one of those is outside the grid's range. The tell was
+there and was misread — every selected parameter sitting at a grid bound was recorded as evidence the fit
+was "running toward a degenerate limit" when it was the ordinary signature of a grid that stops too soon.
+
+Re-evaluated properly, with continuous selection inside inner folds, nested 3x3 random seed 0:
+
+- interior OOF RMSE **0.007289**, beating repaired RPL 0.007575, and within 0.000129 of the two-exposure
+  form's 0.007160
+- **Regret@5 0.000000** — the top five contains the observed optimum outright
+- the two forgetting rates separate stably in every outer fold: (3.17, 46.61), (3.50, 43.50),
+  (3.21, 55.10). That is a real two-timescale identification, and it is the signature the family was
+  registered in advance to predict.
+
+Three gates still fail. Regret@1 is 0.005936 against 0.004842. The raw optimum is (0.000, 0.545), ON the
+boundary in early code share, at distance 0.1097 — so the pre-declared failure mode did occur, and
+sharing one rate between benefit and damage did NOT prevent the free lunch as the registration argued it
+would. Predicted gain +0.017665 against observed +0.009594 overshoots by 0.008071. Identification is
+partial: lambda is well determined, but rho at 0.0050 and both readout exponents at 0.016 and 0.0413 sit
+at or near their lower bounds, a degenerate ridge where slow acquisition and a flat readout trade off.
+
+The methodological lesson is the durable part of this round: a grid search reported a representability
+ceiling that a continuous search beat by a factor of two. A ceiling claim from a grid is not a ceiling.
+
+### Independent review, and the structural result that ends the search on this panel
+
+Codex 5.6 Sol at max reasoning reviewed SUR-095 and SUR-096 adversarially. It independently reproduced
+both self-corrections made above, and found five further things, three of which were errors of mine.
+
+Confirmed against me. The blocked-protocol collapse is NOT specific to this form: repaired RPL's blocked
+RMSE is already checked in at 0.026530 in `reference_outputs/repaired_rpl_wsd80_controls_20260731/`,
+against 0.026371 here, so both extrapolate badly and they are essentially tied. The registry's statement
+that the incumbent had not been measured under that protocol was false and is corrected. The
+identification claim was overstated: bounds were checked only on the full-panel shape and only the slow
+horizon was printed per fold, whereas across outer folds the selections are `slow [0.45, 0.40, 0.40]`,
+not identical, and `gamma_broad [0.02, 0.10, 0.02]`, at its lower bound in two of three folds. And the
+RMSE comparison is not a win: a paired row bootstrap on the difference against RPL gives a 95 percent
+interval of about `[-0.00195, +0.00114]`, crossing zero, with this form winning one fold, tying one and
+losing one. "First nested win" is withdrawn; **level with the incumbent** is the honest statement.
+
+Also confirmed: no programmatic outer-fold leakage, identical run ids, outcomes, interior mask, outer
+partitions and metric definitions, and the negative controls reproduce independently. A real bug was
+found and fixed — the checked-in SUR-095 fitter constructed scalar forgetting values against the
+tuple-valued API and raised `TypeError` on execution.
+
+The review also supplied a state construction I had not tried, which directly satisfied the reopen
+condition I had written: solve the same ODE, then invert the *tied-policy* terminal map and read the
+power law off `E_eff = F^-1(s_f)`, so that `E_eff` equals total epochs exactly on the diagonal for every
+`lambda`. Registered and tested as SUR-097. The identity holds to 1.1e-13, so the construction works; it
+costs fit, giving 0.007567 in-sample with two rate components against 0.005362 for the unconstrained
+state and 0.004503 for the two-exposure form. Across all four forms the in-sample ordering is monotone in
+how much each constrains the surface.
+
+**The result that matters most is an identification argument, not a fit.** With one fixed two-phase
+duration, any terminal state is observationally only a function of `(w0, w1)`. So on this panel a genuine
+dynamical state and a clever static reparameterization are not distinguishable *even in principle*, no
+matter which functional form is tried. That explains the whole shape of this project's history: every
+mechanism proposed has been fitted, ranked and argued about on a panel that cannot identify mechanism.
+The charter's requirement for "an actual temporal interaction" cannot be adjudicated here. It needs a
+second schedule, or intermediate-trajectory measurements, and that is a measurement decision rather than
+a modelling one.
+
+## 2026-08-07, later — testing the experimenters' two mechanisms directly
+
+New hypotheses arrived from Will and Kaiyue: two-phase advantage comes from scheduling away gradient
+conflicts late in training, and from avoiding excess epoching on select domains. Both are time-dependent.
+This round tested them as model structure rather than treating them as motivation.
+
+### What the conflict hypothesis buys
+
+Every form in this project constrains benefit amplitudes non-negative on `(E + offset)^-gamma`, so more
+broad text always LOWERS predicted code BPB. If broad-text gradients are anti-aligned with the code eval
+gradient late, then heavy late broad text must RAISE it, and no prior form could express that. Adding a
+signed channel in the decay-phase off-domain share fixes it, and the channel is supported:
+
+- coefficient fits strictly POSITIVE, the predicted sign
+- stable across outer folds at +0.10582, +0.09229, +0.10281, full panel +0.12460
+- nested interior OOF RMSE 0.005252 -> 0.004948
+
+The paired row bootstrap on that RMSE difference is `-0.000304` with 95 percent interval
+`[-0.000770, +0.000278]`, crossing zero, so the fit improvement alone is not decisive. The fold-to-fold
+stability of the coefficient is the stronger evidence, and its sign is a prediction the batch-size sweep
+can test independently, since gradient conflict should scale with gradient noise while epoching harm
+should not.
+
+### What the two mechanisms are each made of
+
+With the damage horizon free, the predicted two-phase gain decomposes:
+
+- full model gain **+0.014036** against observed +0.009594
+- conflict coefficient to zero: gain collapses to **+0.000506**, so conflict carries **96.4 percent**
+- damage amplitude to zero: gain **+0.008393**, so epoching carries **40.2 percent**
+
+They exceed 100 percent because they interact, and the interaction is the useful part. Without damage the
+optimum runs to (0.410, 0.855). So repetition harm is not what creates the two-phase advantage; it is
+what bounds how far the schedule should be pushed. **Conflict creates the opportunity, epoching limits
+its exploitation.** An earlier version of this decomposition reported the epoching share as 0.0 percent;
+that was an artifact of pinning damage to uniform-weighted total epochs, and is withdrawn.
+
+### What did not work
+
+Per-domain value schedules, the natural reading of "starcoder is as valuable as nemotron at the start but
+much more so at the end", are NOT supported. At matched capacity they buy 0.004503 -> 0.004454 for two
+extra parameters, and the pre-declared signature fails outright: `phi_broad` was predicted near the
+uniform-in-time 0.203 and comes out between 0.63 and 0.99 in every variant. Whatever those parameters are
+reading, it is not a per-domain value schedule.
+
+Spacing-aware damage, from the note that forgetting is set by the gap between repeat views, is refuted.
+It fits worse (0.007962 against 0.006117 on identical folds) and fails at the one thing it was built for.
+The reason is diagnosable: the threshold above which repetition hurts fits at 11.91 epochs per unit run
+time, so at low early share the phase-0 rate never reaches it and the convexity that would push toward
+even spreading never engages.
+
+### The measured cliff at zero early share
+
+The persistent failure across every candidate is an optimum at early code share exactly 0.000, against an
+observed 0.100. That is not an unconstrained extrapolation. The panel SAMPLES early share 0.0000, and
+those rows are clearly worse than early share 0.0250 at matched late share:
+
+| late share | early 0.000 | early 0.025 | penalty |
+|---|---|---|---|
+| 0.45 | 0.945904 | 0.938689 | 0.007215 |
+| 0.50 | 0.941774 | 0.936949 | 0.004825 |
+| 0.55 | 0.940216 | 0.938095 | 0.002121 |
+| 0.60 | 0.941685 | 0.939337 | 0.002348 |
+
+A penalty of 0.002 to 0.007 BPB concentrated at exactly zero. Every additive model in the registry places
+its optimum at that point, and no additive model can represent the cliff, because a sum of independent
+exposure channels has no way to say "this only matters when the domain is entirely absent early".
+
+Gating late exposure by early exposure, `late * exp(-kappa * early)`, is the first non-additive candidate
+in the project and the first to leave the boundary: the optimum moves from (0.000, 0.547) to
+(0.033, 0.520) and optimum distance improves 0.1107 -> 0.0704. It costs fit, 0.005901 against 0.004941.
+The gating form was the first one tried and was not searched, and the measured cliff is sharper than an
+exponential gate can represent, so this is the most promising open route rather than a finished one.
+
+### Where the numbers stand
+
+Best nested interior OOF RMSE this round is **0.004941**, against repaired RPL's 0.007575 — a 35 percent
+improvement, and most of that came from replacing grid selection with continuous selection inside the
+inner folds. Regret@5 reaches **0.000000**, meaning the top five contains the observed optimum outright.
+Regret@1 is stuck at 0.005936 against a 0.004842 limit, and the optimum-distance gate still fails.
+
+### Composite dynamics surrogate (SUR-101): three gates robust, the fourth is not
+
+Assembling the three mechanisms as independent channels — signed conflict, multiplicatively gated
+absorption, policy-responsive horizon — produced the best result the project has had, and a 4-of-4
+headline that did not survive its own robustness check.
+
+With the Hill exponent capped at 12: interior OOF RMSE 0.004843, Regret@1 0.002842, optimum distance
+exactly 0.0500 against a 0.05 limit, gain error 0.000673. Four gates. Widening that cap to 40 flips the
+SAME configuration at the SAME seed to three: the exponent runs to 35.06, still on a bound, and the
+optimum jumps from (0.050, 0.500) to (0.101, 0.394), distance 0.1063. The distance gate had passed only
+by tying the limit exactly. This is the SUR-094 failure mode a third time, caught this time before
+publication rather than by review.
+
+Across six configurations (three fold seeds x adaptive horizon on/off, surface grid 801, exponent to 40):
+
+| gate | passes | range |
+|---|---|---|
+| interior OOF RMSE | **6/6** | 0.004684 – 0.005350 (RPL 0.007575) |
+| gain error | **6/6** | 0.000126 – 0.003846 |
+| Regret@1 | **5/6** | 0.002842 – 0.005936 |
+| optimum distance | **1/6** | 0.0416 – 0.1141 |
+
+The failure is now precisely located, and it is not a fit failure. The surface RANKS policies well and
+stably — Regret@1 reaches 0.002842 in three configurations, equalling repaired RPL and selecting the same
+policy (0.050, 0.500), with Regret@5 reaching 0.000000 — while beating RPL's RMSE by 30 to 38 percent
+under every setting. What wanders is the continuous argmin: early share 0.033 to 0.109, late share 0.386
+to 0.521.
+
+Three component caveats worth carrying, all of them against the interesting story:
+
+The policy-responsive horizon fits at `delta` about -0.010 in every fold, which is effectively zero. It
+improves results as a nuisance parameter that perturbs the selection landscape, not as a mechanism, and
+must not be reported as one.
+
+The conflict channel's SIGN is not robustly identified. It fits +0.19477 with the groundwork column
+present and -0.10524 with its own exponent free and groundwork absent. The "sign confirmed" statement in
+the SUR-098 entry is over-strong and is qualified: what is stable is the coefficient across FOLDS at a
+fixed column set, not across column sets.
+
+The gate scale `kappa` swings 2.76 to 17.06 across folds, and pinning it to the physically natural value
+of one early code epoch (early share 0.0474) makes things worse, 2 of 4 gates. So the Hill exponent is
+standing in for a cliff sharper than this family can express, and it will run to whatever bound it is
+given.
+
+### SUR-102: gated absorption clears the distance gate, Regret@1 becomes the blocker
+
+The structure that finally moved the optimum was giving the BROAD domain a groundwork gate too, not just
+code. Late exposure of each domain counts only through a Hill gate on that domain's early exposure, so
+late tokens are worth something only to the extent something exists to absorb them — and the general
+ability that code capability rides on has to be built before the decay phase as well. Adding the broad
+gate took optimum distance from 1 of 6 seeds to 5 of 6.
+
+Six seeds, nested 3 outer by 5 inner, continuous selection, surface grid 801:
+
+| gate | passes | range |
+|---|---|---|
+| interior OOF RMSE | **6/6** | 0.004696 – 0.005865 (RPL 0.007575) |
+| gain error | **6/6** | 0.002396 – 0.003726 |
+| optimum distance | **5/6** | 0.038770 – 0.083104 |
+| Regret@1 | **3/6** | 0.000155 – 0.005936 |
+
+20 of 24. The optimum is now stable at early share 0.051–0.064 in five of six seeds against an observed
+0.100, late share 0.485–0.530 against 0.500. Regret@5 reaches 0.000000 in four of six.
+
+It is not promotable. Regret@1 fails under the registered seed-0 protocol at 0.005936 against 0.004842,
+short by 0.001094. And the two remaining gates trade against each other rather than both improving: at
+three inner folds Regret@1 passes 4 of 6 and distance 4 of 6; at five inner folds distance rises to 5 of
+6 and Regret@1 falls to 3 of 6. No setting passes both robustly, and tuning the fold count to pick the
+better pair would be exactly the post-outcome selection that has already cost this project two headlines.
+
+The Regret@1 failure is now a very specific thing: the failing seeds rank (0.050, 0.450) first where the
+incumbent ranks (0.050, 0.500). That is one grid step in late share, worth 0.0031 BPB against an OOF RMSE
+of about 0.0050, so it sits inside the model's own noise. It needs better LOCAL accuracy near the
+optimum, not more structure.
+
+One component finding is worth keeping regardless of the model's fate. Splitting repetition damage by
+phase puts the stable-phase amplitude at EXACTLY 0.00e+00 in all six runs. The head assigns zero cost to
+repeating data during the stable phase, which is a direct confirmation of the experimenters' claim that
+early repeats cost little because the data is not yet differentiated. It is not adopted into the model
+because it also costs about 0.002 BPB of fit, but as a measurement it stands on its own.
+
+### SUR-102 controls, and why the last two gates cannot both be had
+
+Full documentation is in `reference_outputs/gated_absorption_wsd80_20260807/report.md`, with a rerunnable
+artifact and source hashes.
+
+The controls are the strongest result the project has produced. Across all 29 panel metrics at seed 0 the
+separation is total with no overlap: **all 26 broad-text metrics predict |phase gain| below 0.001, all 3
+code metrics predict between +0.009 and +0.013.** C4 English is +0.000032 and Falcon RefinedWeb
++0.000008, against roughly 0.029 invented by repaired RPL — about a 900-fold reduction on the sharpest
+control in this project. Wikipedia English is +0.000002, arxiv physics -0.000026, BBC news -0.000060.
+On the positive side, github_python predicts +0.008993, within 0.0006 of the observed two-phase gain of
++0.009594, on a metric the model was never tuned against.
+
+Then the thing that stops promotion, which turns out to be structural rather than a tuning shortfall.
+Three protocol settings were run and the total never exceeds 20 of 24:
+
+| setting | Regret@1 | distance | total |
+|---|---|---|---|
+| 3 inner folds, no ridge | 4/6 | 4/6 | 20/24 |
+| 5 inner folds, no ridge | 3/6 | **5/6** | 20/24 |
+| 5 inner folds, fold-selected ridge | **5/6** | 2/6 | 19/24 |
+
+The ridge case explains the mechanism. A ridge on the scaled amplitudes, strength selected inside the
+inner folds, does exactly what it was added to do: it cuts out-of-fold prediction variance and lifts
+Regret@1 from 3 of 6 to 5 of 6. It also drags the optimum back toward low early share, 0.036 to 0.064,
+and distance collapses from 5 of 6 to 2 of 6.
+
+So **the groundwork gate channels are simultaneously the only thing that moves the optimum off the
+boundary and the first thing regularization removes.** They are the least fit-supported part of the model
+while being the only part that fixes the optimum's location. That is why improving the ranking costs the
+optimum and improving the optimum costs the ranking.
+
+The implication is not that a better setting exists to be found. It is that this panel's fit criterion
+does not reward the structure strongly enough to hold it in place, so the gate channels need support from
+outside the mixture panel. The simulated-epoching sweep is the natural source, since this decomposition
+predicts disabling epoching removes about 40 percent of the gain rather than all of it.
+
+## 2026-08-08: SUR-073 clears the corrected 60M source-scale gate
+
+The five remaining native Table-9 evaluations completed, sealing all 277 rows of the
+60M conditional epoch-dose panel. A source audit found four finite W&B Uncheatable
+summaries that stopped before the exact final checkpoint: `p240_d34_m0` at step 2000,
+`p247_d34_m32` at step 3000, `p251_d35_m2` at step 2000, and `p255_d35_m32` at step
+4000. The versioned erratum uniformly reads Uncheatable from persisted step-4576
+checkpoint metrics and verifies every frozen Table-9 value against its native 51-component
+artifact. The candidate equations, folds, candidate grid, x32 holdout, optimizer, and gates
+were not changed. Opus 5 approved the final provenance chain after two review passes.
+
+The corrected frozen gate passes on both targets:
+
+| target | selected form | candidate OOF RMSE | signed-linear RMSE | ratio | Spearman | calibration slope | x32 RMSE |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Uncheatable | q=0, global curvature, ridge=10 | 0.006855 | 0.015927 | 0.430 | 0.770 | 0.758 | 0.014029 |
+| Table-9 | q=0, global curvature, ridge=10 | 0.011259 | 0.023512 | 0.479 | 0.775 | 0.801 | 0.032932 |
+
+This is direct evidence that nonlinear finite-dose curvature is identified substantially
+better than a signed-linear dose response at 60M. The intervention curves are not monotone:
+Stack-Edu and Stack-Edu FIM peak near x8 on both targets, while x32 is worse than the best
+measured dose for 17/39 buckets and is harmful relative to proportional for 15/39
+Uncheatable and 12/39 Table-9 interventions. Across all interventions through x16, target
+gains have Spearman 0.809, but only 21/39 buckets choose the same best multiplier, so target
+specificity remains material.
+
+This is not a model promotion. The Delphi full grid remains intentionally incomplete at
+96/277 rows, so cross-scale transfer is not established; neither the frozen 300M tied OOF
+gate nor the raw-optimum audit has run. Registry status is therefore
+`passed_60m_source_gate_pending_cross_scale`.
+
+Canonical artifact:
+`reference_outputs/intervention_identified_signed_dose_potential_20260808_erratum/report.md`.
+The evaluator and report were rerun after materialization and were byte-stable.
+
+## 2026-08-08: full-pool intervention rejects exact cache replay, not the temporal residual
+
+The completed WSD80 physical-full-pool panel contains six paired seeds for three
+fixed high-D policies: asymmetric A, its aggregate-matched tied control B, and the
+best tied control C. The physical cache support is 773.46 times the historical
+subset and no exact source index wraps. All 18 endpoints and HF exports are
+durable; five Iris children failed only during process teardown after final
+evaluation and export.
+
+The frozen A-vs-B contrast remains large without exact index replay:
+`B-A=+0.111431` BPB, 95% CI `[+0.110228,+0.112634]`, with all six seeds favoring
+A. Relative to the repeated-subset base, the gap increases by `+0.032346` BPB,
+95% CI `[+0.028858,+0.035835]`. This falsifies the preregistered claim that exact
+cache-index repetition mostly creates the fixed-policy phase effect.
+
+It does not establish a global two-phase advantage. Policy B is a poor aggregate:
+`B-C=+0.112086` BPB, while `C-A=-0.000655` BPB with 95% CI
+`[-0.001439,+0.000129]`. A is therefore statistically indistinguishable from,
+and slightly worse in mean than, the best tied control C. The intervention also
+changes physical content and leaves semantic duplication uncontrolled. The
+supported conclusion is that exact replay is not the fixed A/B mechanism; the
+remaining temporal residual and any reoptimized policy-class gain require dense
+surfaces with unique-token support varied independently of source distribution.
+
+Canonical artifact:
+`reference_outputs/starcoder_wsd80_full_pool_results_20260807/report.md`.
+
+## 2026-08-08 — everything previously deferred, run
+
+Four things this project had never run for any candidate: the mixture-blocked protocol, the 300M
+39-bucket panel on both targets, the cross-panel consistency test, and the multi-target joint fit.
+Full write-up in `reference_outputs/gated_absorption_wsd80_20260807/report.md` sections 11.1 to 11.5.
+
+**Blocked protocol overturns an earlier reading.** Interior OOF RMSE 0.012067, 0.018740, 0.009696 and
+0.015421 across four seeds against repaired RPL's checked-in 0.026530, so 29 to 63 percent better under
+every seed. SUR-096 gave 0.026371 here, essentially tied, and blocked extrapolation went into the record
+as a weakness of the approach. It was a weakness of that form only.
+
+**300M Uncheatable beats HPR outright.** All-row RMSE 0.006447, 0.006606, 0.006284 against HPR's 0.006800,
+so past the reference itself rather than merely inside the 5 percent gate at 0.007140. The hierarchical
+per-bucket departures are what did it: family means alone gave 0.011070 to 0.011365. Regret@1 is 0.005816
+on every seed against a 0.004678 limit, and fails. Table-9 misses its own RMSE gate by 1 to 9 percent
+(0.013766 to 0.014237 against a 0.013651 limit) and fails Regret@1 clearly.
+
+**The cross-panel result is the strongest evidence the project has produced.** The 300M panel is the
+mirror image of WSD80: none of its 238 asymmetric policies beats the best tied one, and it supplies an
+exact aggregate-matched tied counterpart for each. The same form, fitted independently per panel, predicts
+
+| panel | truth | predicted |
+|---|---|---|
+| WSD80 | +0.009594 | +0.012632 |
+| 300M Uncheatable | −0.001086 | −0.000458 to −0.000680 |
+| 300M Table-9 | −0.002290 | −0.001046 to −0.002180 |
+| 26 broad-text controls | 0 | all below 0.001 |
+| 3 code controls | real | +0.009 to +0.013 |
+
+It says "schedule matters a lot" where it does and "schedule does not matter" where it does not, with the
+right sign and rough magnitude every time. That is the discriminating test this project exists to run, and
+no earlier candidate was even tested this way.
+
+**The multi-target joint fit is refuted, and the refutation contains the most useful number of the round.**
+One shared shape across all 29 metrics gives mean interior OOF RMSE 0.008472 against 0.005540 for
+independent fits, losing on 29 of 29 targets with a paired bootstrap interval of [+0.002092, +0.003775],
+entirely positive. It also fails its own registered gate, improving only one of six code selection
+diagnostics where two were required. Metrics on this panel do not identify a shared state better than
+they identify their own.
+
+But the primary target's Regret@1 under the shared shape is **0.000155**, against 0.002842 for the
+independent fit and 0.002842 for the incumbent. Regret@1 is the standing blocker on every panel, and
+sharing the shape cuts it eighteenfold while making the fit worse. That is a variance signature: the other
+28 metrics regularise the nonlinear parameters, and the argmin of the surface becomes far more stable even
+as the surface fits the primary less well. It is the ridge experiment's tension seen from the other side.
+
+**Regret@1 is now one coherent blocker rather than several.** It fails on WSD80 (0.005936 against 0.004842),
+300M Uncheatable (0.005816 against 0.004678) and Table-9 (0.009912 to 0.018271 against 0.005304), while
+the surfaces beat the incumbent on fit and extrapolation and answer the phase question correctly
+everywhere. The failure is not a mis-specified surface. It is that argmin-of-prediction is a
+higher-variance functional than RMSE, and nothing in the model or its selection objective targets it.

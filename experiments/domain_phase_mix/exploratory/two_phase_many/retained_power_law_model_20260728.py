@@ -19,8 +19,9 @@ whole effective-exposure simplex, so nothing is left for a schedule to win.
 separates a sub-sigma fit from a three-sigma fit on the tied diagonal. The argument of the power law is
 *token share*, not epochs, so that a single shared offset can serve domains whose pools differ by more
 than an order of magnitude; epochs enter only where repetition is the mechanism. Exposure is *retained*
-share: material studied in phase 0 survives to the end only to the extent that phase 1 did not
-overwrite it, so ``S_i = exp(-lambda*(1 - w1_i)) * alpha0*w0_i + alpha1*w1_i``. That gate is what makes
+share: material studied in phase 0 survives according to the signed phase contrast, while phase-1
+material receives a learned endpoint multiplier,
+``S_i = exp(c*tanh(lambda*(w1_i-w0_i)/c))*alpha0*w0_i + m*alpha1*w1_i``. The contrast gate is what makes
 the term an interaction -- the value of early data depends on the late mixture, which no reweighting of
 cumulative exposure can express -- and it is the only term that can make a tilt *helpful*.
 
@@ -84,10 +85,11 @@ RETENTIONS = (0.0, 1.0, 2.5, 5.0, 10.0)
 # multiplier over an eight-fold range alongside its forgetting rate, and that second dimension was the
 # difference. Freeing it is worth 12 percent of out-of-fold error on the Delphi 3e18 uncheatable panel
 # and 12 percent on precisely the moved policies a residual localization had indicted, while the tied
-# policies this model already led on give up little. Values past 4 were tried and are worse on both
-# panels, so the selected point is interior rather than a grid edge. It trades against the benefit
-# offset, which sets the exposure scale the multiplier rescales, and the two are selected together.
-LATE_MULTIPLIERS = (1.0, 2.0, 4.0)
+# policies this model already led on give up little. The original ceiling of 4 was appropriate for the
+# 3e18 panel but bound every 300M fold. A follow-up sweep through 64 established an interior optimum at
+# 8--16 on both 300M targets, with 64 clearly worse. The multiplier trades against the benefit offset,
+# which sets the exposure scale it rescales, and the two are selected together.
+LATE_MULTIPLIERS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
 # Ridge zero is not offered. Every multi-member family column is exactly the sum of its member columns,
 # so the design is rank-deficient by construction and only the penalty on the departures identifies it.
 # With no penalty the bounded solve hit its iteration cap without converging and returned that iterate
@@ -409,9 +411,20 @@ def _bounded_solve(
 
 
 def solve_head(
-    design: np.ndarray, target: np.ndarray, ridge: float, multipliers: np.ndarray | None = None
+    design: np.ndarray,
+    target: np.ndarray,
+    ridge: float,
+    multipliers: np.ndarray | None = None,
+    huber_scale: float | None = HUBER_SCALE,
 ) -> tuple[float, np.ndarray]:
-    """Nonnegative amplitudes with a free intercept, fitted robustly and column-scaled for the ridge."""
+    """Nonnegative amplitudes with a free intercept, fitted robustly and column-scaled for the ridge.
+
+    ``huber_scale`` defaults to the module setting, so every existing caller is unaffected. Passing None
+    recovers plain bounded least squares, which costs a single solve instead of an iterated one. That is
+    roughly three hundred times cheaper here and is the only way a grid this size is affordable as a
+    screen; it must not be used for a reported fit, because a least-squares screen measures a different
+    estimator, which has already inverted one conclusion on this model.
+    """
     scale = np.maximum(np.abs(design).max(axis=0), COLUMN_SCALE_FLOOR)
     augmented = np.column_stack([np.ones(len(target)), design / scale])
     response = target
@@ -423,13 +436,13 @@ def solve_head(
         response = np.concatenate([target, np.zeros(penalty.shape[0])])
 
     coefficients = _bounded_solve(augmented, response, design.shape[1], None)
-    if HUBER_SCALE is not None:
+    if huber_scale is not None:
         for _ in range(HUBER_ITERATIONS):
             residual = augmented[: len(target)] @ coefficients - target
             spread = MAD_TO_SIGMA * float(np.median(np.abs(residual - np.median(residual))))
             if spread <= 0.0:
                 break
-            cut = HUBER_SCALE * spread
+            cut = huber_scale * spread
             row_weights = np.minimum(1.0, cut / np.maximum(np.abs(residual), 1e-12))
             updated = _bounded_solve(augmented, response, design.shape[1], row_weights)
             # Convergence is tested on predictions, not coefficients. Collinear columns let the
@@ -535,7 +548,20 @@ def without_phase_terms(model: Fitted) -> Fitted:
     retained exposure at ``a0*w0 + late*a1*w1``, which still separates two schedules that share an
     aggregate, so the supposedly phase-free ablation would report a phase gain.
     """
-    coefficients = model.coefficients.copy()
+    scale = model.geometry.phase_0_fraction + model.shape.late_multiplier * model.geometry.phase_1_fraction
     families = len(np.unique(model.geometry.families))
-    coefficients[2 * (families + len(model.geometry.excess_domains)) :] = 0.0
-    return replace(model, shape=replace(model.shape, retention=0.0, late_multiplier=1.0), coefficients=coefficients)
+    block_width = families + len(model.geometry.excess_domains)
+    coefficients = model.coefficients[: 2 * block_width + 2].copy()
+    coefficients[:block_width] *= scale ** (-model.shape.benefit_exponent)
+    coefficients[2 * block_width :] = 0.0
+    return replace(
+        model,
+        shape=replace(
+            model.shape,
+            benefit_offset=model.shape.benefit_offset / scale,
+            retention=0.0,
+            late_multiplier=1.0,
+            ordering_channel=False,
+        ),
+        coefficients=coefficients,
+    )
