@@ -214,6 +214,69 @@ def test_128_feature_ping_pong_schedule_preserves_fold_semantics() -> None:
 
 
 @pytest.mark.parametrize(
+    ("feature_tile", "shared_buffers"),
+    ((64, 1), (64, 2), (128, 2)),
+)
+def test_fold_candidate_schedules_share_normalized_exponential_semantics(
+    feature_tile: int,
+    shared_buffers: int,
+) -> None:
+    rng = np.random.default_rng(23)
+    axes = _axes(partials=8, rows=3, features=128)
+    program = normalized_exponential_fold_program(
+        _schedule(
+            axes=axes,
+            partial_lanes=32,
+            addressing=FoldPartialAddressing.DENSE,
+            feature_tile=feature_tile,
+            shared_buffers=shared_buffers,
+        ),
+        partial_value_dtype=DType.FP32,
+        output_dtype=DType.FP32,
+    )
+    values = rng.normal(size=(8, 3, 128)).astype(np.float32)
+    scalar = rng.normal(size=(8, 3)).astype(np.float32)
+    valid = np.ones((8, 3), dtype=np.bool_)
+    valid[6:, 1] = False
+
+    actual = evaluate_tiled_fold_finalize(program, values, scalar, partial_valid=valid)
+    masked = np.where(valid, scalar, -np.inf)
+    common = np.max(masked, axis=0)
+    weights = np.where(valid, np.exp(masked - common), 0.0).astype(np.float32)
+    expected = (
+        np.sum(weights[..., None] * values, axis=0, dtype=np.float32)
+        / np.sum(
+            weights,
+            axis=0,
+            dtype=np.float32,
+        )[:, None]
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_fold_candidate_set_changes_only_physical_schedule() -> None:
+    axes = _axes(partials=16, rows=8, features=128)
+    programs = tuple(
+        normalized_exponential_fold_program(
+            _schedule(
+                axes=axes,
+                partial_lanes=32,
+                addressing=FoldPartialAddressing.DENSE,
+                feature_tile=feature_tile,
+                shared_buffers=shared_buffers,
+            ),
+            partial_value_dtype=DType.BF16,
+            output_dtype=DType.BF16,
+        )
+        for feature_tile, shared_buffers in ((64, 1), (64, 2), (128, 2))
+    )
+
+    assert programs[0].semantics == programs[1].semantics == programs[2].semantics
+    assert len({program.schedule for program in programs}) == 3
+
+
+@pytest.mark.parametrize(
     ("shared_buffers", "message"),
     ((0, "schedule parameters must be positive"), (3, "shared-buffer count must be a power of two")),
 )

@@ -749,8 +749,8 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         raise ValueError("the tiled Fold finalizer requires a 64- or 128-feature tile")
     if program.pipeline_stages != 4:
         raise ValueError("the first tiled Fold finalizer requires four shared-memory stages")
-    if program.pipeline_buffers != 2:
-        raise ValueError("the pipelined Fold finalizer requires two shared-memory buffers")
+    if program.pipeline_buffers not in (1, 2):
+        raise ValueError("the first tiled Fold finalizer requires one or two shared-memory buffers")
     if program.vector_bytes != 16:
         raise ValueError("the first tiled Fold finalizer requires 128-bit global-to-shared copies")
     features_per_lane = program.feature_tile // 32
@@ -802,10 +802,18 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
   const int64_t query_count = partial_value.size(1);
   const int64_t query_heads = partial_value.size(2);
   const int64_t value_width = partial_value.size(3);
-  auto output = torch::empty(
-      {query_count, query_heads, value_width},
-      partial_value.options().dtype(torch::kBFloat16));
   const int64_t row_count = query_count * query_heads;
+""".rstrip()
+        output_checks = """
+  TORCH_CHECK(output.dim() == 3, "dense Fold output must be [Q,H,D]");
+  TORCH_CHECK(output.size(0) == query_count && output.size(1) == query_heads &&
+                  output.size(2) == value_width,
+              "dense Fold output shape must match the partial-value row/feature domain");
+""".rstrip()
+        output_allocation = """
+  auto output = torch::empty(
+      {partial_value.size(1), partial_value.size(2), partial_value.size(3)},
+      partial_value.options().dtype(torch::kBFloat16));
 """.rstrip()
     elif input_layout.addressing is FoldPartialAddressing.INDEXED:
         row_mapping = ""
@@ -829,10 +837,17 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
   const int64_t query_count = partial_scalar.size(0);
   const int64_t query_heads = 1;
   const int64_t value_width = partial_value.size(1);
-  auto output = torch::empty(
-      {query_count, value_width},
-      partial_value.options().dtype(torch::kBFloat16));
   const int64_t row_count = query_count;
+""".rstrip()
+        output_checks = """
+  TORCH_CHECK(output.dim() == 2, "indexed Fold output must be [R,D]");
+  TORCH_CHECK(output.size(0) == query_count && output.size(1) == value_width,
+              "indexed Fold output shape must match the row/feature domain");
+""".rstrip()
+        output_allocation = """
+  auto output = torch::empty(
+      {partial_scalar.size(0), partial_value.size(1)},
+      partial_value.options().dtype(torch::kBFloat16));
 """.rstrip()
     else:
         raise ValueError(f"unsupported Fold partial addressing {input_layout.addressing.value}")
@@ -924,6 +939,61 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         f"  reinterpret_cast<__nv_bfloat162*>(output)[output_pair{pair}] = result{pair};"
         for pair in range(features_per_lane // 2)
     )
+    if program.pipeline_buffers == 2:
+        issue_next_group = f"""
+    if (next_partial_base < kPartialExtent) {{
+#pragma unroll
+      for (int stage = 0; stage < kPipelineStages; ++stage) {{
+        const int partial = next_partial_base + stage;
+        if ({stage_validity} && lane < kCopiesPerStage) {{
+          const int fake_feature = feature_base + lane * 8;
+          const int64_t source_index =
+              (static_cast<int64_t>({source_row})) * value_width + fake_feature;
+          copy_global_to_shared_16(
+              &staged_value[warp][next_buffer][stage][lane * 8],
+              &partial_value[source_index]);
+        }}
+      }}
+      commit_async_group();
+    }}
+""".rstrip()
+        finish_next_group = """
+    if (next_partial_base < kPartialExtent) {
+      wait_for_all_async_groups();
+      __syncwarp();
+      current_buffer = next_buffer;
+    }
+""".rstrip()
+        pipeline_comment = """
+  // Ping-pong schedule: issue the next group into a disjoint shared buffer
+  // before evaluating the generated AST over the current group.
+""".rstrip()
+    else:
+        issue_next_group = ""
+        finish_next_group = f"""
+    if (next_partial_base < kPartialExtent) {{
+      // One-buffer ablation: the generated AST must finish consuming the
+      // current group before the next asynchronous copies reuse its storage.
+#pragma unroll
+      for (int stage = 0; stage < kPipelineStages; ++stage) {{
+        const int partial = next_partial_base + stage;
+        if ({stage_validity} && lane < kCopiesPerStage) {{
+          const int fake_feature = feature_base + lane * 8;
+          const int64_t source_index =
+              (static_cast<int64_t>({source_row})) * value_width + fake_feature;
+          copy_global_to_shared_16(
+              &staged_value[warp][0][stage][lane * 8],
+              &partial_value[source_index]);
+        }}
+      }}
+      commit_async_group();
+      wait_for_all_async_groups();
+      __syncwarp();
+    }}
+""".rstrip()
+        pipeline_comment = """
+  // Serialized one-buffer schedule used as the explicit no-overlap ablation.
+""".rstrip()
     return f"""
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
@@ -1015,9 +1085,8 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
 {numerator_declarations}
 {feature_declarations}
 
-  // Prologue: make the first group available. Subsequent groups use the other
-  // shared-memory buffer so their cp.async transfers can run concurrently with
-  // the generated scalar AST over the current group.
+{pipeline_comment}
+  // Prologue: make the first partial group available.
 #pragma unroll
   for (int stage = 0; stage < kPipelineStages; ++stage) {{
     const int partial = stage;
@@ -1039,22 +1108,8 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
   for (int partial_base = 0; partial_base < kPartialExtent;
        partial_base += kPipelineStages) {{
     const int next_partial_base = partial_base + kPipelineStages;
-    const int next_buffer = current_buffer ^ 1;
-    if (next_partial_base < kPartialExtent) {{
-#pragma unroll
-      for (int stage = 0; stage < kPipelineStages; ++stage) {{
-        const int partial = next_partial_base + stage;
-        if ({stage_validity} && lane < kCopiesPerStage) {{
-        const int fake_feature = feature_base + lane * 8;
-        const int64_t source_index =
-            (static_cast<int64_t>({source_row})) * value_width + fake_feature;
-        copy_global_to_shared_16(
-              &staged_value[warp][next_buffer][stage][lane * 8],
-            &partial_value[source_index]);
-        }}
-      }}
-      commit_async_group();
-    }}
+    const int next_buffer = (current_buffer + 1) % kPipelineBuffers;
+{issue_next_group}
 
 #pragma unroll
     for (int stage = 0; stage < kPipelineStages; ++stage) {{
@@ -1067,11 +1122,7 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
 {contribution_updates}
       }}
     }}
-    if (next_partial_base < kPartialExtent) {{
-      wait_for_all_async_groups();
-      __syncwarp();
-      current_buffer = next_buffer;
-    }}
+{finish_next_group}
   }}
 
 {finalized_declarations}
@@ -1080,11 +1131,12 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
 
 }}  // namespace
 
-torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
+torch::Tensor shuttle_tiled_finalize_fold_partials_out_cuda(
     torch::Tensor partial_scalar,
     torch::Tensor partial_value,
     torch::Tensor partial_metadata,
-    int64_t query_heads_per_key_value_head) {{
+    int64_t query_heads_per_key_value_head,
+    torch::Tensor output) {{
   TORCH_CHECK(partial_scalar.is_cuda(), "scalar partial state must be CUDA");
   TORCH_CHECK(partial_value.is_cuda(), "value partial state must be CUDA");
   TORCH_CHECK(partial_metadata.is_cuda(), "partial metadata must be CUDA");
@@ -1097,6 +1149,11 @@ torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
   TORCH_CHECK(partial_scalar.is_contiguous(), "scalar state must be contiguous");
   TORCH_CHECK(partial_value.is_contiguous(), "value state must be contiguous");
   TORCH_CHECK(partial_metadata.is_contiguous(), "partial metadata must be contiguous");
+  TORCH_CHECK(output.is_cuda(), "Fold output must be CUDA");
+  TORCH_CHECK(output.scalar_type() == torch::kBFloat16, "Fold output must be BF16");
+  TORCH_CHECK(output.is_contiguous(), "Fold output must be contiguous");
+  TORCH_CHECK(output.device() == partial_value.device(),
+              "Fold output and partial values must be on the same device");
 {wrapper_checks}
   const int64_t feature_extent = partial_value.size(partial_value.dim() - 1);
   TORCH_CHECK(feature_extent % kFeatureTile == 0,
@@ -1104,6 +1161,7 @@ torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
 
   const c10::cuda::CUDAGuard device_guard(partial_value.device());
 {wrapper_shape}
+{output_checks}
   const dim3 blocks(
       static_cast<unsigned>((row_count + kRowsPerBlock - 1) / kRowsPerBlock),
       static_cast<unsigned>(value_width / kFeatureTile),
@@ -1122,8 +1180,23 @@ torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
   return output;
 }}
 
+torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
+    torch::Tensor partial_scalar,
+    torch::Tensor partial_value,
+    torch::Tensor partial_metadata,
+    int64_t query_heads_per_key_value_head) {{
+{output_allocation}
+  return shuttle_tiled_finalize_fold_partials_out_cuda(
+      partial_scalar,
+      partial_value,
+      partial_metadata,
+      query_heads_per_key_value_head,
+      output);
+}}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
   module.def("merge", &shuttle_tiled_finalize_fold_partials_cuda);
+  module.def("merge_out", &shuttle_tiled_finalize_fold_partials_out_cuda);
 }}
 """.strip()
 

@@ -1575,3 +1575,20 @@ author: dlwh
 - A tanh-to-exponential mutation reuses the matcher. Reverse dX/dW Contracts
   are visible, but post-SPMD structure alone does not assign cotangent and
   saved-value roles; the analyzer reports that as open instead of guessing.
+
+### 2026-08-08 - TLTC-MSA-008 direct Fold ablation harness
+
+- The generic tiled Fold emitter now retains an explicit one-buffer schedule
+  as the no-overlap control. The bounded physical candidate set is 64 features
+  with one buffer, 64 features with ping-pong buffers, and 128 features with
+  ping-pong buffers.
+- A combine-only GB200 harness compiles and preallocates every candidate before
+  measurement, rotates execution order for every warmup and sample, and uses a
+  preallocated output. It records raw samples, repeat order, correctness,
+  determinism, source hashes, and the canonical generic Fold program.
+- All candidates use an identical normalized-exponential state-merge AST; the
+  indexed deterministic weighted-sum mutation remains available through the
+  same emitter. The package suite passes 246 tests.
+- CUDA compilation and timing remain pending. The accepted full MSA result is
+  unchanged until the direct ablation and complete natural boundary are both
+  measured on GB200.
