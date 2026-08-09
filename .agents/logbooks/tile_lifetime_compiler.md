@@ -2825,3 +2825,25 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/`.
 - Infrastructure: holder `/dlwh/dev-gpu-codex-h100-narrowed-da49` was released;
   local session status and pod lookup both verified no active allocation.
+
+### 2026-08-09 14:32 PDT - TLTC-XLA-042 fused weighted reverse bootstrap failure
+
+- Commit `68c7770410` integrates a bounded one-CTA Contract–scalar Map–hidden
+  Fold–source Fold as an explicit eleven-call natural Grug composition. The
+  generated source preserves an FP32 Contract accumulator followed by an RNE
+  BF16 shared-memory boundary, ordered FP32 inner and outer Folds, one owner per
+  source, and no atomics.
+- The only attempted physical-H100 invocation did not reach HLO recovery or
+  generated-handler compilation. The repository-pinned JAX/JAXLIB 0.10.1 CUDA
+  environment did not expose the private `jaxlib._hlo` module required by the
+  benchmark harness and raised `ModuleNotFoundError` before the correctness
+  call or any warmup.
+- No retry was made. There are no timings, correctness results, or performance
+  acceptance claim for the fused candidate. A future physical replay requires
+  explicit authorization after pinning a compatible JAX HLO API or reviewing a
+  harness migration.
+- The device was an NVIDIA H100 80GB HBM3 with driver 595.71.05 and a 700 W
+  power limit. The batch-priority one-GPU/four-CPU allocation was released, and
+  pod lookup verified it inactive.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_fused_weighted_reverse_bootstrap_failure_68c777_v0/`.

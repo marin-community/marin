@@ -1,0 +1,15 @@
+{
+  "accepted": false,
+  "attempted_source_revision": "68c7770410",
+  "benchmark_completed": false,
+  "benchmark_invocations": 1,
+  "correctness_executed": false,
+  "failure_class": "jax_hlo_api_bootstrap",
+  "failure_message": "ModuleNotFoundError: No module named 'jaxlib._hlo'",
+  "generated_handler_compiled": false,
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "jax_version": "0.10.1",
+  "jaxlib_version": "0.10.1",
+  "measurements_completed": 0,
+  "replay_retried": false
+}
