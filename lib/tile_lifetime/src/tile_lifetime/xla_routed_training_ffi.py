@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tile_lifetime.collective_transport import CollectiveCompletionPlan, recover_collective_completion_plans
+from tile_lifetime.cuda_axis_fold_codegen import GeneratedCudaAxisFoldFfi
 from tile_lifetime.event_dataflow import EventSchedulingMode
 from tile_lifetime.event_dataflow_adapters import (
     CollectiveCompletionSchedule,
@@ -17,6 +18,13 @@ from tile_lifetime.event_dataflow_adapters import (
 from tile_lifetime.jax_streaming_attention_backward_ffi import GeneratedStreamingAttentionBackwardFfi
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProgram
+from tile_lifetime.xla_axis_fold_ffi import (
+    AxisFoldHloRegionReplacementAudit,
+    AxisFoldHloRegionReplacementPlan,
+    audit_axis_fold_hlo_region_replacement,
+    plan_axis_fold_hlo_region_replacement,
+    replace_axis_fold_hlo_region_with_custom_call,
+)
 from tile_lifetime.xla_hlo_recovery import HloComputation, parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     RoutedForwardCodegenDisposition,
@@ -101,6 +109,30 @@ class RoutedTrainingAndAttentionReplacementAudit:
     attention_backward_instruction: str
 
 
+@dataclass(frozen=True)
+class RoutedTrainingAttentionAndAxisFoldFfiTargets:
+    """Independent targets for routed, attention, and generic Fold work."""
+
+    routed_attention: RoutedTrainingAndAttentionFfiTargets
+    axis_folds: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RoutedTrainingAttentionAndAxisFoldTypedFfiPlan:
+    """Five existing regions plus generic Fold/final-Map regions."""
+
+    routed_attention: RoutedTrainingAndAttentionTypedFfiPlan
+    axis_folds: tuple[AxisFoldHloRegionReplacementPlan, ...]
+
+
+@dataclass(frozen=True)
+class RoutedTrainingAttentionAndAxisFoldReplacementAudit:
+    """Post-roundtrip evidence for all independently generated regions."""
+
+    routed_attention: RoutedTrainingAndAttentionReplacementAudit
+    axis_folds: tuple[AxisFoldHloRegionReplacementAudit, ...]
+
+
 def plan_routed_training_typed_ffi(
     hlo_text: str,
     *,
@@ -159,6 +191,39 @@ def plan_routed_training_and_attention_typed_ffi(
     )
 
 
+def plan_routed_training_attention_and_axis_fold_typed_ffi(
+    hlo_text: str,
+    attention_program: StreamingAttentionBackwardProgram,
+    generated_attention: GeneratedStreamingAttentionBackwardFfi,
+    generated_axis_folds: tuple[GeneratedCudaAxisFoldFfi, ...],
+    *,
+    axis_fold_numerical_policy: NumericalPolicy,
+    weight_gradient_numerical_policy: NumericalPolicy = NumericalPolicy.ALLOW_ROUNDING_REORDER,
+) -> RoutedTrainingAttentionAndAxisFoldTypedFfiPlan:
+    """Compose the existing five calls with structurally recovered Folds."""
+    if not generated_axis_folds:
+        raise ValueError("combined routed/attention/Fold planning requires at least one generated Fold")
+    axis_folds = tuple(
+        plan_axis_fold_hlo_region_replacement(
+            hlo_text,
+            generated,
+            numerical_policy=axis_fold_numerical_policy,
+        )
+        for generated in generated_axis_folds
+    )
+    if len({plan.internal_instructions for plan in axis_folds}) != len(axis_folds):
+        raise ValueError("combined routed/attention/Fold planning selected one Fold region more than once")
+    return RoutedTrainingAttentionAndAxisFoldTypedFfiPlan(
+        routed_attention=plan_routed_training_and_attention_typed_ffi(
+            hlo_text,
+            attention_program,
+            generated_attention,
+            weight_gradient_numerical_policy=weight_gradient_numerical_policy,
+        ),
+        axis_folds=axis_folds,
+    )
+
+
 def replace_routed_training_regions_with_custom_calls(
     hlo_text: str,
     plan: RoutedTrainingTypedFfiPlan,
@@ -203,6 +268,26 @@ def replace_routed_training_and_attention_regions_with_custom_calls(
         plan.routed,
         targets=targets.routed,
     )
+    parse_hlo_module_text(rewritten)
+    return rewritten
+
+
+def replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
+    hlo_text: str,
+    plan: RoutedTrainingAttentionAndAxisFoldTypedFfiPlan,
+    *,
+    targets: RoutedTrainingAttentionAndAxisFoldFfiTargets,
+) -> str:
+    """Apply six independently proven calls without widening any region."""
+    rewritten = replace_routed_training_and_attention_regions_with_custom_calls(
+        hlo_text,
+        plan.routed_attention,
+        targets=targets.routed_attention,
+    )
+    if len(plan.axis_folds) != len(targets.axis_folds):
+        raise ValueError("combined Fold plans and targets have different lengths")
+    for axis_fold, target in zip(plan.axis_folds, targets.axis_folds, strict=True):
+        rewritten = replace_axis_fold_hlo_region_with_custom_call(rewritten, axis_fold, target=target)
     parse_hlo_module_text(rewritten)
     return rewritten
 
@@ -359,6 +444,44 @@ def audit_routed_training_and_attention_replacement(
     return RoutedTrainingAndAttentionReplacementAudit(
         routed=routed,
         attention_backward_instruction=attention.call_instruction,
+    )
+
+
+def audit_routed_training_attention_and_axis_fold_replacement(
+    original_hlo: str,
+    transformed_hlo: str,
+    plan: RoutedTrainingAttentionAndAxisFoldTypedFfiPlan,
+    *,
+    targets: RoutedTrainingAttentionAndAxisFoldFfiTargets,
+) -> RoutedTrainingAttentionAndAxisFoldReplacementAudit:
+    """Audit routed, attention, and Fold replacements after one HLO round trip."""
+    before_fold = replace_routed_training_and_attention_regions_with_custom_calls(
+        original_hlo,
+        plan.routed_attention,
+        targets=targets.routed_attention,
+    )
+    fold_audits: list[AxisFoldHloRegionReplacementAudit] = []
+    for axis_fold, target in zip(plan.axis_folds, targets.axis_folds, strict=True):
+        after_fold = replace_axis_fold_hlo_region_with_custom_call(before_fold, axis_fold, target=target)
+        fold_audits.append(
+            audit_axis_fold_hlo_region_replacement(
+                before_fold,
+                after_fold,
+                axis_fold,
+                target=target,
+            )
+        )
+        before_fold = after_fold
+    if parse_hlo_module_text(before_fold) != parse_hlo_module_text(transformed_hlo):
+        raise ValueError("composed Fold audit did not reconstruct the transformed HLO module")
+    return RoutedTrainingAttentionAndAxisFoldReplacementAudit(
+        routed_attention=audit_routed_training_and_attention_replacement(
+            original_hlo,
+            transformed_hlo,
+            plan.routed_attention,
+            targets=targets.routed_attention,
+        ),
+        axis_folds=tuple(fold_audits),
     )
 
 

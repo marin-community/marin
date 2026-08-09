@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.ir import DType
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     GeneratedStreamingAttentionBackwardFfi,
@@ -34,13 +35,18 @@ from tile_lifetime.streaming_attention_backward_reference import (
     causal_gqa_attention_vjp,
     export_debug_streaming_attention_backward,
 )
+from tile_lifetime.xla_axis_fold_ffi import recover_axis_fold_hlo_region_candidates
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingAndAttentionFfiTargets,
+    RoutedTrainingAttentionAndAxisFoldFfiTargets,
     RoutedTrainingFfiTargets,
     audit_routed_training_and_attention_replacement,
+    audit_routed_training_attention_and_axis_fold_replacement,
     plan_routed_training_and_attention_typed_ffi,
+    plan_routed_training_attention_and_axis_fold_typed_ffi,
     replace_routed_training_and_attention_regions_with_custom_calls,
+    replace_routed_training_attention_and_axis_fold_regions_with_custom_calls,
     replace_routed_training_regions_with_custom_calls,
 )
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
@@ -71,6 +77,13 @@ _COMBINED_TARGETS = RoutedTrainingAndAttentionFfiTargets(
         ),
     ),
     attention_backward="shuttle.combined.attention_backward.test",
+)
+_SIX_TARGETS = RoutedTrainingAttentionAndAxisFoldFfiTargets(
+    routed_attention=_COMBINED_TARGETS,
+    axis_folds=(
+        "shuttle.combined.axis_fold.0.test",
+        "shuttle.combined.axis_fold.1.test",
+    ),
 )
 
 
@@ -553,6 +566,50 @@ def test_natural_grug_combined_plan_rewrites_routed_and_attention_regions() -> N
     assert audit.attention_backward_instruction == "shuttle.generated.streaming_reverse.region"
     assert len(audit.routed.target_instructions) == 4
     assert rewritten.count('custom_call_target="shuttle.combined.') == 5
+    parse_hlo_module_text(rewritten)
+
+
+def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
+    program, generated_attention, hlo = _grug_region_inputs()
+    fold_report = recover_axis_fold_hlo_region_candidates(
+        hlo,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    selected_folds = tuple(
+        plan
+        for plan in fold_report.plans
+        if plan.program.rows == 8 and plan.program.columns == 32 and plan.output_ffi_shape.startswith("bf16[")
+    )
+    assert len(selected_folds) == 2
+    generated_folds = tuple(
+        generate_cuda_axis_fold_ffi((fold.program,), target_name=target)
+        for fold, target in zip(selected_folds, _SIX_TARGETS.axis_folds, strict=True)
+    )
+    plan = plan_routed_training_attention_and_axis_fold_typed_ffi(
+        hlo,
+        program,
+        generated_attention,
+        generated_folds,
+        axis_fold_numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+
+    rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
+        hlo,
+        plan,
+        targets=_SIX_TARGETS,
+    )
+    audit = audit_routed_training_attention_and_axis_fold_replacement(
+        hlo,
+        rewritten,
+        plan,
+        targets=_SIX_TARGETS,
+    )
+
+    assert len(audit.routed_attention.routed.target_instructions) == 4
+    assert audit.routed_attention.attention_backward_instruction == "shuttle.generated.streaming_reverse.region"
+    assert len({value.call_instruction for value in audit.axis_folds}) == 2
+    assert all(value.call_instruction.startswith("shuttle.generated.axis_fold.region.") for value in audit.axis_folds)
+    assert rewritten.count('custom_call_target="shuttle.combined.') == 7
     parse_hlo_module_text(rewritten)
 
 
