@@ -306,24 +306,20 @@ def _streaming_dkdv_kernel(
         mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
         raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
         key_gradient += tl.dot(tl.trans(raw_score_cotangent.to(tl.bfloat16)), query_tile)
-    key_cotangent_block = tl.make_block_ptr(
-        base=key_cotangent + batch_index * stride_dkb + key_value_head * stride_dkh,
-        shape=(sequence_length, head_dimension),
-        strides=(stride_dks, stride_dkd),
-        offsets=(key_start, 0),
-        block_shape=(block_n, head_dimension),
-        order=(1, 0),
+    key_cotangent_offsets = (
+        batch_index * stride_dkb
+        + key_offsets[:, None] * stride_dks
+        + key_value_head * stride_dkh
+        + features[None, :] * stride_dkd
     )
-    value_cotangent_block = tl.make_block_ptr(
-        base=value_cotangent + batch_index * stride_dvb + key_value_head * stride_dvh,
-        shape=(sequence_length, head_dimension),
-        strides=(stride_dvs, stride_dvd),
-        offsets=(key_start, 0),
-        block_shape=(block_n, head_dimension),
-        order=(1, 0),
+    value_cotangent_offsets = (
+        batch_index * stride_dvb
+        + key_offsets[:, None] * stride_dvs
+        + key_value_head * stride_dvh
+        + features[None, :] * stride_dvd
     )
-    tl.store(key_cotangent_block, key_gradient.to(tl.bfloat16))
-    tl.store(value_cotangent_block, value_gradient.to(tl.bfloat16))
+    tl.store(key_cotangent + key_cotangent_offsets, key_gradient.to(tl.bfloat16))
+    tl.store(value_cotangent + value_cotangent_offsets, value_gradient.to(tl.bfloat16))
 
 
 @dataclass(frozen=True)

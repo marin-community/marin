@@ -4,6 +4,7 @@
 import functools
 import gzip
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import jax
@@ -14,6 +15,7 @@ from tile_lifetime.ir import DType
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     GeneratedStreamingAttentionBackwardFfi,
     StreamingAttentionBackwardFfiBuffer,
+    StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
     generate_streaming_attention_backward_ffi,
 )
@@ -44,6 +46,7 @@ from tile_lifetime.xla_routed_training_ffi import (
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
     StreamingReverseHloRole,
     audit_streaming_attention_backward_region_replacement,
+    derive_streaming_attention_backward_ffi_output_layouts,
     plan_streaming_attention_backward_hlo_region_replacement,
     plan_streaming_attention_backward_hlo_replacement,
     replace_streaming_attention_backward_entry_with_custom_call,
@@ -191,7 +194,7 @@ def test_natural_jax_vjp_hlo_derives_generic_reverse_boundary_and_roles() -> Non
     assert plan.maximum_vjp == "normalized_exp_invariant"
 
 
-def test_rewrite_preserves_entry_layouts_around_canonical_ffi_buffers() -> None:
+def test_rewrite_preserves_entry_layouts_around_default_ffi_buffers() -> None:
     program, generated, hlo = _program_generated_and_hlo()
     plan = plan_streaming_attention_backward_hlo_replacement(hlo, program, generated)
 
@@ -208,13 +211,127 @@ def test_rewrite_preserves_entry_layouts_around_canonical_ffi_buffers() -> None:
     assert generated.target_name in call.attributes
     assert entry.root.shape == plan.root_shape
     assert tuple(entry.root.operands) == (
-        "shuttle.query_cotangent.canonical",
+        "shuttle.query_cotangent.ffi",
         "shuttle.key_cotangent.physical",
         "shuttle.value_cotangent.physical",
     )
-    assert instructions["shuttle.query_cotangent.canonical"].shape == plan.outputs[0].canonical_shape
+    assert instructions["shuttle.query_cotangent.ffi"].shape == plan.outputs[0].ffi_shape
     assert instructions["shuttle.key_cotangent.physical"].shape == plan.outputs[1].physical_shape
     assert instructions["shuttle.value_cotangent.physical"].shape == plan.outputs[2].physical_shape
+
+
+def test_hlo_derived_ffi_output_layouts_erase_all_output_copies() -> None:
+    program, default_generated, hlo = _program_generated_and_hlo()
+    default_plan = plan_streaming_attention_backward_hlo_replacement(hlo, program, default_generated)
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=8,
+        key_value_tile_size=8,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.physical_outputs",
+        output_layouts=derive_streaming_attention_backward_ffi_output_layouts(default_plan),
+    )
+    plan = plan_streaming_attention_backward_hlo_replacement(hlo, program, generated)
+    rewritten = replace_streaming_attention_backward_entry_with_custom_call(
+        hlo,
+        plan,
+        target=generated.target_name,
+    )
+    entry = parse_hlo_module_text(rewritten).computation(parse_hlo_module_text(rewritten).entry)
+    shuttle_instructions = tuple(
+        instruction for instruction in entry.instructions if instruction.name.startswith("shuttle.")
+    )
+
+    assert all(value.physical_shape == value.ffi_shape for value in plan.outputs)
+    assert not any(instruction.opcode == "copy" for instruction in shuttle_instructions)
+    assert tuple(entry.root.operands) == (
+        "shuttle.query_cotangent.ffi",
+        "shuttle.key_cotangent.ffi",
+        "shuttle.value_cotangent.ffi",
+    )
+    assert tuple(output.layout for output in generated.outputs) == (
+        (3, 2, 1, 0),
+        (3, 1, 2, 0),
+        (1, 3, 2, 0),
+    )
+    assert tuple(output.strides for output in generated.outputs) == (
+        (4096, 256, 64, 1),
+        (2048, 64, 1024, 1),
+        (2048, 1, 1024, 16),
+    )
+    dkdv = next(kernel for kernel in generated.aot_kernels if kernel.output_name == "shuttle_streaming_dkdv")
+    assert dkdv.signature[31:35] == ("2048", "64", "1024", "1")
+    assert dkdv.signature[35:39] == ("2048", "1", "1024", "16")
+
+
+def test_physical_output_layout_mutation_changes_strides_without_semantic_dispatch() -> None:
+    program, _, _ = _program_generated_and_hlo()
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=8,
+        key_value_tile_size=8,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    layouts = (
+        StreamingAttentionBackwardFfiBufferLayout("query_cotangent", (3, 2, 1, 0)),
+        StreamingAttentionBackwardFfiBufferLayout("key_cotangent", (3, 2, 1, 0)),
+        StreamingAttentionBackwardFfiBufferLayout("value_cotangent", (3, 1, 2, 0)),
+    )
+
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.layout_mutation",
+        output_layouts=layouts,
+    )
+
+    assert generated.outputs[1].strides == (2048, 128, 64, 1)
+    assert generated.outputs[2].strides == (2048, 64, 1024, 1)
+
+
+def test_invalid_or_incomplete_output_layouts_fail_closed() -> None:
+    program, _, _ = _program_generated_and_hlo()
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=8,
+        key_value_tile_size=8,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+
+    with pytest.raises(ValueError, match="must cover exactly"):
+        generate_streaming_attention_backward_ffi(
+            program,
+            schedule,
+            target_name="shuttle.streaming_reverse.missing_layout",
+            output_layouts=(StreamingAttentionBackwardFfiBufferLayout("query_cotangent", (3, 2, 1, 0)),),
+        )
+    with pytest.raises(ValueError, match="must be a permutation"):
+        generate_streaming_attention_backward_ffi(
+            program,
+            schedule,
+            target_name="shuttle.streaming_reverse.invalid_layout",
+            output_layouts=(
+                StreamingAttentionBackwardFfiBufferLayout("query_cotangent", (3, 2, 1, 0)),
+                StreamingAttentionBackwardFfiBufferLayout("key_cotangent", (3, 1, 1, 0)),
+                StreamingAttentionBackwardFfiBufferLayout("value_cotangent", (1, 3, 2, 0)),
+            ),
+        )
+
+
+def test_hlo_output_without_explicit_layout_fails_closed() -> None:
+    program, generated, hlo = _program_generated_and_hlo()
+    plan = plan_streaming_attention_backward_hlo_replacement(hlo, program, generated)
+    output = replace(plan.outputs[1], physical_shape="bf16[1,16,2,64]")
+
+    with pytest.raises(ValueError, match="requires one explicit dense layout"):
+        derive_streaming_attention_backward_ffi_output_layouts(
+            replace(plan, outputs=(plan.outputs[0], output, plan.outputs[2]))
+        )
 
 
 def test_parameter_spelling_does_not_select_reverse_roles() -> None:
