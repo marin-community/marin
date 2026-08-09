@@ -47,11 +47,11 @@ deterministic over five repeats. The 30-sample medians are 0.061314 ms and
 phased primary/mutation.
 
 Those original GB200 timings measured a scalar event-only physical pipeline.
-The workload-linkage replay at revision `85212469d7` additionally executes the
+The hardened workload-linkage replay at revision `57cca04dc7` additionally executes the
 derived relation and streaming plans over real tensor payloads. Segmented
-Contract primary/mutation medians are 0.112208/0.121696 ms with bitwise reference
+Contract primary/mutation medians are 0.073328/0.072800 ms with bitwise reference
 matches. Streaming Contract/Fold primary/mutation medians are
-0.122144/0.121584 ms with maximum absolute errors 2.384e-7/1.192e-7. All four
+0.074672/0.074224 ms with maximum absolute errors 2.384e-7/1.192e-7. All four
 paths are bitwise deterministic across repeated execution. This validates the
 logical-to-physical linkage and mutation boundary, not tensor-core throughput
 or full attention/MoE performance.

@@ -223,7 +223,7 @@ time.
 
 ## Workload-linked GB200 follow-up
 
-Revision `85212469d7` connects the exact derived plans to real tensor payloads
+Revision `57cca04dc7` connects the exact derived plans to real tensor payloads
 through Torch-free JAX typed FFI. The runtime relation case consumes RelationPlan
 CSR counts, offsets, and source IDs and executes a real segmented FP32 Contract.
 The streaming case executes QK, normalized-exponential Fold, and PV over a finite
@@ -234,7 +234,7 @@ The physical audit keeps K/V-stage acquire and last-consumer release barriers,
 while QK-to-Fold, Fold-to-PV, finalization, and the relation gather-to-Contract
 edge erase to proven same-owner program order. Primary and mutation paths all
 match independent references and are deterministic. The 30-sample medians are
-0.112208/0.121696 ms for segmented primary/mutation and 0.122144/0.121584 ms for
+0.073328/0.072800 ms for segmented primary/mutation and 0.074672/0.074224 ms for
 streaming primary/mutation.
 
 These small FP32 bodies validate derivation, exact buffer reuse, physical event
