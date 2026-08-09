@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
@@ -20,6 +21,7 @@ from tile_lifetime.event_dataflow import (
     verify_event_dataflow_program,
     verify_event_tensor_plan,
 )
+from tile_lifetime.ir import DType
 
 
 class CudaDynamicEventLoweringError(ValueError):
@@ -32,6 +34,7 @@ class CudaDynamicEventLowering:
 
     source: str
     source_sha256: str
+    device_source_sha256: str
     plan_fingerprint: str
     event_count: int
     source_count: int
@@ -44,13 +47,64 @@ class CudaPhasedPipelineLowering:
 
     source: str
     source_sha256: str
+    device_source_sha256: str
     plan_fingerprint: str
     generation_count: int
     pipeline_depth: int
 
 
-def generate_cuda_runtime_event_lowering(plan: EventTensorPlan) -> CudaDynamicEventLowering:
-    """Generate a CTA counted-event kernel whose relation tables are runtime inputs."""
+class CudaEventFfiKind(StrEnum):
+    """Generic generated Event Tensor handler families."""
+
+    RUNTIME_RELATION = "runtime_relation"
+    PHASED_PIPELINE = "phased_pipeline"
+
+
+@dataclass(frozen=True)
+class CudaEventFfiBuffer:
+    """One fixed-rank buffer in a generated Event Tensor FFI signature."""
+
+    name: str
+    dtype: DType
+    shape: tuple[int, ...]
+
+    @property
+    def rank(self) -> int:
+        """Static rank encoded in the typed-FFI signature."""
+        return len(self.shape)
+
+
+@dataclass(frozen=True)
+class CudaEventFfiLowering:
+    """Torch-free typed-FFI source around one generic event device body."""
+
+    kind: CudaEventFfiKind
+    source: str
+    source_sha256: str
+    device_source_sha256: str
+    plan_fingerprint: str
+    target_name: str
+    handler_symbol: str
+    inputs: tuple[CudaEventFfiBuffer, ...]
+    outputs: tuple[CudaEventFfiBuffer, ...]
+
+
+@dataclass(frozen=True)
+class _RuntimeEventMetadata:
+    plan_fingerprint: str
+    event_count: int
+    source_count: int
+    consumer_count: int
+
+
+@dataclass(frozen=True)
+class _PhasedPipelineMetadata:
+    plan_fingerprint: str
+    generation_count: int
+    pipeline_depth: int
+
+
+def _runtime_event_metadata(plan: EventTensorPlan) -> _RuntimeEventMetadata:
     verify_event_tensor_plan(plan)
     reasons: list[str] = []
     if plan.memory_scope is not EventMemoryScope.CTA:
@@ -82,10 +136,7 @@ def generate_cuda_runtime_event_lowering(plan: EventTensorPlan) -> CudaDynamicEv
         "trigger": [(pair.source, pair.target) for pair in plan.trigger_relation.pairs],
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    source = _runtime_event_source()
-    return CudaDynamicEventLowering(
-        source=source,
-        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+    return _RuntimeEventMetadata(
         plan_fingerprint=fingerprint,
         event_count=len(runtime.event_initial_counts),
         source_count=len(runtime.source_event_offsets) - 1,
@@ -93,8 +144,7 @@ def generate_cuda_runtime_event_lowering(plan: EventTensorPlan) -> CudaDynamicEv
     )
 
 
-def generate_cuda_phased_pipeline_lowering(program: EventDataflowProgram) -> CudaPhasedPipelineLowering:
-    """Generate a multi-generation physical pipeline from four generic task stages."""
+def _phased_pipeline_metadata(program: EventDataflowProgram) -> _PhasedPipelineMetadata:
     verify_event_dataflow_program(program)
     if len(program.task_families) != 4 or len(program.dependences) != 4:
         raise CudaDynamicEventLoweringError("the bounded phased template requires four task stages and dependences")
@@ -135,14 +185,116 @@ def generate_cuda_phased_pipeline_lowering(program: EventDataflowProgram) -> Cud
         "scope": EventMemoryScope.CTA.value,
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    source = _phased_pipeline_source()
-    return CudaPhasedPipelineLowering(
-        source=source,
-        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+    return _PhasedPipelineMetadata(
         plan_fingerprint=fingerprint,
         generation_count=generation_count,
         pipeline_depth=pipeline_depth,
     )
+
+
+def generate_cuda_runtime_event_lowering(plan: EventTensorPlan) -> CudaDynamicEventLowering:
+    """Generate a CTA counted-event kernel whose relation tables are runtime inputs."""
+    metadata = _runtime_event_metadata(plan)
+    device_source = _runtime_event_kernel_source()
+    source = _runtime_event_source()
+    return CudaDynamicEventLowering(
+        source=source,
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+        device_source_sha256=hashlib.sha256(device_source.encode()).hexdigest(),
+        plan_fingerprint=metadata.plan_fingerprint,
+        event_count=metadata.event_count,
+        source_count=metadata.source_count,
+        consumer_count=metadata.consumer_count,
+    )
+
+
+def generate_cuda_phased_pipeline_lowering(program: EventDataflowProgram) -> CudaPhasedPipelineLowering:
+    """Generate a multi-generation physical pipeline from four generic task stages."""
+    metadata = _phased_pipeline_metadata(program)
+    device_source = _phased_pipeline_kernel_source()
+    source = _phased_pipeline_source()
+    return CudaPhasedPipelineLowering(
+        source=source,
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+        device_source_sha256=hashlib.sha256(device_source.encode()).hexdigest(),
+        plan_fingerprint=metadata.plan_fingerprint,
+        generation_count=metadata.generation_count,
+        pipeline_depth=metadata.pipeline_depth,
+    )
+
+
+def generate_cuda_runtime_event_ffi_lowering(
+    plan: EventTensorPlan,
+    *,
+    target_name: str,
+) -> CudaEventFfiLowering:
+    """Generate a JAX typed-FFI boundary around runtime relation readiness."""
+    metadata = _runtime_event_metadata(plan)
+    handler_symbol = _ffi_handler_symbol(target_name)
+    inputs = (
+        CudaEventFfiBuffer("input", DType.FP32, (metadata.source_count,)),
+        CudaEventFfiBuffer("event_counts", DType.INT32, (metadata.event_count,)),
+        CudaEventFfiBuffer("event_source_offsets", DType.INT32, (metadata.event_count + 1,)),
+        CudaEventFfiBuffer("event_sources", DType.INT32, (metadata.source_count,)),
+    )
+    outputs = (
+        CudaEventFfiBuffer("partials", DType.FP32, (metadata.source_count,)),
+        CudaEventFfiBuffer("output", DType.FP32, (metadata.event_count,)),
+    )
+    device_source = _runtime_event_kernel_source()
+    source = _runtime_event_ffi_source(handler_symbol)
+    return CudaEventFfiLowering(
+        kind=CudaEventFfiKind.RUNTIME_RELATION,
+        source=source,
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+        device_source_sha256=hashlib.sha256(device_source.encode()).hexdigest(),
+        plan_fingerprint=metadata.plan_fingerprint,
+        target_name=target_name,
+        handler_symbol=handler_symbol,
+        inputs=inputs,
+        outputs=outputs,
+    )
+
+
+def generate_cuda_phased_pipeline_ffi_lowering(
+    program: EventDataflowProgram,
+    *,
+    dimension: int,
+    target_name: str,
+) -> CudaEventFfiLowering:
+    """Generate a JAX typed-FFI boundary around a phased event pipeline."""
+    if dimension <= 0:
+        raise ValueError("phased FFI contract dimension must be positive")
+    metadata = _phased_pipeline_metadata(program)
+    handler_symbol = _ffi_handler_symbol(target_name)
+    generations = metadata.generation_count
+    depth = metadata.pipeline_depth
+    inputs = (
+        CudaEventFfiBuffer("query", DType.FP32, (generations, dimension)),
+        CudaEventFfiBuffer("key", DType.FP32, (generations, depth, dimension)),
+        CudaEventFfiBuffer("value", DType.FP32, (generations, depth)),
+    )
+    outputs = (CudaEventFfiBuffer("output", DType.FP32, (generations,)),)
+    device_source = _phased_pipeline_kernel_source()
+    source = _phased_pipeline_ffi_source(handler_symbol)
+    return CudaEventFfiLowering(
+        kind=CudaEventFfiKind.PHASED_PIPELINE,
+        source=source,
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+        device_source_sha256=hashlib.sha256(device_source.encode()).hexdigest(),
+        plan_fingerprint=metadata.plan_fingerprint,
+        target_name=target_name,
+        handler_symbol=handler_symbol,
+        inputs=inputs,
+        outputs=outputs,
+    )
+
+
+def _ffi_handler_symbol(target_name: str) -> str:
+    handler_symbol = target_name.replace(".", "_")
+    if not handler_symbol.isidentifier():
+        raise ValueError(f"FFI target does not map to a C identifier: {target_name!r}")
+    return handler_symbol
 
 
 def _validate_pipeline_domains(
@@ -206,21 +358,8 @@ def _validate_pipeline_relations(
         raise CudaDynamicEventLoweringError("slot reuse must follow prior-generation Fold finalization")
 
 
-def _runtime_event_source() -> str:
+def _runtime_event_kernel_source() -> str:
     return r"""
-// Copyright The Marin Authors
-// SPDX-License-Identifier: Apache-2.0
-// Generated from generic EventTensorPlan runtime tables; do not edit.
-#include <torch/extension.h>
-
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
-#include <cuda_runtime.h>
-#include <cmath>
-
-namespace {
-
 __global__ void shuttle_runtime_counted_event(
     const float* input,
     float* partials,
@@ -259,7 +398,27 @@ __global__ void shuttle_runtime_counted_event(
     output[event_index] = accumulator;
   }
 }
+""".strip()
 
+
+def _runtime_event_source() -> str:
+    return (
+        r"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic EventTensorPlan runtime tables; do not edit.
+#include <torch/extension.h>
+
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <cuda_runtime.h>
+#include <cmath>
+
+namespace {
+"""
+        + _runtime_event_kernel_source()
+        + r"""
 void check_int32(const torch::Tensor& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda() && tensor.is_contiguous(), name, " must be a contiguous CUDA tensor");
   TORCH_CHECK(tensor.scalar_type() == torch::kInt32, name, " must be int32");
@@ -302,24 +461,12 @@ void run_runtime_counted_event_out(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("run_runtime_counted_event_out", &run_runtime_counted_event_out);
 }
-""".strip()
+"""
+    ).strip()
 
 
-def _phased_pipeline_source() -> str:
+def _phased_pipeline_kernel_source() -> str:
     return r"""
-// Copyright The Marin Authors
-// SPDX-License-Identifier: Apache-2.0
-// Generated from a generic phased Contract/Fold/Contract task graph; do not edit.
-#include <torch/extension.h>
-
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
-#include <cuda_runtime.h>
-#include <cmath>
-
-namespace {
-
 constexpr int kMaximumPipelineDepth = 32;
 
 __device__ __forceinline__ void wait_for_generation(int* address, int generation) {
@@ -401,6 +548,27 @@ __global__ void shuttle_phased_contract_fold_pipeline(
     }
   }
 }
+""".strip()
+
+
+def _phased_pipeline_source() -> str:
+    return (
+        r"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from a generic phased Contract/Fold/Contract task graph; do not edit.
+#include <torch/extension.h>
+
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <cuda_runtime.h>
+#include <cmath>
+
+namespace {
+"""
+        + _phased_pipeline_kernel_source()
+        + r"""
 
 }  // namespace
 
@@ -436,4 +604,170 @@ void run_phased_contract_fold_pipeline_out(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("run_phased_contract_fold_pipeline_out", &run_phased_contract_fold_pipeline_out);
 }
-""".strip()
+"""
+    ).strip()
+
+
+def _runtime_event_ffi_source(handler_symbol: str) -> str:
+    source = (
+        r"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic EventTensorPlan runtime tables; do not edit.
+#include <atomic>
+#include <cstdint>
+#include <string>
+
+#include <cuda_runtime.h>
+
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
+
+namespace {
+std::atomic<int> call_count{0};
+"""
+        + _runtime_event_kernel_source()
+        + r"""
+
+ffi::Error ShuttleRuntimeEventRegion(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32, 1> input,
+    ffi::Buffer<ffi::S32, 1> event_counts,
+    ffi::Buffer<ffi::S32, 1> event_source_offsets,
+    ffi::Buffer<ffi::S32, 1> event_sources,
+    ffi::Result<ffi::Buffer<ffi::F32, 1>> partials,
+    ffi::Result<ffi::Buffer<ffi::F32, 1>> output,
+    std::int64_t maximum_count,
+    std::int64_t event_count) {
+  if (maximum_count <= 0 || maximum_count > 1024) {
+    return ffi::Error::InvalidArgument("maximum_count must be in [1, 1024]");
+  }
+  if (event_count <= 0) {
+    return ffi::Error::InvalidArgument("event_count must be positive");
+  }
+  int threads = 32;
+  while (threads < maximum_count) threads *= 2;
+  shuttle_runtime_counted_event<<<event_count, threads, 0, stream>>>(
+      input.typed_data(),
+      partials->typed_data(),
+      output->typed_data(),
+      event_counts.typed_data(),
+      event_source_offsets.typed_data(),
+      event_sources.typed_data(),
+      static_cast<int>(event_count));
+  const cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return ffi::Error::Internal(
+        std::string("shuttle_runtime_counted_event: ") + cudaGetErrorString(status));
+  }
+  call_count.fetch_add(1, std::memory_order_relaxed);
+  return ffi::Error::Success();
+}
+
+auto ShuttleRuntimeEventRegionBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::F32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::F32, 1>>()
+      .Ret<ffi::Buffer<ffi::F32, 1>>()
+      .Attr<std::int64_t>("maximum_count")
+      .Attr<std::int64_t>("event_count");
+}
+}  // namespace
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    @HANDLER@,
+    ShuttleRuntimeEventRegion,
+    ShuttleRuntimeEventRegionBinding());
+
+extern "C" int @HANDLER@_call_count() {
+  return call_count.load(std::memory_order_relaxed);
+}
+"""
+    )
+    return source.replace("@HANDLER@", handler_symbol).strip()
+
+
+def _phased_pipeline_ffi_source(handler_symbol: str) -> str:
+    source = (
+        r"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from a generic phased Contract/Fold/Contract task graph; do not edit.
+#include <atomic>
+#include <cstdint>
+#include <string>
+
+#include <cuda_runtime.h>
+#include <cmath>
+
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
+
+namespace {
+std::atomic<int> call_count{0};
+"""
+        + _phased_pipeline_kernel_source()
+        + r"""
+
+ffi::Error ShuttlePhasedPipelineRegion(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32, 2> query,
+    ffi::Buffer<ffi::F32, 3> key,
+    ffi::Buffer<ffi::F32, 2> value,
+    ffi::Result<ffi::Buffer<ffi::F32, 1>> output,
+    std::int64_t generation_count,
+    std::int64_t pipeline_depth,
+    std::int64_t dimension) {
+  if (generation_count <= 0 || dimension <= 0) {
+    return ffi::Error::InvalidArgument("generation_count and dimension must be positive");
+  }
+  if (pipeline_depth <= 0 || pipeline_depth > kMaximumPipelineDepth) {
+    return ffi::Error::InvalidArgument("pipeline_depth must be in [1, 32]");
+  }
+  shuttle_phased_contract_fold_pipeline<<<1, 96, 0, stream>>>(
+      query.typed_data(),
+      key.typed_data(),
+      value.typed_data(),
+      output->typed_data(),
+      static_cast<int>(generation_count),
+      static_cast<int>(pipeline_depth),
+      static_cast<int>(dimension));
+  const cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return ffi::Error::Internal(
+        std::string("shuttle_phased_contract_fold_pipeline: ") + cudaGetErrorString(status));
+  }
+  call_count.fetch_add(1, std::memory_order_relaxed);
+  return ffi::Error::Success();
+}
+
+auto ShuttlePhasedPipelineRegionBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::F32, 2>>()
+      .Arg<ffi::Buffer<ffi::F32, 3>>()
+      .Arg<ffi::Buffer<ffi::F32, 2>>()
+      .Ret<ffi::Buffer<ffi::F32, 1>>()
+      .Attr<std::int64_t>("generation_count")
+      .Attr<std::int64_t>("pipeline_depth")
+      .Attr<std::int64_t>("dimension");
+}
+}  // namespace
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    @HANDLER@,
+    ShuttlePhasedPipelineRegion,
+    ShuttlePhasedPipelineRegionBinding());
+
+extern "C" int @HANDLER@_call_count() {
+  return call_count.load(std::memory_order_relaxed);
+}
+"""
+    )
+    return source.replace("@HANDLER@", handler_symbol).strip()
