@@ -11,6 +11,7 @@ import pytest
 
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardStatePolicy,
+    _run_triton_aot_compile,
     call_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
 )
@@ -243,6 +244,17 @@ def test_aot_compile_plan_is_build_time_triton_but_runtime_handler_is_self_conta
     assert "xla/ffi/api/ffi.h" in generated.handler_template
     assert "triton" not in generated.handler_template.lower()
     assert "torch" not in generated.handler_template.lower()
+
+
+def test_triton_aot_subprocess_owns_its_cache_directory(tmp_path: Path) -> None:
+    cache_directory = tmp_path / "build" / ".triton-cache"
+    captured_environment = tmp_path / "child-triton-cache.txt"
+    script = "import os, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(os.environ['TRITON_CACHE_DIR'])"
+    command = (sys.executable, "-c", script, str(captured_environment))
+    _run_triton_aot_compile(command, repository=REPOSITORY, cache_directory=cache_directory)
+
+    assert cache_directory.is_dir()
+    assert captured_environment.read_text() == str(cache_directory.resolve())
 
 
 def test_call_validates_shape_before_ffi_dispatch() -> None:
