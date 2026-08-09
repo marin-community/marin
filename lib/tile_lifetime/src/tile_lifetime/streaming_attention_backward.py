@@ -71,8 +71,8 @@ class StreamingAttentionBackwardTileSchedule:
 
     ``query_heads_per_key_value_tile`` is derived from the QK input index map.
     It coalesces all query rows that consume the same K/V tile into one physical
-    Contract.  This is an axis-relation transformation, not an attention-name
-    dispatch.
+    Contract in both reverse traversals.  This is an axis-relation
+    transformation, not an attention-name dispatch.
     """
 
     query_tile_size: int
@@ -98,7 +98,9 @@ class StreamingAttentionBackwardWorkEstimate:
     logical_query_key_tile_pairs: int
     fully_restricted_tile_pairs: int
     query_gradient_contract_invocations: int
+    scalar_head_query_gradient_contract_invocations: int
     full_domain_query_gradient_contract_invocations: int
+    full_domain_scalar_head_query_gradient_contract_invocations: int
     key_value_gradient_contract_invocations: int
     scalar_head_key_value_contract_invocations: int
     full_domain_scalar_head_key_value_contract_invocations: int
@@ -106,6 +108,16 @@ class StreamingAttentionBackwardWorkEstimate:
     peak_score_tile_elements: int
     peak_query_tile_elements: int
     key_value_gradient_accumulator_elements: int
+
+    @property
+    def query_gradient_contract_invocation_reduction(self) -> float:
+        return self.scalar_head_query_gradient_contract_invocations / self.query_gradient_contract_invocations
+
+    @property
+    def query_gradient_contract_invocation_reduction_from_full_scalar(self) -> float:
+        return (
+            self.full_domain_scalar_head_query_gradient_contract_invocations / self.query_gradient_contract_invocations
+        )
 
     @property
     def key_value_contract_invocation_reduction(self) -> float:
@@ -247,8 +259,9 @@ def estimate_streaming_attention_backward_work(
     batch_count = batch_axis.extent
     logical_tile_pairs = batch_count * query_head.extent * valid_tile_pairs
     fully_restricted = batch_count * query_head.extent * (all_tile_pairs - valid_tile_pairs)
-    query_contracts = logical_tile_pairs * 3
-    full_domain_query_contracts = batch_count * query_head.extent * all_tile_pairs * 3
+    grouped_query_contracts = batch_count * key_value_head.extent * valid_tile_pairs * 3
+    scalar_query_contracts = logical_tile_pairs * 3
+    full_domain_scalar_query_contracts = batch_count * query_head.extent * all_tile_pairs * 3
     grouped_key_value_contracts = batch_count * key_value_head.extent * valid_tile_pairs * 4
     scalar_key_value_contracts = logical_tile_pairs * 4
     full_domain_scalar_key_value_contracts = batch_count * query_head.extent * all_tile_pairs * 4
@@ -256,8 +269,10 @@ def estimate_streaming_attention_backward_work(
     return StreamingAttentionBackwardWorkEstimate(
         logical_query_key_tile_pairs=logical_tile_pairs,
         fully_restricted_tile_pairs=fully_restricted,
-        query_gradient_contract_invocations=query_contracts,
-        full_domain_query_gradient_contract_invocations=full_domain_query_contracts,
+        query_gradient_contract_invocations=grouped_query_contracts,
+        scalar_head_query_gradient_contract_invocations=scalar_query_contracts,
+        full_domain_query_gradient_contract_invocations=(batch_count * key_value_head.extent * all_tile_pairs * 3),
+        full_domain_scalar_head_query_gradient_contract_invocations=full_domain_scalar_query_contracts,
         key_value_gradient_contract_invocations=grouped_key_value_contracts,
         scalar_head_key_value_contract_invocations=scalar_key_value_contracts,
         full_domain_scalar_head_key_value_contract_invocations=full_domain_scalar_key_value_contracts,

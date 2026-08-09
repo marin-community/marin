@@ -28,7 +28,14 @@ from tile_lifetime import (
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant
 
 
-def _program(*, causal: bool, softcap: float | None = None, output_scale: float = 1.0):
+def _program(
+    *,
+    causal: bool,
+    softcap: float | None = None,
+    output_scale: float = 1.0,
+    query_heads: int = 4,
+    key_value_heads: int = 2,
+):
     score_map = scaled_score_map(0.7)
     if softcap is not None:
         score_map = apply_tanh_softcap(score_map, softcap)
@@ -38,8 +45,8 @@ def _program(*, causal: bool, softcap: float | None = None, output_scale: float 
         batch_size=1,
         query_length=5,
         key_length=5,
-        query_heads=4,
-        key_value_heads=2,
+        query_heads=query_heads,
+        key_value_heads=key_value_heads,
         key_dimension=3,
         value_dimension=3,
         score_map=score_map,
@@ -158,8 +165,12 @@ def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() ->
     assert schedule.key_value_fold_order is StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE
     assert work.logical_query_key_tile_pairs == 60
     assert work.fully_restricted_tile_pairs == 40
-    assert work.query_gradient_contract_invocations == 180
-    assert work.full_domain_query_gradient_contract_invocations == 300
+    assert work.query_gradient_contract_invocations == 90
+    assert work.scalar_head_query_gradient_contract_invocations == 180
+    assert work.full_domain_query_gradient_contract_invocations == 150
+    assert work.full_domain_scalar_head_query_gradient_contract_invocations == 300
+    assert work.query_gradient_contract_invocation_reduction == 2.0
+    assert work.query_gradient_contract_invocation_reduction_from_full_scalar == 10 / 3
     assert work.key_value_gradient_contract_invocations == 120
     assert work.scalar_head_key_value_contract_invocations == 240
     assert work.full_domain_scalar_head_key_value_contract_invocations == 400
@@ -169,6 +180,35 @@ def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() ->
     assert work.peak_score_tile_elements == 2
     assert work.peak_query_tile_elements == 6
     assert work.key_value_gradient_accumulator_elements == 6
+
+
+@pytest.mark.parametrize(
+    ("query_heads", "key_value_heads", "expected_group_size"),
+    ((4, 4, 1), (4, 2, 2), (8, 2, 4)),
+)
+def test_query_gradient_packing_tracks_contract_head_index_relation(
+    query_heads: int,
+    key_value_heads: int,
+    expected_group_size: int,
+) -> None:
+    backward = derive_streaming_attention_backward(
+        _program(
+            causal=False,
+            query_heads=query_heads,
+            key_value_heads=key_value_heads,
+        )
+    )
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        backward,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.FULL,
+    )
+    work = estimate_streaming_attention_backward_work(backward, schedule)
+
+    assert schedule.query_heads_per_key_value_tile == expected_group_size
+    assert work.query_gradient_contract_invocation_reduction == expected_group_size
+    assert work.key_value_contract_invocation_reduction == expected_group_size
 
 
 def test_score_map_mutation_changes_domain_work_without_changing_grouped_schedule() -> None:
