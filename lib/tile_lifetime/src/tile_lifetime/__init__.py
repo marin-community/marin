@@ -23,6 +23,10 @@ from tile_lifetime.autodiff import (
     scalar_expression_vjp,
 )
 from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
+from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
+    GeneratedCudaNormalizedExpContractReverseFfi,
+    generate_cuda_normalized_exp_contract_reverse_ffi,
+)
 from tile_lifetime.dense_algebra import DenseSemanticErasureError, erase_dense_semantics
 from tile_lifetime.dense_flow import (
     DenseFlowOperation,
@@ -80,6 +84,10 @@ from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
     build_jax_collective_execution_plan,
     execute_jax_collective_completion,
+)
+from tile_lifetime.jax_normalized_exp_contract_reverse_ffi import (
+    call_cuda_normalized_exp_contract_reverse_ffi,
+    register_cuda_normalized_exp_contract_reverse_ffi,
 )
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     CompiledStreamingAttentionBackwardFfi,

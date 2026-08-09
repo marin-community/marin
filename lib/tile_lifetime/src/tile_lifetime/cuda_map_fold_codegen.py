@@ -43,8 +43,8 @@ class CudaScalarFunction:
     def __post_init__(self) -> None:
         if not self.symbol.isidentifier():
             raise ValueError(f"CUDA scalar symbol must be an identifier: {self.symbol!r}")
-        if not self.arguments or len(set(self.arguments)) != len(self.arguments):
-            raise ValueError("CUDA scalar arguments must be nonempty and unique")
+        if len(set(self.arguments)) != len(self.arguments):
+            raise ValueError("CUDA scalar arguments must be unique")
         if any(not argument.isidentifier() for argument in self.arguments):
             raise ValueError(f"CUDA scalar arguments must be identifiers: {self.arguments!r}")
         referenced = scalar_expression_inputs(self.expression)

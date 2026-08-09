@@ -2868,3 +2868,25 @@ author: dlwh
   open.
 - Verification: 13 focused normalized-exp/autodiff tests pass; Pyrefly reports
   zero errors; scoped pre-commit and `git diff --check` pass.
+
+### 2026-08-09 15:24 PDT - TLTC-XLA-044 generated normalized-exp reverse body
+
+- The recovered natural Grug output-head reverse now lowers to a bounded generic
+  one-CTA Contract/Map/Fold/Contract family. It generates the score Contract,
+  score Map, Fold-domain restriction, normalized-exponential update, indexed
+  selected-coordinate correction, and both reverse Contracts without calling a
+  named loss, softmax, or attention kernel.
+- Numerical boundaries are explicit: the score Contract rounds to BF16 before
+  the generated score Map, the score cotangent rounds to BF16 before both reverse
+  Contracts, and all Contract reductions use deterministic source-ordered FP32
+  accumulation. The compact selection ABI carries indices and row validity
+  rather than a materialized one-hot tensor.
+- An identity score Map has a constant generated derivative. A tanh soft-cap
+  mutation changes the generated scalar Map and derivative while retaining the
+  same physical Contract/Fold family, shapes, and handler interface.
+- A Torch-free JAX typed-FFI registration/call boundary validates all seven
+  physical input shapes and dtypes before dispatch. GPU compilation, numerical
+  execution, integration into the full natural Grug harness, and performance
+  remain unmeasured.
+- Verification: 17 focused codegen, FFI-boundary, HLO-recovery, and semantic
+  tests pass; Pyrefly reports zero errors; scoped pre-commit passes.
