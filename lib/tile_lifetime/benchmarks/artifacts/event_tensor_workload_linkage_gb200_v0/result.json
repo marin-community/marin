@@ -1,0 +1,563 @@
+{
+  "benchmark": "shuttle_event_tensor_workload_linkage_sm100",
+  "hardware": "NVIDIA GB200, 595.71.05, 1200.00 W, 1950 MHz, 3996 MHz",
+  "jax": "0.10.1",
+  "device": "cuda:0",
+  "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:45:27_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0",
+  "architecture": "sm_100a",
+  "timing_boundary": "host dispatch through JAX typed FFI and output completion",
+  "records": {
+    "segmented_primary": {
+      "plan_fingerprint": "8b6d1da6211b89c19f3c6a6c104f268a58298a5fb1b7f089f78d4b4e70e00dd5",
+      "source_sha256": "0d3b6f91e8546401ba765f81a31f1e2a7ddd540108710478ff89bf83feaaec4c",
+      "device_source_sha256": "4c53447f4f76b90704eeb0487b64f7f581f1ff31e9d696c153da6c10058a3ac4",
+      "typed_ffi_inputs": [
+        {
+          "name": "source",
+          "dtype": "fp32",
+          "shape": [
+            64,
+            32
+          ]
+        },
+        {
+          "name": "weight",
+          "dtype": "fp32",
+          "shape": [
+            8,
+            32,
+            16
+          ]
+        },
+        {
+          "name": "event_counts",
+          "dtype": "int32",
+          "shape": [
+            8
+          ]
+        },
+        {
+          "name": "event_offsets",
+          "dtype": "int32",
+          "shape": [
+            9
+          ]
+        },
+        {
+          "name": "edge_sources",
+          "dtype": "int32",
+          "shape": [
+            128
+          ]
+        }
+      ],
+      "typed_ffi_outputs": [
+        {
+          "name": "output",
+          "dtype": "fp32",
+          "shape": [
+            128,
+            16
+          ]
+        }
+      ],
+      "event_realizations": [
+        {
+          "plan": "relation_edges_to_segmented_contract",
+          "kind": "erased_program_order",
+          "mechanism": "same CTA reads each routed row before its segmented Contract",
+          "reason": "the generated body performs payload gather and contraction in one ordered task"
+        }
+      ],
+      "physical_schedule": [
+        "one CTA per runtime segment",
+        "RelationPlan CSR counts/offsets define the ragged task domain",
+        "each output row loads its source payload then executes a generic Contract",
+        "edge-ready Event Tensor erased by same-task program order"
+      ],
+      "samples_ms": [
+        0.101504,
+        0.107392,
+        0.114208,
+        0.114656,
+        0.111776,
+        0.110784,
+        0.11232,
+        0.119521,
+        0.114784,
+        0.113184,
+        0.109856,
+        0.108928,
+        0.112832,
+        0.114816,
+        0.110464,
+        0.112064,
+        0.130272,
+        0.10432,
+        0.107489,
+        0.111776,
+        0.097024,
+        0.111296,
+        0.114784,
+        0.112096,
+        0.110048,
+        0.127168,
+        0.11568,
+        0.11312,
+        0.113824,
+        0.114625
+      ],
+      "median_ms": 0.112208,
+      "minimum_ms": 0.097024,
+      "maximum_ms": 0.130272,
+      "mean_ms": 0.11242036666666666,
+      "max_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "bitwise_deterministic": true,
+      "output_sha256": "d38eb0ae37f62d10b984112abc69d0d743211a6ac34ffecb8a66f24323885e96",
+      "hlo": {
+        "custom_call_target_lines": [
+          "ROOT ffi_call.1 = f32[128,16]{1,0} custom-call(source.1, weight.1, runtime_counts.1, runtime_offsets.1, runtime_edge_sources.1), custom_call_target=\"shuttle.event_segmented_primary\", operand_layout_constraints={f32[64,32]{1,0}, f32[8,32,16]{2,1,0}, s32[8]{0}, s32[9]{0}, s32[128]{0}}, api_version=API_VERSION_TYPED_FFI, backend_config={}"
+        ],
+        "constant_lines": 0,
+        "copy_lines": 0,
+        "sha256": "663e161ceadde7781dbea7ca257f262788d059d88315fe18149177c7994cf310"
+      },
+      "relation_counts": [
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16
+      ]
+    },
+    "segmented_mutation": {
+      "plan_fingerprint": "b6a9a6fb66a7befb650b9ae4eb1094b1b9883b79bc338cbd94a6bdf905791a4c",
+      "source_sha256": "daa53b1dfdc6a5221e9e797ffd255654cf8df4b2c6fa6fd0e19c9618580e35c0",
+      "device_source_sha256": "4c53447f4f76b90704eeb0487b64f7f581f1ff31e9d696c153da6c10058a3ac4",
+      "typed_ffi_inputs": [
+        {
+          "name": "source",
+          "dtype": "fp32",
+          "shape": [
+            64,
+            32
+          ]
+        },
+        {
+          "name": "weight",
+          "dtype": "fp32",
+          "shape": [
+            8,
+            32,
+            16
+          ]
+        },
+        {
+          "name": "event_counts",
+          "dtype": "int32",
+          "shape": [
+            8
+          ]
+        },
+        {
+          "name": "event_offsets",
+          "dtype": "int32",
+          "shape": [
+            9
+          ]
+        },
+        {
+          "name": "edge_sources",
+          "dtype": "int32",
+          "shape": [
+            128
+          ]
+        }
+      ],
+      "typed_ffi_outputs": [
+        {
+          "name": "output",
+          "dtype": "fp32",
+          "shape": [
+            128,
+            16
+          ]
+        }
+      ],
+      "event_realizations": [
+        {
+          "plan": "relation_edges_to_segmented_contract",
+          "kind": "erased_program_order",
+          "mechanism": "same CTA reads each routed row before its segmented Contract",
+          "reason": "the generated body performs payload gather and contraction in one ordered task"
+        }
+      ],
+      "physical_schedule": [
+        "one CTA per runtime segment",
+        "RelationPlan CSR counts/offsets define the ragged task domain",
+        "each output row loads its source payload then executes a generic Contract",
+        "edge-ready Event Tensor erased by same-task program order"
+      ],
+      "samples_ms": [
+        0.12496,
+        0.122784,
+        0.1224,
+        0.134784,
+        0.124032,
+        0.126848,
+        0.120704,
+        0.123744,
+        0.121345,
+        0.10368,
+        0.117408,
+        0.113312,
+        0.117632,
+        0.12192,
+        0.10352,
+        0.097856,
+        0.11712,
+        0.12336,
+        0.119937,
+        0.121088,
+        0.128032,
+        0.122144,
+        0.117952,
+        0.124032,
+        0.121056,
+        0.121472,
+        0.123072,
+        0.10624,
+        0.126176,
+        0.126657
+      ],
+      "median_ms": 0.121696,
+      "minimum_ms": 0.097856,
+      "maximum_ms": 0.134784,
+      "mean_ms": 0.11984223333333334,
+      "max_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "bitwise_deterministic": true,
+      "output_sha256": "8e456e858cfe88362a2358774eb64e8f21d019e8b211b57dcfc1a2197f2e691a",
+      "hlo": {
+        "custom_call_target_lines": [
+          "ROOT ffi_call.1 = f32[128,16]{1,0} custom-call(source.1, weight.1, runtime_counts.1, runtime_offsets.1, runtime_edge_sources.1), custom_call_target=\"shuttle.event_segmented_mutation\", operand_layout_constraints={f32[64,32]{1,0}, f32[8,32,16]{2,1,0}, s32[8]{0}, s32[9]{0}, s32[128]{0}}, api_version=API_VERSION_TYPED_FFI, backend_config={}"
+        ],
+        "constant_lines": 0,
+        "copy_lines": 0,
+        "sha256": "02f4719c4d6a633b2232e880d9825dff57e38d4fa4b90db6d6379e5e5afd77b2"
+      },
+      "relation_counts": [
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        16
+      ]
+    },
+    "streaming_primary": {
+      "plan_fingerprint": "3c9d75ce166c30b1cbaddf72e743e8f922df1ea17acf2a3f0ab4779d8e3af2cf",
+      "source_sha256": "95e5ccf16f5ce354e3a7deda2741bda651486646be5fb36b9495f5052f42061e",
+      "device_source_sha256": "d2f12714543fec710f780e4b93a37b8a4894c3227e4f1ea0507e92594feb8e8c",
+      "typed_ffi_inputs": [
+        {
+          "name": "query",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            16
+          ]
+        },
+        {
+          "name": "key",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            4,
+            16
+          ]
+        },
+        {
+          "name": "value",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            4,
+            8
+          ]
+        },
+        {
+          "name": "domain_valid",
+          "dtype": "int32",
+          "shape": [
+            2,
+            4,
+            4,
+            4
+          ]
+        }
+      ],
+      "typed_ffi_outputs": [
+        {
+          "name": "output",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            8
+          ]
+        }
+      ],
+      "event_realizations": [
+        {
+          "plan": "key_value_stage_to_qk",
+          "kind": "physical",
+          "mechanism": "CTA barrier after shared K/V stage fill",
+          "reason": "query-row consumers must acquire staged K/V payload"
+        },
+        {
+          "plan": "key_value_stage_to_pv",
+          "kind": "physical",
+          "mechanism": "CTA barrier after shared K/V stage fill",
+          "reason": "query-row consumers must acquire staged K/V payload"
+        },
+        {
+          "plan": "qk_to_normalized_exp_fold_partial",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner executes QK, Fold update, and PV in source order",
+          "reason": "the selected scalar reference body retains normalized-exp state in registers"
+        },
+        {
+          "plan": "normalized_exp_fold_partial_to_pv",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner executes QK, Fold update, and PV in source order",
+          "reason": "the selected scalar reference body retains normalized-exp state in registers"
+        },
+        {
+          "plan": "pv_to_normalize",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner finalizes after its ordered partition loop",
+          "reason": "all partial Fold updates complete in the same owner before finalization"
+        },
+        {
+          "plan": "pv_to_key_value_stage",
+          "kind": "physical",
+          "mechanism": "CTA barrier plus circular-slot generation advance",
+          "reason": "the last PV consumer must finish before a slot is overwritten"
+        }
+      ],
+      "physical_schedule": [
+        "2-slot circular shared K/V buffer",
+        "cooperative K/V stage fill then CTA acquire barrier",
+        "one query-row owner performs QK Contract, online normalized-exp Fold, and PV Contract",
+        "CTA release barrier after the last PV consumer before slot generation advances"
+      ],
+      "samples_ms": [
+        0.128352,
+        0.105952,
+        0.130944,
+        0.120064,
+        0.119296,
+        0.121344,
+        0.12288,
+        0.101409,
+        0.120192,
+        0.123712,
+        0.132448,
+        0.119168,
+        0.129056,
+        0.12096,
+        0.122112,
+        0.12064,
+        0.119936,
+        0.124545,
+        0.130592,
+        0.122176,
+        0.125952,
+        0.12032,
+        0.12016,
+        0.121088,
+        0.119968,
+        0.12272,
+        0.129408,
+        0.123137,
+        0.124256,
+        0.122624
+      ],
+      "median_ms": 0.122144,
+      "minimum_ms": 0.101409,
+      "maximum_ms": 0.132448,
+      "mean_ms": 0.12218036666666666,
+      "max_absolute_error": 2.384185791015625e-07,
+      "mean_absolute_error": 3.20469553116709e-08,
+      "bitwise_deterministic": true,
+      "output_sha256": "a4be3212436cbf62130a6a54198bf8ac7c4a6e5d771b618eeb295751b34bfae5",
+      "hlo": {
+        "custom_call_target_lines": [
+          "ROOT ffi_call.1 = f32[2,4,8]{2,1,0} custom-call(query.1, key.1, value.1, domain_valid.1), custom_call_target=\"shuttle.event_streaming_primary\", operand_layout_constraints={f32[2,4,16]{2,1,0}, f32[2,4,4,16]{3,2,1,0}, f32[2,4,4,8]{3,2,1,0}, s32[2,4,4,4]{3,2,1,0}}, api_version=API_VERSION_TYPED_FFI, backend_config={}"
+        ],
+        "constant_lines": 0,
+        "copy_lines": 0,
+        "sha256": "1b7649f9511436a19a87962c900bf6c4ed72932c88bafe4eb30b5d1d01f47909"
+      }
+    },
+    "streaming_mutation": {
+      "plan_fingerprint": "bf98fcaaf5bdc22c080ab690b33abf36e4ce82e8a8948602f16156bb1ab89fc0",
+      "source_sha256": "c7539f2728783bd008ff241c13f73751793eaf8621bc748b82693fc2b718ab18",
+      "device_source_sha256": "d2f12714543fec710f780e4b93a37b8a4894c3227e4f1ea0507e92594feb8e8c",
+      "typed_ffi_inputs": [
+        {
+          "name": "query",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            16
+          ]
+        },
+        {
+          "name": "key",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            5,
+            4,
+            16
+          ]
+        },
+        {
+          "name": "value",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            5,
+            4,
+            8
+          ]
+        },
+        {
+          "name": "domain_valid",
+          "dtype": "int32",
+          "shape": [
+            2,
+            4,
+            5,
+            4
+          ]
+        }
+      ],
+      "typed_ffi_outputs": [
+        {
+          "name": "output",
+          "dtype": "fp32",
+          "shape": [
+            2,
+            4,
+            8
+          ]
+        }
+      ],
+      "event_realizations": [
+        {
+          "plan": "key_value_stage_to_qk",
+          "kind": "physical",
+          "mechanism": "CTA barrier after shared K/V stage fill",
+          "reason": "query-row consumers must acquire staged K/V payload"
+        },
+        {
+          "plan": "key_value_stage_to_pv",
+          "kind": "physical",
+          "mechanism": "CTA barrier after shared K/V stage fill",
+          "reason": "query-row consumers must acquire staged K/V payload"
+        },
+        {
+          "plan": "qk_to_normalized_exp_fold_partial",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner executes QK, Fold update, and PV in source order",
+          "reason": "the selected scalar reference body retains normalized-exp state in registers"
+        },
+        {
+          "plan": "normalized_exp_fold_partial_to_pv",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner executes QK, Fold update, and PV in source order",
+          "reason": "the selected scalar reference body retains normalized-exp state in registers"
+        },
+        {
+          "plan": "pv_to_normalize",
+          "kind": "erased_program_order",
+          "mechanism": "one query-row owner finalizes after its ordered partition loop",
+          "reason": "all partial Fold updates complete in the same owner before finalization"
+        },
+        {
+          "plan": "pv_to_key_value_stage",
+          "kind": "physical",
+          "mechanism": "CTA barrier plus circular-slot generation advance",
+          "reason": "the last PV consumer must finish before a slot is overwritten"
+        }
+      ],
+      "physical_schedule": [
+        "3-slot circular shared K/V buffer",
+        "cooperative K/V stage fill then CTA acquire barrier",
+        "one query-row owner performs QK Contract, online normalized-exp Fold, and PV Contract",
+        "CTA release barrier after the last PV consumer before slot generation advances"
+      ],
+      "samples_ms": [
+        0.11328,
+        0.123648,
+        0.125568,
+        0.126368,
+        0.129088,
+        0.134433,
+        0.125056,
+        0.121952,
+        0.121472,
+        0.124384,
+        0.123584,
+        0.121472,
+        0.120192,
+        0.129792,
+        0.116736,
+        0.1176,
+        0.104161,
+        0.115392,
+        0.120512,
+        0.12032,
+        0.122944,
+        0.122784,
+        0.125952,
+        0.102336,
+        0.116768,
+        0.12368,
+        0.109025,
+        0.115968,
+        0.121696,
+        0.118784
+      ],
+      "median_ms": 0.121584,
+      "minimum_ms": 0.102336,
+      "maximum_ms": 0.134433,
+      "mean_ms": 0.12049823333333333,
+      "max_absolute_error": 1.1920928955078125e-07,
+      "mean_absolute_error": 2.3822849470889196e-08,
+      "bitwise_deterministic": true,
+      "output_sha256": "57dc057304d39abc76c5fad62ae2b57232f4ebe88aa55047baae9c9821bd61ba",
+      "hlo": {
+        "custom_call_target_lines": [
+          "ROOT ffi_call.1 = f32[2,4,8]{2,1,0} custom-call(query.1, key.1, value.1, domain_valid.1), custom_call_target=\"shuttle.event_streaming_mutation\", operand_layout_constraints={f32[2,4,16]{2,1,0}, f32[2,5,4,16]{3,2,1,0}, f32[2,5,4,8]{3,2,1,0}, s32[2,4,5,4]{3,2,1,0}}, api_version=API_VERSION_TYPED_FFI, backend_config={}"
+        ],
+        "constant_lines": 0,
+        "copy_lines": 0,
+        "sha256": "32782087b266f080bd3732a812f7c4d7e50f5350d77b037ec5f560d18f270316"
+      }
+    }
+  }
+}
