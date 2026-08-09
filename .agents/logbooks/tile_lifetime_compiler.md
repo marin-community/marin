@@ -2955,3 +2955,25 @@ author: dlwh
   records; the publishable artifact retains its checksum and derived launch
   tables. Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_coalesced_v0/`.
+
+### 2026-08-09 - TLTC-XLA-048 compact normalized-exp forward
+
+- Commit `554e4ecc65` recovers the padded output-head forward from the natural
+  Grug post-SPMD HLO as a compact score Contract, Fold-domain restriction,
+  normalized-exponential max/sum Folds, indexed selection, and two observable
+  outputs: per-row loss and saved log-normalizer state.
+- The compact operands are proven to share their unpadded primal bases with the
+  previously recovered reverse. The replacement consumes `[8,32]` and
+  `[32,128]` BF16 operands instead of executing XLA's zero-padded
+  `[128,64] @ [64,128]` physical Contract.
+- A bounded generated one-CTA family emits the Contract, scalar score Map,
+  source-ordered FP32 max/sum Folds, validity restriction, and selected-index
+  finalization. The score Contract has an explicit RNE BF16 boundary. A tanh
+  score-map mutation regenerates through the same physical family.
+- Forward and reverse replacement compose as two generic typed-FFI calls. The
+  reverse consumes the generated forward's saved state directly; the old
+  loss/state consumers are rewired and the padded subgraph is left dead for
+  ordinary XLA cleanup.
+- GPU compilation, numerical execution, and performance are unmeasured.
+  Twenty-one focused forward, reverse, FFI-boundary, and independent semantic
+  tests pass; scoped pre-commit and Pyrefly pass.
