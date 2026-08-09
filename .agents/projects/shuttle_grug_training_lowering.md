@@ -46,16 +46,47 @@ can continue to use expert implementations; the clean compiler fixture should
 explicitly select reference attention, XLA ragged contraction, and a generic
 relation path.
 
+The JAX 0.11 insertion-point probe is now executable. In an isolated JAX and
+JAXLIB 0.11.0 environment, `PRE_SCHEDULER` receives one `jit_train_step`
+`HloModuleProto` from the natural Grug lowering. The callback input retains 82
+contractions, 67 reductions, 8 scatters, and 4 sorts. Frontend StableHLO has no
+custom calls; XLA introduces only its generic `TopK` custom call before this
+stage. The callback returns `None`, so ordinary XLA compilation completes
+unchanged. The raw proto, text HLO, census, and reproduction command are in
+`lib/tile_lifetime/benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0`.
+
+This result uses one CPU partition. It verifies the API and clean semantic
+boundary, but it does not show that nontrivial GPU SPMD partitioning preserves
+the same recoverable structure. H100 capture and generic FFI call insertion
+remain open.
+
+The callback can return a modified serialized proto. A disposable CPU smoke
+parsed the callback input with JAXLIB's HLO binding, replaced one `Tanh` with a
+`Negate`, returned `module.as_serialized_hlo_module_proto()`, and changed
+`[1, -2, 3]` to `[-1, 2, -3]` in the compiled executable. The current Python
+binding only constructs unary HLO instructions; it cannot construct an
+arbitrary custom call.
+
+The smallest real replacement experiment is a generic
+`shuttle.execute_region_v1` FFI call for one shape-preserving
+Contract+Map+Fold region. A narrow C++ bridge should replace the structurally
+selected HLO instructions with a custom call while preserving result shape,
+sharding, aliasing, and unrelated HLO. The handler should receive a plan or
+artifact fingerprint instead of a workload name. Start with the standalone
+linear pair-Map forward/backward proof, then replace the same region inside the
+Grug capture. Do not round-trip the complete Grug module through edited HLO
+text; that risks dropping proto fields and donation metadata.
+
 ## Required implementation sequence
 
-1. Create a pinned JAX/JAXLIB 0.11 probe environment without changing Marin's
-   main lock. Register a no-op pre-scheduler transform and verify it observes a
-   trivial H100 module. Disable the persistent compilation cache or include the
-   Shuttle revision and plan fingerprint in an isolated cache namespace.
+1. The pinned JAX/JAXLIB 0.11 CPU probe is complete without changing Marin's
+   main lock. Repeat the no-op capture on H100 and with a nontrivial partitioned
+   mesh. Keep the persistent compilation cache disabled until the cache key
+   includes the Shuttle revision and plan fingerprint.
 
-2. Compile the frozen one-layer Grug train step on H100. Save both frontend
-   StableHLO and the exact post-SPMD `HloModuleProto` seen by Shuttle. Add an
-   opcode/custom-call census and reject FA4, DeepEP, Sonic, or other semantic
+2. Compile the one-layer Grug train step on H100. Save the exact partitioned
+   `HloModuleProto` seen by Shuttle and compare it with the checked-in CPU
+   capture. The existing census rejects FA4, DeepEP, Sonic, and other semantic
    kernels in the clean fixture.
 
 3. Recover one dense forward/backward contraction region from post-SPMD HLO

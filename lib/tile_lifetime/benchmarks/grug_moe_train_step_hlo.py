@@ -25,6 +25,7 @@ from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import _make_train_step, initial_state
+from lib.tile_lifetime.benchmarks.xla_pre_scheduler_probe import capture_pre_scheduler_compile
 
 _STABLEHLO_OPERATION = re.compile(r"\bstablehlo\.([A-Za-z0-9_]+)")
 _CUSTOM_CALL_TARGET = re.compile(r'call_target_name\s*=\s*"([^"]+)"')
@@ -71,6 +72,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--experts", type=int, default=4)
     parser.add_argument("--experts-per-token", type=int, default=2)
     parser.add_argument("--optimizer", choices=("sgd", "adamw"), default="sgd")
+    parser.add_argument("--pre-scheduler-artifact-directory", type=Path)
     return parser.parse_args()
 
 
@@ -121,6 +123,15 @@ def main() -> None:
         )
         lowered = train_step.lower(state, batch, compute_watch=False)
         stablehlo_text = str(lowered.compiler_ir(dialect="stablehlo"))
+        if args.pre_scheduler_artifact_directory is not None:
+            capture_pre_scheduler_compile(
+                lowered.compile,
+                frontend_stablehlo=stablehlo_text,
+                frontend_name=str(args.stablehlo_output),
+                artifact_directory=args.pre_scheduler_artifact_directory,
+                module_name="jit_train_step",
+                platform=jax.default_backend(),
+            )
 
     operations = _operation_inventory(stablehlo_text)
     custom_targets = _custom_call_targets(stablehlo_text)
