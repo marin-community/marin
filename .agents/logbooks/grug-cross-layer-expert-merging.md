@@ -902,3 +902,13 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Controller: `/dlwh/grug-xem-012-d1280-smoke-20260809`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-012-d1280-smoke-20260809. Submission completed at 05:51:22 PDT. The two central1 v5p-8 children may run concurrently.
 - Monitoring: one dedicated babysitter owns allocation, compile, W&B, exact 500-history/cardinality audit, terminal 23-component evaluation, final-50 gate, and step-500 artifacts. It may not mutate a cluster, change experiment identity, or launch full.
 - Next action: launch the fresh 14,315-update full comparison only on a complete smoke pass.
+
+### 2026-08-09 07:37 - GRUG-XEM-012 smoke pass and full launch
+
+- Smoke terminal state: controller and both children succeeded without retry or HBM/compile failure. Both W&B runs finished at zero-indexed step 499 and exactly 524,288,000 tokens. Each has 500 unique finite CE, routing, activation, and expected bank gradient/update samples; all 23 terminal evaluation components are finite; both roots contain `.artifact.json` and `checkpoints/step-500/metadata.json`.
+- Smoke metrics: Paloma control/treatment `4.006762981/4.029606819`, descriptive delta `+0.022843838`. Final-50 CE medians are `3.642156243/3.672140956`, delta `+0.029984713` versus `<=+0.15`. Final-50 overflow is zero, all 256 experts are active in every layer, and minimum per-layer mean entropy is `5.519863/5.520370` versus `>=5.3`.
+- Shared-bank health: treatment bank-2/bank-3 gradient-median ratio is `1.30044`; update-median ratio is `1.000392`. Both pass the ratio-4 gate. Every registered smoke condition passes.
+- Full preflight: both `2026.08.09` full roots matched no objects immediately before submission. The branch was clean and pushed at `aa67faacbb6ff525fa6e9f6efc362e04d62ba3dc`; experiment implementation remains `7d6fa47220`. Full fingerprints are control `a1a2b02c` and treatment `27a96496`.
+- Full command: `.venv/bin/iris --config lib/iris/config/marin.yaml job run --no-wait --region us-central1 --cpu 1 --memory 2GB --extra cpu --job-name grug-xem-012-d1280-full-20260809 -e MARIN_PREFIX gs://marin-us-central1 -e GRUG_TIED_MODEL d1280 -e GRUG_TIED_PHASE full -- python -m experiments.grug.moe.launch_tied_experts --version 2026.08.09 --run --max-concurrent 2`.
+- Full controller: `/dlwh/grug-xem-012-d1280-full-20260809`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-012-d1280-full-20260809. Submission completed at 07:36:56 PDT. A dedicated babysitter owns both arms through the exact 14,315-update terminal audit.
+- Next action: wait for both 15,010,365,440-token arms. XEM-012 launches no further experiment automatically after terminal result.
