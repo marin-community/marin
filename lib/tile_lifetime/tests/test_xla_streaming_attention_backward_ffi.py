@@ -264,6 +264,11 @@ def test_hlo_derived_ffi_output_layouts_erase_all_output_copies() -> None:
         (2048, 64, 1024, 1),
         (2048, 1, 1024, 16),
     )
+    assert tuple(output.jax_layout for output in generated.outputs) == (
+        (0, 1, 2, 3),
+        (0, 2, 1, 3),
+        (0, 2, 3, 1),
+    )
     dkdv = next(kernel for kernel in generated.aot_kernels if kernel.output_name == "shuttle_streaming_dkdv")
     assert dkdv.signature[31:35] == ("2048", "64", "1024", "1")
     assert dkdv.signature[35:39] == ("2048", "1", "1024", "16")
