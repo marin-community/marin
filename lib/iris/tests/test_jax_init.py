@@ -18,7 +18,7 @@ pytest.importorskip("jax")
 import iris.runtime.jax_init as jax_init_module
 import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
-from iris.cluster.client.job_info import JobInfo
+from iris.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resources
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port

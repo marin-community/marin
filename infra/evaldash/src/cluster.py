@@ -26,11 +26,11 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
-from iris.cluster.client.resource_client import ResourceClient
-from iris.cluster.resources.attempt import AttemptSummary
-from iris.cluster.resources.job import JobDetail, JobQuery
-from iris.cluster.resources.task import TaskDetail, TaskQuery
+from iris.resources.attempt import AttemptSummary
+from iris.resources.job import JobDetail, JobQuery
+from iris.resources.task import TaskDetail, TaskQuery
 from iris.rpc import job_pb2
+from iris.rpc.resource_client import ResourceRpcClient
 from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ class ClusterGateway:
         """Return the dashboard's live status shape for one Iris Job resource."""
 
         def fetch(address: str):
-            client = ResourceClient(address=address, timeout_ms=self._timeout_ms)
+            client = ResourceRpcClient(address=address, timeout_ms=self._timeout_ms)
             try:
                 job = _find_job(client, job_path)
                 tasks = _job_tasks(client, job)
@@ -169,7 +169,7 @@ class ClusterGateway:
         }
 
 
-def _find_job(client: ResourceClient, job_path: str) -> JobDetail:
+def _find_job(client: ResourceRpcClient, job_path: str) -> JobDetail:
     page_token = None
     while True:
         page = client.list_jobs(JobQuery(job_id_prefix=job_path, page_size=500, page_token=page_token))
@@ -181,7 +181,7 @@ def _find_job(client: ResourceClient, job_path: str) -> JobDetail:
         page_token = page.next_page_token
 
 
-def _job_tasks(client: ResourceClient, job: JobDetail) -> list[TaskDetail]:
+def _job_tasks(client: ResourceRpcClient, job: JobDetail) -> list[TaskDetail]:
     tasks: list[TaskDetail] = []
     page_token = None
     while True:

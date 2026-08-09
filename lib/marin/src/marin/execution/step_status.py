@@ -21,7 +21,7 @@ from threading import Event, Thread
 from time import sleep
 from typing import TypeVar
 
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from rigging.filesystem import prefix_join, url_to_fs
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,

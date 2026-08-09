@@ -5,7 +5,7 @@
 
 The job-list dashboard reads a job's failure/preemption totals on every refresh.
 Those totals are derived from ``task_attempts`` (see
-:mod:`iris.cluster.resources.attempt`), and re-aggregating the attempt log
+:mod:`iris.resources.attempt`), and re-aggregating the attempt log
 on every read is wasteful for the many terminal jobs whose attempts never change
 again. This projection memoizes the per-job :class:`AttemptCounts`, computed lazily
 via :func:`reads.attempt_counts_for_jobs` and dropped after any commit that touches
@@ -38,8 +38,8 @@ from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.persistence.schema import task_attempts_table
-from iris.cluster.resources.attempt import AttemptCounts
 from iris.cluster.types import JobName
+from iris.resources.attempt import AttemptCounts
 
 logger = logging.getLogger(__name__)
 

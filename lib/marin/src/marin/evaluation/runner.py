@@ -11,7 +11,7 @@ from typing import Protocol
 from fray.client import JobHandle
 from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
 

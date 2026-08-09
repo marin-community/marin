@@ -11,7 +11,6 @@ from rigging import telemetry
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.telemetry.probes import nvidia
 
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.config import WorkerConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
 from iris.cluster.node_agent import SERVICE_NAME
@@ -24,6 +23,7 @@ from iris.cluster.worker.env_probe import (
     infer_worker_id,
     probe_hardware,
 )
+from iris.rpc.resource_client import ResourceRpcClient
 
 DEFAULT_COLLECTION_INTERVAL = 30.0
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
@@ -38,7 +38,7 @@ def _worker_telemetry_endpoint(config: WorkerConfig) -> str:
     interceptors: tuple[BearerTokenInjector, ...] = ()
     if config.auth_token:
         interceptors = (BearerTokenInjector(StaticTokenProvider(config.auth_token), "authorization"),)
-    client = ResourceClient(
+    client = ResourceRpcClient(
         address,
         timeout_ms=10_000,
         interceptors=interceptors,

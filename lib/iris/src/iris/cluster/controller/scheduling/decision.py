@@ -20,8 +20,8 @@ from iris.cluster.controller.scheduling.scheduler import (
     Scheduler,
     SchedulingContext,
 )
-from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import JobName, WorkerId
+from iris.resources.state import PriorityBand
 
 
 def apply_preemptions(

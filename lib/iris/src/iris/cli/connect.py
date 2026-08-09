@@ -22,13 +22,13 @@ from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import ClientCredentials, credentials_for
 
 from iris.client import IrisClient
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.resource_client import ResourceRpcClient
 
 logger = logging.getLogger(__name__)
 
@@ -213,11 +213,11 @@ def resource_client_for_ctx(
     ctx: click.Context,
     *,
     timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
-) -> ResourceClient:
+) -> ResourceRpcClient:
     obj = ctx.obj or {}
     credentials = obj.get("credentials")
     interceptors = credentials.interceptors() if credentials is not None else ()
-    return ResourceClient(
+    return ResourceRpcClient(
         require_controller_url(ctx),
         timeout_ms=timeout_ms,
         interceptors=interceptors,

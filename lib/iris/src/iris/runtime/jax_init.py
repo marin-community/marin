@@ -23,7 +23,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.client.job_info import JobInfo, get_job_info
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
 from iris.env_resources import TaskResources

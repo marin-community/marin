@@ -9,9 +9,9 @@ from typing import cast
 import pytest
 from infra_probes import iris_job_succeeds, resolve_finelog_address
 from iris.client.client import IrisClient
-from iris.cluster.resources.endpoint import EndpointAccess, EndpointDetail, EndpointSummary
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
-from iris.cluster.resources.source import Page
+from iris.resources.endpoint import EndpointAccess, EndpointDetail, EndpointSummary
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.source import Page
 from iris.rpc import job_pb2
 
 

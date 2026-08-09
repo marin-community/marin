@@ -30,8 +30,8 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.resources.execution import Entrypoint, ResourceSpec
 from iris.cluster.types import AcceleratorType, CapacityType
+from iris.resources.execution import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.connect import proxy_path

@@ -14,10 +14,11 @@ from typing import Any
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.resources.attempt import AttemptSummary
-from iris.cluster.resources.endpoint import (
+from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
+from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.attempt import AttemptSummary
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,
@@ -25,18 +26,17 @@ from iris.cluster.resources.endpoint import (
     ProfileConfiguration,
     ThreadsProfileConfiguration,
 )
-from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobDetail, JobQuery, JobSummary
-from iris.cluster.resources.node import NodeHealth, NodeQuery, NodeSummary
-from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.job import JobDetail, JobQuery, JobSummary
+from iris.resources.node import NodeHealth, NodeQuery, NodeSummary
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
+from iris.rpc.resource_client import ResourceRpcClient
 from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
 from rigging.credential_store import cluster_name_from_url
@@ -416,7 +416,7 @@ class IrisBabysitter:
             timeout_ms=config.timeout_ms,
             interceptors=interceptors,
         )
-        self.resources = ResourceClient(
+        self.resources = ResourceRpcClient(
             config.controller_url,
             timeout_ms=config.timeout_ms,
             interceptors=interceptors,

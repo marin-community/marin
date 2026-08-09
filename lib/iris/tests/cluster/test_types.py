@@ -18,7 +18,13 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.resources.execution import (
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    JobName,
+    TaskAttempt,
+    is_federated,
+)
+from iris.resources.execution import (
     CpuDevice,
     Entrypoint,
     EnvironmentSpec,
@@ -27,12 +33,6 @@ from iris.cluster.resources.execution import (
     build_runtime_entrypoint,
     gpu_device,
     tpu_device,
-)
-from iris.cluster.types import (
-    LOCAL_CLUSTER,
-    JobName,
-    TaskAttempt,
-    is_federated,
 )
 from iris.rpc.resource_codec import (
     constraint_from_proto,

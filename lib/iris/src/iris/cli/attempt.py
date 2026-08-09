@@ -21,15 +21,15 @@ from iris.cli.resource_commands import (
     echo_logs,
     task_state_name,
 )
-from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.endpoint import (
+from iris.resources.activity import ActivityQuery
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,
     MemoryProfileFormat,
     ThreadsProfileConfiguration,
 )
-from iris.cluster.resources.log import LogQuery
+from iris.resources.log import LogQuery
 
 
 class ProfileName(StrEnum):

@@ -33,8 +33,6 @@ from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
-from iris.cluster.resources.execution import GpuDevice, TpuDevice
-from iris.cluster.resources.job import ContainerProfile, ExistingJobPolicy, JobSpec, PriorityBand
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -42,6 +40,8 @@ from iris.cluster.types import (
     UserBudgetDefaults,
     is_job_finished,
 )
+from iris.resources.execution import GpuDevice, TpuDevice
+from iris.resources.job import ContainerProfile, ExistingJobPolicy, JobSpec, PriorityBand
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
 
 logger = logging.getLogger(__name__)

@@ -25,7 +25,7 @@ from pathlib import Path
 import pulumi
 import pulumi_command as command
 from google.protobuf import json_format
-from iris.cluster.resources.execution import ResourceSpec
+from iris.resources.execution import ResourceSpec
 from iris.rpc.resource_codec import resource_spec_to_proto
 
 from iac.iris.spec import ALWAYS_ON_RETRIES, DEFAULT_READY_WAIT, SPEC_ENV_VAR, ServiceSpec

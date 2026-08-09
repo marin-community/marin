@@ -7,12 +7,11 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client import LogClient
-from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
+from iris.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -29,6 +28,7 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.timing import Timestamp
 from sqlalchemy import select

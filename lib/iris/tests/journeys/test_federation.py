@@ -6,10 +6,10 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.resources.action import ActionResult, ActionState
-from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.resources.job import JobQuery
-from iris.cluster.resources.source import Freshness, SourceState
+from iris.resources.action import ActionResult, ActionState
+from iris.resources.endpoint import EndpointQuery
+from iris.resources.job import JobQuery
+from iris.resources.source import Freshness, SourceState
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 from tests.journeys.federation import PARENT_CLUSTER_ID, PEER_ID, FederationJourney

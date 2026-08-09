@@ -16,7 +16,7 @@ from rigging.provenance import Provenance
 from rigging.timing import Duration
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.resources.execution import (
+from iris.resources.execution import (
     CommandEntrypoint,
     CpuDevice,
     Environment,
@@ -25,7 +25,7 @@ from iris.cluster.resources.execution import (
     RuntimeEntrypoint,
     TpuDevice,
 )
-from iris.cluster.resources.job import (
+from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
     ExistingJobPolicy,
@@ -33,7 +33,7 @@ from iris.cluster.resources.job import (
     JobSpec,
     PriorityBand,
 )
-from iris.cluster.resources.worker import WorkerMetadata
+from iris.resources.worker import WorkerMetadata
 
 
 class WorkerAttributeRow(Protocol):

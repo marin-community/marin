@@ -16,14 +16,14 @@ import httpx
 import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
-from iris.cluster.resources.endpoint import (
+from iris.cluster.types import EndpointAccess, JobName
+from iris.resources.endpoint import (
     EndpointAccess as ResourceEndpointAccess,
 )
-from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery, EndpointSummary, EndpointToken
-from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobSummary
-from iris.cluster.resources.source import Page
-from iris.cluster.types import EndpointAccess, JobName
+from iris.resources.endpoint import EndpointDetail, EndpointQuery, EndpointSummary, EndpointToken
+from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.job import JobSummary
+from iris.resources.source import Page
 from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker

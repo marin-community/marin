@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
-from iris.cluster.resources.endpoint import CpuProfileConfiguration, CpuProfileFormat
+from iris.resources.endpoint import CpuProfileConfiguration, CpuProfileFormat
 from iris.rpc import iris_logging_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 

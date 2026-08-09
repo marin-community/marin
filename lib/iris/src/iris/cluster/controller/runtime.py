@@ -27,7 +27,6 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, PeerConfig
-from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
@@ -61,7 +60,6 @@ from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
 from iris.cluster.controller.native_proxy_metrics import (
@@ -121,7 +119,6 @@ from iris.cluster.federation.manager import (
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
-from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     JobName,
@@ -130,7 +127,10 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
+from iris.resources.state import PriorityBand
 from iris.rpc.auth import SESSION_COOKIE
+from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 

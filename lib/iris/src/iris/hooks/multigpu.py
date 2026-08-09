@@ -15,7 +15,7 @@ stamps on each child; :mod:`iris.runtime.jax_init` and
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec
+from iris.resources.execution import GpuDevice, ResourceSpec
 
 # Rank env the supervisor stamps on each child.
 IRIS_MULTIGPU_PROCESS_COUNT_ENV = "IRIS_MULTIGPU_PROCESS_COUNT"

@@ -39,13 +39,13 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.resources.job import CoschedulingConfig
 from iris.cluster.types import (
     AcceleratorType,
     CapacityType,
     is_job_finished,
 )
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.job import CoschedulingConfig
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.connect import proxy_path

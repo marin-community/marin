@@ -20,7 +20,7 @@ import json
 import logging
 import os
 
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 
 logger = logging.getLogger(__name__)
 

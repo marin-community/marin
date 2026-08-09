@@ -4,8 +4,8 @@
 """Constants and predicate sets shared across the reconcile kernel."""
 
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.types import TERMINAL_JOB_STATES
+from iris.resources.state import JobState, TaskState
 
 # ---------------------------------------------------------------------------
 # Limits and well-known names

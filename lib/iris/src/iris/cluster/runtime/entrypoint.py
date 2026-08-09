@@ -3,4 +3,4 @@
 
 """Public runtime import for the native entrypoint builder."""
 
-from iris.cluster.resources.execution import build_runtime_entrypoint as build_runtime_entrypoint
+from iris.resources.execution import build_runtime_entrypoint as build_runtime_entrypoint

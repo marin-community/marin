@@ -35,8 +35,8 @@ from iris.cluster.controller.reconcile import (
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import JobName, WorkerId
+from iris.resources.state import TaskState
 
 
 @dataclass(frozen=True)

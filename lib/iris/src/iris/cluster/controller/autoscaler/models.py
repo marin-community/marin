@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.constraints import Constraint, PlacementRequirements
-from iris.cluster.resources.execution import ResourceSpec
+from iris.resources.execution import ResourceSpec
 
 
 class ScalingAction(Enum):

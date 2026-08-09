@@ -27,7 +27,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
 
 from .conftest import eq_constraint, in_constraint
 

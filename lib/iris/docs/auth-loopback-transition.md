@@ -174,7 +174,7 @@ auth {
 - `lib/iris/src/iris/cluster/controller/dashboard.py` — the RPC interceptor and
   route middleware (`PolicyAuthInterceptor` / `RouteAuthMiddleware` from
   rigging) pass the transport peer + headers into the shared resolver.
-- `lib/iris/src/iris/cluster/controller/legacy/controller_service.py` — `LaunchJob` reconciles the
+- `lib/iris/src/iris/rpc/controller_service.py` — `LaunchJob` reconciles the
   principal against the requested owner segment (admins act-as; non-admins pinned).
-- `lib/iris/src/iris/cluster/client/job_info.py` — `resolve_job_user()` stamps
+- `lib/iris/src/iris/client/job_info.py` — `resolve_job_user()` stamps
   the job name's owner segment with `$USER`.

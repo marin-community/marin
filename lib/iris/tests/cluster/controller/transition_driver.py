@@ -32,9 +32,9 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.resources.attempt import AttemptObservation
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.resources.attempt import AttemptObservation
+from iris.resources.state import TaskState
 from rigging.timing import Timestamp
 from sqlalchemy import select
 

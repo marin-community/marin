@@ -18,11 +18,13 @@ from iris.cluster.controller.persistence.transition_reader import DbTransitionRe
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.resources.action import ActionReceipt, ActionState
-from iris.cluster.resources.attempt import AttemptDetail
-from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.identity import (
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
+from iris.managed_thread import ThreadContainer
+from iris.resources.action import ActionReceipt, ActionState
+from iris.resources.attempt import AttemptDetail
+from iris.resources.endpoint import EndpointDetail, EndpointQuery
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
     JobIdentity,
@@ -30,7 +32,7 @@ from iris.cluster.resources.identity import (
     ResourceKind,
     TaskIdentity,
 )
-from iris.cluster.resources.job import (
+from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
     ExistingJobPolicy,
@@ -41,11 +43,9 @@ from iris.cluster.resources.job import (
     JobSummary,
     PriorityBand,
 )
-from iris.cluster.resources.source import Page
-from iris.cluster.resources.state import JobState, TaskState
-from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
-from iris.managed_thread import ThreadContainer
+from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, Timestamp

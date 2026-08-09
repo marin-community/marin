@@ -10,7 +10,7 @@ import logging
 import time
 
 from iris.client import iris_ctx
-from iris.cluster.resources.endpoint import EndpointQuery
+from iris.resources.endpoint import EndpointQuery
 
 
 def quick():

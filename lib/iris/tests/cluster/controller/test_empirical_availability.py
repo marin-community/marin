@@ -24,10 +24,10 @@ from iris.cluster.controller.autoscaler.routing import (
     empirical_zone_capabilities,
 )
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.types import AcceleratorType
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from rigging.timing import Timestamp
-from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
+from tests.cluster.platforms.conftest import make_fake_slice_handle, make_mock_platform
 
 TS = Timestamp.from_ms(1_000_000)
 

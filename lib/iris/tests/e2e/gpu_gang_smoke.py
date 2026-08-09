@@ -76,9 +76,9 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import Labels, find_free_port
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
-from iris.cluster.resources.job import CoschedulingConfig
 from iris.cluster.types import AcceleratorType
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
+from iris.resources.job import CoschedulingConfig
 from iris.rpc import job_pb2
 
 # install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the

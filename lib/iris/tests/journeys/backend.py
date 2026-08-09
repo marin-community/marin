@@ -27,9 +27,9 @@ from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from rigging.timing import Timestamp
 

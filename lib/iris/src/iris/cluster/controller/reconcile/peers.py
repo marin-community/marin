@@ -14,9 +14,9 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
 )
-from iris.cluster.resources.state import TaskState
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName
+from iris.resources.state import TaskState
 
 
 def find_coscheduled_siblings(

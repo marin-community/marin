@@ -15,8 +15,8 @@ from iris.cli.job import (
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
-from iris.cluster.resources.execution import GpuDevice
-from iris.cluster.resources.state import PriorityBand
+from iris.resources.execution import GpuDevice
+from iris.resources.state import PriorityBand
 
 
 def _invoke_run(args: list[str]):

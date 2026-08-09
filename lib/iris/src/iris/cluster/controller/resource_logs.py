@@ -7,7 +7,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
-from iris.cluster.resources.log import LogEntry, LogLevel, LogQuery
+from iris.resources.log import LogEntry, LogLevel, LogQuery
 
 
 def fetch_log_entries(

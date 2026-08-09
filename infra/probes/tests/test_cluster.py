@@ -23,9 +23,9 @@ from cluster import (
     aggregate_workers,
     collect_workers,
 )
-from iris.cluster.resources.identity import NodeIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.node import NodeCapacity, NodeHealth, NodeSummary
-from iris.cluster.resources.source import Page
+from iris.resources.identity import NodeIdentity, ResourceKey, ResourceKind
+from iris.resources.node import NodeCapacity, NodeHealth, NodeSummary
+from iris.resources.source import Page
 from rigging.timing import Timestamp
 
 GIB = 1024**3

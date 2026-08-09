@@ -17,27 +17,9 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptObservation
-from iris.cluster.resources.endpoint import (
-    CpuProfileConfiguration,
-    CpuProfileFormat,
-    ExecResult,
-    ProfileConfiguration,
-)
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import (
-    AttemptStatus,
-    ResourceUsage,
-    WorkerHealth,
-    WorkerMetadata,
-    WorkerReconcileRequest,
-    WorkerReconcileResponse,
-    WorkerResourceSnapshot,
-)
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
     build_profile_row,
@@ -74,9 +56,27 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.resources.attempt import AttemptLaunch, AttemptObservation
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    ExecResult,
+    ProfileConfiguration,
+)
+from iris.resources.state import TaskState
+from iris.resources.worker import (
+    AttemptStatus,
+    ResourceUsage,
+    WorkerHealth,
+    WorkerMetadata,
+    WorkerReconcileRequest,
+    WorkerReconcileResponse,
+    WorkerResourceSnapshot,
+)
 from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.resource_client import ResourceRpcClient
 from iris.rpc.worker_codec import worker_metadata_to_proto
 
 logger = logging.getLogger(__name__)
@@ -251,7 +251,7 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
-        self._resource_client: ResourceClient | None = None
+        self._resource_client: ResourceRpcClient | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -288,7 +288,7 @@ class Worker:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            self._resource_client = ResourceClient(
+            self._resource_client = ResourceRpcClient(
                 self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,

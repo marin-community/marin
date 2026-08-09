@@ -25,7 +25,7 @@ from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 

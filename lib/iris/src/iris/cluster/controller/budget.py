@@ -15,8 +15,8 @@ from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.json_codec import device_counts_from_json
-from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import UserBudgetDefaults
+from iris.resources.state import PriorityBand
 
 logger = logging.getLogger(__name__)
 

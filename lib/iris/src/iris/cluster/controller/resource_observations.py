@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.backend import TaskBackend
-from iris.cluster.resources.node import (
+from iris.resources.node import (
     NodeAttribute,
     NodeAttributeKind,
     NodeCapacity,

@@ -40,10 +40,10 @@ from iris.cluster.controller.persistence.reads import (
 )
 from iris.cluster.controller.persistence.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
-from iris.cluster.resources.job import CoschedulingConfig
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.job import CoschedulingConfig
+from iris.resources.state import TaskState
 
 
 @dataclass(frozen=True)

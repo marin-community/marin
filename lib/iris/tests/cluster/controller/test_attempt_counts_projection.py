@@ -13,8 +13,8 @@ the dead job's cached counts until the next attempt mirror.
 from iris.cluster.controller.persistence import writes
 from iris.cluster.controller.persistence.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.resources.attempt import AttemptCounts
 from iris.cluster.types import JobName
+from iris.resources.attempt import AttemptCounts
 from iris.rpc import job_pb2
 from sqlalchemy import insert
 

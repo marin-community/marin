@@ -19,13 +19,13 @@ import logging
 from finelog.client.log_client import Table
 from rigging.timing import Duration
 
-from iris.cluster.backends.k8s.tasks import (
+from iris.backends.k8s.tasks import (
     _CW_DEFAULT_TOPOLOGIES,
     _DEFAULT_PRIORITY_CLASS_NAMES,
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
     BackendConfig,
     IrisClusterConfig,
@@ -46,7 +46,7 @@ from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundl
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.cluster.resources.state import PriorityBand
+from iris.resources.state import PriorityBand
 
 logger = logging.getLogger(__name__)
 

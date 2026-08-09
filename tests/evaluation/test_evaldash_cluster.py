@@ -16,8 +16,8 @@ discovery = ModuleType("discovery")
 discovery.resolve_internal_ip = lambda *_args, **_kwargs: "127.0.0.1"
 sys.modules["discovery"] = discovery
 
-from iris.cluster.resources.attempt import AttemptSummary  # noqa: E402
-from iris.cluster.resources.identity import (  # noqa: E402
+from iris.resources.attempt import AttemptSummary  # noqa: E402
+from iris.resources.identity import (  # noqa: E402
     AttemptIdentity,
     JobIdentity,
     NodeIdentity,
@@ -25,9 +25,9 @@ from iris.cluster.resources.identity import (  # noqa: E402
     ResourceKind,
     TaskIdentity,
 )
-from iris.cluster.resources.job import JobDetail, JobSpec, JobSummary  # noqa: E402
-from iris.cluster.resources.source import Page  # noqa: E402
-from iris.cluster.resources.task import TaskDetail, TaskSummary  # noqa: E402
+from iris.resources.job import JobDetail, JobSpec, JobSummary  # noqa: E402
+from iris.resources.source import Page  # noqa: E402
+from iris.resources.task import TaskDetail, TaskSummary  # noqa: E402
 from iris.rpc import job_pb2  # noqa: E402
 from rigging.timing import Timestamp  # noqa: E402
 
@@ -152,7 +152,7 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(cluster, "ResourceClient", FakeResourceClient)
+    monkeypatch.setattr(cluster, "ResourceRpcClient", FakeResourceClient)
     gateway = cluster.ClusterGateway()
     monkeypatch.setattr(gateway, "_resolve", lambda *_args: "http://controller")
 

@@ -7,7 +7,7 @@ This module contains controller and worker identifiers plus legacy runtime
 records that have not yet moved into the resource model.
 
 Generated messages in :mod:`iris.rpc` are serialization types, not the public
-Job and Task model. Public resource records live in :mod:`iris.cluster.resources`.
+Job and Task model. Public resource records live in :mod:`iris.resources`.
 """
 
 import functools
@@ -19,7 +19,7 @@ from typing import NewType
 
 from rigging.timing import Timestamp
 
-from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+from iris.resources.state import JobState, PriorityBand, TaskState
 from iris.rpc import controller_pb2
 
 

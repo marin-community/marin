@@ -12,7 +12,7 @@ three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.recon
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). Worker and placement state
 never flow controller→backend: a backend sources its own workers through a
-:class:`~iris.cluster.controller.backend_store.BackendWorkerStore` and decides
+:class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` and decides
 placement itself. Backends perform
 backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
 read or write the controller database directly.
@@ -68,10 +68,10 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.resources.attempt import AttemptLaunch
-from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
+from iris.resources.attempt import AttemptLaunch
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, vm_pb2
 
 logger = logging.getLogger(__name__)
@@ -454,7 +454,7 @@ def apply_placements(
 @dataclass(frozen=True)
 class BackendRuntime:
     """The controller-owned values a worker-daemon backend builds its
-    :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
+    :class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` from.
 
     Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
@@ -634,7 +634,7 @@ class TaskBackend(Protocol):
 
         Called once by the controller for worker-daemon backends. The backend joins
         ``runtime`` with its own liveness tracker to build the scale-group-scoped
-        :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` it reads
+        :class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` it reads
         through; capacity-managing backends (k8s) track no Iris workers and no-op.
         """
         ...

@@ -13,9 +13,7 @@ import json
 
 import pytest
 from google.protobuf import json_format as jf
-from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
-from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
+from iris.backends.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
@@ -23,6 +21,8 @@ from iris.cluster.runtime.env import (
     with_slice_topology_env,
 )
 from iris.cluster.types import AttemptUid, JobName
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.rpc import job_pb2
 from iris.rpc.legacy_job_codec import (
     constraint_from_proto,

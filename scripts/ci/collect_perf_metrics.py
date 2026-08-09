@@ -30,9 +30,9 @@ import click
 from connectrpc.errors import ConnectError
 from iris.cli.connect import connect_controller, rpc_client
 from iris.client import IrisClient
-from iris.cluster.resources.job import JobQuery, JobSummary
-from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.types import JobName, is_task_finished
+from iris.resources.job import JobQuery, JobSummary
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.filesystem import StoragePath

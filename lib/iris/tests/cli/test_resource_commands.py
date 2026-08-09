@@ -8,12 +8,12 @@ from iris.cli.attempt import attempt
 from iris.cli.job import job
 from iris.cli.process_status import process_group
 from iris.cli.task import task
-from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
-from iris.cluster.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
-from iris.cluster.resources.endpoint import ProfileResult
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.cluster.resources.job import (
+from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
+from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
+from iris.resources.endpoint import ProfileResult
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import (
     ContainerProfile,
     ExistingJobPolicy,
     JobDetail,
@@ -22,8 +22,8 @@ from iris.cluster.resources.job import (
     JobSummary,
     PriorityBand,
 )
-from iris.cluster.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
-from iris.cluster.resources.task import TaskSummary
+from iris.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
+from iris.resources.task import TaskSummary
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 

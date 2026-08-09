@@ -21,10 +21,10 @@ from iris.cli.resource_commands import (
     resource_key,
     task_state_name,
 )
-from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.identity import ResourceKind
-from iris.cluster.resources.log import LogQuery
-from iris.cluster.resources.task import TaskQuery
+from iris.resources.activity import ActivityQuery
+from iris.resources.identity import ResourceKind
+from iris.resources.log import LogQuery
+from iris.resources.task import TaskQuery
 
 
 @click.group()

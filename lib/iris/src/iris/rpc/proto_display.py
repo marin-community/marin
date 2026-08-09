@@ -8,8 +8,8 @@ import signal
 import humanfriendly
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
-from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.state import JobState, PriorityBand, TaskState
 from iris.rpc import vm_pb2
 
 

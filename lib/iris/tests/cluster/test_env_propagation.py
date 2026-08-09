@@ -15,12 +15,12 @@ from unittest.mock import patch
 
 import pytest
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo
+from iris.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import JobName
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.job import JobSpec
 
 
 def dummy_entrypoint():

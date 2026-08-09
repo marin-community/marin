@@ -26,7 +26,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.resources.endpoint import (
+from iris.cluster.stats.tables import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,
@@ -34,7 +35,6 @@ from iris.cluster.resources.endpoint import (
     ProfileConfiguration,
     ThreadsProfileConfiguration,
 )
-from iris.cluster.stats.tables import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
 
 logger = logging.getLogger(__name__)
 

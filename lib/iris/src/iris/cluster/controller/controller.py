@@ -56,13 +56,22 @@ from iris.cluster.controller.resource_observations import (
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager, FederationPeerObservation
-from iris.cluster.federation.store import CancelTarget, FederationDirection, HandoffState
+from iris.cluster.federation.protocol import CancelTarget, FederationDirection, HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
-from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
-from iris.cluster.resources.attempt import AttemptCounts, AttemptDetail, AttemptRuntimeObject, AttemptSummary
-from iris.cluster.resources.endpoint import (
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    LOCAL_ADMIN_SUBMITTER,
+    LOCAL_CLUSTER,
+    JobName,
+    UserBudgetDefaults,
+    WorkerId,
+)
+from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
+from iris.resources.activity import ActivityEntry, ActivityQuery
+from iris.resources.attempt import AttemptCounts, AttemptDetail, AttemptRuntimeObject, AttemptSummary
+from iris.resources.endpoint import (
     EndpointAccess,
     EndpointDetail,
     EndpointQuery,
@@ -74,7 +83,7 @@ from iris.cluster.resources.endpoint import (
     ProfileRequest,
     ProfileResult,
 )
-from iris.cluster.resources.errors import (
+from iris.resources.errors import (
     ActionIdempotencyConflict,
     ActionPolicyRejected,
     BackendIdentityUnknown,
@@ -84,7 +93,7 @@ from iris.cluster.resources.errors import (
     ResourceReplaced,
     ResourceSourceUnavailable,
 )
-from iris.cluster.resources.identity import (
+from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
     JobIdentity,
@@ -96,7 +105,7 @@ from iris.cluster.resources.identity import (
     SliceLocator,
     TaskIdentity,
 )
-from iris.cluster.resources.job import (
+from iris.resources.job import (
     FederationPosture,
     JobDetail,
     JobObservation,
@@ -106,8 +115,8 @@ from iris.cluster.resources.job import (
     JobTaskAggregate,
     TaskStateCount,
 )
-from iris.cluster.resources.log import LogPage, LogQuery
-from iris.cluster.resources.node import (
+from iris.resources.log import LogPage, LogQuery
+from iris.resources.node import (
     NodeAttribute,
     NodeAttributeKind,
     NodeDetail,
@@ -115,7 +124,7 @@ from iris.cluster.resources.node import (
     NodeQuery,
     NodeSummary,
 )
-from iris.cluster.resources.slice import (
+from iris.resources.slice import (
     MembershipState,
     SliceDetail,
     SliceLifecycle,
@@ -123,7 +132,7 @@ from iris.cluster.resources.slice import (
     SliceQuery,
     SliceSummary,
 )
-from iris.cluster.resources.source import (
+from iris.resources.source import (
     MAX_PROVIDER_SNAPSHOT_ITEMS,
     MAX_SOURCE_ERROR_MESSAGE,
     Freshness,
@@ -131,17 +140,8 @@ from iris.cluster.resources.source import (
     ResourceSourceStatus,
     SourceState,
 )
-from iris.cluster.resources.state import JobState, TaskState
-from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
-from iris.cluster.types import (
-    DEFAULT_BACKEND_ID,
-    LOCAL_ADMIN_SUBMITTER,
-    LOCAL_CLUSTER,
-    JobName,
-    UserBudgetDefaults,
-    WorkerId,
-)
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 
 _RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
 _RESOURCE_UID_PREFIX = "iris-resource-v2"

@@ -30,10 +30,10 @@ from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
 )
-from iris.cluster.resources.execution import ResourceSpec
-from iris.cluster.resources.job import JobSpec
-from iris.cluster.resources.state import JobState, PriorityBand, TaskState
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.resources.execution import ResourceSpec
+from iris.resources.job import JobSpec
+from iris.resources.state import JobState, PriorityBand, TaskState
 
 _JOB_SUBMISSION_EPOCH_KEY = "job_submission_epoch_ms"
 

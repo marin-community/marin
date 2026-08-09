@@ -24,7 +24,7 @@ from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration
 
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
     GcpPlatformConfig,
     IrisClusterConfig,

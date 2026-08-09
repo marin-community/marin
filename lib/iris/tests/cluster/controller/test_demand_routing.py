@@ -28,13 +28,9 @@ from iris.cluster.controller.autoscaler.routing import (
     route_demand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.types import AcceleratorType, CapacityType
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
-    make_mock_platform,
-    make_mock_slice_handle,
-)
 from tests.cluster.controller.conftest import (
     DEFAULT_RESOURCES,
     make_demand_entries,
@@ -45,6 +41,10 @@ from tests.cluster.controller.conftest import (
 )
 from tests.cluster.controller.conftest import (
     mark_discovered_ready as _mark_discovered_ready,
+)
+from tests.cluster.platforms.conftest import (
+    make_mock_platform,
+    make_mock_slice_handle,
 )
 
 # ---------------------------------------------------------------------------

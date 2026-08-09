@@ -12,8 +12,8 @@ from iris.cli.resource_commands import (
     echo_source_warnings,
     resource_key,
 )
-from iris.cluster.resources.identity import ResourceKind, SliceLocator
-from iris.cluster.resources.slice import SliceQuery
+from iris.resources.identity import ResourceKind, SliceLocator
+from iris.resources.slice import SliceQuery
 
 
 @click.group("slice")

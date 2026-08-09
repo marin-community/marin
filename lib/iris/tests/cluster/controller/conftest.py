@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from finelog.client.log_client import Table
-from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
+from iris.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
     AutoscalerConfig,
@@ -61,14 +61,12 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
     run_scheduling_decision,
 )
-from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.backends import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.federation import build_queued_candidates
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -94,9 +92,6 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
-from iris.cluster.resources.endpoint import ProfileRequest, ProfileResult
-from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
-from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -109,20 +104,25 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.managed_thread import get_thread_container
+from iris.resources.endpoint import ProfileRequest, ProfileResult
+from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.legacy_codec import job_spec_from_legacy_request
 from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, resource_spec_from_proto
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
-from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import (
     ControllerTestState,
     resolve_band_for_test,
     set_task_state_for_test,
 )
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.platforms.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
 

@@ -4,7 +4,7 @@
 """Drop the denormalized ``tasks.failure_count`` / ``tasks.preemption_count``.
 
 Both counters are now derived from the task's ``task_attempts`` rows (see
-``iris.cluster.resources.attempt``) and served from an in-memory cache,
+``iris.resources.attempt``) and served from an in-memory cache,
 so the columns are a removed second source of truth. Their two covering indexes
 (``idx_tasks_job_failures``, ``idx_tasks_job_state_counts``) go with them —
 ``idx_tasks_job_state`` already covers ``(job_id, state)``. A new

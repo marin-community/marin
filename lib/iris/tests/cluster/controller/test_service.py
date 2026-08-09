@@ -27,8 +27,6 @@ from iris.cluster.controller import jobs as resource_jobs
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.jobs import CLIENT_FRESHNESS_WINDOW
-from iris.cluster.controller.legacy.codec import redact_request_env_vars
-from iris.cluster.controller.legacy.controller_service import MAX_LIST_JOBS_OFFSET
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
 from iris.cluster.controller.persistence.operations.task import Assignment, finalize
@@ -36,10 +34,12 @@ from iris.cluster.controller.persistence.schema import jobs_table, task_attempts
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.redaction import REDACTED_VALUE
-from iris.cluster.resources.endpoint import ProfileResult
-from iris.cluster.resources.execution import tpu_device
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId
+from iris.resources.endpoint import ProfileResult
+from iris.resources.execution import tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_service import MAX_LIST_JOBS_OFFSET
+from iris.rpc.legacy_codec import redact_request_env_vars
 from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, device_to_proto
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.server_auth import VerifiedIdentity, _verified_identity

@@ -16,12 +16,12 @@ from pathlib import Path
 from typing import Literal
 
 import click
+from iris.backends.k8s.tasks import _sanitize_label_value
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
-from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.controller.autoscaler.provisioning import STOCKOUT_MARKER
-from iris.cluster.resources.job import JobQuery, JobSummary
 from iris.cluster.types import JobName, is_job_finished
+from iris.resources.job import JobQuery, JobSummary
 from iris.rpc import job_pb2
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff

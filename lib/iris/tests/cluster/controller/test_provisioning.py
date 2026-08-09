@@ -17,13 +17,13 @@ from iris.cluster.platforms.types import QuotaExhaustedError
 from iris.cluster.stats.tables import ProvisioningOutcome
 from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
-from tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle
 from tests.cluster.controller.conftest import (
     make_autoscaler,
     make_demand_entries,
     make_scale_group_config,
     mark_discovered_ready,
 )
+from tests.cluster.platforms.conftest import make_mock_platform, make_mock_slice_handle
 
 
 class FakeTable:

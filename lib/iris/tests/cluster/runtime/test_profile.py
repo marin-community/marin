@@ -14,12 +14,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pytest
-from iris.cluster.resources.endpoint import (
-    CpuProfileConfiguration,
-    CpuProfileFormat,
-    MemoryProfileConfiguration,
-    MemoryProfileFormat,
-)
 from iris.cluster.runtime.profile import (
     ExecResult,
     _run_memray_profile,
@@ -31,6 +25,12 @@ from iris.cluster.runtime.profile import (
     capture_threads,
     resolve_cpu_spec,
     resolve_memory_spec,
+)
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
 )
 
 

@@ -16,9 +16,9 @@ from iris.cluster.controller.budget import (
     resource_value,
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from tests.cluster.controller.conftest import (
     MockController,

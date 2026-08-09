@@ -24,8 +24,6 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD
-from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.federation import ControllerFederationStore
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
@@ -38,7 +36,7 @@ from iris.cluster.federation.peer import (
     HandoffDelivery,
     legacy_handoff_request,
 )
-from iris.cluster.federation.store import (
+from iris.cluster.federation.protocol import (
     FederationJobDelta,
     FederationSyncBatch,
     HandoffAdmission,
@@ -48,7 +46,6 @@ from iris.cluster.federation.store import (
     SyncedJob,
     SyncedTask,
 )
-from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     LOCAL_ADMIN_SUBMITTER,
@@ -58,8 +55,11 @@ from iris.cluster.types import (
     WellKnownAttribute,
 )
 from iris.managed_thread import get_thread_container
+from iris.resources.execution import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.legacy_codec import job_spec_from_legacy_request
 from iris.rpc.legacy_job_codec import constraint_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp

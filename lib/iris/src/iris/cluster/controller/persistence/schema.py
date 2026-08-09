@@ -338,7 +338,7 @@ tasks_table = Table(
     Column("max_retries_failure", Integer, nullable=False),
     Column("max_retries_preemption", Integer, nullable=False),
     # failure_count / preemption_count are NOT stored: they are derived from the
-    # task's attempt rows (iris.cluster.resources.attempt) and served from
+    # task's attempt rows (iris.resources.attempt) and served from
     # an in-memory cache. current_attempt_id stays denormalized — it is the live
     # in-flight-attempt pointer, written atomically with each attempt insert.
     Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
@@ -450,7 +450,7 @@ task_attempts_table = Table(
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
     Index("idx_task_attempts_backend", "backend_id"),
     # Covers the failure/preemption derivation (COUNT by state, filtered on
-    # started_at_ms), grouped per task — see iris.cluster.resources.attempt.
+    # started_at_ms), grouped per task — see iris.resources.attempt.
     Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
 )
 

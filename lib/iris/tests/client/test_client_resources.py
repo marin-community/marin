@@ -5,12 +5,12 @@ from dataclasses import replace
 from unittest.mock import MagicMock
 
 from iris.client import IrisClient
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, GpuDevice, ResourceSpec
-from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobSummary
-from iris.cluster.resources.source import Page
-from iris.cluster.resources.state import JobState
 from iris.cluster.types import JobName
+from iris.resources.execution import Entrypoint, EnvironmentSpec, GpuDevice, ResourceSpec
+from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.job import JobSummary
+from iris.resources.source import Page
+from iris.resources.state import JobState
 from rigging.timing import Timestamp
 
 

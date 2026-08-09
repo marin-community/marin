@@ -4,7 +4,7 @@
 """Codecs for the protobuf task-launch and retired ControllerService wires."""
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.resources.execution import (
+from iris.resources.execution import (
     CommandEntrypoint,
     CpuDevice,
     Device,

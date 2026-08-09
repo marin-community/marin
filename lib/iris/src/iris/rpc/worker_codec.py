@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from rigging.provenance import Provenance
 from rigging.timing import Duration
 
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
-from iris.cluster.resources.endpoint import ExecResult, ProfileConfiguration
-from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.system import ProcessInfo
-from iris.cluster.resources.worker import (
+from iris.cluster.types import AttemptUid, JobName
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.endpoint import ExecResult, ProfileConfiguration
+from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
+from iris.resources.state import TaskState
+from iris.resources.system import ProcessInfo
+from iris.resources.worker import (
     AttemptStatus,
     DesiredAttempt,
     ResourceUsage,
@@ -24,7 +25,6 @@ from iris.cluster.resources.worker import (
     WorkerResourceSnapshot,
     WorkerTaskStatus,
 )
-from iris.cluster.types import AttemptUid, JobName
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.legacy_job_codec import (
     attribute_value_from_proto,

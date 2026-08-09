@@ -25,7 +25,7 @@ from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
 from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -37,16 +37,16 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
-from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.resources.execution import Device, EnvironmentSpec, GpuDevice, ResourceSpec, tpu_device
-from iris.cluster.resources.execution import Entrypoint as IrisEntrypoint
-from iris.cluster.resources.job import CoschedulingConfig, ExistingJobPolicy, PriorityBand
-from iris.cluster.resources.state import JobState
 from iris.cluster.types import (
     JobName,
     is_job_finished,
 )
 from iris.hooks.multigpu import build_multigpu_hook
+from iris.resources.endpoint import EndpointQuery
+from iris.resources.execution import Device, EnvironmentSpec, GpuDevice, ResourceSpec, tpu_device
+from iris.resources.execution import Entrypoint as IrisEntrypoint
+from iris.resources.job import CoschedulingConfig, ExistingJobPolicy, PriorityBand
+from iris.resources.state import JobState
 from iris.rpc import actor_pb2
 from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff

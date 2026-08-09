@@ -51,7 +51,7 @@ from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

@@ -5,7 +5,7 @@
 
 from rigging.timing import Timestamp
 
-from iris.cluster.federation.store import (
+from iris.cluster.federation.protocol import (
     FederationJobDelta,
     FederationSyncBatch,
     SyncedAttempt,
@@ -13,9 +13,9 @@ from iris.cluster.federation.store import (
     SyncedJob,
     SyncedTask,
 )
-from iris.cluster.resources.endpoint import EndpointAccess
-from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.types import JobName
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.execution import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.legacy_job_codec import device_from_proto, resource_spec_to_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto

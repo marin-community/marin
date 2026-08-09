@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.cluster.resources.errors import ResourceNotFound
+from iris.resources.errors import ResourceNotFound
 from iris.rpc import job_pb2
 
 

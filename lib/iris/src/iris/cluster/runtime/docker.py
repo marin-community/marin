@@ -31,14 +31,6 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.resources.endpoint import (
-    CpuProfileConfiguration,
-    MemoryProfileConfiguration,
-    ProfileConfiguration,
-    ThreadsProfileConfiguration,
-)
-from iris.cluster.resources.execution import CommandEntrypoint, RuntimeEntrypoint, TpuDevice
-from iris.cluster.resources.job import ContainerProfile
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -64,6 +56,14 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    MemoryProfileConfiguration,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
+from iris.resources.execution import CommandEntrypoint, RuntimeEntrypoint, TpuDevice
+from iris.resources.job import ContainerProfile
 
 logger = logging.getLogger(__name__)
 

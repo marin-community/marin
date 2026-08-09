@@ -6,25 +6,25 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from iris.cluster.backends.rpc.backend import RpcTaskBackend
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
-from iris.cluster.resources.job import (
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.managed_thread import ThreadContainer
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
+from iris.resources.job import (
     ContainerProfile,
     ExistingJobPolicy,
     JobPreemptionPolicy,
     JobSpec,
     PriorityBand,
 )
-from iris.cluster.resources.node import NodeDetail, NodeQuery
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.task import TaskDetail
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
-from iris.managed_thread import ThreadContainer
+from iris.resources.node import NodeDetail, NodeQuery
+from iris.resources.state import TaskState
+from iris.resources.task import TaskDetail
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 

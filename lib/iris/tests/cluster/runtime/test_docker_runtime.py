@@ -8,10 +8,10 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.resources.execution import CommandEntrypoint, ResourceSpec, RuntimeEntrypoint, TpuDevice
-from iris.cluster.resources.job import ContainerProfile
 from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.resources.execution import CommandEntrypoint, ResourceSpec, RuntimeEntrypoint, TpuDevice
+from iris.resources.job import ContainerProfile
 
 
 @pytest.fixture

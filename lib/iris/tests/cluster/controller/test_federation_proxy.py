@@ -41,7 +41,6 @@ from iris.cluster.controller.controller import CapabilityUrlConfig
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
     PROXY_DECISION_PATH,
@@ -53,6 +52,7 @@ from iris.cluster.controller.persistence import reads
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
 from rigging.server_auth import RequestAuthPolicy
 from rigging.timing import Duration, ExponentialBackoff
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem

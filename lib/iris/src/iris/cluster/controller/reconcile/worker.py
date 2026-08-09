@@ -17,14 +17,14 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
 )
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     AttemptUid,
     JobName,
     WorkerId,
 )
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.state import TaskState
 
 logger = logging.getLogger(__name__)
 

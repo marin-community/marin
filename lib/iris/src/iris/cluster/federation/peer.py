@@ -16,24 +16,16 @@ from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
-from iris.cluster.client.resource_conversion import (
-    action_receipt_from_proto,
-    attempt_identity_to_proto,
-    exec_result_from_proto,
-    job_identity_to_proto,
-    profile_result_from_proto,
-    task_identity_to_proto,
-)
+from iris.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
-from iris.cluster.federation.store import FederationSyncBatch
-from iris.cluster.resources.action import ActionReceipt
-from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
-from iris.cluster.resources.job import JobSpec
-from iris.cluster.resources.system import ProcessInfo
+from iris.cluster.federation.protocol import FederationSyncBatch
 from iris.cluster.types import JobName
+from iris.resources.action import ActionReceipt
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
+from iris.resources.job import JobSpec
+from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.legacy_job_codec import (
@@ -43,6 +35,14 @@ from iris.rpc.legacy_job_codec import (
     runtime_entrypoint_to_proto,
 )
 from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.resource_client_codec import (
+    action_receipt_from_proto,
+    attempt_identity_to_proto,
+    exec_result_from_proto,
+    job_identity_to_proto,
+    profile_result_from_proto,
+    task_identity_to_proto,
+)
 from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.rpc.worker_codec import process_info_from_proto
 from iris.time_proto import duration_to_proto

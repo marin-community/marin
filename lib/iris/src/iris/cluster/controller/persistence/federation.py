@@ -29,7 +29,7 @@ from iris.cluster.controller.persistence.projections.attempt_counts import Attem
 from iris.cluster.controller.persistence.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.federation.availability import QueuedCandidate
-from iris.cluster.federation.store import (
+from iris.cluster.federation.protocol import (
     CancelTarget,
     FederationJobDelta,
     HandoffAdmission,
@@ -39,8 +39,8 @@ from iris.cluster.federation.store import (
     SyncedJob,
     SyncedTask,
 )
-from iris.cluster.resources.endpoint import EndpointAccess
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.resources.endpoint import EndpointAccess
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def _endpoint_rows(peer_id: str, endpoints: tuple[SyncedEndpoint, ...], now: Tim
 
 
 class ControllerFederationStore:
-    """A :class:`~iris.cluster.federation.store.FederationStore` over ``ControllerDB``."""
+    """A :class:`~iris.cluster.federation.protocol.FederationStore` over ``ControllerDB``."""
 
     def __init__(
         self,

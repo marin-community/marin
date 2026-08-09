@@ -20,7 +20,9 @@ from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
 )
-from iris.cluster.resources.execution import (
+from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.execution import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
     CpuDevice,
@@ -29,8 +31,6 @@ from iris.cluster.resources.execution import (
     ResourceSpec,
     TpuDevice,
 )
-from iris.cluster.runtime.types import MountKind, MountSpec
-from iris.cluster.tpu_topology import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 

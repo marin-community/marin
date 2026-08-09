@@ -19,11 +19,12 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/cluster/controller/` — controller server: `controller.py` (canonical resource application), `runtime.py` (daemon and control loop), `api/` and `legacy/` (RPC adapters), `persistence/` (SQLite, migrations, queries, and projections), `backend.py` (the `TaskBackend` contract), `scheduling/`, and `autoscaler/`
-- `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
+- `src/iris/resources/` — immutable native resource records used by clients and controller behavior
+- `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `backend.py` (the `TaskBackend` contract), `scheduling/`, and `autoscaler/`
+- `src/iris/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
-- `src/iris/rpc/` — protobuf definitions (`.proto`), generated code (`_pb2.py`), and RPC client helpers (`cluster_connect.py`, `auth.py`)
+- `src/iris/rpc/` — protobuf definitions/generated code plus RPC clients, codecs, and server adapters
 - `dashboard/` — Vue 3 frontend (Vite + Tailwind)
 
 ## Development

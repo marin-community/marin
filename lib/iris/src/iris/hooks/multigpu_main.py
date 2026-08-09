@@ -46,7 +46,7 @@ from types import FrameType
 
 from rigging.timing import Deadline, Duration
 
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,

@@ -14,8 +14,8 @@ from iris.cli.resource_commands import (
     echo_source_warnings,
     resource_key,
 )
-from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.resources.identity import ResourceKind
+from iris.resources.endpoint import EndpointQuery
+from iris.resources.identity import ResourceKind
 
 
 @click.group("endpoint")

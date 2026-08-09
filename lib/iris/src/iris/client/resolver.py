@@ -7,8 +7,8 @@ import os
 
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.client import get_iris_ctx
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.types import Namespace
+from iris.rpc.resource_client import ResourceRpcClient
 
 
 def _rewrite_address_for_host(address: str) -> str:
@@ -51,7 +51,7 @@ class ClusterResolver:
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
         self._explicit_namespace = namespace
-        self._client = ResourceClient(self._address, timeout_ms=int(timeout * 1000))
+        self._client = ResourceRpcClient(self._address, timeout_ms=int(timeout * 1000))
 
     def _namespace_prefix(self) -> str:
         if self._explicit_namespace is not None:

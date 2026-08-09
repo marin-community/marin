@@ -15,8 +15,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from iris.cluster.resources.execution import EnvironmentSpec
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, wants_gpu_extra
+from iris.resources.execution import EnvironmentSpec
 
 _CUDA_13_TEST_PACKAGES = (
     ("nvidia-cudnn-cu13", "9.19.0.56", "nvidia/cudnn/lib/libcudnn.so.9"),

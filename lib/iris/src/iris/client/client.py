@@ -33,13 +33,9 @@ from rigging.credentials import ClientCredentials
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
-from iris.cluster.client import (
-    ClusterClient,
-    JobInfo,
-    RemoteClusterClient,
-    get_job_info,
-    resolve_job_user,
-)
+from iris.client.job_info import JobInfo, get_job_info, resolve_job_user
+from iris.client.protocol import ClusterClient
+from iris.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -47,10 +43,16 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.resources.action import ActionReceipt
-from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
-from iris.cluster.resources.attempt import AttemptDetail
-from iris.cluster.resources.endpoint import (
+from iris.cluster.types import (
+    EndpointAccess,
+    JobName,
+    Namespace,
+    TaskAttempt,
+)
+from iris.resources.action import ActionReceipt
+from iris.resources.activity import ActivityEntry, ActivityQuery
+from iris.resources.attempt import AttemptDetail
+from iris.resources.endpoint import (
     EndpointDetail,
     EndpointQuery,
     EndpointSummary,
@@ -59,7 +61,7 @@ from iris.cluster.resources.endpoint import (
     ProfileConfiguration,
     ProfileResult,
 )
-from iris.cluster.resources.execution import (
+from iris.resources.execution import (
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
@@ -68,7 +70,7 @@ from iris.cluster.resources.execution import (
     with_accelerator_cpu_default,
     with_slice_topology_environment,
 )
-from iris.cluster.resources.identity import (
+from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
     JobIdentity,
@@ -77,7 +79,7 @@ from iris.cluster.resources.identity import (
     SliceLocator,
     TaskIdentity,
 )
-from iris.cluster.resources.job import (
+from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
     ExistingJobPolicy,
@@ -88,18 +90,12 @@ from iris.cluster.resources.job import (
     JobSummary,
     PriorityBand,
 )
-from iris.cluster.resources.log import LogEntry, LogLevel, LogPage, LogQuery
-from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
-from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
-from iris.cluster.resources.source import Page
-from iris.cluster.resources.state import JobState, TaskState
-from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.types import (
-    EndpointAccess,
-    JobName,
-    Namespace,
-    TaskAttempt,
-)
+from iris.resources.log import LogEntry, LogLevel, LogPage, LogQuery
+from iris.resources.node import NodeDetail, NodeQuery, NodeSummary
+from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
+from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)

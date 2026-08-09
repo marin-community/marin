@@ -50,7 +50,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.backends.rpc.backend import (
+from iris.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
     RpcWorkerStubFactory,
@@ -72,14 +72,10 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
     run_scheduling_decision,
 )
-from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.legacy.controller_service import (
-    USER_JOB_STATES,
-    _worker_roster,
-)
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.backends import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -119,22 +115,26 @@ from iris.cluster.controller.scheduling.policy import build_scheduling_context, 
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.resources.attempt import AttemptLaunchTemplate, AttemptObservation
-from iris.cluster.resources.execution import CommandEntrypoint, CpuDevice, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.job import (
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.managed_thread import ThreadContainer
+from iris.resources.attempt import AttemptLaunchTemplate, AttemptObservation
+from iris.resources.execution import CommandEntrypoint, CpuDevice, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.job import (
     ContainerProfile,
     ExistingJobPolicy,
     JobPreemptionPolicy,
     JobSpec,
     PriorityBand,
 )
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import WorkerMetadata
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
-from iris.managed_thread import ThreadContainer
+from iris.resources.state import TaskState
+from iris.resources.worker import WorkerMetadata
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
+from iris.rpc.controller_service import (
+    USER_JOB_STATES,
+    _worker_roster,
+)
 from iris.rpc.worker_codec import worker_metadata_to_proto
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date

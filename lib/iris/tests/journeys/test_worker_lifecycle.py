@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.cluster.resources.node import NodeHealth
+from iris.resources.node import NodeHealth
 from iris.rpc import job_pb2
 from tests.journeys.worker import WorkerJourney
 

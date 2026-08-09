@@ -6,7 +6,6 @@
 from datetime import datetime
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
 from iris.cluster.stats.tables import (
     IrisTaskStat,
     IrisWorkerStat,
@@ -14,6 +13,7 @@ from iris.cluster.stats.tables import (
     build_task_stat,
     build_worker_stat,
 )
+from iris.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
 
 
 def test_build_worker_stat_shape():

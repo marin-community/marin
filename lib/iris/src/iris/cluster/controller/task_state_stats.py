@@ -18,9 +18,9 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.task_state import DISPATCHED_TASK_STATES
-from iris.cluster.resources.state import TaskState
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import CLUSTER_ROLLUP_ROOT_JOB, IrisTaskState
+from iris.resources.state import TaskState
 
 # Emission cadence. Coarser than the control tick: these rows feed fleet
 # dashboards and stuck-task alerting, where 30s resolution is plenty.

@@ -38,8 +38,8 @@ from google.cloud import storage
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client import iris_ctx
-from iris.cluster.client import get_job_info
-from iris.cluster.resources.execution import Entrypoint, ResourceSpec
+from iris.client.job_info import get_job_info
+from iris.resources.execution import Entrypoint, ResourceSpec
 from rigging.filesystem import StoragePath
 
 from scripts.ops.storage.constants import (

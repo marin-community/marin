@@ -427,7 +427,7 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 
 ## Source map
 
-- [`backends/k8s/tasks.py`](../src/iris/cluster/backends/k8s/tasks.py) — task Pod
+- [`backends/k8s/tasks.py`](../src/iris/backends/k8s/tasks.py) — task Pod
   manifests, Kueue status, profiling, and cleanup.
 - [`platforms/k8s/controller.py`](../src/iris/cluster/platforms/k8s/controller.py)
   — controller resources, prerequisite checks, and Secret projection.

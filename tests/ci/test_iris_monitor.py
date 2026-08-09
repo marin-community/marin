@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobQuery, JobSummary
-from iris.cluster.resources.source import Page
+from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.job import JobQuery, JobSummary
+from iris.resources.source import Page
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 from rigging.timing import Timestamp

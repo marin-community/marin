@@ -4,11 +4,11 @@
 from typing import cast
 
 from iris.client import IrisClient
-from iris.cluster.resources.attempt import AttemptSummary
-from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.cluster.resources.job import JobSummary
-from iris.cluster.resources.source import Page
-from iris.cluster.resources.task import TaskDetail, TaskSummary
+from iris.resources.attempt import AttemptSummary
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import JobSummary
+from iris.resources.source import Page
+from iris.resources.task import TaskDetail, TaskSummary
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 

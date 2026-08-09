@@ -20,7 +20,7 @@ infra/pulumi/README.md for the state backend and KMS provider.
 import pulumi
 from ducky.config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME
 from iac.iris.service import IrisService, IrisServiceArgs
-from iris.cluster.resources.execution import ResourceSpec, tpu_device
+from iris.resources.execution import ResourceSpec, tpu_device
 
 # The built SPA is gitignored; this glob re-includes it into the Iris bundle. The build
 # command produces it fresh on every up (npm ci only when node_modules is absent keeps

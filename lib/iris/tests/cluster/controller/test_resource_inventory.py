@@ -14,13 +14,13 @@ from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.resources.errors import ResourceNotFound
-from iris.cluster.resources.identity import NodeLocator, ResourceKind, SliceLocator
-from iris.cluster.resources.node import NodeHealth, NodeQuery
-from iris.cluster.resources.slice import SliceLifecycle, SliceQuery
-from iris.cluster.resources.source import SourceState
 from iris.cluster.types import DEFAULT_BACKEND_ID, UserBudgetDefaults
+from iris.resources.endpoint import EndpointQuery
+from iris.resources.errors import ResourceNotFound
+from iris.resources.identity import NodeLocator, ResourceKind, SliceLocator
+from iris.resources.node import NodeHealth, NodeQuery
+from iris.resources.slice import SliceLifecycle, SliceQuery
+from iris.resources.source import SourceState
 from iris.rpc import controller_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp

@@ -6,13 +6,13 @@ from collections.abc import Callable
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table
-from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.endpoint import ExecResult, ProfileResult
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from iris.cluster.types import JobName
+from iris.resources.activity import ActivityQuery
+from iris.resources.endpoint import ExecResult, ProfileResult
+from iris.resources.identity import ResourceKey, ResourceKind
 from iris.rpc import resource_pb2
+from iris.rpc.resource_service import ResourceServiceImpl
 from sqlalchemy import update
 
 

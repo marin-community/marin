@@ -12,12 +12,12 @@ from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status
-from iris.cluster.resources.attempt import AttemptLaunch
-from iris.cluster.resources.endpoint import ExecResult, ProfileConfiguration
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import WorkerReconcileRequest, WorkerReconcileResponse
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
+from iris.resources.attempt import AttemptLaunch
+from iris.resources.endpoint import ExecResult, ProfileConfiguration
+from iris.resources.state import TaskState
+from iris.resources.worker import WorkerReconcileRequest, WorkerReconcileResponse
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.worker_codec import (

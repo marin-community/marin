@@ -32,14 +32,6 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.resources.endpoint import (
-    CpuProfileConfiguration,
-    CpuProfileFormat,
-    MemoryProfileConfiguration,
-    MemoryProfileFormat,
-    ProfileConfiguration,
-    ThreadsProfileConfiguration,
-)
 from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -58,6 +50,14 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import get_thread_container
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
 
 logger = logging.getLogger(__name__)
 

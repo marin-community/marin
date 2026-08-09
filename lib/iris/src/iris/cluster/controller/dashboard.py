@@ -52,12 +52,10 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
-from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
     DEFAULT_PROXY_TIMEOUT_SECONDS,
@@ -81,8 +79,10 @@ from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
+from iris.rpc.controller_service import ControllerServiceImpl
 from iris.rpc.interceptors import RequestTimingInterceptor
 from iris.rpc.resource_connect import ResourceServiceASGIApplication
+from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 

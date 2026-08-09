@@ -32,10 +32,10 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
-from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.resources.execution import Entrypoint as IrisEntrypoint
-from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice, gpu_device
 from iris.cluster.types import JobName
+from iris.resources.endpoint import EndpointQuery
+from iris.resources.execution import Entrypoint as IrisEntrypoint
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice, gpu_device
 
 
 class TestConvertConstraints:

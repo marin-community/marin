@@ -10,7 +10,7 @@ from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris

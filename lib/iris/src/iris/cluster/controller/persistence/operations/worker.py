@@ -20,9 +20,9 @@ from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.worker import LaunchAttempt, WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.resources.execution import GpuDevice, TpuDevice
-from iris.cluster.resources.worker import WorkerMetadata
 from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.resources.execution import GpuDevice, TpuDevice
+from iris.resources.worker import WorkerMetadata
 
 FAIL_WORKERS_CHUNK_SIZE = 10
 

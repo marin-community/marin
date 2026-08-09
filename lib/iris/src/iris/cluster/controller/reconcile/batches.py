@@ -48,8 +48,6 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
-from iris.cluster.resources.job import JobPreemptionPolicy
-from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -57,6 +55,8 @@ from iris.cluster.types import (
     JobName,
     WorkerId,
 )
+from iris.resources.job import JobPreemptionPolicy
+from iris.resources.state import JobState, TaskState
 
 logger = logging.getLogger(__name__)
 

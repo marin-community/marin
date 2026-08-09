@@ -28,7 +28,7 @@ uv run iris --cluster=marin cluster stop
 
 ```python
 from iris.client import IrisClient
-from iris.cluster.resources.execution import Entrypoint, ResourceSpec
+from iris.resources.execution import Entrypoint, ResourceSpec
 
 def my_task():
     print("Hello from Iris!")

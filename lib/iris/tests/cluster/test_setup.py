@@ -4,7 +4,7 @@
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
 import pytest
-from iris.cluster.resources.execution import EnvironmentSpec
+from iris.resources.execution import EnvironmentSpec
 
 
 @pytest.mark.parametrize(

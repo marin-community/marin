@@ -12,8 +12,8 @@ from iris.cli.resource_commands import (
     echo_source_warnings,
     resource_key,
 )
-from iris.cluster.resources.identity import NodeLocator, ResourceKind
-from iris.cluster.resources.node import NodeHealth, NodeQuery
+from iris.resources.identity import NodeLocator, ResourceKind
+from iris.resources.node import NodeHealth, NodeQuery
 
 
 @click.group()

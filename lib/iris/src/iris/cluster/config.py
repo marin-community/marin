@@ -32,8 +32,6 @@ from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
-from iris.cluster.resources.execution import parse_memory_string
-from iris.cluster.resources.job import PriorityBand
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -45,6 +43,8 @@ from iris.cluster.types import (
     WellKnownAttribute,
 )
 from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
+from iris.resources.execution import parse_memory_string
+from iris.resources.job import PriorityBand
 
 logger = logging.getLogger(__name__)
 

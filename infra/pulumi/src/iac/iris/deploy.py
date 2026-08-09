@@ -29,9 +29,9 @@ from google.protobuf import json_format
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.resources.job import ExistingJobPolicy
 from iris.cluster.types import JobName, is_job_finished
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.job import ExistingJobPolicy
 from iris.rpc import job_pb2, resource_pb2
 from iris.rpc.resource_codec import resource_spec_from_proto
 from rigging.connect import proxy_path

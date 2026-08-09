@@ -6,12 +6,12 @@
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import ERROR_STATES
-from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
 )
+from iris.resources.state import JobState, TaskState
 
 
 def recompute_state(state: Overlay, job_id: JobName) -> int | None:

@@ -7,7 +7,7 @@ The controller composes one manager. It owns the peer registry, the submit-time
 :class:`~iris.cluster.federation.router.PeerRouter`, and two background loops —
 the capability heartbeat and the delta-sync loop that mirrors each peer's handed-
 off jobs back into the local projection. Every durable mutation goes through an
-injected :class:`~iris.cluster.federation.store.FederationStore`, so the manager
+injected :class:`~iris.cluster.federation.protocol.FederationStore`, so the manager
 stays a self-contained module.
 
 With no peers configured it is inert: neither loop starts and every view is
@@ -38,15 +38,15 @@ from iris.cluster.federation.availability import (
     assign_queued,
 )
 from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
-from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
-from iris.cluster.federation.store import (
+from iris.cluster.federation.protocol import (
     CancelTarget,
     FederationStore,
     HandoffSpec,
 )
-from iris.cluster.resources.job import JobSpec
+from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
+from iris.resources.job import JobSpec
 from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)

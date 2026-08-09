@@ -4,8 +4,8 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.rpc import resource_pb2
+from iris.rpc.resource_service import ResourceServiceImpl
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 

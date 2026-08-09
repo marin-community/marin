@@ -3,7 +3,7 @@
 
 """Encode typed profiling configuration at legacy RPC boundaries."""
 
-from iris.cluster.resources.endpoint import (
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,

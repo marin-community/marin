@@ -20,14 +20,13 @@ from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request, job_spec_to_legacy_request
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.json_codec import reconstruct_job_spec
 from iris.cluster.controller.persistence.schema import job_config_table
-from iris.cluster.resources.execution import (
+from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.resources.execution import (
     CommandEntrypoint,
     Environment,
     GpuDevice,
@@ -35,8 +34,8 @@ from iris.cluster.resources.execution import (
     RuntimeEntrypoint,
     tpu_device,
 )
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
-from iris.cluster.resources.job import (
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
     ExistingJobPolicy,
@@ -44,8 +43,9 @@ from iris.cluster.resources.job import (
     JobSpec,
     PriorityBand,
 )
-from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.legacy_codec import job_spec_from_legacy_request, job_spec_to_legacy_request
 from iris.rpc.legacy_job_codec import (
     constraint_to_proto,
     device_to_proto,

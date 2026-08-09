@@ -19,8 +19,8 @@ from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from iris.client import IrisClient, Task, iris_ctx
-from iris.cluster.resources.identity import AttemptIdentity
 from iris.cluster.types import JobName
+from iris.resources.identity import AttemptIdentity
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset

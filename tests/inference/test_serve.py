@@ -22,9 +22,9 @@ import pytest
 import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
-from iris.cluster.resources.endpoint import EndpointAccess, EndpointDetail, EndpointSummary, EndpointToken
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
-from iris.cluster.resources.source import Page
+from iris.resources.endpoint import EndpointAccess, EndpointDetail, EndpointSummary, EndpointToken
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.source import Page
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (

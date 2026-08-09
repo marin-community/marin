@@ -16,7 +16,6 @@ projections through ``Controller`` constructor arguments.
 from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
@@ -32,6 +31,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy_codec import job_spec_from_legacy_request
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update

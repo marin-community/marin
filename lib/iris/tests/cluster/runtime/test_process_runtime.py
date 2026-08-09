@@ -6,9 +6,9 @@
 import sys
 from pathlib import Path
 
-from iris.cluster.resources.execution import CommandEntrypoint, RuntimeEntrypoint
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
+from iris.resources.execution import CommandEntrypoint, RuntimeEntrypoint
 from iris.test_util import wait_for_condition
 
 

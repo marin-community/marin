@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
-from iris.cluster.client.job_info import set_job_info
+from iris.client.job_info import set_job_info
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.hooks.nsys import NsysHook
 from iris.hooks.nsys_main import (

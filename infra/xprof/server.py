@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cheroot import wsgi
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY
 from rigging.filesystem.s3_compat import configure_coreweave_s3

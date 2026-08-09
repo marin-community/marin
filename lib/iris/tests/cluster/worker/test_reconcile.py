@@ -10,17 +10,17 @@ These exercise the Reconcile RPC handler in-process by calling
 from unittest.mock import Mock
 
 import pytest
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptObservation
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import (
+from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
+from iris.cluster.types import AttemptUid, JobName
+from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.resources.attempt import AttemptLaunch, AttemptObservation
+from iris.resources.state import TaskState
+from iris.resources.worker import (
     DesiredAttempt,
     StopReason,
     WorkerReconcileRequest,
     WorkerReconcileResponse,
 )
-from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
-from iris.cluster.types import AttemptUid, JobName
-from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 from tests.cluster.worker.conftest import create_attempt_launch, create_mock_container_handle

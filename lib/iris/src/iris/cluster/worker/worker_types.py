@@ -10,8 +10,8 @@ from finelog.rpc import logging_pb2
 from pydantic import BaseModel
 from rigging.timing import Timestamp
 
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import WorkerTaskStatus
+from iris.resources.state import TaskState
+from iris.resources.worker import WorkerTaskStatus
 
 
 class LogLine(BaseModel):

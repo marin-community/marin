@@ -7,12 +7,12 @@ import uuid
 
 import click
 
-from iris.cluster.resources.action import ActionReceipt
-from iris.cluster.resources.activity import ActivityEntry
-from iris.cluster.resources.identity import AttemptLocator, ResourceKey, ResourceKind
-from iris.cluster.resources.log import LogEntry
-from iris.cluster.resources.source import ResourceSourceStatus, SourceState
-from iris.cluster.resources.state import JobState, TaskState
+from iris.resources.action import ActionReceipt
+from iris.resources.activity import ActivityEntry
+from iris.resources.identity import AttemptLocator, ResourceKey, ResourceKind
+from iris.resources.log import LogEntry
+from iris.resources.source import ResourceSourceStatus, SourceState
+from iris.resources.state import JobState, TaskState
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 
 DEFAULT_RESOURCE_LIST_LIMIT = 100

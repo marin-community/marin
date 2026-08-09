@@ -27,12 +27,6 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
-from iris.cluster.resources.endpoint import ExecResult, ProfileConfiguration
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.job import ContainerProfile, PriorityBand
-from iris.cluster.resources.state import TaskState
-from iris.cluster.resources.worker import BuildMetrics, ResourceUsage, WorkerMetadata, WorkerTaskStatus
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -51,6 +45,12 @@ from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.endpoint import ExecResult, ProfileConfiguration
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.state import TaskState
+from iris.resources.worker import BuildMetrics, ResourceUsage, WorkerMetadata, WorkerTaskStatus
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.proto_display import signal_name
 

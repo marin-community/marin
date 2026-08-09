@@ -38,9 +38,9 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar, Protocol
 
-from iris.cluster.resources.execution import Device, GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
 from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
+from iris.resources.execution import Device, GpuDevice, ResourceSpec, TpuDevice
 
 # ---------------------------------------------------------------------------
 # Step 1 types: core constraint primitives

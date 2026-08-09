@@ -3,11 +3,11 @@
 
 import marin.mcp.babysitter as babysitter
 import pytest
-from iris.cluster.resources.attempt import AttemptSummary
-from iris.cluster.resources.endpoint import ProfileResult
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.cluster.resources.job import (
+from iris.resources.attempt import AttemptSummary
+from iris.resources.endpoint import ProfileResult
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import (
     ContainerProfile,
     ExistingJobPolicy,
     JobDetail,
@@ -16,8 +16,8 @@ from iris.cluster.resources.job import (
     JobSummary,
     PriorityBand,
 )
-from iris.cluster.resources.source import Page
-from iris.cluster.resources.task import TaskDetail, TaskSummary
+from iris.resources.source import Page
+from iris.resources.task import TaskDetail, TaskSummary
 from iris.rpc import job_pb2
 from marin.mcp.babysitter import (
     IrisBabysitter,
@@ -227,7 +227,7 @@ def test_job_summary_describes_the_exact_resource_without_prefix_scanning(monkey
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
     monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: Closeable())
     monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
     service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
@@ -267,7 +267,7 @@ def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, ex
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
     monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
     monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
     service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
@@ -296,7 +296,7 @@ def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(babysitter, "ResourceClient", lambda *_args, **_kwargs: Resources())
+    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: Resources())
     monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: LegacyController())
     monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: Closeable())
     service = IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))

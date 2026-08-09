@@ -23,7 +23,6 @@ from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.federation import ControllerFederationStore
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
@@ -33,13 +32,14 @@ from iris.cluster.federation.peer import (
     HandoffDelivery,
     legacy_handoff_request,
 )
-from iris.cluster.federation.store import FederationSyncBatch
-from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.resources.system import ProcessInfo
+from iris.cluster.federation.protocol import FederationSyncBatch
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import get_thread_container
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.controller_service import ControllerServiceImpl
 from iris.rpc.legacy_job_codec import constraint_to_proto
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.worker_codec import process_info_from_proto

@@ -66,11 +66,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.federation.store import FederationDirection, HandoffState
-from iris.cluster.resources.attempt import AttemptCounts, AttemptLaunch, AttemptLaunchTemplate
-from iris.cluster.resources.execution import ResourceSpec
-from iris.cluster.resources.job import ContainerProfile
-from iris.cluster.resources.state import PriorityBand, TaskState
+from iris.cluster.federation.protocol import FederationDirection, HandoffState
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
@@ -81,6 +77,10 @@ from iris.cluster.types import (
     WorkerId,
     WorkerUsability,
 )
+from iris.resources.attempt import AttemptCounts, AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.execution import ResourceSpec
+from iris.resources.job import ContainerProfile
+from iris.resources.state import PriorityBand, TaskState
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)

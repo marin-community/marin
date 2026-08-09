@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.cluster.resources.action import ActionKind, ActionResult, ActionState
-from iris.cluster.resources.errors import ResourceReplaced
+from iris.resources.action import ActionKind, ActionResult, ActionState
+from iris.resources.errors import ResourceReplaced
 from iris.rpc import job_pb2
 
 

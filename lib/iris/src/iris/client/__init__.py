@@ -22,8 +22,10 @@ from iris.client.client import (
     iris_ctx,
     iris_ctx_scope,
 )
+from iris.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
+from iris.client.protocol import ClusterClient, ResourceClientProtocol
+from iris.client.remote_client import RemoteClusterClient
 from iris.client.resolver import ClusterResolver
-from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.setup_scripts import (
     default_setup_script,
     iris_runtime_setup_script,

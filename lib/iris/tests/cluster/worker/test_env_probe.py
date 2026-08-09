@@ -8,7 +8,6 @@ import sys
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.resources.execution import CpuDevice, GpuDevice, TpuDevice
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
@@ -21,6 +20,7 @@ from iris.cluster.worker.env_probe import (
     construct_worker_id,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.resources.execution import CpuDevice, GpuDevice, TpuDevice
 
 
 def _make_hardware(**overrides) -> HardwareProbe:

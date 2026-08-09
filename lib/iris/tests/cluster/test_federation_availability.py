@@ -20,9 +20,9 @@ from iris.cluster.federation.availability import (
     ReservationLedger,
     assign_queued,
 )
-from iris.cluster.resources.execution import CpuDevice, GpuDevice, TpuDevice
-from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import JobName
+from iris.resources.execution import CpuDevice, GpuDevice, TpuDevice
+from iris.resources.state import PriorityBand
 
 
 def _gpu(variant: str, count: int) -> GpuDevice:

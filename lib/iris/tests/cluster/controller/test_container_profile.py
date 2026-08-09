@@ -17,11 +17,11 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_service import ControllerServiceImpl
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from tests.cluster.controller.conftest import (
     MockController,

@@ -81,9 +81,9 @@ from typing import NamedTuple
 import click
 from connectrpc.errors import ConnectError
 from iris.client import IrisClient
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.resources.job import JobSummary
+from iris.client.job_info import get_job_info
 from iris.cluster.types import JobName
+from iris.resources.job import JobSummary
 from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff

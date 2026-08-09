@@ -8,8 +8,8 @@ from sqlalchemy import and_, insert, literal, or_, select
 
 from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.schema import action_receipts_table
-from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
-from iris.cluster.resources.identity import ResourceKey, ResourceKind
+from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
+from iris.resources.identity import ResourceKey, ResourceKind
 
 
 def action_by_idempotency_key(

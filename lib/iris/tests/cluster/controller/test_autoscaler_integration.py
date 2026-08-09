@@ -17,7 +17,7 @@ from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.types import CloudSliceState
-from iris.cluster.resources.execution import ResourceSpec
+from iris.resources.execution import ResourceSpec
 from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (
     advance_all_tpus,

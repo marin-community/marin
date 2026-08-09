@@ -38,8 +38,8 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.resources.execution import ResourceSpec, gpu_device, tpu_device
 from iris.cluster.types import AcceleratorType, CapacityType
+from iris.resources.execution import ResourceSpec, gpu_device, tpu_device
 
 # Synthetic task id stem for an availability probe (see availability_probe_entries).
 _AVAILABILITY_PROBE_TASK = "__availability_probe__"

@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
-from iris.cluster.backends.k8s.tasks import (
+from iris.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_QUEUE_NAME,
     _LABEL_MANAGED,
@@ -20,7 +20,7 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.rpc.backend import RpcTaskBackend
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability

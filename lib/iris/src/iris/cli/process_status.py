@@ -23,15 +23,15 @@ from rigging.timing import Duration
 from iris.cli.connect import require_controller_url, resource_client_for_ctx, rpc_client_for_ctx
 from iris.cli.resource_commands import attempt_locator
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.resources.endpoint import (
+from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,
     MemoryProfileFormat,
     ThreadsProfileConfiguration,
 )
-from iris.cluster.resources.system import ProcessInfo
-from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
+from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.worker_codec import process_info_from_proto

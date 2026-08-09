@@ -33,7 +33,7 @@ from typing import ClassVar
 from finelog.client import StoragePolicy
 from rigging.timing import Timestamp
 
-from iris.cluster.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
+from iris.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"

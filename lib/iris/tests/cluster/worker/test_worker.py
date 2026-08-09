@@ -18,16 +18,6 @@ from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
-from iris.cluster.resources.execution import (
-    CommandEntrypoint,
-    Entrypoint,
-    Environment,
-    ResourceSpec,
-    RuntimeEntrypoint,
-)
-from iris.cluster.resources.job import ContainerProfile, PriorityBand
-from iris.cluster.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.types import (
@@ -49,6 +39,16 @@ from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.execution import (
+    CommandEntrypoint,
+    Entrypoint,
+    Environment,
+    ResourceSpec,
+    RuntimeEntrypoint,
+)
+from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
 from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
@@ -875,7 +875,7 @@ def test_start_publishes_worker_logs_before_controller_registration(
 
     controller = _ControllerBoundary()
     monkeypatch.setattr("iris.cluster.worker.worker.ControllerServiceClientSync", lambda **_kwargs: controller)
-    monkeypatch.setattr("iris.cluster.worker.worker.ResourceClient", lambda *_args, **_kwargs: _ResourceBoundary())
+    monkeypatch.setattr("iris.cluster.worker.worker.ResourceRpcClient", lambda *_args, **_kwargs: _ResourceBoundary())
     worker = Worker(
         WorkerConfig(
             port=0,

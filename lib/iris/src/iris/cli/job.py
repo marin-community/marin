@@ -52,8 +52,9 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
-from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.execution import (
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.activity import ActivityQuery
+from iris.resources.execution import (
     Entrypoint,
     EnvironmentSpec,
     GpuDevice,
@@ -62,11 +63,10 @@ from iris.cluster.resources.execution import (
     gpu_device,
     tpu_device,
 )
-from iris.cluster.resources.identity import ResourceKind
-from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, JobQuery, PriorityBand
-from iris.cluster.resources.log import LogQuery
-from iris.cluster.resources.state import JobState
-from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.identity import ResourceKind
+from iris.resources.job import ContainerProfile, CoschedulingConfig, JobQuery, PriorityBand
+from iris.resources.log import LogQuery
+from iris.resources.state import JobState
 
 logger = logging.getLogger(__name__)
 

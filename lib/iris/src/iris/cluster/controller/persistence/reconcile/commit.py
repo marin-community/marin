@@ -31,8 +31,8 @@ from iris.cluster.controller.reconcile.effects import (
     TaskRowDelta,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.resources.state import JobState
 from iris.cluster.stats.tables import TaskEventRow
+from iris.resources.state import JobState
 
 _CONTROLLER_EVENT_SOURCE = "iris/controller"
 

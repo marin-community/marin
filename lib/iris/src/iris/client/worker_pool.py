@@ -12,7 +12,7 @@ Example:
     from pathlib import Path
     from iris.client import IrisClient
     from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
-    from iris.cluster.resources.execution import ResourceSpec
+    from iris.resources.execution import ResourceSpec
 
     client = IrisClient.remote("http://controller:8080", workspace=Path("./my-project"))
 
@@ -46,10 +46,10 @@ from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient, Job, iris_ctx
-from iris.cluster.client import get_job_info
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 
 logger = logging.getLogger(__name__)
 

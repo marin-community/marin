@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from iris.client import Job, JobFailedError, iris_ctx
-from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY

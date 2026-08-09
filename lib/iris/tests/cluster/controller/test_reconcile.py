@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
-from iris.cluster.backends.rpc.backend import (
+from iris.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
 )
@@ -34,9 +34,9 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     plans_from_snapshot,
 )
-from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
+from iris.cluster.controller.persistence.backends import BackendWorkerStore
 from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.persistence.schema import task_attempts_table
@@ -64,11 +64,11 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
-from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.job import ContainerProfile, PriorityBand
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.state import TaskState
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select

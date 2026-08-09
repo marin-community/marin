@@ -14,8 +14,8 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.local_cluster import LocalCluster
-from iris.cluster.resources.execution import Entrypoint, ResourceSpec
 from iris.cluster.types import AcceleratorType, CapacityType
+from iris.resources.execution import Entrypoint, ResourceSpec
 from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.requires_cluster

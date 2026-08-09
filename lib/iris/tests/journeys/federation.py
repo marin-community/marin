@@ -6,7 +6,25 @@
 from pathlib import Path
 
 import pytest
-from iris.cluster.client.resource_conversion import (
+from iris.cluster.config import PeerConfig
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
+from iris.cluster.controller.jobs import FederationSubmission
+from iris.cluster.controller.runtime import ControllerRuntime
+from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
+from iris.cluster.federation.manager import FederationPeerObservation
+from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
+from iris.cluster.federation.protocol import FederationSyncBatch
+from iris.cluster.types import JobName
+from iris.resources.action import ActionReceipt
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import JobDetail
+from iris.resources.system import ProcessInfo
+from iris.resources.task import TaskSummary
+from iris.rpc import controller_pb2, resource_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.resource_client_codec import (
     action_receipt_from_proto,
     attempt_identity_to_proto,
     exec_result_from_proto,
@@ -14,25 +32,7 @@ from iris.cluster.client.resource_conversion import (
     profile_result_from_proto,
     task_identity_to_proto,
 )
-from iris.cluster.config import PeerConfig
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
-from iris.cluster.controller.api.resource_service import ResourceServiceImpl
-from iris.cluster.controller.jobs import FederationSubmission
-from iris.cluster.controller.runtime import ControllerRuntime
-from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
-from iris.cluster.federation.manager import FederationPeerObservation
-from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
-from iris.cluster.federation.store import FederationSyncBatch
-from iris.cluster.resources.action import ActionReceipt
-from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.cluster.resources.job import JobDetail
-from iris.cluster.resources.system import ProcessInfo
-from iris.cluster.resources.task import TaskSummary
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, resource_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE
-from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.resource_service import ResourceServiceImpl
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from tests.journeys.world import JobRef, JourneyWorld, TaskRef

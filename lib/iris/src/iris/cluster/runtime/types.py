@@ -23,11 +23,11 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.resources.endpoint import ProfileConfiguration
-from iris.cluster.resources.execution import ResourceSpec, RuntimeEntrypoint
-from iris.cluster.resources.job import ContainerProfile
-from iris.cluster.resources.worker import WorkerMetadata
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.resources.endpoint import ProfileConfiguration
+from iris.resources.execution import ResourceSpec, RuntimeEntrypoint
+from iris.resources.job import ContainerProfile
+from iris.resources.worker import WorkerMetadata
 
 ACCELERATOR_SHM_FALLBACK_BYTES = 100 * 1024**3
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iris.cluster.resources.source import SourceState
+from iris.resources.source import SourceState
 
 
 def test_global_task_view_spans_jobs_and_backends_with_exact_current_attempts(multi_backend_journey):

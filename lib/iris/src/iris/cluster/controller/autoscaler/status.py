@@ -11,8 +11,8 @@ from enum import StrEnum
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
-from iris.cluster.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
 from iris.cluster.types import JobName, WorkerId, WorkerUsability
+from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
 from iris.rpc import vm_pb2
 
 

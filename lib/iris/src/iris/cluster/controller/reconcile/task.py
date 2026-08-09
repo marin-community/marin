@@ -25,12 +25,12 @@ from iris.cluster.controller.task_state import (
     TaskDetailRow,
     task_is_finished,
 )
-from iris.cluster.resources.state import TaskState
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     JobName,
     WorkerId,
 )
+from iris.resources.state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ def merge_task_termination(
 
     No retry counter is carried: both the failure and preemption counts derive
     from the attempt rows this records (see
-    ``iris.cluster.resources.attempt``).
+    ``iris.resources.attempt``).
 
     An already-terminal attempt is left untouched: killing a PENDING task (a
     cancel or a job-failure cascade) must not overwrite the historical outcome of

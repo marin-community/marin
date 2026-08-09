@@ -4,9 +4,9 @@
 """Tests for RuntimeEntrypoint assembly from an Entrypoint + EnvironmentConfig."""
 
 import pytest
-from iris.cluster.resources.execution import Entrypoint, Environment
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.setup_scripts import iris_runtime_setup_script
+from iris.resources.execution import Entrypoint, Environment
 
 
 @pytest.mark.parametrize(

@@ -7,8 +7,8 @@ from sqlalchemy import case, func
 from sqlalchemy.sql.elements import ColumnElement
 
 from iris.cluster.controller.persistence.schema import task_attempts_table
-from iris.cluster.resources.attempt import PREEMPTION_ATTEMPT_STATES
-from iris.cluster.resources.state import TaskState
+from iris.resources.attempt import PREEMPTION_ATTEMPT_STATES
+from iris.resources.state import TaskState
 
 
 def failure_count_expr() -> ColumnElement[int]:

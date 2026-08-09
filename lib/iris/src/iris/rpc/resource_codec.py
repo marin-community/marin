@@ -4,7 +4,7 @@
 """Codecs between native public resources and the ResourceService wire."""
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.resources.endpoint import (
+from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
     MemoryProfileConfiguration,
@@ -12,7 +12,7 @@ from iris.cluster.resources.endpoint import (
     ProfileConfiguration,
     ThreadsProfileConfiguration,
 )
-from iris.cluster.resources.execution import (
+from iris.resources.execution import (
     CommandEntrypoint,
     CpuDevice,
     Environment,
@@ -21,7 +21,7 @@ from iris.cluster.resources.execution import (
     RuntimeEntrypoint,
     TpuDevice,
 )
-from iris.cluster.resources.job import (
+from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
     ExistingJobPolicy,

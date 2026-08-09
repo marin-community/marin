@@ -15,8 +15,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import NamedTuple, Protocol
 
-from iris.cluster.resources.node import NodeHealth, NodeQuery, NodeSummary
-from iris.cluster.resources.source import Page
+from iris.resources.node import NodeHealth, NodeQuery, NodeSummary
+from iris.resources.source import Page
 from iris.rpc import query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from sample import Sample
