@@ -10,16 +10,31 @@ from tile_lifetime import (
     RowStatisticKind,
     compile_stablehlo_row_normalization_backward,
 )
-from tile_lifetime.cuda_axis_fold_codegen import evaluate_axis_fold_program, generate_cuda_axis_fold
+from tile_lifetime.cuda_axis_fold_codegen import (
+    evaluate_axis_fold_pipeline,
+    evaluate_axis_fold_program,
+    generate_cuda_axis_fold,
+)
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
+from tile_lifetime.stablehlo_row_normalization_backward import (
+    StableHLORowNormalizationBackwardError,
+    compile_stablehlo_row_normalization_backward_ffi,
+)
+from tile_lifetime.xla_axis_fold_pipeline_ffi import (
+    audit_axis_fold_pipeline_hlo_replacement,
+    plan_axis_fold_pipeline_hlo_replacement,
+    replace_axis_fold_pipeline_hlo_with_custom_call,
+)
+from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 
 
-def _natural_jax_vjp(*, centered: bool, rows: int = 4, hidden: int = 8):
+def _natural_jax_vjp(*, centered: bool, rows: int = 4, hidden: int = 8, epsilon: float = 1e-5):
     def normalization(x, feature_scale):
         local = x.astype(jnp.float32)
         if centered:
             local -= jnp.mean(local, axis=-1, keepdims=True)
-        inverse = jax.lax.rsqrt(jnp.mean(jnp.square(local), axis=-1, keepdims=True) + 1e-5)
+        inverse = jax.lax.rsqrt(jnp.mean(jnp.square(local), axis=-1, keepdims=True) + epsilon)
         return (local * inverse * feature_scale.astype(jnp.float32)).astype(jnp.bfloat16)
 
     def reverse(x, feature_scale, cotangent):
@@ -102,3 +117,152 @@ def test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs(
     generated = generate_cuda_axis_fold(programs.input_cotangent).source.lower()
     assert "rms" not in generated
     assert "layernorm" not in generated
+
+
+def test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline() -> None:
+    reverse, graph = _natural_jax_vjp(centered=False)
+
+    compilation = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name="shuttle.row_statistic_backward_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+    )
+
+    assert compilation.recovered.epsilon == pytest.approx(1e-5)
+    assert compilation.input_bindings == (
+        ("primal", graph.inputs[0]),
+        ("feature_scale", graph.inputs[1]),
+        ("output_cotangent", graph.inputs[2]),
+    )
+    assert tuple(value_id for _, value_id in compilation.output_bindings) == graph.outputs
+    assert compilation.replaced_operation_ids == tuple(operation.id for operation in graph.operations)
+    assert [stage.output_name for stage in compilation.pipeline.stages] == [
+        "inverse_scale",
+        "input_cotangent",
+        "feature_scale_cotangent",
+    ]
+    assert [stage.expose_output for stage in compilation.pipeline.stages] == [False, True, True]
+    assert [(value.name, value.shape) for value in compilation.generated.inputs] == [
+        ("primal", (4, 8)),
+        ("feature_scale", (8,)),
+        ("output_cotangent", (4, 8)),
+    ]
+    assert [(value.name, value.shape) for value in compilation.generated.outputs] == [
+        ("input_cotangent", (4, 8)),
+        ("feature_scale_cotangent", (8,)),
+    ]
+    assert "inverse_scale_storage = scratch.Allocate" in compilation.generated.source
+    assert "__bfloat162float" in compilation.generated.source
+    assert "__float2bfloat16_rn" in compilation.generated.source
+    assert "rmsnorm" not in compilation.generated.source.lower()
+    assert "layernorm" not in compilation.generated.source.lower()
+
+    rng = np.random.default_rng(41)
+    x = jnp.asarray(rng.normal(size=(4, 8)), dtype=jnp.bfloat16)
+    feature_scale = jnp.asarray(rng.normal(size=(8,)), dtype=jnp.bfloat16)
+    cotangent = jnp.asarray(rng.normal(size=(4, 8)), dtype=jnp.bfloat16)
+    expected_input, expected_scale = reverse(x, feature_scale, cotangent)
+    actual_input, actual_scale = evaluate_axis_fold_pipeline(
+        compilation.pipeline,
+        {
+            "primal": np.asarray(x, dtype=np.float32),
+            "feature_scale": np.asarray(feature_scale, dtype=np.float32),
+            "output_cotangent": np.asarray(cotangent, dtype=np.float32),
+        },
+    )
+    actual_input = np.asarray(jnp.asarray(actual_input, dtype=jnp.bfloat16), dtype=np.float32)
+    actual_scale = np.asarray(jnp.asarray(actual_scale, dtype=jnp.bfloat16), dtype=np.float32)
+
+    np.testing.assert_allclose(actual_input, np.asarray(expected_input, dtype=np.float32), atol=0.016, rtol=0.01)
+    np.testing.assert_allclose(actual_scale, np.asarray(expected_scale, dtype=np.float32), atol=0.032, rtol=0.01)
+
+
+def test_natural_scalar_mutation_changes_generated_pipeline_without_physical_switch() -> None:
+    _, original_graph = _natural_jax_vjp(centered=False, epsilon=1e-5)
+    _, mutated_graph = _natural_jax_vjp(centered=False, epsilon=2e-4)
+
+    original = compile_stablehlo_row_normalization_backward_ffi(
+        original_graph,
+        target_name="shuttle.row_statistic_backward_mutation_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+    )
+    mutated = compile_stablehlo_row_normalization_backward_ffi(
+        mutated_graph,
+        target_name="shuttle.row_statistic_backward_mutation_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+    )
+
+    assert original.recovered.epsilon == pytest.approx(1e-5)
+    assert mutated.recovered.epsilon == pytest.approx(2e-4)
+    assert original.generated.semantic_fingerprints != mutated.generated.semantic_fingerprints
+    assert original.generated.source_sha256 != mutated.generated.source_sha256
+    assert original.generated.inputs == mutated.generated.inputs
+    assert original.generated.outputs == mutated.generated.outputs
+
+
+def test_bounded_ffi_path_fails_closed_for_source_order_and_centered_statistics() -> None:
+    _, uncentered_graph = _natural_jax_vjp(centered=False)
+    _, centered_graph = _natural_jax_vjp(centered=True)
+
+    with pytest.raises(StableHLORowNormalizationBackwardError, match="ALLOW_ROUNDING_REORDER"):
+        compile_stablehlo_row_normalization_backward_ffi(
+            uncentered_graph,
+            target_name="shuttle.row_statistic_source_order_v1",
+            numerical_policy=NumericalPolicy.BITWISE_EXACT,
+            threads=8,
+        )
+    with pytest.raises(StableHLORowNormalizationBackwardError, match="uncentered second-moment"):
+        compile_stablehlo_row_normalization_backward_ffi(
+            centered_graph,
+            target_name="shuttle.row_statistic_centered_v1",
+            numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+            threads=8,
+        )
+
+    centered_generic = compile_stablehlo_row_normalization_backward(centered_graph, threads=8)
+    assert centered_generic.recovered.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT
+
+
+def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo() -> None:
+    reverse, graph = _natural_jax_vjp(centered=False)
+    arguments = (
+        jnp.zeros((4, 8), dtype=jnp.bfloat16),
+        jnp.ones((8,), dtype=jnp.bfloat16),
+        jnp.zeros((4, 8), dtype=jnp.bfloat16),
+    )
+    hlo = jax.jit(reverse).lower(*arguments).compiler_ir("hlo").as_hlo_text()
+    compilation = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name="shuttle.row_statistic_whole_entry_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+    )
+
+    plan = plan_axis_fold_pipeline_hlo_replacement(
+        hlo,
+        compilation.generated,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    transformed = replace_axis_fold_pipeline_hlo_with_custom_call(
+        hlo,
+        plan,
+        target=compilation.generated.target_name,
+    )
+    audit = audit_axis_fold_pipeline_hlo_replacement(
+        hlo,
+        transformed,
+        plan,
+        target=compilation.generated.target_name,
+    )
+    transformed_entry = parse_hlo_module_text(transformed).computation(plan.entry)
+
+    assert tuple(value.buffer_name for value in plan.inputs) == ("primal", "feature_scale", "output_cotangent")
+    assert len(plan.replaced_instructions) > 20
+    assert audit.dead_internal_instructions == plan.replaced_instructions
+    assert audit.copy_count[0] == audit.copy_count[1]
+    assert audit.transpose_count[0] == audit.transpose_count[1]
+    assert all("shuttle.axis_fold.pipeline.output" in name for name in transformed_entry.root.operands)
+    assert transformed.count('custom_call_target="shuttle.row_statistic_whole_entry_v1"') == 1

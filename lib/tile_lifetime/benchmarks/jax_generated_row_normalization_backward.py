@@ -26,8 +26,12 @@ import numpy as np
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
 from tile_lifetime.jax_axis_fold_ffi import call_cuda_axis_fold_ffi, register_cuda_axis_fold_ffi
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
-from tile_lifetime.stablehlo_row_normalization_backward import compile_stablehlo_row_normalization_backward
+from tile_lifetime.stablehlo_row_normalization_backward import (
+    compile_stablehlo_row_normalization_backward,
+    compile_stablehlo_row_normalization_backward_ffi,
+)
 
 _TARGET_NAME = "shuttle.axis_fold_reverse_v1"
 _INPUT_TARGET_NAME = "shuttle.axis_fold_reverse_input_v1"
@@ -145,15 +149,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     exported = jax.export.export(jax.jit(_natural_reverse))(*arguments)
     serialized = exported.mlir_module_serialized
     graph = import_stablehlo(serialized, input_names=("matrix_a", "feature_vector", "matrix_b"))
-    compilation = compile_stablehlo_row_normalization_backward(graph, threads=args.threads)
-    programs = (
-        compilation.programs.input_cotangent,
-        replace(
-            compilation.programs.feature_scale_cotangent,
-            groups_per_block=args.column_groups_per_block,
-        ),
+    compilation = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name=_TARGET_NAME,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=args.threads,
+        feature_groups_per_block=args.column_groups_per_block,
     )
-    generated = generate_cuda_axis_fold_ffi(programs, target_name=_TARGET_NAME)
+    generated = compilation.generated
     library = _compile_generated_source(generated.source, args.artifact_directory, args.nvcc, args.architecture)
     register_cuda_axis_fold_ffi(generated, library)
 
@@ -162,6 +165,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     feature_generated = None
     feature_library = None
     if args.profile_components:
+        component_compilation = compile_stablehlo_row_normalization_backward(graph, threads=args.threads)
+        programs = (
+            component_compilation.programs.input_cotangent,
+            replace(
+                component_compilation.programs.feature_scale_cotangent,
+                groups_per_block=args.column_groups_per_block,
+            ),
+        )
         input_generated = generate_cuda_axis_fold_ffi((programs[0],), target_name=_INPUT_TARGET_NAME)
         input_library = _compile_generated_source(
             input_generated.source,
@@ -191,35 +202,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     @jax.jit
     def generated_reverse(
-        projected_argument: jax.Array,
+        primal_argument: jax.Array,
         feature_scale_argument: jax.Array,
-        standardized_argument: jax.Array,
-        inverse_scale_argument: jax.Array,
+        output_cotangent_argument: jax.Array,
     ) -> tuple[jax.Array, ...]:
         return call_cuda_axis_fold_ffi(
             generated,
             {
-                "projected": projected_argument,
+                "primal": primal_argument,
                 "feature_scale": feature_scale_argument,
-                "standardized": standardized_argument,
-                "inverse_scale": inverse_scale_argument,
+                "output_cotangent": output_cotangent_argument,
             },
         )
 
     @jax.jit
     def matched_xla_algebra(
-        projected_argument: jax.Array,
+        primal_argument: jax.Array,
         feature_scale_argument: jax.Array,
-        standardized_argument: jax.Array,
-        inverse_scale_argument: jax.Array,
+        output_cotangent_argument: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
-        scaled = projected_argument * feature_scale_argument.astype(jnp.float32)
-        correlation = jnp.sum(scaled * standardized_argument.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
-        input_cotangent = inverse_scale_argument[:, None] * (
-            scaled - standardized_argument.astype(jnp.float32) * correlation
-        )
-        feature_cotangent = jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
-        return input_cotangent, feature_cotangent
+        return _natural_reverse(primal_argument, feature_scale_argument, output_cotangent_argument)
 
     @jax.jit
     def matched_xla_input_cotangent(
@@ -240,15 +242,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
 
     def execute_generated_reverse() -> tuple[jax.Array, ...]:
-        return generated_reverse(projected, feature_scale, standardized, inverse_scale)
+        return generated_reverse(x, feature_scale, cotangent)
 
     def execute_matched_xla_algebra() -> tuple[jax.Array, jax.Array]:
-        return matched_xla_algebra(projected, feature_scale, standardized, inverse_scale)
+        return matched_xla_algebra(x, feature_scale, cotangent)
 
     if args.xla_dump_directory is not None:
         args.xla_dump_directory.mkdir(parents=True, exist_ok=True)
         (args.xla_dump_directory / "matched_full_optimized_hlo.txt").write_text(
-            matched_xla_algebra.lower(projected, feature_scale, standardized, inverse_scale).compile().as_text()
+            matched_xla_algebra.lower(x, feature_scale, cotangent).compile().as_text()
         )
         (args.xla_dump_directory / "matched_input_cotangent_optimized_hlo.txt").write_text(
             matched_xla_input_cotangent.lower(projected, feature_scale, standardized, inverse_scale).compile().as_text()
@@ -262,13 +264,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
     jax.block_until_ready((generated_outputs, xla_outputs, natural_outputs))
     correctness = {
-        "matched_fp32_algebra": {
+        "natural_jax_vjp": {
             "input_cotangent": _error(generated_outputs[0], xla_outputs[0]),
             "feature_scale_cotangent": _error(generated_outputs[1], xla_outputs[1]),
         },
-        "natural_jax_vjp_after_source_dtype_cast": {
-            "input_cotangent": _error(generated_outputs[0].astype(jnp.bfloat16), natural_outputs[0]),
-            "feature_scale_cotangent": _error(generated_outputs[1].astype(jnp.bfloat16), natural_outputs[1]),
+        "independent_natural_jax_vjp": {
+            "input_cotangent": _error(generated_outputs[0], natural_outputs[0]),
+            "feature_scale_cotangent": _error(generated_outputs[1], natural_outputs[1]),
         },
     }
     first_hashes = tuple(_hash(value) for value in generated_outputs)
@@ -418,11 +420,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "handler_executions": _handler_call_count(library),
         },
         "numerical_contract": {
-            "generated_reassociation": [program.reassociation.value for program in programs],
-            "accepted_reference": "matched explicit FP32 Map/Fold algebra",
+            "policy": compilation.numerical_policy.value,
+            "generated_reassociation": [stage.program.reassociation.value for stage in compilation.pipeline.stages],
+            "accepted_reference": "natural JAX VJP with BF16 inputs and outputs",
             "natural_jax_vjp": (
-                "diagnostic after BF16 output cast; source-ordered equivalence is not established because "
-                "XLA may select a different reduction tree"
+                "source-ordered equivalence is not established because generated and XLA reductions may "
+                "select different deterministic trees"
             ),
         },
         "correctness": {**correctness, "deterministic_hashes": list(first_hashes)},

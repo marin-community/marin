@@ -205,6 +205,31 @@ class GeneratedCudaAxisFoldFfi:
     source_sha256: str
 
 
+@dataclass(frozen=True)
+class AxisFoldPipelineStage:
+    """One topologically ordered Fold whose result may feed later Folds."""
+
+    output_name: str
+    program: AxisFoldProgram
+    expose_output: bool
+
+    def __post_init__(self) -> None:
+        if not self.output_name.isidentifier():
+            raise ValueError(f"axis-Fold pipeline output must be an identifier: {self.output_name!r}")
+
+
+@dataclass(frozen=True)
+class AxisFoldPipeline:
+    """A bounded dataflow composition of generic axis-Fold programs."""
+
+    stages: tuple[AxisFoldPipelineStage, ...]
+
+    def __post_init__(self) -> None:
+        if not self.stages:
+            raise ValueError("axis-Fold pipeline requires at least one stage")
+        _axis_fold_pipeline_buffers(self)
+
+
 def generate_cuda_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxisFold:
     """Render a generic deterministic Map/Fold CUDA extension."""
     if program.groups_per_block > 1:
@@ -344,22 +369,25 @@ def generate_cuda_axis_fold_ffi(
     """
     if not programs:
         raise ValueError("axis-Fold FFI generation requires at least one program")
+    pipeline = AxisFoldPipeline(
+        tuple(
+            AxisFoldPipelineStage(output_name=f"output{index}", program=program, expose_output=True)
+            for index, program in enumerate(programs)
+        )
+    )
+    return generate_cuda_axis_fold_pipeline_ffi(pipeline, target_name=target_name)
+
+
+def generate_cuda_axis_fold_pipeline_ffi(
+    pipeline: AxisFoldPipeline,
+    *,
+    target_name: str,
+) -> GeneratedCudaAxisFoldFfi:
+    """Render a topological Fold pipeline with internal scratch values."""
     handler_symbol = target_name.replace(".", "_")
     if not handler_symbol.isidentifier():
         raise ValueError(f"FFI target does not map to a C identifier: {target_name!r}")
-    inputs = _ffi_input_buffers(programs)
-    outputs = tuple(
-        CudaAxisFoldFfiBuffer(
-            name=f"output{index}",
-            dtype=program.output_dtype,
-            shape=(
-                (program.rows, program.columns)
-                if program.output_kind is AxisFoldOutputKind.ELEMENT
-                else (program.columns if program.reduction_axis is AxisFoldDirection.ROWS else program.rows,)
-            ),
-        )
-        for index, program in enumerate(programs)
-    )
+    inputs, stage_outputs, outputs = _axis_fold_pipeline_buffers(pipeline)
     input_arguments = ",\n    ".join(
         f"ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}> {value.name}_buffer" for value in inputs
     )
@@ -369,11 +397,22 @@ def generate_cuda_axis_fold_ffi(
     input_pointers = "\n".join(_ffi_input_pointer(value) for value in inputs)
     output_pointers = "\n".join(_ffi_output_pointer(value) for value in outputs)
     kernels = "\n\n".join(
-        _ffi_axis_fold_kernel(program, symbol=f"ShuttleAxisFoldKernel{index}", prefix=f"Program{index}")
-        for index, program in enumerate(programs)
+        _ffi_axis_fold_kernel(stage.program, symbol=f"ShuttleAxisFoldKernel{index}", prefix=f"Program{index}")
+        for index, stage in enumerate(pipeline.stages)
     )
+    scratch_declarations = "\n".join(
+        _ffi_pipeline_scratch(stage_output)
+        for stage, stage_output in zip(pipeline.stages, stage_outputs, strict=True)
+        if not stage.expose_output
+    )
+    exposed_data = {value.name: f"{value.name}_data" for value in outputs}
     launches = "\n".join(
-        _ffi_axis_fold_launch(program, index=index, output=outputs[index]) for index, program in enumerate(programs)
+        _ffi_axis_fold_launch_to_pointer(
+            stage.program,
+            index=index,
+            output_pointer=exposed_data.get(stage.output_name, stage.output_name),
+        )
+        for index, stage in enumerate(pipeline.stages)
     )
     input_bindings = "\n".join(f"      .Arg<ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}>>()" for value in inputs)
     output_bindings = "\n".join(
@@ -401,10 +440,12 @@ std::atomic<int> call_count{{0}};
 
 ffi::Error ShuttleAxisFoldRegion(
     cudaStream_t stream,
+    ffi::ScratchAllocator scratch,
     {input_arguments},
     {output_arguments}) {{
 {input_pointers}
 {output_pointers}
+{scratch_declarations}
 {launches}
   call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
@@ -413,6 +454,7 @@ ffi::Error ShuttleAxisFoldRegion(
 auto ShuttleAxisFoldRegionBinding() {{
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Ctx<ffi::ScratchAllocator>()
 {input_bindings}
 {output_bindings};
 }}
@@ -433,7 +475,7 @@ extern "C" int shuttle_axis_fold_ffi_call_count() {{
         handler_symbol=handler_symbol,
         inputs=inputs,
         outputs=outputs,
-        semantic_fingerprints=tuple(program.semantic_fingerprint for program in programs),
+        semantic_fingerprints=tuple(stage.program.semantic_fingerprint for stage in pipeline.stages),
         source_sha256=hashlib.sha256(source.encode()).hexdigest(),
     )
 
@@ -575,6 +617,72 @@ def _ffi_input_buffers(programs: tuple[AxisFoldProgram, ...]) -> tuple[CudaAxisF
     return tuple(ordered)
 
 
+def _axis_fold_input_buffer(value: AxisFoldInput, program: AxisFoldProgram) -> CudaAxisFoldFfiBuffer:
+    return CudaAxisFoldFfiBuffer(
+        name=value.name,
+        dtype=value.dtype,
+        shape={
+            AxisFoldInputLayout.ELEMENT: (program.rows, program.columns),
+            AxisFoldInputLayout.ROW: (program.rows,),
+            AxisFoldInputLayout.COLUMN: (program.columns,),
+            AxisFoldInputLayout.SCALAR: (),
+        }[value.layout],
+    )
+
+
+def _axis_fold_output_buffer(stage: AxisFoldPipelineStage) -> CudaAxisFoldFfiBuffer:
+    program = stage.program
+    shape = (
+        (program.rows, program.columns)
+        if program.output_kind is AxisFoldOutputKind.ELEMENT
+        else ((program.columns,) if program.reduction_axis is AxisFoldDirection.ROWS else (program.rows,))
+    )
+    return CudaAxisFoldFfiBuffer(name=stage.output_name, dtype=program.output_dtype, shape=shape)
+
+
+def _axis_fold_pipeline_buffers(
+    pipeline: AxisFoldPipeline,
+) -> tuple[
+    tuple[CudaAxisFoldFfiBuffer, ...],
+    tuple[CudaAxisFoldFfiBuffer, ...],
+    tuple[CudaAxisFoldFfiBuffer, ...],
+]:
+    external_inputs: list[CudaAxisFoldFfiBuffer] = []
+    external_by_name: dict[str, CudaAxisFoldFfiBuffer] = {}
+    stage_outputs: list[CudaAxisFoldFfiBuffer] = []
+    produced_by_name: dict[str, CudaAxisFoldFfiBuffer] = {}
+    exposed_outputs: list[CudaAxisFoldFfiBuffer] = []
+    for stage in pipeline.stages:
+        for value in stage.program.inputs:
+            candidate = _axis_fold_input_buffer(value, stage.program)
+            produced = produced_by_name.get(value.name)
+            if produced is not None:
+                if produced != candidate:
+                    raise ValueError(
+                        f"axis-Fold pipeline value {value.name!r} has incompatible producer and consumer uses: "
+                        f"{produced} and {candidate}"
+                    )
+                continue
+            previous = external_by_name.get(value.name)
+            if previous is not None and previous != candidate:
+                raise ValueError(
+                    f"axis-Fold pipeline input {value.name!r} has incompatible uses: {previous} and {candidate}"
+                )
+            if previous is None:
+                external_by_name[value.name] = candidate
+                external_inputs.append(candidate)
+        if stage.output_name in produced_by_name or stage.output_name in external_by_name:
+            raise ValueError(f"axis-Fold pipeline output {stage.output_name!r} is not single-assignment")
+        output = _axis_fold_output_buffer(stage)
+        produced_by_name[stage.output_name] = output
+        stage_outputs.append(output)
+        if stage.expose_output:
+            exposed_outputs.append(output)
+    if not exposed_outputs:
+        raise ValueError("axis-Fold pipeline must expose at least one output")
+    return tuple(external_inputs), tuple(stage_outputs), tuple(exposed_outputs)
+
+
 def _ffi_dtype(dtype: DType) -> str:
     return {DType.BF16: "ffi::BF16", DType.FP32: "ffi::F32"}[dtype]
 
@@ -591,6 +699,19 @@ def _ffi_output_pointer(value: CudaAxisFoldFfiBuffer) -> str:
     if value.dtype is DType.BF16:
         return f"  auto* {value.name}_data = reinterpret_cast<__nv_bfloat16*>(" f"{value.name}->typed_data());"
     return f"  auto* {value.name}_data = {value.name}->typed_data();"
+
+
+def _ffi_pipeline_scratch(value: CudaAxisFoldFfiBuffer) -> str:
+    cpp_type = "__nv_bfloat16" if value.dtype is DType.BF16 else "float"
+    element_count = math.prod(value.shape)
+    return f"""
+  auto {value.name}_storage = scratch.Allocate(
+      sizeof({cpp_type}) * {element_count}, alignof({cpp_type}));
+  if (!{value.name}_storage) {{
+    return ffi::Error::Internal("failed to allocate axis-Fold pipeline value {value.name}");
+  }}
+  auto* {value.name} = static_cast<{cpp_type}*>(*{value.name}_storage);
+""".rstrip()
 
 
 def _ffi_axis_fold_kernel(program: AxisFoldProgram, *, symbol: str, prefix: str) -> str:
@@ -796,13 +917,17 @@ def _ffi_output_body(
 
 
 def _ffi_axis_fold_launch(program: AxisFoldProgram, *, index: int, output: CudaAxisFoldFfiBuffer) -> str:
+    return _ffi_axis_fold_launch_to_pointer(program, index=index, output_pointer=f"{output.name}_data")
+
+
+def _ffi_axis_fold_launch_to_pointer(program: AxisFoldProgram, *, index: int, output_pointer: str) -> str:
     prefix = f"Program{index}"
     blocks = (
         f"(k{prefix}Columns + k{prefix}GroupsPerBlock - 1) / k{prefix}GroupsPerBlock"
         if program.groups_per_block > 1
         else (f"k{prefix}Columns" if program.reduction_axis is AxisFoldDirection.ROWS else f"k{prefix}Rows")
     )
-    arguments = ",\n      ".join((*tuple(value.name for value in program.inputs), f"{output.name}_data"))
+    arguments = ",\n      ".join((*tuple(value.name for value in program.inputs), output_pointer))
     return f"""
   ShuttleAxisFoldKernel{index}<<<{blocks}, k{prefix}Threads, 0, stream>>>(
       {arguments});
@@ -873,6 +998,27 @@ def evaluate_axis_fold_program(
             )
             output[row, column] = np.float32(_evaluate_expression(program.output_expression, aliases))
     return output
+
+
+def evaluate_axis_fold_pipeline(
+    pipeline: AxisFoldPipeline,
+    inputs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, ...]:
+    """Evaluate a topological Fold pipeline, including internal values."""
+    external_inputs, _, exposed_outputs = _axis_fold_pipeline_buffers(pipeline)
+    expected_names = {value.name for value in external_inputs}
+    if set(inputs) != expected_names:
+        raise ValueError(f"axis-Fold pipeline inputs must be {sorted(expected_names)}, found {sorted(inputs)}")
+    values = {name: np.asarray(value) for name, value in inputs.items()}
+    exposed_names = {value.name for value in exposed_outputs}
+    exposed: list[np.ndarray] = []
+    for stage in pipeline.stages:
+        stage_inputs = {value.name: values[value.name] for value in stage.program.inputs}
+        output = evaluate_axis_fold_program(stage.program, stage_inputs)
+        values[stage.output_name] = output
+        if stage.output_name in exposed_names:
+            exposed.append(output)
+    return tuple(exposed)
 
 
 def _input_aliases(inputs: tuple[AxisFoldInput, ...], row: str, column: str) -> dict[str, str]:
