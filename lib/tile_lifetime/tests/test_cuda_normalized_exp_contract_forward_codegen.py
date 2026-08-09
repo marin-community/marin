@@ -10,6 +10,7 @@ import pytest
 from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
     generate_cuda_normalized_exp_contract_forward_ffi,
 )
+from tile_lifetime.ffi_command_buffer import audit_ffi_command_buffer_eligibility
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input, scalar_unary
 from tile_lifetime.xla_normalized_exp_contract_forward import plan_normalized_exp_contract_forward_hlo_replacement
 
@@ -38,6 +39,22 @@ def test_generated_normalized_exp_forward_owns_compact_contract_fold_selection()
     assert "cublas" not in generated.source.lower()
     assert "softmax" not in generated.source.lower()
     assert "cross_entropy" not in generated.source.lower()
+    assert not generated.command_buffer_compatible
+    assert "cudaPeekAtLastError" in generated.source
+    assert "kCmdBufferCompatible" not in generated.source
+
+
+def test_generated_normalized_exp_forward_has_capture_safe_candidate() -> None:
+    generated = generate_cuda_normalized_exp_contract_forward_ffi(
+        _plan(),
+        target=_TARGET,
+        command_buffer_compatible=True,
+    )
+
+    assert generated.command_buffer_compatible
+    assert audit_ffi_command_buffer_eligibility(generated.source).eligible
+    assert "cudaPeekAtLastError" not in generated.source
+    assert "{ffi::Traits::kCmdBufferCompatible}" in generated.source
 
 
 def test_forward_score_map_mutation_regenerates_same_physical_family() -> None:

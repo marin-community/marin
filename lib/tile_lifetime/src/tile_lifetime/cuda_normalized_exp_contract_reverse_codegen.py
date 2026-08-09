@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from tile_lifetime.autodiff import differentiate_scalar_expression
 from tile_lifetime.cuda_map_fold_codegen import CudaMapFoldProgram, CudaScalarFunction, render_cuda_map_fold_include
+from tile_lifetime.ffi_command_buffer import finalize_ffi_handler_source
 from tile_lifetime.tensor_program import (
     ScalarExpression,
     scalar_expression_inputs,
@@ -38,6 +39,7 @@ class GeneratedCudaNormalizedExpContractReverseFfi:
     fold_extent: int
     threads: int
     shared_bytes: int
+    command_buffer_compatible: bool
 
 
 def generate_cuda_normalized_exp_contract_reverse_ffi(
@@ -46,6 +48,7 @@ def generate_cuda_normalized_exp_contract_reverse_ffi(
     target: str,
     score_expression: ScalarExpression | None = None,
     threads: int = 256,
+    command_buffer_compatible: bool = False,
 ) -> GeneratedCudaNormalizedExpContractReverseFfi:
     """Generate one CTA from generic Contracts, Maps, and indexed Fold state."""
     if threads not in {128, 256, 512}:
@@ -83,7 +86,18 @@ def generate_cuda_normalized_exp_contract_reverse_ffi(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     handler_symbol = _target_symbol(target)
-    source = f"""// Generated from generic Contract/Map/Fold reverse semantics; do not edit.
+    launch_status_check = (
+        ""
+        if command_buffer_compatible
+        else """
+  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return ffi::Error::Internal(
+        "normalized-exp Contract reverse launch failed: " + std::string(cudaGetErrorString(status)));
+  }
+"""
+    )
+    source_template = f"""// Generated from generic Contract/Map/Fold reverse semantics; do not edit.
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -190,11 +204,7 @@ ffi::Error ShuttleNormalizedExpContractReverse(
       reinterpret_cast<const std::uint8_t*>(row_validity_buffer.typed_data()),
       reinterpret_cast<__nv_bfloat16*>(input_cotangent_buffer->typed_data()),
       reinterpret_cast<__nv_bfloat16*>(operand_cotangent_buffer->typed_data()));
-  const cudaError_t status = cudaPeekAtLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal(
-        "normalized-exp Contract reverse launch failed: " + std::string(cudaGetErrorString(status)));
-  }}
+{launch_status_check}
   call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
@@ -217,12 +227,16 @@ auto ShuttleNormalizedExpContractReverseBinding() {{
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {handler_symbol},
     ShuttleNormalizedExpContractReverse,
-    ShuttleNormalizedExpContractReverseBinding());
+    ShuttleNormalizedExpContractReverseBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" int shuttle_normalized_exp_contract_reverse_call_count() {{
   return call_count.load(std::memory_order_relaxed);
 }}
 """
+    source = finalize_ffi_handler_source(
+        source_template,
+        command_buffer_compatible=command_buffer_compatible,
+    )
     return GeneratedCudaNormalizedExpContractReverseFfi(
         target=target,
         handler_symbol=handler_symbol,
@@ -234,6 +248,7 @@ extern "C" int shuttle_normalized_exp_contract_reverse_call_count() {{
         fold_extent=fold_extent,
         threads=threads,
         shared_bytes=shared_bytes,
+        command_buffer_compatible=command_buffer_compatible,
     )
 
 
