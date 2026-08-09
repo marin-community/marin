@@ -16,8 +16,11 @@ This self-contained variant is the selected one-rack EP64 configuration for GB20
 - MoE backend: `fixed_all_to_all` with gather dispatch, structured custom VJPs, and capacity
   factor 1.33.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: GPU command buffers off, `cuda_async`, and collective overlap limit 4. Auto-PGLE is off
-  for the process-per-GPU topology because a node cannot run four concurrent profiling sessions.
+- Runtime: GPU command buffers off and `cuda_async`. The fixed and ring backends use latency hiding
+  and collective overlap limit 4. Ragged all-to-all disables latency hiding and uses overlap limit 1;
+  the default scheduler corrupts its first backward at larger expert banks, and four-way overlap was
+  24% slower in a same-host clean timing comparison. Auto-PGLE is off for the process-per-GPU
+  topology because a node cannot run four concurrent profiling sessions.
 - Output: Metrics only. This throughput run does not write a checkpoint.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and

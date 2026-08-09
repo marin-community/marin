@@ -818,3 +818,10 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Timing: steps 5-24 averaged 1.21747 seconds and 430,693 tokens/s; median duration was 1.21697 seconds and sample standard deviation 0.01416 seconds. W&B's d768 MFU was 2.19616 and is not the hero gate.
 - Controlled comparison: S22's overlap-four mean was 1.60172 seconds and 327,371 tokens/s. Overlap one therefore reduced step duration by 24.0% and increased throughput by 31.6%. It also reproduces S21's 1.21903-second watched result, confirming that the gain is the overlap setting rather than watch contamination.
 - Decision: exact ragged treatment uses both `--xla_gpu_enable_latency_hiding_scheduler=false` for correctness and `--xla_gpu_experimental_parallel_collective_overlap_limit=1` for throughput. Preserve S15b's enabled/four-way defaults as the paired baseline.
+
+### 2026-08-09 17:39 UTC - Ragged-only runtime defaults prepared
+
+- Change: `run_grug` now selects latency hiding off and collective overlap limit 1 only when `model.moe_implementation == "ragged_all_to_all"`. Fixed all-to-all, ring, and the FSDP control retain latency hiding on and their prior overlap behavior. Explicit user `XLA_FLAGS` still override every default.
+- Regression coverage: the new ragged runtime test failed against the prior latency-hiding-on/overlap-four behavior, then passed after the change. The 31-test EP suite passes serially; 15 relevant Grug variant contracts pass with one platform-specific skip. The unrelated base JSON-tracker contract exceeded its existing 60-second timeout when the full contract file was included and was excluded from the targeted variant run.
+- Documentation: the EP hero README records the measured ragged settings and their correctness/performance rationale.
+- Experiment isolation: S15b was bundled before this change and retains latency hiding on/overlap four. The exact treatment will set both flags explicitly, so neither member of the pair depends on the moving branch default.

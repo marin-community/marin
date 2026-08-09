@@ -29,8 +29,10 @@ def _grug_run_config(
     watch_interval: int = 1,
     watch_mode: train.WatchMode = train.WatchMode.INLINE,
     processes_per_task: int = 1,
+    moe_implementation: str = "fixed_all_to_all",
 ) -> SimpleNamespace:
     return SimpleNamespace(
+        model=SimpleNamespace(moe_implementation=moe_implementation),
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
@@ -225,6 +227,34 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
 
     assert os.environ["JAX_ENABLE_PGLE"] == "true"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+
+
+def test_run_grug_uses_safe_ragged_xla_schedule(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _grug_run_config(watch_interval=0, moe_implementation="ragged_all_to_all")
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+
+
+def test_run_grug_keeps_explicit_ragged_xla_schedule(monkeypatch):
+    explicit_latency_hiding = "--xla_gpu_enable_latency_hiding_scheduler=true"
+    explicit_overlap = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=2"
+    monkeypatch.setenv("XLA_FLAGS", f"{explicit_latency_hiding} {explicit_overlap}")
+    config = _grug_run_config(watch_interval=0, moe_implementation="ragged_all_to_all")
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert explicit_latency_hiding in flags
+    assert explicit_overlap in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" not in flags
 
 
 def test_run_grug_disables_pgle_for_multiple_processes_per_task(monkeypatch):

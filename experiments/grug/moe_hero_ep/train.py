@@ -55,10 +55,12 @@ HERO_EP_RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 JAX_ENABLE_PGLE_ENV = "JAX_ENABLE_PGLE"
-_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_ALL_TO_ALL_IMPLEMENTATION = "ragged_all_to_all"
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -71,15 +73,23 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int) -> None:
+def _apply_hero_ep_runtime_defaults(
+    *, inline_watch_enabled: bool, processes_per_task: int, moe_implementation: str
+) -> None:
     for name, value in HERO_EP_RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
     os.environ.setdefault(JAX_ENABLE_PGLE_ENV, "false" if processes_per_task > 1 else "true")
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    ragged_all_to_all = moe_implementation == RAGGED_ALL_TO_ALL_IMPLEMENTATION
+    if ragged_all_to_all:
+        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
+    elif inline_watch_enabled:
+        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
+    else:
+        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        *_XLA_FLAG_DEFAULTS,
+        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged_all_to_all else 'true'}",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
@@ -760,6 +770,7 @@ def run_grug(config: GrugRunConfig) -> None:
     _apply_hero_ep_runtime_defaults(
         inline_watch_enabled=inline_watch_enabled,
         processes_per_task=config.processes_per_task,
+        moe_implementation=config.model.moe_implementation,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,
