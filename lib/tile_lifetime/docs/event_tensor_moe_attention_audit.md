@@ -167,6 +167,15 @@ exact HLO target counts, source pins, dynamic dependencies, and toolchain
 provenance are under
 `benchmarks/artifacts/event_tensor_segmented_grouped_contract_gb200_v0/`.
 
+The CPU-side schedule boundary is prepared. A
+`SegmentedGroupedContractEventSchedule` composes runtime segment readiness with
+the independently derived grouped-Contract pipeline, realizes the outer edge
+by verified device-stream order, and keeps program and runtime fingerprints
+separate. A relation mutation changes only runtime tables and their fingerprint;
+a cluster-worker mutation changes only the inner physical schedule and program
+fingerprint. Empty segments are represented by zero-count ready events. This
+has not been replayed through the SM100 typed-FFI path yet.
+
 For attention, another dense H100 replay is not presently informative: the
 real TMA/WGMMA attachment is already correct, deterministic, and 1.001x the
 matched pre-attachment body. The next attention allocation should instead be a
