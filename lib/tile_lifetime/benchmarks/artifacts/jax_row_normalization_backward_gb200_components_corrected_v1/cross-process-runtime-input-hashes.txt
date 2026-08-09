@@ -1,0 +1,16 @@
+Two fresh JAX processes used seed 20260809 and the same JAX/JAXlib 0.11.0 stack.
+
+Process 1
+x              85abbf5912b603f0eef1c7c0dfc6d52d7b13beb251dc03c420b24b4029f7610f
+feature_scale  5fb74b406fc173c01a4c59db4d6554699f0b28a933bdf7133803b3d5b971c288
+cotangent      01bc0cf00fe98b8931fb7b4a1f56b734d416c17b6674b8c7309fdea2aad412ed
+standardized   5ffdb30b9e843ac23c4b6e11bdf156fec097b683469df3ec412fb1b2b7804bda
+inverse_scale  f78bbc917d6fdbca5b27b1ad2652d48cf150839bbeee00673ed5a499a7b1e930
+
+Process 2
+x              85abbf5912b603f0eef1c7c0dfc6d52d7b13beb251dc03c420b24b4029f7610f
+feature_scale  5fb74b406fc173c01a4c59db4d6554699f0b28a933bdf7133803b3d5b971c288
+cotangent      01bc0cf00fe98b8931fb7b4a1f56b734d416c17b6674b8c7309fdea2aad412ed
+standardized   5ffdb30b9e843ac23c4b6e11bdf156fec097b683469df3ec412fb1b2b7804bda
+inverse_scale  e8d9c02e80a54e5d5877c235569a3caaa2bd4c4cd68b8066fcc29418d45d9228
+

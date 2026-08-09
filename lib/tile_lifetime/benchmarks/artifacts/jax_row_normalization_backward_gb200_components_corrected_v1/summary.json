@@ -1,0 +1,710 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "iterations_per_sample": 100,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready",
+    "warmups": 10
+  },
+  "component_profile": {
+    "correctness": {
+      "against_full_generated": {
+        "feature_scale_cotangent": {
+          "maximum_absolute_error": 0.0,
+          "mean_absolute_error": 0.0
+        },
+        "input_cotangent": {
+          "maximum_absolute_error": 0.0,
+          "mean_absolute_error": 0.0
+        }
+      },
+      "against_matched_xla": {
+        "feature_scale_cotangent": {
+          "maximum_absolute_error": 3.0517578125e-05,
+          "mean_absolute_error": 4.385423380881548e-06
+        },
+        "input_cotangent": {
+          "maximum_absolute_error": 9.5367431640625e-07,
+          "mean_absolute_error": 1.3035926782478668e-09
+        }
+      },
+      "deterministic_hashes": [
+        "db038d17c1d830c0bd24007e2ada6f785b7421e0dcbec75e75cd5a0a45c0de51",
+        "fda783d534c9d729e4bf5de05819b5edd0f3dc8a6e6b1d154e0664dd3186f2d4"
+      ]
+    },
+    "feature_scale_cotangent": {
+      "execution_order": [
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ]
+      ],
+      "generated_handler_executions": 3012,
+      "measurements": {
+        "generated_ffi": {
+          "median_ms": 0.09721972281113267,
+          "minimum_ms": 0.09352257940918207,
+          "samples_ms": [
+            0.09804612025618553,
+            0.09686306584626436,
+            0.09746628347784281,
+            0.09827012196183205,
+            0.09544291067868471,
+            0.10834342800080776,
+            0.10400871280580759,
+            0.0956569891422987,
+            0.09697316214442253,
+            0.09658627212047577,
+            0.09924036916345358,
+            0.10450886096805334,
+            0.10691622737795115,
+            0.10927239898592234,
+            0.0991766806691885,
+            0.1004765322431922,
+            0.09920547716319561,
+            0.10787719860672951,
+            0.10716455057263374,
+            0.09841155726462603,
+            0.09573538787662983,
+            0.09672163054347038,
+            0.09464386850595474,
+            0.09597154799848795,
+            0.09352257940918207,
+            0.09584355168044567,
+            0.09674211032688618,
+            0.09495297912508249,
+            0.09667460341006517,
+            0.0954736303538084
+          ]
+        },
+        "matched_xla": {
+          "median_ms": 0.10197877651080489,
+          "minimum_ms": 0.09699075017124414,
+          "samples_ms": [
+            0.1084743207320571,
+            0.109950159676373,
+            0.09918980300426483,
+            0.10232741944491863,
+            0.10890696197748184,
+            0.10760006960481405,
+            0.11297960765659809,
+            0.10761959012597799,
+            0.09834019932895899,
+            0.09915811941027641,
+            0.10850759223103523,
+            0.1072819996625185,
+            0.11014311574399471,
+            0.11203497182577848,
+            0.10322790127247572,
+            0.101131247356534,
+            0.10404326021671295,
+            0.10966919828206301,
+            0.10984135791659355,
+            0.10074596852064133,
+            0.10042660869657993,
+            0.10163013357669115,
+            0.09879971854388714,
+            0.10028420947492123,
+            0.10034725069999695,
+            0.10142757091671228,
+            0.10041284840553999,
+            0.10050437413156033,
+            0.09699075017124414,
+            0.10010180994868279
+          ]
+        }
+      },
+      "ratio_generated_to_matched_xla": 0.953332900604392
+    },
+    "input_cotangent": {
+      "execution_order": [
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ],
+        [
+          "generated_ffi",
+          "matched_xla"
+        ],
+        [
+          "matched_xla",
+          "generated_ffi"
+        ]
+      ],
+      "generated_handler_executions": 3012,
+      "measurements": {
+        "generated_ffi": {
+          "median_ms": 0.09334929985925555,
+          "minimum_ms": 0.09005696978420019,
+          "samples_ms": [
+            0.09111617226153612,
+            0.09162432979792356,
+            0.09311074856668711,
+            0.09505059104412794,
+            0.09326018393039703,
+            0.09505026042461395,
+            0.09356035385280848,
+            0.09447074960917234,
+            0.0946393795311451,
+            0.0951526639983058,
+            0.09005696978420019,
+            0.0943155400454998,
+            0.09516738820821047,
+            0.09329154156148434,
+            0.09385154116898775,
+            0.09433506987988949,
+            0.0917235342785716,
+            0.09269441943615675,
+            0.09464194066822529,
+            0.09340705815702677,
+            0.09173729922622442,
+            0.09571970906108618,
+            0.09303073864430189,
+            0.09450178127735853,
+            0.09272865019738674,
+            0.09124418254941702,
+            0.09175969287753105,
+            0.0901923282071948,
+            0.0945977820083499,
+            0.09068641345947981
+          ]
+        },
+        "matched_xla": {
+          "median_ms": 0.1046463055536151,
+          "minimum_ms": 0.09766532108187675,
+          "samples_ms": [
+            0.10310436598956585,
+            0.10056997183710337,
+            0.10510117746889591,
+            0.09865604341030121,
+            0.10892711579799652,
+            0.09766532108187675,
+            0.10504966136068106,
+            0.10706054978072643,
+            0.10499654803425074,
+            0.10665831156075001,
+            0.10623622685670853,
+            0.10526278987526894,
+            0.10737319011241198,
+            0.1052240701392293,
+            0.10410661809146404,
+            0.10112004820257425,
+            0.10211206041276455,
+            0.10130948852747679,
+            0.10455526877194643,
+            0.10550181847065687,
+            0.10694151278585196,
+            0.10328069794923067,
+            0.10537765920162201,
+            0.09986373130232096,
+            0.1029815012589097,
+            0.10473734233528376,
+            0.09798083920031786,
+            0.0997395720332861,
+            0.1056237518787384,
+            0.09853220079094172
+          ]
+        }
+      },
+      "ratio_generated_to_matched_xla": 0.8920458239343044
+    }
+  },
+  "correctness": {
+    "deterministic_hashes": [
+      "db038d17c1d830c0bd24007e2ada6f785b7421e0dcbec75e75cd5a0a45c0de51",
+      "fda783d534c9d729e4bf5de05819b5edd0f3dc8a6e6b1d154e0664dd3186f2d4"
+    ],
+    "matched_fp32_algebra": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 3.0517578125e-05,
+        "mean_absolute_error": 4.385423380881548e-06
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 9.5367431640625e-07,
+        "mean_absolute_error": 1.3035926782478668e-09
+      }
+    },
+    "natural_jax_vjp_after_source_dtype_cast": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 1.0,
+        "mean_absolute_error": 0.06091634929180145
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0625,
+        "mean_absolute_error": 2.4060282157734036e-05
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA GB200",
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "telemetry": "NVIDIA GB200, 595.71.05, 1200.00, 1950, 3996"
+  },
+  "execution_order": [
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ],
+    [
+      "generated_ffi",
+      "matched_xla"
+    ],
+    [
+      "matched_xla",
+      "generated_ffi"
+    ]
+  ],
+  "frontend": {
+    "jax_owns_ad": true,
+    "named_semantics_erased": true,
+    "operation_kinds": {
+      "add": 2,
+      "broadcast_in_dim": 11,
+      "constant": 5,
+      "convert": 5,
+      "divide": 3,
+      "multiply": 10,
+      "reduce": 5,
+      "reshape": 2,
+      "rsqrt": 1
+    },
+    "source": "ordinary JAX function differentiated by jax.vjp and exported to StableHLO",
+    "stablehlo_sha256": "01a2229a84cfb123fc6f235a7236528e1b9a826e17379f3b6ae03c8e60c3a696"
+  },
+  "generated": {
+    "handler_executions": 3012,
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_fingerprints": [
+      "b4692655805765214e766b0cc5ef476d3666aa82ea561007a0f6d31a57681188",
+      "235d32f31cfbd5b18af407132dabddffd2196d29d5f114ee67a92b3dc7f0b80b"
+    ],
+    "source_sha256": "a4a08bb7f932c2e584ddb1a5e401e6a8dcd35e0eb335042ace9a211d0ca7a3ae",
+    "target": "shuttle.axis_fold_reverse_v1"
+  },
+  "measurements": {
+    "generated_ffi": {
+      "median_ms": 0.10114885168150067,
+      "minimum_ms": 0.09841091930866241,
+      "samples_ms": [
+        0.11382698081433773,
+        0.09841091930866241,
+        0.17814177088439465,
+        0.1254679774865508,
+        0.12245739810168743,
+        0.11500009801238775,
+        0.12045069132000208,
+        0.11338441167026758,
+        0.11086216662079096,
+        0.1033546170219779,
+        0.10054404847323895,
+        0.09968515951186419,
+        0.10109189432114363,
+        0.09951237123459578,
+        0.10098980739712715,
+        0.10172036942094564,
+        0.10018116794526577,
+        0.1015405310317874,
+        0.10055365040898323,
+        0.10093893390148878,
+        0.10157478041946888,
+        0.10161029174923897,
+        0.10120580904185772,
+        0.10545478202402592,
+        0.10088036768138409,
+        0.09962308686226606,
+        0.10092517361044884,
+        0.10078244842588902,
+        0.09993028361350298,
+        0.1007238868623972
+      ]
+    },
+    "matched_xla": {
+      "median_ms": 0.11471546022221446,
+      "minimum_ms": 0.11019367724657059,
+      "samples_ms": [
+        0.1257870066910982,
+        0.12396397069096565,
+        0.1464606961235404,
+        0.13129168190062046,
+        0.12929487973451614,
+        0.1275114994496107,
+        0.12302636168897152,
+        0.12600333895534277,
+        0.12227916158735752,
+        0.11755306739360094,
+        0.11095080990344286,
+        0.11225224938243628,
+        0.11461962014436722,
+        0.11302536819130182,
+        0.11215816717594862,
+        0.11019367724657059,
+        0.1135184895247221,
+        0.11344873812049627,
+        0.1132106501609087,
+        0.1154224993661046,
+        0.1148113003000617,
+        0.11394696775823832,
+        0.11633770074695349,
+        0.11649323161691427,
+        0.11564011219888926,
+        0.11106759775429964,
+        0.1145856874063611,
+        0.11074569076299667,
+        0.11198536958545446,
+        0.11200744658708572
+      ]
+    }
+  },
+  "numerical_contract": {
+    "accepted_reference": "matched explicit FP32 Map/Fold algebra",
+    "generated_reassociation": [
+      "deterministic_tree",
+      "deterministic_tree"
+    ],
+    "natural_jax_vjp": "diagnostic after BF16 output cast; source-ordered equivalence is not established because XLA may select a different reduction tree"
+  },
+  "ratio_generated_to_matched_xla": 0.8817368773621793,
+  "revisions": {
+    "shuttle": "07bbabb184c"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}

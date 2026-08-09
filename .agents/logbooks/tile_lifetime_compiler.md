@@ -1974,3 +1974,33 @@ author: dlwh
   feature-scale reduction. This identifies generic multi-output Map/Fold fusion
   as a useful follow-up, but the current generated full path already matches
   XLA on H100.
+
+### 2026-08-09 - TLTC-TRAIN-012 corrected GB200 RMS reverse replay
+
+- Revision `07bbabb184` was replayed on one NVIDIA GB200 from the four-GPU
+  GB200 pool. No B200 device or B200 result is involved. The measured Shuttle
+  source and newer allocation-control client are pinned separately in the
+  artifact provenance.
+- Two independent captures each use 30 counterbalanced samples and 100
+  iterations per sample. Primary full generated/XLA medians are
+  0.101149/0.114715 ms (`0.881737x`); confirmation medians are
+  0.112671/0.125017 ms (`0.901247x`). Pooled 60-sample medians are
+  0.107179/0.121351 ms (`0.883215x`).
+- Primary generated/XLA component medians are 0.093349/0.104646 ms
+  (`0.892046x`) for the input-cotangent row Fold and 0.097220/0.101979 ms
+  (`0.953333x`) for the feature-scale column Fold. Both components remain
+  below XLA in the confirmation capture.
+- Separate component outputs are bitwise identical to the full generated
+  outputs inside each capture, repeated executions have stable hashes, and the
+  generated path matches explicit FP32 algebra within `9.537e-7` maximum dX
+  error and `3.052e-5` maximum feature-scale-cotangent error.
+- Corrected optimized HLO contains runtime tensor parameters. A two-process
+  diagnostic found that the upstream XLA-produced FP32 inverse-scale buffer is
+  not bitwise identical across fresh processes, while the random BF16 inputs
+  and standardized BF16 activation are identical. Determinism claims are
+  therefore scoped to identical runtime buffers within a capture.
+- Interpretation: the generic two-kernel row/column Fold reverse beats matched
+  XLA on this GB200 configuration. A workload-specific fused RMS backward body
+  is not justified by the current H100 or GB200 measurements.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_gb200_components_corrected_v1/`.

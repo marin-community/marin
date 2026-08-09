@@ -50,9 +50,10 @@ The performance comparison in this subsection is withdrawn. The matched XLA
 function closed over benchmark arrays, so XLA constant-folded the computation.
 The raw samples remain preserved, and the generated correctness, handler-call,
 and determinism evidence remains valid. The corrected H100 runtime-input replay
-is under `../jax_row_normalization_backward_h100_components_corrected_v1`; GB200
-must be replayed with the same correction before making a GB200 performance
-claim.
+is under `../jax_row_normalization_backward_h100_components_corrected_v1`.
+The corrected GB200 replay is under
+`../jax_row_normalization_backward_gb200_components_corrected_v1` and
+supersedes the withdrawn GB200 performance comparison in this artifact.
 
 At Shuttle revision `1e0512923d`, JAX 0.11.0 registered and called the
 generated CUDA Fold family through typed FFI. The runtime path has no Torch
