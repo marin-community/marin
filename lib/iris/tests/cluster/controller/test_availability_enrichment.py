@@ -16,7 +16,7 @@ from iris.cluster.constraints import (
     availability_key,
     region_constraint,
 )
-from iris.cluster.controller.codec import constraints_to_json
+from iris.cluster.controller.persistence.json_codec import constraints_to_json
 from iris.cluster.controller.scheduling.policy import (
     demanded_availability_variants,
     enrich_workers_with_availability,

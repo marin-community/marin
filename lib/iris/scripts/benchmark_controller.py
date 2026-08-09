@@ -57,7 +57,6 @@ from iris.cluster.backends.rpc.backend import (
     _reconcile_request_to_proto,
 )
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -74,24 +73,34 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.checkpoint import download_checkpoint_to_local
-from iris.cluster.controller.controller import (
-    _CONTROLLER_KEEPALIVE,
-    Controller,
-    ControllerConfig,
+from iris.cluster.controller.legacy.controller_service import (
+    USER_JOB_STATES,
+    _worker_roster,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.reads import (  # noqa: F401
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.operations.worker import apply_reconcile
+from iris.cluster.controller.persistence.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.persistence.reads import (  # noqa: F401
     ControlSnapshot,
     SchedulableWorker,
     healthy_active_workers_with_attributes,
 )
-from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.persistence.reconcile.commit import commit_effects
+from iris.cluster.controller.persistence.schema import (
+    endpoints_table,
+    job_config_table,
+    jobs_table,
+    task_attempts_table,
+    tasks_table,
+    worker_attributes_table,
+    workers_table,
+)
 from iris.cluster.controller.reconcile.worker import (
     KeepAttempt,
     ReconcileInputs,
@@ -101,21 +110,13 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
+from iris.cluster.controller.runtime import (
+    _CONTROLLER_KEEPALIVE,
+    ControllerConfig,
+    ControllerRuntime,
+)
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.schema import (
-    endpoints_table,
-    job_config_table,
-    jobs_table,
-    task_attempts_table,
-    tasks_table,
-    worker_attributes_table,
-    workers_table,
-)
-from iris.cluster.controller.service import (
-    USER_JOB_STATES,
-    _worker_roster,
-)
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.resources.attempt import AttemptLaunchTemplate, AttemptObservation
@@ -160,12 +161,12 @@ def _marin_remote_state_dir() -> str:
 
 
 # ---------------------------------------------------------------------------
-# RPC harness: real Controller(dry_run=True) + Connect sync client
+# RPC harness: real ControllerRuntime(dry_run=True) + Connect sync client
 # ---------------------------------------------------------------------------
 
 
 class _FakeProvider:
-    """Minimal worker-daemon TaskBackend that satisfies Controller's wiring
+    """Minimal worker-daemon TaskBackend that satisfies ControllerRuntime's wiring
     without making real cluster calls. Mirrors
     tests/cluster/controller/conftest.py:FakeProvider.
 
@@ -258,7 +259,7 @@ class _FakeProvider:
 
 
 class RpcHarness:
-    """Out-of-process Controller(dry_run=True) + sync Connect clients.
+    """Out-of-process ControllerRuntime(dry_run=True) + sync Connect clients.
 
     Spawns ``benchmark_controller.py serve --db-path X --state-dir Y`` as a
     child process. The child prints ``READY port=N`` to stdout once the HTTP
@@ -1015,7 +1016,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
     """Cover the highest-volume RPCs: GetJobState, ListJobs, GetJobStatus,
     Register, RegisterEndpoint, LaunchJob, TerminateJob.
 
-    All RPCs go through ``RpcHarness`` (real Controller in dry_run + Connect
+    All RPCs go through ``RpcHarness`` (real ControllerRuntime in dry_run + Connect
     HTTP). Numbers include serialization, ASGI dispatch, AsyncServiceAdapter,
     and any contention from the controller's read-only scheduling loop.
     """
@@ -2344,7 +2345,7 @@ def _wait_for_server_start(condition: Callable[[], bool], error_message: str) ->
     help="Scratch directory for the controller's local state / remote-state-dir.",
 )
 def serve_cmd(db_path: Path, state_dir: Path) -> None:
-    """Boot a Controller(dry_run=True) bound to ``db_path`` and serve over RPC.
+    """Boot a ControllerRuntime(dry_run=True) bound to ``db_path`` and serve over RPC.
 
     Prints ``READY port=N`` to stdout once the HTTP server is accepting
     connections, then blocks until SIGTERM. Used by ``RpcHarness`` so the
@@ -2369,7 +2370,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         host=config.host,
         worker_token=None,
     )
-    controller = Controller(
+    controller = ControllerRuntime(
         config=config,
         backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
         log_stack=log_stack,
@@ -2380,7 +2381,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
     try:
         _wait_for_server_start(
             lambda: controller._server is not None and controller._server.started,
-            "Controller server did not start within 10s",
+            "ControllerRuntime server did not start within 10s",
         )
     except TimeoutError as exc:
         controller.stop()

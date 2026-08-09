@@ -36,9 +36,9 @@ from typing import ClassVar, Protocol
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (

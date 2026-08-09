@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2ECluster: context manager for running Controller + Worker clusters in tests.
+"""E2ECluster: context manager for running ControllerRuntime + Worker clusters in tests.
 
 Supports both in-process (LocalCluster) and Docker (real containers) modes.
-Docker mode manually wires up Controller + Workers with DockerRuntime, which is
+Docker mode manually wires up ControllerRuntime + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
@@ -31,8 +31,8 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -122,7 +122,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._cache_dir = cache_dir
         self._env_provider_factory = env_provider_factory
-        self._controller: LocalCluster | Controller | None = None
+        self._controller: LocalCluster | ControllerRuntime | None = None
         self._controller_port: int | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._container_runtime: DockerRuntime | None = None
@@ -150,7 +150,7 @@ class E2ECluster:
             self._wait_for_workers(timeout=10.0)
             return self
 
-        # Docker path: manual Controller + Worker setup
+        # Docker path: manual ControllerRuntime + Worker setup
         self._controller_port = find_free_port()
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
         temp_path = Path(self._temp_dir.name)
@@ -176,7 +176,7 @@ class E2ECluster:
             host="127.0.0.1",
             worker_token=None,
         )
-        self._controller = Controller(
+        self._controller = ControllerRuntime(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
             log_stack=log_stack,

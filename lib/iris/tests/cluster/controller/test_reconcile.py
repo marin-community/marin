@@ -23,7 +23,6 @@ from iris.cluster.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
 )
-from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -36,8 +35,11 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import writes
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence.schema import task_attempts_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
     AttemptStopReason,
@@ -55,7 +57,6 @@ from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
@@ -214,7 +215,7 @@ def test_insert_attempt_remints_on_uid_collision(monkeypatch):
 
         # token_hex hands back the existing uid (collision), then a fresh one.
         scripted = iter([first_uid, "cafebabecafebabe"])
-        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: next(scripted))
+        monkeypatch.setattr("iris.cluster.controller.persistence.writes.secrets.token_hex", lambda _n: next(scripted))
 
         second_uid = _insert_attempt(state, task_b, attempt_id=0)
 
@@ -232,7 +233,7 @@ def test_insert_attempt_exhausts_retries_when_every_mint_collides(monkeypatch):
 
         first_uid = _insert_attempt(state, task_a, attempt_id=0)
         # Every mint returns the already-stored uid.
-        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: first_uid)
+        monkeypatch.setattr("iris.cluster.controller.persistence.writes.secrets.token_hex", lambda _n: first_uid)
 
         with pytest.raises(RuntimeError, match="exhausted attempt_uid retries"):
             _insert_attempt(state, task_b, attempt_id=0)

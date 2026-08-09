@@ -18,8 +18,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller import db as controller_db
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence import database as controller_db
+from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.resources.action import ActionResult, ActionState
 from iris.rpc import job_pb2
 from tests.journeys.world import journey_world

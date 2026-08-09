@@ -126,7 +126,7 @@ identity:
 - The client stamps the job name's owner segment with the local `$USER`
   (`resolve_job_user`), producing names like `/alice/train-run`.
 - `LaunchJob` reconciles the requested owner against the caller's role
-  (`controller/service.py`): a **non-admin** token caller is pinned to their own
+  (`controller/legacy/controller_service.py`): a **non-admin** token caller is pinned to their own
   verified identity (so they cannot submit `/someone-else/job`), while an
   **admin** — including every loopback caller — keeps the requested owner.
 
@@ -174,7 +174,7 @@ auth {
 - `lib/iris/src/iris/cluster/controller/dashboard.py` — the RPC interceptor and
   route middleware (`PolicyAuthInterceptor` / `RouteAuthMiddleware` from
   rigging) pass the transport peer + headers into the shared resolver.
-- `lib/iris/src/iris/cluster/controller/service.py` — `LaunchJob` reconciles the
+- `lib/iris/src/iris/cluster/controller/legacy/controller_service.py` — `LaunchJob` reconciles the
   principal against the requested owner segment (admins act-as; non-admins pinned).
 - `lib/iris/src/iris/cluster/client/job_info.py` — `resolve_job_user()` stamps
   the job name's owner segment with `$USER`.

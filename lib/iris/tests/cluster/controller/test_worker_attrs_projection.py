@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db, writes
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import worker_attributes_table, workers_table
+from iris.cluster.controller.persistence import database as db
+from iris.cluster.controller.persistence import writes
+from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
 from sqlalchemy import insert, select

@@ -10,13 +10,9 @@ expressions produce identical numbers over the same attempt rows.
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.controller.attempt_counts import (
-    AttemptCounts,
-    counts_from_attempts,
-    failure_count_expr,
-    preemption_count_expr,
-)
-from iris.cluster.controller.schema import task_attempts_table
+from iris.cluster.controller.persistence.attempt_counts import failure_count_expr, preemption_count_expr
+from iris.cluster.controller.persistence.schema import task_attempts_table
+from iris.cluster.resources.attempt import AttemptCounts, counts_from_attempts
 from iris.rpc import job_pb2
 from sqlalchemy import MetaData, Table, create_engine, insert, select
 

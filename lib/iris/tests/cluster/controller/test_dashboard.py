@@ -23,15 +23,21 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.projections.endpoints import EndpointRow
+from iris.cluster.controller.persistence.reads import ControlSnapshot, healthy_active_workers_with_attributes
+from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -41,7 +47,6 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource

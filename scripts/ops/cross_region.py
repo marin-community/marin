@@ -31,7 +31,7 @@ import duckdb
 import fsspec
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
+from iris.cluster.controller.persistence.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

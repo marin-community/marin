@@ -22,8 +22,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections.endpoints import (
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.projections.endpoints import (
     AddEndpointOutcome,
     EndpointDelta,
     EndpointQuery,

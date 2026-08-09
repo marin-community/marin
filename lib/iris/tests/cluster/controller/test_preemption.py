@@ -4,9 +4,10 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
-from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.operations.task import Assignment, finalize
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state

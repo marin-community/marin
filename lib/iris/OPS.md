@@ -139,7 +139,7 @@ sudo mv "$STATE_DIR/db" "$STATE_DIR/db.bloated.bak.$(date +%s)"
 IMAGE="$(sudo docker inspect --format='{{.Config.Image}}' iris-controller)"
 sudo docker run --rm --network=host -v /var/cache/iris:/var/cache/iris "$IMAGE" \
     .venv/bin/python -c "from pathlib import Path; \
-from iris.cluster.controller.checkpoint import download_checkpoint_to_local as restore; \
+from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local as restore; \
 ok = restore('$REMOTE', Path('$STATE_DIR/db'), checkpoint_dir='$REMOTE/controller-state/<epoch_ms>'); \
 raise SystemExit(0 if ok else 1)"
 

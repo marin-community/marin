@@ -47,7 +47,7 @@ remain visible.
 
 ## Reads
 
-`ResourceController` owns resource reads over one controller snapshot and the
+`Controller` owns resource reads over one controller snapshot and the
 configured backend set.
 
 - Job and Task reads use the active controller tables and typed records.
@@ -94,18 +94,35 @@ The implementation uses these boundaries:
 
 ```text
 iris/cluster/resources/                    frozen public records
-iris/cluster/controller/resources/
+iris/cluster/controller/
+  controller.py                            canonical resource application API
+  runtime.py                               process lifecycle and control loop
   jobs.py                                  resource-native Job admission
-  facade.py                                resource reads and actions
-  rpc.py                                   resource protobuf boundary
-  legacy_rpc.py                            old ControllerService wire adapter
-iris/cluster/controller/persistence/
-  action.py                                action receipt persistence
-iris/cluster/controller/schema.py          active SQLAlchemy schema
-iris/cluster/controller/reads.py           existing shared controller reads
-iris/cluster/controller/writes.py          existing shared controller writes
+  api/
+    resource_service.py                    canonical ResourceService adapter
+  legacy/
+    controller_service.py                  old ControllerService adapter
+    codec.py                               old request/response translation
+  persistence/
+    database.py                            engine and transaction lifecycle
+    schema.py                              active SQLAlchemy schema
+    reads.py                               shared typed reads
+    writes.py                              shared transactional writes
+    json_codec.py                          persisted native-record JSON
+    federation.py                          FederationStore DB implementation
+    attempt_counts.py                      SQL attempt-count expressions
+    action.py                              action receipt persistence
+    migrations/                            ordered schema deltas
+    projections/                           write-through/read projections
 iris/cluster/controller/backend.py         existing TaskBackend contract
 ```
+
+The concrete names may be split further by noun, but ownership does not move:
+generated Job and Task protobuf values are confined to API, legacy, worker,
+federation, and provider transport adapters; SQLAlchemy and controller table
+definitions are confined to `controller/persistence/`. Historical
+controller/VM operational status return types on `TaskBackend` remain explicit
+tracked debt rather than part of the resource model.
 
 The change does not introduce a second backend protocol or resolver package.
 Existing RPC and Kubernetes backends continue to implement `TaskBackend`.
@@ -124,9 +141,10 @@ resource state.
 
 The old Job and Task methods on `ControllerService` are a one-way network
 boundary, not a supported second product version. `ResourceService` is the
-default and only first-party resource API. `controller/resources/legacy_rpc.py`
-translates old requests and responses immediately, and internal controller code
-does not depend on those protobuf shapes.
+default and only first-party resource API. `controller/legacy/` translates old
+requests and responses immediately and delegates to the same `Controller` used
+by `controller/api/`. It does not query controller tables or contact a backend
+to implement resource behavior.
 
 Federation retains its authenticated peer and handoff protocol. Received Jobs
 are decoded into resource `JobSpec` records before admission. This change does
@@ -134,8 +152,9 @@ not add a second federation transport or require simultaneous fleet cutover.
 
 ## Persistence and migration
 
-The controller keeps one active schema in `controller/schema.py` and one
-ordered migration chain in `controller/migrations/`. Existing Job, Task,
+The controller keeps one active schema in `controller/persistence/schema.py`
+and one ordered migration chain in `controller/persistence/migrations/`.
+Existing Job, Task,
 Attempt, Worker, Endpoint, federation, and autoscaler tables remain in place.
 
 `0051_action_receipts.py` is the only new physical schema migration. It
@@ -185,3 +204,7 @@ observations. They do not pin private helper names or dispatch order.
   models.
 - Persisting Kubernetes Node heartbeats as synthetic RPC Worker rows.
 - Time-series utilization in resource records; measurements remain in finelog.
+- A generic repository interface or dependency-injection framework. The
+  persistence package is the concrete SQLite implementation.
+- The future client-level abstraction sweep beyond the already-native resource
+  client surface.

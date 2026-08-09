@@ -35,9 +35,9 @@ from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import get_thread_container

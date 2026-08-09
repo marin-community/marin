@@ -28,7 +28,6 @@ from dataclasses import asdict, dataclass, field
 import httpx
 import pytest
 import uvicorn
-from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FederationTokenProvider,
@@ -38,9 +37,11 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
+from iris.cluster.controller.controller import CapabilityUrlConfig
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
     PROXY_DECISION_PATH,
@@ -48,8 +49,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
-from iris.cluster.controller.resources.facade import CapabilityUrlConfig
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.persistence import reads
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2

@@ -11,11 +11,11 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
-from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.persistence.checkpoint import CheckpointResult, download_checkpoint_to_local
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
+from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.resources.action import ActionReceipt, ActionState
@@ -139,7 +139,7 @@ class JourneyWorld:
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
 
-    def _build_controller(self, db: ControllerDB) -> tuple[Controller, dict[str, ScriptedTaskBackend]]:
+    def _build_controller(self, db: ControllerDB) -> tuple[ControllerRuntime, dict[str, ScriptedTaskBackend]]:
         self._incarnation += 1
         state_dir = self.root / f"controller-{self._incarnation}"
         config = ControllerConfig(
@@ -169,7 +169,7 @@ class JourneyWorld:
             worker_token=None,
         )
         self.log_stack = log_stack
-        controller = Controller(
+        controller = ControllerRuntime(
             config=config,
             backends=backends,
             log_stack=log_stack,
@@ -319,7 +319,7 @@ class JourneyWorld:
             client_revision_date="",
             container_profile=ContainerProfile.UNSPECIFIED,
         )
-        identity = self.controller.resources.submit_job(spec, enforce_client_freshness=False)
+        identity = self.controller.controller.submit_job(spec, enforce_client_freshness=False)
         ref = JobRef(identity.key.resource_id, tasks, identity.key.cluster_id, coscheduled)
         self._jobs[ref.wire_id] = ref
         self.trace.append(f"submit {ref.wire_id} tasks={tasks}")
@@ -366,7 +366,7 @@ class JourneyWorld:
         self.trace.append(f"observe {task.wire_id} {state.name}")
 
     def cancel(self, job: JobRef) -> None:
-        self.controller.resources.cancel_job(
+        self.controller.controller.cancel_job(
             self.job(job).summary.identity,
             idempotency_key=f"journey-cancel:{job.wire_id}",
         )
@@ -375,7 +375,7 @@ class JourneyWorld:
     def jobs(self, *, state: str = "") -> list[JobSummary]:
         """List Jobs, optionally filtered by their stable state name."""
         states = frozenset({_JOB_STATE_BY_NAME[state]}) if state else frozenset()
-        return list(self.controller.resources.list_jobs(JobQuery(states=states, page_size=500)).items)
+        return list(self.controller.controller.list_jobs(JobQuery(states=states, page_size=500)).items)
 
     def set_budget(self, user: str, *, limit: int = 10_000) -> None:
         """Create or replace one budget row through the public service."""
@@ -425,9 +425,9 @@ class JourneyWorld:
         return response.endpoint_id
 
     def endpoints(self, *, name: str = "") -> list[EndpointDetail]:
-        items = self.controller.resources.list_endpoints(EndpointQuery(name_prefix=name, page_size=500)).items
+        items = self.controller.controller.list_endpoints(EndpointQuery(name_prefix=name, page_size=500)).items
         return [
-            self.controller.resources.describe_endpoint(endpoint.key)
+            self.controller.controller.describe_endpoint(endpoint.key)
             for endpoint in items
             if not name or endpoint.name == name
         ]
@@ -477,24 +477,24 @@ class JourneyWorld:
         return " -> ".join(self.trace)
 
     def job(self, job: JobRef) -> JobDetail:
-        return self.controller.resources.describe_job(
+        return self.controller.controller.describe_job(
             self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id)
         )
 
     def tasks(self, job: JobRef) -> list[TaskSummary]:
         return list(
-            self.controller.resources.list_tasks(
+            self.controller.controller.list_tasks(
                 TaskQuery(job=self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id))
             ).items
         )
 
     def task(self, task: TaskRef) -> TaskDetail:
-        return self.controller.resources.describe_task(
+        return self.controller.controller.describe_task(
             self._resource_key(ResourceKind.TASK, task.wire_id, task.authority_cluster_id)
         )
 
     def attempt(self, task: TaskRef, attempt_number: int | None = None) -> AttemptDetail:
-        return self.controller.resources.describe_attempt(
+        return self.controller.controller.describe_attempt(
             AttemptLocator(
                 self._resource_key(ResourceKind.TASK, task.wire_id, task.authority_cluster_id),
                 attempt_number,
@@ -511,10 +511,10 @@ class JourneyWorld:
         job_key = (
             self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id) if job is not None else None
         )
-        return self.controller.resources.list_tasks(TaskQuery(job=job_key, backend_id=backend_id))
+        return self.controller.controller.list_tasks(TaskQuery(job=job_key, backend_id=backend_id))
 
     def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
-        return self.controller.resources.cancel_job(
+        return self.controller.controller.cancel_job(
             identity,
             idempotency_key=idempotency_key,
             principal_id=JobName.from_wire(identity.key.resource_id).user,
@@ -527,7 +527,7 @@ class JourneyWorld:
         expected_attempt_uid: str,
         idempotency_key: str,
     ) -> ActionReceipt:
-        return self.controller.resources.retry_task(
+        return self.controller.controller.retry_task(
             identity,
             expected_attempt_uid=expected_attempt_uid,
             idempotency_key=idempotency_key,
@@ -540,14 +540,14 @@ class JourneyWorld:
         *,
         idempotency_key: str,
     ) -> ActionReceipt:
-        return self.controller.resources.terminate_attempt(
+        return self.controller.controller.terminate_attempt(
             identity,
             idempotency_key=idempotency_key,
             principal_id=JobName.from_wire(identity.task.resource_id).user,
         )
 
     def action_receipt(self, action_id: str) -> ActionReceipt:
-        return self.controller.resources.get_action_receipt(action_id)
+        return self.controller.controller.get_action_receipt(action_id)
 
     def settle_action(self, receipt: ActionReceipt, *, max_ticks: int = 20) -> ActionReceipt:
         for _ in range(max_ticks):

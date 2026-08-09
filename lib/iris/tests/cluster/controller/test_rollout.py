@@ -7,16 +7,16 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.checkpoint import write_checkpoint
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.main import prepare_controller_state
+from iris.cluster.controller.persistence.checkpoint import write_checkpoint
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.writes import meta_value_set
 from iris.cluster.controller.rollout import (
     RolloutPhase,
     RolloutRecord,
     read_rollout_record,
     write_rollout_record,
 )
-from iris.cluster.controller.writes import meta_value_set
 from rigging.filesystem import prefix_join
 
 _MARKER_KEY = "test_rollout_marker"

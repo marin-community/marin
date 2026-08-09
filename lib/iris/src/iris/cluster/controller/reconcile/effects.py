@@ -16,7 +16,7 @@ The batch state model has two layers over one event stream:
 This module is the pure data half of that contract — it imports no ``db`` /
 ``schema`` / ``projections`` so the state-machine kernel stays import-clean. The
 I/O sink that drains a :class:`ControllerEffects` to SQL lives in
-:mod:`iris.cluster.controller.reconcile.commit` (``commit_effects``).
+:mod:`iris.cluster.controller.persistence.reconcile.commit` (``commit_effects``).
 """
 
 from dataclasses import dataclass, field

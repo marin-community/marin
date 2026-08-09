@@ -54,16 +54,25 @@ _TRANSPORT_ALLOWLIST = frozenset(
         ("cluster/controller/dashboard.py", "iris.rpc.controller_connect"),
         ("cluster/controller/dashboard.py", "iris.rpc.interceptors"),
         ("cluster/controller/dashboard.py", "iris.rpc.resource_connect"),
-        ("cluster/controller/resources/legacy_rpc.py", "iris.rpc.controller_pb2"),
-        ("cluster/controller/resources/legacy_rpc.py", "iris.rpc.job_pb2"),
-        ("cluster/controller/resources/legacy_rpc.py", "iris.rpc.legacy_job_codec"),
-        ("cluster/controller/resources/legacy_rpc.py", "iris.rpc.proto_display"),
-        ("cluster/controller/resources/logs.py", "finelog.rpc.logging_pb2"),
-        ("cluster/controller/resources/rpc.py", "iris.rpc.auth"),
-        ("cluster/controller/resources/rpc.py", "iris.rpc.iris_logging_pb2"),
-        ("cluster/controller/resources/rpc.py", "iris.rpc.resource_codec"),
-        ("cluster/controller/resources/rpc.py", "iris.rpc.resource_pb2"),
-        ("cluster/controller/service.py", "iris.rpc.worker_codec"),
+        ("cluster/controller/legacy/codec.py", "iris.rpc.controller_pb2"),
+        ("cluster/controller/legacy/codec.py", "iris.rpc.job_pb2"),
+        ("cluster/controller/legacy/codec.py", "iris.rpc.legacy_job_codec"),
+        ("cluster/controller/legacy/codec.py", "iris.rpc.proto_display"),
+        ("cluster/controller/resource_logs.py", "finelog.rpc.logging_pb2"),
+        ("cluster/controller/api/resource_service.py", "iris.rpc.auth"),
+        ("cluster/controller/api/resource_service.py", "iris.rpc.iris_logging_pb2"),
+        ("cluster/controller/api/resource_service.py", "iris.rpc.resource_codec"),
+        ("cluster/controller/api/resource_service.py", "iris.rpc.resource_pb2"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.worker_codec"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.auth"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.controller_pb2"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.job_pb2"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.legacy_job_codec"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.profile_codec"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.proto_display"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.query_pb2"),
+        ("cluster/controller/legacy/controller_service.py", "iris.rpc.vm_pb2"),
+        ("cluster/controller/runtime.py", "iris.rpc.auth"),
         ("cluster/federation/legacy_rpc.py", "iris.rpc.controller_pb2"),
         ("cluster/federation/legacy_rpc.py", "iris.rpc.job_pb2"),
         ("cluster/federation/legacy_rpc.py", "iris.rpc.legacy_job_codec"),
@@ -136,18 +145,9 @@ _PROTOBUF_DEBT = frozenset(
         ("cluster/controller/autoscaler/worker_registry.py", "iris.rpc.vm_pb2"),
         ("cluster/controller/backend.py", "iris.rpc.controller_pb2"),
         ("cluster/controller/backend.py", "iris.rpc.vm_pb2"),
-        ("cluster/controller/controller.py", "iris.rpc.auth"),
         ("cluster/controller/endpoint_service.py", "iris.rpc.controller_pb2"),
         ("cluster/controller/endpoint_service.py", "iris.rpc.job_pb2"),
-        ("cluster/controller/resources/jobs.py", "iris.rpc.auth"),
-        ("cluster/controller/service.py", "iris.rpc.auth"),
-        ("cluster/controller/service.py", "iris.rpc.controller_pb2"),
-        ("cluster/controller/service.py", "iris.rpc.job_pb2"),
-        ("cluster/controller/service.py", "iris.rpc.legacy_job_codec"),
-        ("cluster/controller/service.py", "iris.rpc.profile_codec"),
-        ("cluster/controller/service.py", "iris.rpc.proto_display"),
-        ("cluster/controller/service.py", "iris.rpc.query_pb2"),
-        ("cluster/controller/service.py", "iris.rpc.vm_pb2"),
+        ("cluster/controller/jobs.py", "iris.rpc.auth"),
         ("cluster/federation/manager.py", "iris.rpc.controller_pb2"),
         ("cluster/federation/peer.py", "iris.rpc.controller_connect"),
         ("cluster/federation/peer.py", "iris.rpc.controller_pb2"),
@@ -226,3 +226,21 @@ def test_rpc_imports_match_transport_boundaries_and_debt_manifest() -> None:
 
 def test_resource_service_wire_is_independent_of_the_retired_job_wire() -> None:
     assert "job.proto" not in {dependency.name for dependency in resource_pb2.DESCRIPTOR.dependencies}
+
+
+def test_controller_sqlalchemy_is_confined_to_persistence() -> None:
+    controller_root = _SOURCE_ROOT / "cluster" / "controller"
+    violations: list[str] = []
+    for path in controller_root.rglob("*.py"):
+        relative_path = path.relative_to(controller_root).as_posix()
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        for node in ast.walk(tree):
+            modules: tuple[str, ...] = ()
+            if isinstance(node, ast.Import):
+                modules = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules = (node.module,)
+            if any(module == "sqlalchemy" or module.startswith("sqlalchemy.") for module in modules):
+                if not relative_path.startswith("persistence/"):
+                    violations.append(relative_path)
+    assert not violations, f"SQLAlchemy imports outside controller/persistence: {sorted(set(violations))}"

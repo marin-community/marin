@@ -3,7 +3,7 @@
 
 """Tests for the ``CachedProto`` TypeDecorator on the SA Core ``schema``."""
 
-from iris.cluster.controller.schema import CachedProto
+from iris.cluster.controller.persistence.schema import CachedProto
 from iris.rpc.job_pb2 import GetCurrentUserResponse
 
 

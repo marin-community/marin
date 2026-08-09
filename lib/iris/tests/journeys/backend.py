@@ -22,8 +22,8 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
 )
-from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.reconcile.loader import TransitionReader
+from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
+from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker

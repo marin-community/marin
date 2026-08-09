@@ -19,7 +19,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
+- `src/iris/cluster/controller/` — controller server: `controller.py` (canonical resource application), `runtime.py` (daemon and control loop), `api/` and `legacy/` (RPC adapters), `persistence/` (SQLite, migrations, queries, and projections), `backend.py` (the `TaskBackend` contract), `scheduling/`, and `autoscaler/`
 - `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
@@ -56,16 +56,16 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 The controller store uses SQLAlchemy Core. Read the code, not historical
 design notes:
 
-- `controller/schema.py` — table definitions and indexes.
-- `controller/migrations/` — on-disk schema changes. Add a migration whenever
+- `controller/persistence/schema.py` — table definitions and indexes.
+- `controller/persistence/migrations/` — on-disk schema changes. Add a migration whenever
   changing persisted schema. A migration only ever runs against a DB created
   before it: a fresh DB is materialized from `schema.py` and records every
   migration as already applied. So write each one to carry the *previous* schema
   forward, and to be re-runnable after a mid-migration crash — never to depend on
   the current `schema.py`, which will keep moving.
-- `controller/db.py` — engine setup, transaction wrappers, and `Tx.execute`.
-- `controller/reads.py` / `controller/writes.py` — shared read/write helpers.
-- `controller/projections/` — write-through caches; do not write projection
+- `controller/persistence/database.py` — engine setup, transaction wrappers, and `Tx.execute`.
+- `controller/persistence/reads.py` / `controller/persistence/writes.py` — shared read/write helpers.
+- `controller/persistence/projections/` — write-through caches; do not write projection
   tables from outside their owning projection.
 
 Prefer existing `reads.py`/`writes.py` helpers before adding new query code.

@@ -45,7 +45,7 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.persistence.operations.worker import apply_reconcile
 from iris.cluster.controller.reconcile.worker import (
     AttemptStopReason,
     KeepAttempt,

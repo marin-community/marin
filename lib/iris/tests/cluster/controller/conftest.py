@@ -41,7 +41,6 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -63,25 +62,27 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_store import build_queued_candidates
+from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.reads import SchedulableWorker
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
-from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
-from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
-from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.schema import (
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.federation import build_queued_candidates
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.operations.worker import apply_reconcile
+from iris.cluster.controller.persistence.reads import SchedulableWorker
+from iris.cluster.controller.persistence.schema import (
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
 )
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
@@ -381,7 +382,7 @@ def make_controller_service(
         local_origin=getattr(capability_url_config, "local_origin", ""),
         parent_origin=getattr(capability_url_config, "parent_origin", ""),
     )
-    resources = ResourceController(
+    resources = Controller(
         cluster_id=cluster_id,
         db=db,
         runtime=controller,
@@ -405,12 +406,12 @@ def make_controller_service(
         log_client=log_client,
     )
     return ControllerServiceImpl(
-        controller=controller,
+        runtime=controller,
         bundle_store=bundle_store,
         log_client=log_client,
         db=db,
         endpoint_service=endpoint_service,
-        resources=resources,
+        controller=resources,
         auth=resolved_auth,
         user_budget_defaults=user_budget_defaults,
     )
@@ -453,9 +454,9 @@ def make_controller_state(**kwargs):
 
 @pytest.fixture
 def make_controller(tmp_path):
-    """Factory for building ``Controller`` instances with automatic teardown.
+    """Factory for building ``ControllerRuntime`` instances with automatic teardown.
 
-    ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
+    ``ControllerRuntime.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
     logger and spawns a ``LogClient`` drain thread. Without ``stop()``, those
     leak across the test session and pull every ``iris.*`` log record into
     their internal queue — which can then be flushed into another test's
@@ -463,7 +464,7 @@ def make_controller(tmp_path):
     constructed controller and ``stop()``s them at fixture teardown.
 
     Pass ``db=`` to inject a pre-built ``ControllerDB`` (otherwise the
-    ``Controller`` opens one under ``config.local_state_dir``). Pass
+    ``ControllerRuntime`` opens one under ``config.local_state_dir``). Pass
     ``provider=`` to override the default ``FakeProvider``. Any remaining
     keyword arguments are forwarded to ``ControllerConfig``.
 
@@ -478,7 +479,7 @@ def make_controller(tmp_path):
                 db=my_db,
             )
     """
-    created: list[Controller] = []
+    created: list[ControllerRuntime] = []
 
     def _factory(
         config: ControllerConfig | None = None,
@@ -488,7 +489,7 @@ def make_controller(tmp_path):
         backend_configs: dict | None = None,
         db: ControllerDB | None = None,
         **config_kwargs,
-    ) -> Controller:
+    ) -> ControllerRuntime:
         if config is None:
             config_kwargs.setdefault("cluster_id", "test-cluster")
             config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
@@ -510,7 +511,7 @@ def make_controller(tmp_path):
         for backend in backends.values():
             if backend.health is not None:
                 backend.health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
-        controller = Controller(
+        controller = ControllerRuntime(
             config=config,
             backends=backends,
             log_stack=log_stack,
@@ -538,10 +539,10 @@ def _spent_limiter() -> RateLimiter:
     return limiter
 
 
-def reconcile_once(ctrl: Controller) -> None:
+def reconcile_once(ctrl: ControllerRuntime) -> None:
     """Drive exactly one reconcile pass through the production control tick.
 
-    Reconcile runs only as a phase of ``Controller._control_tick``, so this forces
+    Reconcile runs only as a phase of ``ControllerRuntime._control_tick``, so this forces
     a reconcile-only tick: the reconcile phase fires while the schedule and
     autoscale phases are held off.
     """
@@ -554,10 +555,10 @@ def reconcile_once(ctrl: Controller) -> None:
     )
 
 
-def autoscale_once(ctrl: Controller) -> None:
+def autoscale_once(ctrl: ControllerRuntime) -> None:
     """Drive one autoscale pass through the production control tick.
 
-    Autoscale runs only as a phase of ``Controller._control_tick``, always paired
+    Autoscale runs only as a phase of ``ControllerRuntime._control_tick``, always paired
     with a fresh schedule. In dry-run the tick short-circuits to the schedule-only
     path, so the autoscale backend call is suppressed.
     """
@@ -570,7 +571,7 @@ def autoscale_once(ctrl: Controller) -> None:
     )
 
 
-def schedule_once(ctrl: Controller) -> None:
+def schedule_once(ctrl: ControllerRuntime) -> None:
     """Drive exactly one schedule pass through the production control tick.
 
     A wake forces the schedule phase while reconcile and autoscale are held off,
@@ -816,7 +817,7 @@ def register_worker(
 
 
 def register_worker_into_backend(
-    controller: Controller,
+    controller: ControllerRuntime,
     worker_id: str,
     address: str,
     metadata: job_pb2.WorkerMetadata,

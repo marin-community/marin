@@ -19,10 +19,10 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
 )
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.schema import tasks_table
+from iris.cluster.controller.persistence.writes import set_user_budget, stamp_backend
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import set_user_budget, stamp_backend
 from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2

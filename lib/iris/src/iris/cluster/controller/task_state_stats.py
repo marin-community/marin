@@ -15,8 +15,8 @@ emitter) is down.
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
-from iris.cluster.controller import reads
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.task_state import DISPATCHED_TASK_STATES
 from iris.cluster.resources.state import TaskState
 from iris.cluster.stats.emitter import PeriodicEmitter

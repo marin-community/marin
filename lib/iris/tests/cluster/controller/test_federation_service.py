@@ -16,7 +16,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.schema import tasks_table
+from iris.cluster.controller.persistence.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import LOCAL_CLUSTER, JobName

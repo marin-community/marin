@@ -12,9 +12,9 @@ from typing import Generic, TypeVar
 from rigging.timing import Timestamp
 
 from iris.cluster.config import UserBudgetTier
-from iris.cluster.controller import reads, writes
-from iris.cluster.controller.codec import device_counts_from_json
-from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.json_codec import device_counts_from_json
 from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import UserBudgetDefaults
 
@@ -76,7 +76,7 @@ def compute_effective_band(
     row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
 
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
-    :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
+    :func:`iris.cluster.controller.persistence.operations.job.resolve_priority_band`).
     """
     if task_band == PriorityBand.PRODUCTION:
         return task_band

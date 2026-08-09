@@ -6,13 +6,13 @@
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.projections.endpoints import (
+from iris.cluster.controller.persistence.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.controller.schema import tasks_table
+from iris.cluster.controller.persistence.schema import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp

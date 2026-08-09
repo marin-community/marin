@@ -10,7 +10,7 @@ dataclasses are the plain-data hand-off: the autoscaler produces an
 :class:`AutoscalerState`, the controller persists it. No DB types appear here,
 so :mod:`iris.cluster.controller.backend` can carry these in its result types
 without importing the autoscaler runtime (which would cycle through
-``controller.db``).
+``controller.persistence.database``).
 """
 
 from dataclasses import dataclass, field

@@ -17,15 +17,16 @@ from datetime import date
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.codec import reconstruct_job_spec
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
-from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request, job_spec_to_legacy_request
-from iris.cluster.controller.schema import job_config_table
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request, job_spec_to_legacy_request
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.json_codec import reconstruct_job_spec
+from iris.cluster.controller.persistence.schema import job_config_table
 from iris.cluster.resources.execution import (
     CommandEntrypoint,
     Environment,
@@ -135,12 +136,12 @@ def _controller_boundaries(
     log_client,
     *,
     initialize_projections: bool = True,
-) -> tuple[ResourceController, ControllerServiceImpl]:
+) -> tuple[Controller, ControllerServiceImpl]:
     if initialize_projections:
         ControllerTestState(db)
     bundle_store = BundleStore(storage_dir=str(tmp_path / "bundles"))
     endpoint_service = EndpointServiceImpl(db=db)
-    resources = ResourceController(
+    resources = Controller(
         cluster_id="test",
         db=db,
         runtime=mock_controller,
@@ -153,12 +154,12 @@ def _controller_boundaries(
         backend_configs={backend_id: BackendConfig(kind="worker_daemon") for backend_id in mock_controller.backends},
     )
     legacy = ControllerServiceImpl(
-        controller=mock_controller,
+        runtime=mock_controller,
         bundle_store=bundle_store,
         log_client=log_client,
         db=db,
         endpoint_service=endpoint_service,
-        resources=resources,
+        controller=resources,
     )
     return resources, legacy
 

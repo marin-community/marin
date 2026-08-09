@@ -7,13 +7,13 @@ import urllib.request
 
 import pytest
 from iris.cluster.config import ScaleGroupConfig
-from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
     SliceLifecycleState,
     SliceSnapshot,
 )
+from iris.cluster.controller.persistence.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
 from iris.cluster.platforms.types import CloudSliceState, ListedSlice
 from iris.cluster.types import WorkerStatus
 from rigging.timing import Duration, Timestamp

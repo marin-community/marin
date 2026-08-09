@@ -3,7 +3,7 @@
 
 """Local in-process cluster for testing.
 
-Runs Controller + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the current process.
+Runs ControllerRuntime + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the current process.
 Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
 This module lives inside providers/local/ to co-locate it with the provider
@@ -41,12 +41,12 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.controller import (
-    Controller,
-    ControllerConfig,
-)
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.runtime import (
+    ControllerConfig,
+    ControllerRuntime,
+)
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import find_free_port
@@ -163,7 +163,7 @@ def create_local_autoscaler(
 class LocalCluster:
     """In-process cluster for local testing.
 
-    Runs Controller + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the
+    Runs ControllerRuntime + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the
     current process. Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
     A single instance can be stopped and restarted via restart(). The controller
@@ -178,7 +178,7 @@ class LocalCluster:
     ):
         self._config = config
         self._threads = threads or ThreadContainer("local-cluster")
-        self._controller: Controller | None = None
+        self._controller: ControllerRuntime | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
@@ -214,7 +214,7 @@ class LocalCluster:
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
         # The log stack is built before the autoscaler so its provisioning table
-        # is a constructor arg; the Controller owns it and tears it down at stop().
+        # is a constructor arg; the ControllerRuntime owns it and tears it down at stop().
         log_stack = build_log_stack(
             log_service_address="",
             local_log_dir=Path(self._db_dir.name) / "log-server",
@@ -255,7 +255,7 @@ class LocalCluster:
             autoscaler=self._autoscaler,
         )
 
-        self._controller = Controller(
+        self._controller = ControllerRuntime(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,

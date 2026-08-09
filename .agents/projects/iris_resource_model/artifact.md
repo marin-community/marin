@@ -54,17 +54,12 @@ continues through normal reconciliation.
 
 ```text
 iris/cluster/resources/                    frozen public records
-iris/cluster/controller/resources/jobs.py  typed Job admission
-iris/cluster/controller/resources/facade.py
-                                            reads and actions
-iris/cluster/controller/resources/rpc.py   resource protobuf translation
-iris/cluster/controller/resources/legacy_rpc.py
-                                            old RPC boundary translation
-iris/cluster/controller/persistence/action.py
-                                            action receipt persistence
-iris/cluster/controller/schema.py          active schema
-iris/cluster/controller/reads.py           existing shared reads
-iris/cluster/controller/writes.py          existing shared writes
+iris/cluster/controller/controller.py      canonical reads and actions
+iris/cluster/controller/runtime.py         daemon and control loop
+iris/cluster/controller/jobs.py            typed Job admission
+iris/cluster/controller/api/               resource protobuf translation
+iris/cluster/controller/legacy/            old RPC boundary translation
+iris/cluster/controller/persistence/       SQLAlchemy, migrations, and projections
 iris/cluster/controller/backend.py         existing backend contract
 ```
 

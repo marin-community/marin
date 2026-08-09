@@ -14,7 +14,9 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0048_endpoints_drop_job_fk.py"
+_MIGRATION = (
+    Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0048_endpoints_drop_job_fk.py"
+)
 
 _ENDPOINT_COLUMNS = (
     "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms, lease_deadline_ms, access, peer_id"

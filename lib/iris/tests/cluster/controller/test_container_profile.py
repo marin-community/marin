@@ -14,12 +14,12 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
@@ -117,7 +117,7 @@ def test_docker_access_rejected_on_cluster_backend(state, tmp_path, log_client):
     """DOCKER_ACCESS needs the docker worker backend; a CLUSTER_VIEW (k8s)
     backend rejects it at submit so it never stalls the reconcile tick."""
     service = _make_service(state, tmp_path, log_client, ControllerAuth(provider="static"))
-    service._controller.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+    service._runtime.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     with pytest.raises(ConnectError) as exc:
         _as("admin", "admin", service.launch_job, _launch("/admin/job", DOCKER_ACCESS), None)
     assert exc.value.code == Code.INVALID_ARGUMENT

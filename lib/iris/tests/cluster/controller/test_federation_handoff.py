@@ -21,15 +21,15 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore, content_id
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD
+from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.federation import ControllerFederationStore
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.resources.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD
-from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
@@ -228,7 +228,7 @@ def _attach_federation(
         bundles=parent_service._bundle_store,
         cluster_id="parent",
     )
-    parent_service._controller.federation = manager
+    parent_service._runtime.federation = manager
     return manager
 
 
@@ -876,7 +876,7 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
         manager = _attach_federation(parent_service, connection)
         # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
         # (a locally feasible job would just run here).
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._runtime.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("no-room", replicas=1)
         request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
@@ -919,7 +919,7 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _BatchOccupiedGpuPeerConnection(peer_service)
         manager = _attach_federation(parent_service, connection)
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._runtime.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("held-by-batch", replicas=1)
         request.priority_band = band

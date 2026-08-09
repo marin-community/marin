@@ -29,7 +29,6 @@ from iris.cluster.constraints import (
     split_hard_soft,
     strip_backend_constraints,
 )
-from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
@@ -38,14 +37,15 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
     resource_value,
 )
-from iris.cluster.controller.codec import (
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.json_codec import (
     constraints_from_json,
     device_counts_from_json,
     device_variant_from_json,
     resource_spec_from_scalars,
 )
-from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.reads import WorkerAttrsSource
+from iris.cluster.controller.persistence.reads import WorkerAttrsSource
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,

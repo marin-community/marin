@@ -5,7 +5,7 @@ from copy import deepcopy
 
 import pytest
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
-from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.persistence.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService

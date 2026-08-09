@@ -10,7 +10,7 @@ the stale-set race: a fill from a snapshot older than the key's invalidation is
 refused, so a slow reader can never write back a value the invalidation superseded.
 """
 
-from iris.cluster.controller.projections.base import LazyFillGuard
+from iris.cluster.controller.persistence.projections.base import LazyFillGuard
 
 
 def test_unseen_key_is_cacheable_from_any_snapshot():

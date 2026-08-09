@@ -16,9 +16,9 @@ from iris.cluster.client.resource_conversion import (
 )
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
-from iris.cluster.controller.controller import Controller
-from iris.cluster.controller.resources.jobs import FederationSubmission
-from iris.cluster.controller.resources.rpc import ResourceServiceImpl
+from iris.cluster.controller.api.resource_service import ResourceServiceImpl
+from iris.cluster.controller.jobs import FederationSubmission
+from iris.cluster.controller.runtime import ControllerRuntime
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationPeerObservation
 from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
@@ -46,9 +46,9 @@ _PEER_IDENTITY = VerifiedIdentity(user_id=PARENT_CLUSTER_ID, role=FEDERATION_PEE
 class InProcessPeerConnection:
     """Authenticated parent-to-peer RPCs against a real in-process service."""
 
-    def __init__(self, controller: Controller) -> None:
+    def __init__(self, controller: ControllerRuntime) -> None:
         self._controller = controller
-        self._resources = ResourceServiceImpl(controller.resources)
+        self._resources = ResourceServiceImpl(controller.controller)
         self._reachable = True
 
     def set_reachable(self, reachable: bool) -> None:
@@ -65,7 +65,7 @@ class InProcessPeerConnection:
     def launch_job(self, delivery: HandoffDelivery) -> None:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            self._controller.resources.submit_federated_job(
+            self._controller.controller.submit_federated_job(
                 delivery.spec,
                 delivery.bundle_blob,
                 FederationSubmission(
@@ -88,10 +88,10 @@ class InProcessPeerConnection:
     def terminate_job(self, job_id: JobName) -> None:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            identity = self._controller.resources.describe_job(
+            identity = self._controller.controller.describe_job(
                 ResourceKey(PARENT_CLUSTER_ID, ResourceKind.JOB, job_id.to_wire())
             ).summary.identity
-            self._controller.resources.cancel_job(
+            self._controller.controller.cancel_job(
                 identity,
                 idempotency_key=f"journey-federated-cancel:{identity.job_uid}",
                 principal_id=job_id.user,

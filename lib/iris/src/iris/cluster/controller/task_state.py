@@ -122,6 +122,7 @@ class TaskDetailRow:
 
     task_id: JobName
     job_id: JobName
+    task_index: int
     state: int
     current_attempt_id: int
     failure_count: int

@@ -37,10 +37,10 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.backend import TaskBackend
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.reconcile.loader import TransitionReader
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
+from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding

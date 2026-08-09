@@ -21,11 +21,11 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.federation import ControllerFederationStore
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import (
@@ -171,7 +171,7 @@ def _attach_federation(parent_service: ControllerServiceImpl, connection: _Proxy
     peer.probe()
     store = ControllerFederationStore(parent_service._db)
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
-    parent_service._controller.federation = manager
+    parent_service._runtime.federation = manager
     return manager
 
 
@@ -223,7 +223,7 @@ def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client)
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.profile_task.return_value = ProfileResult(b"peer-profile", "")
+        peer_service._runtime.provider.profile_task.return_value = ProfileResult(b"peer-profile", "")
         resp = parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=job_id.task(0).to_wire(),
@@ -236,9 +236,9 @@ def test_profile_against_a_federated_task_runs_on_the_peer(tmp_path, log_client)
         # The bytes could only have come from the peer's backend.
         assert resp.profile_data == b"peer-profile"
         # The federated task was never dispatched to the parent's local fallback backend.
-        parent_service._controller.provider.profile_task.assert_not_called()
+        parent_service._runtime.provider.profile_task.assert_not_called()
         # The peer resolved the task under the same, cluster-invariant job id.
-        (call,) = peer_service._controller.provider.profile_task.call_args_list
+        (call,) = peer_service._runtime.provider.profile_task.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
@@ -251,7 +251,7 @@ def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_cli
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.profile_task.return_value = ProfileResult(b"ok", "")
+        peer_service._runtime.provider.profile_task.return_value = ProfileResult(b"ok", "")
         parent_service.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=f"{job_id.task(0).to_wire()}:0",
@@ -261,7 +261,7 @@ def test_profile_preserves_the_attempt_qualifier_when_proxying(tmp_path, log_cli
             None,
         )
 
-        (call,) = peer_service._controller.provider.profile_task.call_args_list
+        (call,) = peer_service._runtime.provider.profile_task.call_args_list
         # The forwarded request carries the target verbatim, with the attempt kept.
         assert call.args[1].attempt is not None
         assert call.args[1].attempt.attempt_number == 0
@@ -274,7 +274,7 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.exec_in_container.return_value = ExecResult(0, "hello", "", "")
+        peer_service._runtime.provider.exec_in_container.return_value = ExecResult(0, "hello", "", "")
         resp = parent_service.exec_in_container(
             controller_pb2.Controller.ExecInContainerRequest(
                 task_id=job_id.task(0).to_wire(),
@@ -287,10 +287,10 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         assert resp.exit_code == 0
         assert resp.stdout == "hello"
         # Never dispatched to the parent's local fallback backend.
-        parent_service._controller.provider.exec_in_container.assert_not_called()
+        parent_service._runtime.provider.exec_in_container.assert_not_called()
         # The peer resolved the task, and its forwarded worker request both carry the
         # same, cluster-invariant task id.
-        (call,) = peer_service._controller.provider.exec_in_container.call_args_list
+        (call,) = peer_service._runtime.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
         assert call.args[1].attempt.task.resource_id == job_id.task(0).to_wire()
 
@@ -303,7 +303,7 @@ def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
         expected = _process_info()
-        peer_service._controller.provider.get_process_status.return_value = expected
+        peer_service._runtime.provider.get_process_status.return_value = expected
         resp = parent_service.get_process_status(
             job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire()),
             None,
@@ -313,9 +313,9 @@ def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_
         # while the federation path itself carries the native record.
         assert process_info_from_proto(resp.process_info) == expected
         # The federated task was never dispatched to the parent's local fallback backend.
-        parent_service._controller.provider.get_process_status.assert_not_called()
+        parent_service._runtime.provider.get_process_status.assert_not_called()
         # The peer resolved the task under the same, cluster-invariant job id.
-        (call,) = peer_service._controller.provider.get_process_status.call_args_list
+        (call,) = peer_service._runtime.provider.get_process_status.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
@@ -333,14 +333,14 @@ def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_pa
         # An auth-enforcing view of the peer over the same state. The handoff above ran
         # through the null-auth service (scoping skipped); this one activates it.
         enforcing_peer = make_controller_service(
-            controller=peer_service._controller,
+            controller=peer_service._runtime,
             bundle_store=BundleStore(storage_dir=str(tmp_path / "peer" / "bundles")),
             log_client=log_client,
             db=peer_state._db,
             endpoint_service=peer_service._endpoint_service,
             auth=ControllerAuth(provider="iap"),
         )
-        peer_service._controller.provider.get_process_status.return_value = _process_info()
+        peer_service._runtime.provider.get_process_status.return_value = _process_info()
         request = job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire())
 
         # "parent" is the requester on the received handle — it may read the task.
@@ -349,12 +349,12 @@ def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_pa
         assert resp.process_info.thread_count == 7
 
         # A different peer never federated this job here — PERMISSION_DENIED, no backend call.
-        peer_service._controller.provider.get_process_status.reset_mock()
+        peer_service._runtime.provider.get_process_status.reset_mock()
         with identity_scope(VerifiedIdentity(user_id="intruder", role=FEDERATION_PEER_ROLE)):
             with pytest.raises(ConnectError) as exc:
                 enforcing_peer.get_process_status(request, None)
         assert exc.value.code == Code.PERMISSION_DENIED
-        peer_service._controller.provider.get_process_status.assert_not_called()
+        peer_service._runtime.provider.get_process_status.assert_not_called()
 
 
 def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):
@@ -367,14 +367,14 @@ def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_c
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager, name="train:debug")
 
-        peer_service._controller.provider.exec_in_container.return_value = ExecResult(0, "", "", "")
+        peer_service._runtime.provider.exec_in_container.return_value = ExecResult(0, "", "", "")
         resp = parent_service.exec_in_container(
             controller_pb2.Controller.ExecInContainerRequest(task_id=job_id.task(0).to_wire(), command=["true"]),
             None,
         )
 
         assert resp.exit_code == 0
-        (call,) = peer_service._controller.provider.exec_in_container.call_args_list
+        (call,) = peer_service._runtime.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
@@ -400,7 +400,7 @@ def test_exec_surfaces_the_peers_not_found_for_a_stale_mirror(tmp_path, log_clie
             )
         assert exc.value.code == Code.NOT_FOUND
         # The peer's local backend was never reached — the task is gone on the peer.
-        peer_service._controller.provider.exec_in_container.assert_not_called()
+        peer_service._runtime.provider.exec_in_container.assert_not_called()
 
 
 def test_tombstoned_handle_resolves_not_found_without_a_peer_round_trip(tmp_path, log_client):

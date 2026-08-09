@@ -16,7 +16,7 @@ from pathlib import Path
 
 from iris.cluster.types import DEFAULT_BACKEND_ID, BackendStatus
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0033_backend_id.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0033_backend_id.py"
 
 _OLD_SCHEMA = """
 CREATE TABLE jobs (job_id VARCHAR PRIMARY KEY, state INTEGER NOT NULL, name VARCHAR NOT NULL DEFAULT '');

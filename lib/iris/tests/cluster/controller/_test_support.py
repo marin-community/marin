@@ -16,14 +16,15 @@ projections through ``Controller`` constructor arguments.
 from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.resources.legacy_rpc import job_spec_from_legacy_request
-from iris.cluster.controller.schema import (
+from iris.cluster.controller.legacy.codec import job_spec_from_legacy_request
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.persistence.schema import (
     tasks_table,
     workers_table,
 )

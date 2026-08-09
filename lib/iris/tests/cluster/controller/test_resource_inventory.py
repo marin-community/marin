@@ -8,11 +8,11 @@ import pytest
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
-from iris.cluster.controller.schema import worker_attributes_table, workers_table
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.resources.errors import ResourceNotFound
@@ -120,7 +120,7 @@ def resources(tmp_path: Path):
     db = ControllerDB(tmp_path / "db")
     runtime = Mock()
     runtime.all_liveness.return_value = {}
-    facade = ResourceController(
+    facade = Controller(
         cluster_id="cluster-a",
         db=db,
         runtime=runtime,
@@ -159,7 +159,7 @@ def worker_resources(tmp_path: Path):
     backend.status.return_value = controller_pb2.Controller.BackendStatus(
         worker=controller_pb2.Controller.WorkerFleetDetail()
     )
-    facade = ResourceController(
+    facade = Controller(
         cluster_id="cluster-a",
         db=db,
         runtime=runtime,
@@ -175,7 +175,7 @@ def worker_resources(tmp_path: Path):
     db.close()
 
 
-def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: ResourceController) -> None:
+def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: Controller) -> None:
     first = resources.list_nodes(NodeQuery(backend_id="k8s", page_size=1))
     assert [node.identity.key.resource_id for node in first.items] == ["node-alpha"]
     assert first.items[0].region == "us-central1"
@@ -215,7 +215,7 @@ def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> 
     endpoint_service.register_system_endpoint("/system/log-server", "http://logs:9000")
     runtime = Mock()
     runtime.federation.peer_summaries.return_value = []
-    resources = ResourceController(
+    resources = Controller(
         cluster_id="cluster-a",
         db=db,
         runtime=runtime,
@@ -341,7 +341,7 @@ def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_
     ]
 
 
-def test_slices_filter_page_and_describe_observed_membership(resources: ResourceController) -> None:
+def test_slices_filter_page_and_describe_observed_membership(resources: Controller) -> None:
     first = resources.list_slices(SliceQuery(backend_id="rpc", scaling_group_id="pool-a", page_size=1))
     assert [item.identity.key.resource_id for item in first.items] == ["slice-a"]
     assert first.next_page_token is not None

@@ -6,7 +6,7 @@
 ## Summary
 
 Iris now uses typed resource records as its in-process Job and Task contract.
-`ResourceController` owns public reads and actions, `JobResources` owns typed Job
+`Controller` owns public reads and actions, `JobResources` owns typed Job
 admission, and boundary adapters translate protobuf messages. The existing
 controller schema, ordered migrations, `TaskBackend` contract, scheduler,
 autoscaler, and federation transport remain in place.
@@ -53,25 +53,36 @@ remain the mechanisms that apply those operations.
 ## Internal design
 
 Frozen records in `iris.cluster.resources` are the only in-process resource
-contract. The implementation separates four responsibilities:
+contract. The package layout makes the dependency direction visible rather than
+relying on conventions around a file named `facade.py`:
 
-- `controller/resources/jobs.py` admits typed Job specifications.
-- `controller/resources/facade.py` reads resources and performs exact actions.
-- `controller/resources/rpc.py` translates the public resource protobuf.
-- `controller/resources/legacy_rpc.py` translates the old network RPC at entry
-  and exit.
+- `controller/controller.py` contains the canonical resource-oriented
+  application controller.
+- `controller/runtime.py` contains the daemon lifecycle, control loop, backend
+  coordination, and service composition formerly called `Controller`.
+- `controller/api/` translates the canonical resource protobuf at entry and
+  exit.
+- `controller/legacy/` implements the old `ControllerService` as a one-way
+  adapter over the canonical controller. It owns no resource behavior or SQL.
+- `controller/persistence/` owns SQLAlchemy, schema, migrations, transactions,
+  queries, projections, and persisted JSON codecs.
+
+The application controller consumes typed persistence results and delegates
+execution work to the runtime. Neither it nor its Job, Task, Attempt, Endpoint,
+Node, Slice, or federation policy modules import SQLAlchemy or generated
+protobuf modules. The runtime may use persistence repositories for control-loop
+snapshots and commits, but backends remain database-free.
 
 `ResourceService` is the default and only first-party Job, Task, Attempt, Node,
 Slice, and Endpoint API. The old Job and Task protobufs are not a supported
-second version: the old RPC service is a one-way boundary wrapper that decodes
-into resources immediately. Worker and federation transports retain the wire
-messages required by those protocols, without exposing them inside the product
-model.
+second version: the legacy service decodes into resources immediately and
+encodes only its response. Active worker and federation transports retain their
+own wire adapters without exporting those messages into the product model.
 
-The active persistence layer remains `controller/schema.py`, `reads.py`, and
-`writes.py`. Action receipts have one noun-specific persistence module because
-they are new retained state. This change does not add a parallel schema package,
-generic repository, or constructor-selected database implementation.
+Persistence remains one concrete SQLAlchemy/SQLite implementation, not a
+generic repository framework. Modules are noun-owned where useful, and
+transactional commands may enforce storage invariants atomically. Pure policy
+does not live beside SQL merely because a transaction consumes its result.
 
 `TaskBackend` remains in `controller/backend.py`. RPC and Kubernetes adapters
 keep their existing scheduling, reconciliation, and autoscaling boundaries.
@@ -120,6 +131,12 @@ possible.
   resource records and exact-target semantics.
 - Old Job and Task protobuf shapes appear only in generated/client transport or
   the explicit legacy RPC adapter.
+- `controller/controller.py` is the resource application surface;
+  `controller/runtime.py` is the process/control-loop implementation.
+- Hand-written SQLAlchemy imports under `controller/` appear only in
+  `controller/persistence/`.
+- The legacy service depends on the canonical controller and never reaches
+  persistence or a backend directly for resource operations.
 - A populated pre-0051 database retains public Job and Task reads and can create
   and reopen an idempotent action receipt after migration.
 - Resource list pages retain fixed statement and SQLite bind budgets. Retired

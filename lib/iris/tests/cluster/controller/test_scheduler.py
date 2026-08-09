@@ -12,10 +12,16 @@ from collections import Counter
 
 import pytest
 from iris.cluster.constraints import AttributeValue, WellKnownAttribute
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.schema import jobs_table, worker_attributes_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -27,7 +33,6 @@ from iris.cluster.controller.scheduling.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, worker_attributes_table
 from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
 from iris.cluster.worker.env_probe import _build_worker_attributes
 from iris.rpc import controller_pb2, job_pb2, vm_pb2

@@ -80,7 +80,7 @@ def test_peer_outage_and_parent_restart_preserve_last_known_state_until_recovery
     peer_source = next(status for status in cached.source_statuses if status.source_id == f"federation:{PEER_ID}")
     assert peer_source.state is SourceState.UNAVAILABLE
     assert peer_source.freshness is Freshness.STALE
-    jobs_page = federation.parent.controller.resources.list_jobs(JobQuery())
+    jobs_page = federation.parent.controller.controller.list_jobs(JobQuery())
     assert any(status == peer_source for status in jobs_page.source_statuses)
 
     federation.set_peer_reachable(True)
@@ -270,7 +270,7 @@ def test_federated_exec_rejects_attempt_replaced_on_peer_before_runtime_call(fed
     federation.run_peer()
 
     with pytest.raises(ConnectError) as exc_info:
-        federation.parent.controller.resources.exec_attempt(
+        federation.parent.controller.controller.exec_attempt(
             stale,
             ("echo", "stale"),
             Duration.from_seconds(1),
@@ -323,14 +323,14 @@ def test_federated_endpoint_keeps_authority_and_execution_coordinates_distinct(
     federation.run_peer()
     federation.peer.register_endpoint(job[0], "/serve/endpoint", "10.0.0.7:8000", endpoint_id="endpoint-1")
 
-    (received,) = federation.peer.controller.resources.list_endpoints(EndpointQuery()).items
+    (received,) = federation.peer.controller.controller.list_endpoints(EndpointQuery()).items
     assert received.key.cluster_id == PARENT_CLUSTER_ID
     assert received.task is not None and received.task.cluster_id == PARENT_CLUSTER_ID
     assert received.execution_cluster_id == PEER_ID
 
     federation.sync()
 
-    parent_page = federation.parent.controller.resources.list_endpoints(EndpointQuery())
+    parent_page = federation.parent.controller.controller.list_endpoints(EndpointQuery())
     (mirrored,) = parent_page.items
     assert mirrored.key.cluster_id == PARENT_CLUSTER_ID
     assert mirrored.task is not None and mirrored.task.cluster_id == PARENT_CLUSTER_ID
@@ -339,7 +339,7 @@ def test_federated_endpoint_keeps_authority_and_execution_coordinates_distinct(
     federation.set_peer_reachable(False)
     federation.sync()
 
-    cached_page = federation.parent.controller.resources.list_endpoints(EndpointQuery())
+    cached_page = federation.parent.controller.controller.list_endpoints(EndpointQuery())
     assert cached_page.items == (mirrored,)
     peer_source = next(status for status in cached_page.source_statuses if status.source_id == f"federation:{PEER_ID}")
     assert peer_source.state is SourceState.UNAVAILABLE

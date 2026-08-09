@@ -23,17 +23,18 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import jobs as resource_jobs
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.jobs import CLIENT_FRESHNESS_WINDOW
+from iris.cluster.controller.legacy.codec import redact_request_env_vars
+from iris.cluster.controller.legacy.controller_service import MAX_LIST_JOBS_OFFSET
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import writes
+from iris.cluster.controller.persistence.operations.task import Assignment, finalize
+from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.resources import jobs as resource_jobs
-from iris.cluster.controller.resources.jobs import CLIENT_FRESHNESS_WINDOW
-from iris.cluster.controller.resources.legacy_rpc import redact_request_env_vars
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import MAX_LIST_JOBS_OFFSET
 from iris.cluster.redaction import REDACTED_VALUE
 from iris.cluster.resources.endpoint import ProfileResult
 from iris.cluster.resources.execution import tpu_device
@@ -167,7 +168,7 @@ def test_launch_job_feasible_on_non_first_backend(service):
     rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
     admitting = Mock()
     admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+    service._runtime.backends = {"gcp": rejecting, "cw": admitting}
 
     response = service.launch_job(make_job_request("multi-backend-ok"), None)
 
@@ -180,7 +181,7 @@ def test_launch_job_rejected_when_all_backends_infeasible(service):
     gcp.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
     cw = Mock()
     cw.autoscaler = _FeasibilityAutoscaler("region us-east5 has no h100 pool")
-    service._controller.backends = {"gcp": gcp, "cw": cw}
+    service._runtime.backends = {"gcp": gcp, "cw": cw}
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(make_job_request("multi-backend-bad"), None)
@@ -194,7 +195,7 @@ def test_launch_job_pinned_backend_checks_only_that_backend(service):
     rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
     admitting = Mock()
     admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+    service._runtime.backends = {"gcp": rejecting, "cw": admitting}
 
     request = make_job_request("pinned-bad")
     request.constraints.append(
@@ -224,8 +225,8 @@ def test_profile_worker_routes_to_worker_backend(service, state):
     # This mock backend only routes the profile dispatch; the worker's liveness is
     # registered into the default backend's tracker above, so cw owns no tracker.
     cw.health = None
-    service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
-    service._controller.scale_group_to_backend = {"cw-h100": "cw"}
+    service._runtime.backends = {DEFAULT_BACKEND_ID: service._runtime.provider, "cw": cw}
+    service._runtime.scale_group_to_backend = {"cw-h100": "cw"}
 
     resp = service.profile_task(
         job_pb2.ProfileTaskRequest(

@@ -16,12 +16,12 @@ this is a behavior-preserving refactor; the tests inject the rows the future
 sync will write and pin the boundary now.
 """
 
-from iris.cluster.controller import reads
-from iris.cluster.controller.reads import TaskScope
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.reads import TaskScope
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
-from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2

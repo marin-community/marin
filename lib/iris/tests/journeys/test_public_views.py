@@ -67,7 +67,7 @@ def test_failed_task_status_survives_unavailable_log_transport(journey, monkeypa
         raise ConnectionError("finelog unavailable")
 
     monkeypatch.setattr(journey.log_stack.client, "fetch_logs", unavailable)
-    with caplog.at_level(logging.WARNING, logger="iris.cluster.controller.resources.facade"):
+    with caplog.at_level(logging.WARNING, logger="iris.cluster.controller.controller"):
         detail = journey.task(job[0])
 
     assert detail.root_cause_highlights == ()
@@ -76,7 +76,7 @@ def test_failed_task_status_survives_unavailable_log_transport(journey, monkeypa
     assert finelog_statuses[0].error_code == "finelog_unavailable"
     assert finelog_statuses[0].error_message == "finelog unavailable"
     assert any(
-        record.name == "iris.cluster.controller.resources.facade" and record.levelno == logging.WARNING
+        record.name == "iris.cluster.controller.controller" and record.levelno == logging.WARNING
         for record in caplog.records
     )
 

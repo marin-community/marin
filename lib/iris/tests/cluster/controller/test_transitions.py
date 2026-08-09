@@ -16,18 +16,24 @@ from datetime import date
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment, finalize
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.pruner import PruneResult, prune_old_data
-from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.operations.task import Assignment, finalize
+from iris.cluster.controller.persistence.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.persistence.pruning import PruneResult, prune_old_data
+from iris.cluster.controller.persistence.reads import WorkerResourceUsage
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.schema import jobs_table, slices_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.job import recompute_state
 from iris.cluster.controller.reconcile.overlay import Overlay
@@ -49,7 +55,6 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table, tasks_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2

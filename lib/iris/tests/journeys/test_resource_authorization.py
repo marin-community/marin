@@ -4,7 +4,7 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.controller.resources.rpc import ResourceServiceImpl
+from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.rpc import resource_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
@@ -17,7 +17,7 @@ def test_resource_reads_scope_users_before_rows_cross_the_rpc_boundary(journey) 
     alice = journey.submit("alice-job", user="alice")
     bob = journey.submit("bob-job", user="bob")
     journey.settle()
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
 
     with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
         jobs = service.list_jobs(resource_pb2.ListJobsRequest(), None)

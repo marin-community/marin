@@ -6,8 +6,8 @@ from collections.abc import Callable
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.controller.resources.rpc import ResourceServiceImpl
-from iris.cluster.controller.schema import task_attempts_table, tasks_table
+from iris.cluster.controller.api.resource_service import ResourceServiceImpl
+from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table
 from iris.cluster.resources.activity import ActivityQuery
 from iris.cluster.resources.endpoint import ExecResult, ProfileResult
 from iris.cluster.resources.identity import ResourceKey, ResourceKind
@@ -78,7 +78,7 @@ def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> No
     journey.push_task_logs(selected[1], ["selected-sibling"], attempt_id=0)
     journey.push_task_logs(other[0], ["other-job"], attempt_id=0)
 
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
     job = journey.job(selected).summary.identity
     task = journey.task(selected[0]).summary.identity
 
@@ -122,7 +122,7 @@ def test_activity_after_restart_keeps_durable_actions_when_task_events_are_unava
         raise ConnectionError("finelog task events unavailable")
 
     monkeypatch.setattr(journey.log_stack.client, "query", unavailable_query)
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
     response = service.list_activity(
         resource_pb2.ListActivityRequest(
             query=resource_pb2.ActivityQuery(
@@ -157,7 +157,7 @@ def test_activity_after_restart_keeps_durable_actions_when_task_events_are_unava
 def test_batch_describe_tasks_returns_ordered_details_with_attempts(journey) -> None:
     job = journey.submit("batch-details", tasks=2)
     journey.settle()
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
 
     response = service.batch_describe_tasks(
         resource_pb2.BatchDescribeTasksRequest(
@@ -184,7 +184,7 @@ def test_batch_describe_many_failed_tasks_does_not_fan_out_to_finelog(journey, m
         raise AssertionError("batch Task details must not issue per-Task finelog calls")
 
     monkeypatch.setattr(journey.log_stack.client, "fetch_logs", unexpected_finelog_call)
-    response = ResourceServiceImpl(journey.controller.resources).batch_describe_tasks(
+    response = ResourceServiceImpl(journey.controller.controller).batch_describe_tasks(
         resource_pb2.BatchDescribeTasksRequest(
             tasks=[
                 _key(ResourceKey(job[index].authority_cluster_id, ResourceKind.TASK, job[index].wire_id))
@@ -214,13 +214,13 @@ def test_activity_page_token_continues_past_each_sources_first_batch(journey) ->
 
     journey.log_stack.task_event_table.flush()
 
-    all_entries = journey.controller.resources.list_activity(
+    all_entries = journey.controller.controller.list_activity(
         ActivityQuery(target=task_identity.key, page_size=100)
     ).items
     paged_entries = []
     page_token = None
     while True:
-        page = journey.controller.resources.list_activity(
+        page = journey.controller.controller.list_activity(
             ActivityQuery(target=task_identity.key, page_size=1, page_token=page_token)
         )
         paged_entries.extend(page.items)
@@ -298,7 +298,7 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
 
     monkeypatch.setattr(journey.backend, "exec_in_container", exec_in_container)
     monkeypatch.setattr(journey.backend, "profile_task", profile_task)
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
 
     stale = _attempt_identity(stale_identity)
     with pytest.raises(ConnectError) as exec_error:
@@ -340,7 +340,7 @@ def test_debug_action_rechecks_attempt_after_target_resolution(journey, monkeypa
     job = journey.submit(f"debug-race-{operation}", preemption_retries=1)
     journey.settle()
     stale = journey.attempt(job[0]).summary.identity
-    original_target = journey.controller.resources._task_target
+    original_target = journey.controller.controller._task_target
 
     # Stage a competing controller write in the exact window under test; the
     # oracle is the public error plus zero provider calls, not helper dispatch.
@@ -357,7 +357,7 @@ def test_debug_action_rechecks_attempt_after_target_resolution(journey, monkeypa
         return target
 
     runtime_calls: list[str] = []
-    monkeypatch.setattr(journey.controller.resources, "_task_target", replace_after_resolution)
+    monkeypatch.setattr(journey.controller.controller, "_task_target", replace_after_resolution)
     monkeypatch.setattr(
         journey.backend,
         "exec_in_container",
@@ -368,7 +368,7 @@ def test_debug_action_rechecks_attempt_after_target_resolution(journey, monkeypa
         "profile_task",
         lambda *_args, **_kwargs: runtime_calls.append("profile") or ProfileResult(b"", ""),
     )
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
 
     with pytest.raises(ConnectError) as error:
         if operation == "exec":
@@ -416,7 +416,7 @@ def test_exec_and_profile_refuse_an_attempt_from_a_replaced_task_incarnation(jou
 
     monkeypatch.setattr(journey.backend, "exec_in_container", exec_in_container)
     monkeypatch.setattr(journey.backend, "profile_task", profile_task)
-    service = ResourceServiceImpl(journey.controller.resources)
+    service = ResourceServiceImpl(journey.controller.controller)
     stale_proto = _attempt_identity(stale)
 
     with pytest.raises(ConnectError) as exec_error:

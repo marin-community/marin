@@ -9,8 +9,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller import reads
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.database import ControllerDB
 from iris.rpc import job_pb2
 from sqlalchemy import text
 

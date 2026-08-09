@@ -10,18 +10,18 @@ from finelog.client import LogClient
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendCapability
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.reads import ControlSnapshot
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile.commit import commit_effects
+from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService

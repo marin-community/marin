@@ -45,7 +45,6 @@ from rigging.server_auth import (
     extract_bearer_token,
     public,
 )
-from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -53,10 +52,12 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
+from iris.cluster.controller.api.resource_service import ResourceServiceImpl
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.legacy.controller_service import ControllerServiceImpl
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
     DEFAULT_PROXY_TIMEOUT_SECONDS,
@@ -68,8 +69,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_AUTHORIZATION_HEADER,
     UPSTREAM_URL_HEADER,
 )
-from iris.cluster.controller.resources.rpc import ResourceServiceImpl
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.persistence.database import DatabaseError
 from iris.cluster.dashboard_common import (
     favicon_route,
     html_shell,
@@ -439,7 +439,7 @@ class ControllerDashboard:
         """Health check endpoint for controller availability."""
         try:
             checkpoint_epoch_ms = self._service.probe_database()
-        except SQLAlchemyError:
+        except DatabaseError:
             logger.exception("Controller database health probe failed")
             return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)
         return JSONResponse(

@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed Attempt launch, lifecycle, and provider-runtime records."""
+"""Typed Attempt launch, lifecycle, retry-count, and provider-runtime records."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Protocol
 
 from rigging.timing import Duration, Timestamp
 
@@ -22,6 +24,42 @@ from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, Pri
 from iris.cluster.resources.source import ResourceSourceStatus
 from iris.cluster.resources.state import TaskState
 from iris.cluster.types import AttemptUid, JobName
+
+PREEMPTION_ATTEMPT_STATES: frozenset[int] = frozenset(
+    {
+        TaskState.WORKER_FAILED,
+        TaskState.KILLED,
+        TaskState.PREEMPTED,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptCounts:
+    """Retry counters derived from a Task's Attempt history."""
+
+    failure_count: int = 0
+    preemption_count: int = 0
+
+
+class AttemptCountRecord(Protocol):
+    """Attempt fields needed to derive retry counters."""
+
+    state: int
+    started_at_ms: object | None
+
+
+def counts_from_attempts(attempts: Iterable[AttemptCountRecord]) -> AttemptCounts:
+    """Derive retry counters from an iterable of Attempt lifecycle records."""
+    failure = 0
+    preemption = 0
+    for attempt in attempts:
+        state = int(attempt.state)
+        if state == TaskState.FAILED:
+            failure += 1
+        elif state in PREEMPTION_ATTEMPT_STATES and attempt.started_at_ms is not None:
+            preemption += 1
+    return AttemptCounts(failure_count=failure, preemption_count=preemption)
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,9 +8,9 @@ from pathlib import Path
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
 from iris.cluster.resources.job import (
@@ -151,7 +151,7 @@ def _worker_metadata(*, cpu_millicores: int) -> job_pb2.WorkerMetadata:
 
 
 class WorkerJourney:
-    """Drive worker lifecycle stories through Controller and worker RPC APIs."""
+    """Drive worker lifecycle stories through ControllerRuntime and worker RPC APIs."""
 
     def __init__(self, root: Path, monkeypatch) -> None:
         self.clock = WorkerJourneyClock()
@@ -167,7 +167,7 @@ class WorkerJourney:
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
         )
-        self.controller = Controller(
+        self.controller = ControllerRuntime(
             config=config,
             backends={DEFAULT_BACKEND_ID: self.backend},
             log_stack=build_log_stack(
@@ -220,7 +220,7 @@ class WorkerJourney:
         preemption_retries: int = 1,
     ) -> WorkerJob:
         entrypoint = RuntimeEntrypoint((), CommandEntrypoint(("python", "-c", "pass")), {}, {})
-        identity = self.controller.resources.submit_job(
+        identity = self.controller.controller.submit_job(
             JobSpec(
                 version=1,
                 name=JobName.root("journey", name).to_wire(),
@@ -255,7 +255,7 @@ class WorkerJourney:
         current = task.summary.current_attempt
         if current is None:
             raise AssertionError(f"{job.task_id} has no current Attempt")
-        self.controller.resources.retry_task(
+        self.controller.controller.retry_task(
             task.summary.identity,
             expected_attempt_uid=current.attempt_uid,
             idempotency_key=f"worker-journey-preempt:{current.attempt_uid}",
@@ -284,22 +284,24 @@ class WorkerJourney:
         raise AssertionError(f"{worker_id} still owns {job.task_id} after {max_ticks} control ticks")
 
     def task(self, job: WorkerJob) -> TaskDetail:
-        return self.controller.resources.describe_task(
-            ResourceKey(self.controller.resources.cluster_id, ResourceKind.TASK, job.task_id)
+        return self.controller.controller.describe_task(
+            ResourceKey(self.controller.controller.cluster_id, ResourceKind.TASK, job.task_id)
         )
 
     def worker(self, worker_id: str) -> NodeDetail:
-        page = self.controller.resources.list_nodes(NodeQuery(contains=worker_id, page_size=100))
+        page = self.controller.controller.list_nodes(NodeQuery(contains=worker_id, page_size=100))
         summary = next(node for node in page.items if node.identity.key.resource_id == worker_id)
-        return self.controller.resources.describe_node(
+        return self.controller.controller.describe_node(
             NodeLocator(summary.identity.key, summary.identity.backend_id, summary.identity.node_uid)
         )
 
     def node(self, identity: NodeIdentity) -> NodeDetail:
-        return self.controller.resources.describe_node(NodeLocator(identity.key, identity.backend_id, identity.node_uid))
+        return self.controller.controller.describe_node(
+            NodeLocator(identity.key, identity.backend_id, identity.node_uid)
+        )
 
     def worker_ids(self) -> set[str]:
         return {
             node.identity.key.resource_id
-            for node in self.controller.resources.list_nodes(NodeQuery(page_size=100)).items
+            for node in self.controller.controller.list_nodes(NodeQuery(page_size=100)).items
         }

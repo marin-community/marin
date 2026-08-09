@@ -44,10 +44,6 @@ from iris.cluster.controller.autoscaler.provisioning import (
     ERROR_MESSAGE_MAX_LEN,
     classify_create_failure,
 )
-from iris.cluster.controller.autoscaler.recovery import (
-    load_autoscaler_checkpoint,
-    restore_autoscaler_state,
-)
 from iris.cluster.controller.autoscaler.routing import (
     availability_probe_entries,
     empirical_zone_capabilities,
@@ -61,7 +57,11 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence.autoscaler.recovery import (
+    load_autoscaler_checkpoint,
+    restore_autoscaler_state,
+)
+from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import (

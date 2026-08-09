@@ -19,12 +19,18 @@ Production incident timeline (Incident B, v5p-256):
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import ops, reads
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.operations.task import Assignment
+from iris.cluster.controller.persistence.reads import WorkerResourceUsage
+from iris.cluster.controller.persistence.schema import task_attempts_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.runtime import SchedulingOutcome
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -32,7 +38,6 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp

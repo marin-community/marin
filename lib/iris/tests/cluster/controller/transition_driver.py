@@ -13,12 +13,13 @@ per-worker batch of :class:`WorkerTaskUpdates` into native reconcile
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from iris.cluster.controller.db import Tx
-from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.persistence.database import Tx
+from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
+from iris.cluster.controller.persistence.operations.worker import apply_reconcile
+from iris.cluster.controller.persistence.reconcile.commit import commit_effects
+from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence.schema import task_attempts_table
 from iris.cluster.controller.reconcile.effects import ControllerEffects
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.reconcile.worker import (
     KeepAttempt,
@@ -26,7 +27,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileRequest,
     WorkerReconcileResult,
 )
-from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,

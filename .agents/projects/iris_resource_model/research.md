@@ -139,3 +139,41 @@ tests remain green.
   directly.
 - Cut independent controllers over separately. Federation translates the old
   wire request to resource records at the receiving RPC boundary.
+
+## Package-boundary follow-up
+
+**Effort:** low, in-repository design-doc pass at
+`cb5e87478fe66d4fdd12b4a5abaa39c3b79675ed`.
+
+The native value migration exposed a second, structural source of ambiguity:
+the resource-oriented controller lives in
+[`resources/facade.py`](https://github.com/marin-community/marin/blob/cb5e87478fe66d4fdd12b4a5abaa39c3b79675ed/lib/iris/src/iris/cluster/controller/resources/facade.py#L447),
+while the class named `Controller` is the daemon lifecycle and control loop in
+[`controller.py`](https://github.com/marin-community/marin/blob/cb5e87478fe66d4fdd12b4a5abaa39c3b79675ed/lib/iris/src/iris/cluster/controller/controller.py#L337).
+The naming records the order in which the resource API was introduced, not the
+intended architecture.
+
+SQL ownership is also scattered. The application facade and Job admission
+import SQLAlchemy and table definitions directly; `schema.py`, `db.py`,
+`reads.py`, `writes.py`, `ops/`, migrations, and projections sit beside
+application code. `federation_store.py` combines an atomic DB implementation
+with candidate planning and backend-coordinate policy. `attempt_counts.py`
+combines a pure retry-count derivation with SQL aggregate expressions.
+
+The old `ControllerService` is not solely a Job compatibility service. It also
+hosts active worker, checkpoint, query, and administrative operations. A clean
+legacy boundary therefore means resource methods delegate only to the canonical
+controller while operational methods delegate to the runtime; the adapter must
+not become a second controller merely because both method groups share one
+generated service.
+
+Rigging `Provenance` already provides
+[`to_json` and `from_json`](https://github.com/marin-community/marin/blob/cb5e87478fe66d4fdd12b4a5abaa39c3b79675ed/lib/rigging/src/rigging/provenance.py#L119-L143).
+The Iris persistence codec duplicates a subset of that behavior and should use
+the owning type rather than add Pydantic or another serialization model.
+
+The approved correction is a behavior-preserving package refactor: promote the
+resource application controller, rename the daemon runtime, consolidate
+SQLAlchemy under persistence, split mixed federation/count responsibilities,
+and isolate canonical and legacy transports. Import gates provide the smallest
+durable regression proof; existing controller and journey tests prove behavior.

@@ -158,7 +158,7 @@ def merge_task_termination(
 
     No retry counter is carried: both the failure and preemption counts derive
     from the attempt rows this records (see
-    ``iris.cluster.controller.attempt_counts``).
+    ``iris.cluster.resources.attempt``).
 
     An already-terminal attempt is left untouched: killing a PENDING task (a
     cancel or a job-failure cascade) must not overwrite the historical outcome of

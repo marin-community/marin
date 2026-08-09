@@ -17,8 +17,8 @@ The package surface is the **pure** kernel API — importing it pulls in no
 The two I/O boundary helpers are intentionally NOT re-exported here so this
 surface stays pure — the I/O command layer imports them from their own modules:
 
-* ``load_closed_snapshot`` from :mod:`iris.cluster.controller.reconcile.loader`
-* ``commit_effects`` from :mod:`iris.cluster.controller.reconcile.commit`
+* ``load_closed_snapshot`` from :mod:`iris.cluster.controller.persistence.reconcile.loader`
+* ``commit_effects`` from :mod:`iris.cluster.controller.persistence.reconcile.commit`
 """
 
 from iris.cluster.controller.reconcile.batches import ReconcileState

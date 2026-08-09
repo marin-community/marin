@@ -1,1814 +1,2446 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris Controller logic for connecting state, scheduler and managing workers."""
+"""Canonical resource operations over controller state and backend observations."""
 
-import asyncio
-import atexit
-import enum
+import base64
+import hashlib
 import json
 import logging
 import secrets
-import socket
-import tempfile
-import threading
-import time
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Protocol, cast
 
-import uvicorn
-from finelog.client import RemoteLogHandler
-from rigging import telemetry
-from rigging.filesystem import prefix_join
-from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
-from sqlalchemy import Row
+from connectrpc.errors import ConnectError
+from finelog.client import LogClient
+from finelog.errors import StatsError
+from rigging.connect import capability_path, federated_capability_path
+from rigging.timing import Duration, Timestamp
 
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, PeerConfig
-from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.audit_logging import log_event
+from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import (
-    CONTROL_PLANE_AUDIENCE,
-    DEFAULT_USER_ROLE,
-    ENDPOINT_TOKEN_SCOPE,
-    FEDERATION_AUDIENCE,
-    NATIVE_PROXY_JWT_CACHE_CAPACITY,
-    NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
-    NATIVE_PROXY_JWT_LEEWAY_SECONDS,
-    PROXY_PLANE_AUDIENCE,
+    DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
+    MAX_ENDPOINT_TOKEN_TTL_SECONDS,
     ControllerAuth,
-    FederationTokenProvider,
-    NativeProxyAuthConfig,
-    NativeProxyAuthMode,
-    native_proxy_auth_policy,
-    request_auth_policy,
 )
-from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
-from iris.cluster.controller.backend import (
-    AutoscaleRequest,
-    AutoscaleResult,
-    BackendCapability,
-    BackendRuntime,
-    ReconcileRequest,
-    ReconcileResult,
-    ScheduleRequest,
-    ScheduleResult,
-    TaskBackend,
+from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.jobs import FederationSubmission, JobResources
+from iris.cluster.controller.persistence import action as action_persistence
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.json_codec import (
+    decode_attribute_value,
+    reconstruct_job_spec,
 )
-from iris.cluster.controller.budget import resource_value
-from iris.cluster.controller.checkpoint import (
-    CheckpointResult,
-    backup_databases,
-    upload_checkpoint,
-    write_checkpoint,
+from iris.cluster.controller.persistence.operations import job as job_ops
+from iris.cluster.controller.persistence.operations.task import finalize
+from iris.cluster.controller.persistence.projections.endpoints import (
+    EndpointQuery as ProjectionEndpointQuery,
 )
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
-from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
-from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
-from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
-from iris.cluster.controller.native_proxy_metrics import (
-    NativeProxyTelemetry,
-    install_native_proxy_metrics,
-    uninstall_native_proxy_metrics,
-)
-from iris.cluster.controller.ops.task import (
-    Assignment,
-    finalize,
-)
-from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.dispatch import (
-    DISPATCH_PROMOTION_RATE,
+from iris.cluster.controller.persistence.projections.endpoints import (
+    EndpointRow,
+    EndpointsProjection,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.resources import ResourceController, ResourceServiceImpl
-from iris.cluster.controller.resources.facade import CapabilityUrlConfig
-from iris.cluster.controller.scheduling.meta_scheduler import (
-    BackendRouting,
-    RoutableJob,
-    build_backend_index,
-    route_jobs_to_backends,
+from iris.cluster.controller.resource_logs import fetch_log_entries
+from iris.cluster.controller.resource_observations import (
+    observe_autoscaler_resources,
+    observe_backend_resources,
+    worker_node_metadata,
 )
-from iris.cluster.controller.scheduling.policy import (
-    RoutingInputs,
-    build_routing_inputs,
-)
-from iris.cluster.controller.scheduling.scheduler import (
-    SchedulingContext,
-)
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
-from iris.cluster.federation.availability import Promotion, QueuedCandidate
-from iris.cluster.federation.manager import (
-    DEFAULT_HEARTBEAT_INTERVAL,
-    DEFAULT_MAX_HANDOFFS_PER_CYCLE,
-    FederationManager,
+from iris.cluster.federation.manager import FederationManager, FederationPeerObservation
+from iris.cluster.federation.store import CancelTarget, FederationDirection, HandoffState
+from iris.cluster.log_highlights import extract_failure_highlights
+from iris.cluster.log_keys import build_log_source
+from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
+from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
+from iris.cluster.resources.attempt import AttemptCounts, AttemptDetail, AttemptRuntimeObject, AttemptSummary
+from iris.cluster.resources.endpoint import (
+    EndpointAccess,
+    EndpointDetail,
+    EndpointQuery,
+    EndpointSummary,
+    EndpointToken,
+    ExecRequest,
+    ExecResult,
+    ProfileConfiguration,
+    ProfileRequest,
+    ProfileResult,
 )
-from iris.cluster.federation.peer import FederationPeer, build_peers
-from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.platforms.types import resolve_external_host
-from iris.cluster.resources.state import PriorityBand
+from iris.cluster.resources.errors import (
+    ActionIdempotencyConflict,
+    ActionPolicyRejected,
+    BackendIdentityUnknown,
+    InvalidPageToken,
+    InvalidResourceKey,
+    ResourceNotFound,
+    ResourceReplaced,
+    ResourceSourceUnavailable,
+)
+from iris.cluster.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    NodeIdentity,
+    NodeLocator,
+    ResourceKey,
+    ResourceKind,
+    SliceIdentity,
+    SliceLocator,
+    TaskIdentity,
+)
+from iris.cluster.resources.job import (
+    FederationPosture,
+    JobDetail,
+    JobObservation,
+    JobQuery,
+    JobSpec,
+    JobSummary,
+    JobTaskAggregate,
+    TaskStateCount,
+)
+from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.node import (
+    NodeAttribute,
+    NodeAttributeKind,
+    NodeDetail,
+    NodeHealth,
+    NodeQuery,
+    NodeSummary,
+)
+from iris.cluster.resources.slice import (
+    MembershipState,
+    SliceDetail,
+    SliceLifecycle,
+    SliceMember,
+    SliceQuery,
+    SliceSummary,
+)
+from iris.cluster.resources.source import (
+    MAX_PROVIDER_SNAPSHOT_ITEMS,
+    MAX_SOURCE_ERROR_MESSAGE,
+    Freshness,
+    Page,
+    ResourceSourceStatus,
+    SourceState,
+)
+from iris.cluster.resources.state import JobState, TaskState
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    LOCAL_ADMIN_SUBMITTER,
+    LOCAL_CLUSTER,
     JobName,
-    PendingTask,
     UserBudgetDefaults,
     WorkerId,
 )
-from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc.auth import SESSION_COOKIE
+
+_RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
+_RESOURCE_UID_PREFIX = "iris-resource-v2"
+_MAX_JOB_PAGE = 500
+_MAX_JOB_STATE_BATCH = 32_767
+_MAX_TASK_PAGE = 500
+_MAX_ENDPOINT_PAGE = 500
+_MAX_ACTIVITY_PAGE = 500
+_MAX_NODE_RECENT_ATTEMPTS = 50
+_NODE_WORKER_SCAN_BATCH = _MAX_TASK_PAGE + 1
+_BACKEND_UNAVAILABLE = "backend_unavailable"
+_PEER_UNAVAILABLE = "peer_unavailable"
+_FINELOG_UNAVAILABLE = "finelog_unavailable"
+_SOURCE_UNSUPPORTED = "unsupported"
+_FINELOG_NOT_CONFIGURED = "finelog is not configured"
 
 logger = logging.getLogger(__name__)
 
-# Sync Connect RPC handlers are dispatched via ``asyncio.to_thread``, which
-# uses the running loop's default executor. asyncio's default executor sizes
-# at ``min(32, os.cpu_count() + 4)`` — only 8 threads on a 4-vCPU controller
-# VM. A handful of slow handlers (e.g. ``launch_job`` blocking up to 120s in
-# ``_wait_until_job_drained``) saturates that pool and head-of-line blocks
-# every other RPC, including the worker heartbeats that would unblock the
-# drain. Install a wider, named pool so a burst of slow handlers cannot
-# starve the rest.
-_RPC_HANDLER_THREADS = 64
-_CONTROLLER_KEEPALIVE = 120
-_PRIVATE_CONTROLLER_HOST = "127.0.0.1"
-_SYNCHRONOUS_PHASE_INTERVAL = 0.0
+
+@dataclass(frozen=True, slots=True)
+class _NodeDetails:
+    address: str | None
+    attributes: tuple[NodeAttribute, ...]
 
 
-def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
-    """Replace ``server.run`` with a variant that pins a sized default executor."""
-
-    def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
-        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
-        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
-            runner.get_loop().set_default_executor(
-                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
-            )
-            runner.run(server.serve(sockets=sockets))
-
-    server.run = run_with_executor
+@dataclass(frozen=True, slots=True)
+class _ProviderNodeCandidate:
+    summary: NodeSummary
+    details: _NodeDetails
 
 
-class SchedulingOutcome(enum.Enum):
-    """Result of a scheduling cycle, used to drive adaptive backoff."""
-
-    NO_PENDING_TASKS = "no_pending_tasks"
-    NO_ASSIGNMENTS = "no_assignments"
-    ASSIGNMENTS_MADE = "assignments_made"
-
-
-# Log a detailed per-phase scheduling trace every this many rounds.
-_SCHEDULING_TRACE_INTERVAL = 50
+@dataclass(frozen=True, slots=True)
+class _WorkerNodeCandidate:
+    backend_id: str
+    worker: reads.WorkerRecord
+    liveness: WorkerLiveness
 
 
-@dataclass
-class _TickInputs:
-    """Per-tick inputs the control driver assembles for the due phases.
-
-    The controller reads only its own task-lifecycle state: ``routing`` carries
-    the pending tasks + budgets the meta-scheduler and per-user budget thread off of;
-    ``reconcile_requests`` carries each ``CLUSTER_VIEW`` backend's dispatch drain
-    (worker-daemon backends source their own reconcile snapshot, so they have no
-    entry); ``timeout_rows`` is the global execution-timeout sweep. Workers are
-    read by each backend, never here.
-    """
-
-    routing: RoutingInputs | None = None
-    reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
-    timeout_rows: Sequence[Row] = ()
-    # Federated jobs queued on this parent awaiting a peer with free capacity, in
-    # priority-then-age order. The tick's federation pass assigns them to peers.
-    queued_federation: list[QueuedCandidate] = field(default_factory=list)
-    # Queued federated jobs whose scheduling deadline has elapsed while waiting for a
-    # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
-    # timeout scan never sees them).
-    expired_queued_federation: list[JobName] = field(default_factory=list)
+_NodeCandidate = _ProviderNodeCandidate | _WorkerNodeCandidate
 
 
-@dataclass(frozen=True)
-class SchedulePhaseResult:
-    """One schedule phase's outputs, before any DB write.
-
-    ``results`` is the per-backend placement decision; ``pins`` are the
-    ``(job_id, backend_id)`` routings the meta-scheduler chose this tick; and
-    ``unschedulable`` are the ``(task, reason)`` pairs no backend could take.
-    """
-
-    results: dict[str, ScheduleResult]
-    pins: list[tuple[JobName, str]]
-    unschedulable: list[tuple[PendingTask, str]]
+@dataclass(frozen=True, slots=True)
+class _ProviderNodeSnapshot:
+    candidates: tuple[_ProviderNodeCandidate, ...]
+    source_statuses: tuple[ResourceSourceStatus, ...]
 
 
-@dataclass
-class ControllerConfig:
-    """Controller configuration."""
+@dataclass(frozen=True, slots=True)
+class _SliceSnapshot:
+    slices: tuple[SliceSummary, ...]
+    members: Mapping[tuple[str, str], tuple[SliceMember, ...]]
+    source_statuses: tuple[ResourceSourceStatus, ...]
 
-    host: str = "127.0.0.1"
-    """Host to bind the HTTP server to."""
 
-    port: int = 0
-    """Port to bind the HTTP server to. Use 0 for auto-assign."""
+@dataclass(frozen=True, slots=True)
+class _FailureHighlights:
+    entries: tuple[str, ...]
+    source_status: ResourceSourceStatus | None
 
-    remote_state_dir: str = ""
-    """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
-    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """Schedule-phase cadence: the control tick runs its schedule phase at most
-    this often (a submit wake still forces an immediate schedule-only mini-tick)."""
+@dataclass(frozen=True, slots=True)
+class _ActivityItem:
+    entry: ActivityEntry
+    source_rank: int
+    source_key: tuple[int | str, ...]
 
-    autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """How often the controller runs an autoscale provisioning cycle
-    (``backend.autoscale``). A capacity-managing backend (k8s) no-ops."""
+    @property
+    def order_key(self) -> tuple[int, int, tuple[int | str, ...]]:
+        return (self.entry.occurred_at.epoch_ms(), self.source_rank, self.source_key)
 
-    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
-    """Reconcile cadence — the sole reconcile + liveness channel. The control
-    tick runs its reconcile phase every ``poll_interval`` (or sooner when a fresh
-    assignment forces one) against every active worker. The reconcile RPC outcome
-    is the only liveness signal; ``worker_unreachable_grace`` sets how long a
-    worker may stay unreachable before teardown. The Reconcile RPC is also the
-    sole channel that dispatches new ASSIGNED rows and observes worker state."""
 
-    worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
-    """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before it is failed and torn down. Threaded into each worker-daemon
-    backend at construction to size the ``WorkerHealthTracker`` it owns. Realized as
-    wall-clock elapsed since the worker's last successful reconcile, so detection
-    latency is ~grace regardless of the reconcile cadence or how long a failing pass
-    takes. ~50s tolerates brief network blips without reaping a multi-VM slice;
-    tests shorten it for fast deterministic teardown."""
+class ResourceRuntime(Protocol):
+    """Controller capabilities needed by resource operations."""
 
-    max_tasks_per_job_per_cycle: int = 4
-    """Maximum tasks from a single non-coscheduled job to consider per scheduling
-    cycle. Bounds CPU time in the scheduler when many tasks are pending, preventing
-    GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
-    all tasks for atomic assignment). Set to 0 for unlimited."""
+    @property
+    def backends(self) -> dict[str, TaskBackend]: ...
 
-    checkpoint_interval: Duration | None = None
-    """If set, take a periodic best-effort snapshot this often.
-    Runs on its own checkpoint thread; does not pause the control tick."""
+    @property
+    def federation(self) -> FederationManager: ...
 
-    prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
-    """How often to run the data pruning sweep (default: 1 hour)."""
+    @property
+    def capabilities(self) -> frozenset[BackendCapability]: ...
 
-    job_retention: Duration = field(default_factory=lambda: Duration.from_seconds(7 * 86400))
-    """Delete terminal jobs older than this (default: 7 days)."""
+    def wake(self) -> None: ...
 
-    worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
-    """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness: ...
 
-    slice_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
-    """Delete orphaned slices (no backing worker row) older than this (default: 1 hour).
+    def backend_id_for_scale_group(self, scale_group: str) -> str: ...
 
-    Must comfortably exceed worst-case slice boot + worker-registration lag, so a
-    freshly-created slice whose VMs are still booting is never reaped before its
-    workers register."""
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
-    local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
-    """Local directory for controller DB, logs, bundle cache."""
 
-    auth_verifier: TokenVerifier | None = None
-    """When set, all RPC calls require a valid bearer token verified by this verifier."""
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins used to construct endpoint capability URLs."""
 
-    auth_provider: str | None = None
-    """Name of the auth provider (e.g. "gcp", "static") for the dashboard UI."""
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
 
-    auth: ControllerAuth | None = None
-    """Full auth config passed to the service layer for login and API key management."""
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
 
-    dry_run: bool = False
-    """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
-    user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
-    """Default budget settings applied when a new user is first seen."""
+def _uid(kind: ResourceKind, *parts: object) -> str:
+    name = "\0".join((_RESOURCE_UID_PREFIX, kind.value, *(str(part) for part in parts)))
+    return str(uuid.uuid5(_RESOURCE_UID_NAMESPACE, name))
 
-    endpoints: dict[str, str] = field(default_factory=dict)
-    """Resolved cluster endpoints: logical name -> concrete URL. Built from
-    cluster_config.endpoints by the daemon entrypoint. Registered as system
-    endpoints on the EndpointService during start()."""
 
-    cluster_id: str = ""
-    """This cluster's real federation identity (from the cluster config ``name``).
+def _job_uid(
+    cluster_id: str,
+    job_id: JobName,
+    submitted_at: Timestamp,
+    *,
+    handoff_nonce: str = "",
+) -> str:
+    incarnation = handoff_nonce if job_id.is_root and handoff_nonce else submitted_at.epoch_ms()
+    return _uid(ResourceKind.JOB, cluster_id, job_id.to_wire(), incarnation)
 
-    Sent as the ``requester_id`` on each ``FederationSync`` and used as the
-    authority coordinate on typed resources. Also the tag a minted capability
-    URL carries so a federation parent can relay it back here."""
 
-    dashboard_url: str = ""
-    """This cluster's public origin (cluster config ``dashboard_url``); the local origin
-    a minted capability URL uses when no public parent is configured."""
+def _task_uid(job_uid: str, task_id: JobName) -> str:
+    _, task_index = task_id.require_task()
+    return _uid(ResourceKind.TASK, job_uid, task_index)
 
-    federation_public_parent: str = ""
-    """Public origin of the federation parent that fronts this cluster (cluster config
-    ``federation_public_parent``). Set on a child whose own origin is not world-visible:
-    a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
-    which relays it back here."""
 
-    peers: dict[str, PeerConfig] = field(default_factory=dict)
-    """Federation peers (peer id -> declaration). Empty leaves federation inert:
-    no peer connections, no heartbeat, an empty ListPeers view."""
+def _execution_cluster(cluster_id: str, stored: str) -> str:
+    return cluster_id if stored == LOCAL_CLUSTER else stored
 
-    federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
-    """How often the federation capability heartbeat probes each peer."""
 
-    max_federation_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE
-    """Cap on federation queue promotions to any one peer per control tick. Bounds a
-    burst of over-assignment against a single (possibly stale) availability
-    observation, on top of the reservation ledger."""
+def _query_fingerprint(kind: str, payload: Mapping[str, object]) -> str:
+    encoded = json.dumps({"kind": kind, **payload}, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
-    def __post_init__(self) -> None:
-        if not self.cluster_id.strip():
-            raise ValueError("cluster_id is required")
+
+def _encode_page_token(fingerprint: str, position: Mapping[str, object]) -> str:
+    payload = json.dumps(
+        {"query": fingerprint, "position": position},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_page_token(token: str | None, fingerprint: str) -> dict[str, object] | None:
+    if token is None:
+        return None
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if payload["query"] != fingerprint or not isinstance(payload["position"], dict):
+            raise InvalidPageToken("page token does not match the query")
+        return payload["position"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        if isinstance(exc, InvalidPageToken):
+            raise
+        raise InvalidPageToken("malformed page token") from exc
+
+
+def _task_event_source_key(row: Mapping[str, object]) -> tuple[int, str, str, str, str, str, int]:
+    return _validated_task_event_source_key(
+        (
+            row["attempt_id"],
+            row["attempt_uid"],
+            row["type"],
+            row["reason"],
+            row["message"],
+            row["source"],
+            row["count"],
+        )
+    )
+
+
+def _validated_task_event_source_key(
+    values: tuple[int | str, ...],
+) -> tuple[int, str, str, str, str, str, int]:
+    if (
+        len(values) != 7
+        or type(values[0]) is not int
+        or not all(isinstance(value, str) for value in values[1:6])
+        or type(values[6]) is not int
+    ):
+        raise InvalidPageToken("malformed task-event activity position")
+    return (
+        cast(int, values[0]),
+        cast(str, values[1]),
+        cast(str, values[2]),
+        cast(str, values[3]),
+        cast(str, values[4]),
+        cast(str, values[5]),
+        cast(int, values[6]),
+    )
+
+
+def _sql_key_before(columns: tuple[str, ...], values: tuple[int | str, ...]) -> str:
+    terms = []
+    for index, (column, value) in enumerate(zip(columns, values, strict=True)):
+        equal_prefix = " AND ".join(
+            f"{prefix_column} = {_sql_literal(prefix_value)}"
+            for prefix_column, prefix_value in zip(columns[:index], values[:index], strict=True)
+        )
+        comparison = f"{column} < {_sql_literal(value)}"
+        terms.append(f"({equal_prefix} AND {comparison})" if equal_prefix else comparison)
+    return " OR ".join(terms)
+
+
+def _sql_literal(value: int | str) -> str:
+    if type(value) is int:
+        return str(value)
+    return f"'{value.replace("'", "''")}'"
+
+
+def _available_source(source_id: str, *, backend_id: str = "") -> ResourceSourceStatus:
+    return ResourceSourceStatus(
+        source_id=source_id,
+        backend_id=backend_id,
+        state=SourceState.AVAILABLE,
+        freshness=Freshness.CURRENT,
+        observed_at=Timestamp.now(),
+        error_code="",
+        error_message="",
+    )
+
+
+def _unavailable_backend_source(backend_id: str, error: Exception) -> ResourceSourceStatus:
+    return ResourceSourceStatus(
+        source_id=f"backend:{backend_id}",
+        backend_id=backend_id,
+        state=SourceState.UNAVAILABLE,
+        freshness=Freshness.UNKNOWN,
+        observed_at=None,
+        error_code=_BACKEND_UNAVAILABLE,
+        error_message=str(error)[:MAX_SOURCE_ERROR_MESSAGE],
+    )
+
+
+def _unavailable_finelog_source(cluster_id: str, error: Exception) -> ResourceSourceStatus:
+    return ResourceSourceStatus(
+        source_id=f"finelog:{cluster_id}",
+        backend_id="",
+        state=SourceState.UNAVAILABLE,
+        freshness=Freshness.UNKNOWN,
+        observed_at=None,
+        error_code=_FINELOG_UNAVAILABLE,
+        error_message=str(error)[:MAX_SOURCE_ERROR_MESSAGE],
+    )
+
+
+def _unsupported_source(source_id: str, *, backend_id: str = "") -> ResourceSourceStatus:
+    return ResourceSourceStatus(
+        source_id=source_id,
+        backend_id=backend_id,
+        state=SourceState.UNSUPPORTED,
+        freshness=Freshness.UNKNOWN,
+        observed_at=None,
+        error_code=_SOURCE_UNSUPPORTED,
+        error_message="",
+    )
+
+
+def _opaque_uid(value: str) -> str:
+    return uuid.uuid5(_RESOURCE_UID_NAMESPACE, value).hex
+
+
+def _string_node_attribute(key: str, value: str) -> NodeAttribute | None:
+    if not value:
+        return None
+    return NodeAttribute(key=key, kind=NodeAttributeKind.STRING, string_value=value)
+
+
+def _slice_lifecycle(value: str) -> SliceLifecycle:
+    if value == "ready":
+        return SliceLifecycle.READY
+    if value == "failed":
+        return SliceLifecycle.FAILED
+    if value in {"deleting", "stopping", "terminated"}:
+        return SliceLifecycle.DELETING
+    return SliceLifecycle.CREATING
 
 
 class Controller:
-    """Unified controller managing all components and lifecycle.
-
-    One driver thread runs the control tick — schedule -> reconcile -> autoscale
-    as phases over a single read snapshot, committed through one end-of-tick write
-    transaction — alongside the prune and checkpoint housekeeping threads.
-
-    Args:
-        config: Controller configuration
-        backends: The ``{backend_id: TaskBackend}`` collection the controller
-            drives. Each control-tick phase runs per backend over a snapshot
-            filtered to that backend's workers/tasks; a single-backend mapping
-            keyed :data:`DEFAULT_BACKEND_ID` reproduces the single-backend behavior
-            exactly.
-        backend_configs: Per-backend ``BackendConfig`` map used to route tasks to
-            backends (the meta-scheduler index + allow policies) and to map each
-            worker's scale group to its owning backend. Defaults to one implicit
-            worker-daemon backend per entry in ``backends``.
-        federation_peers: Optional prebuilt peer connections for an embedding
-            that owns transport composition. Production builds peers from config.
-    """
+    """Present typed resources over one controller snapshot and backend set."""
 
     def __init__(
         self,
-        config: ControllerConfig,
-        backends: dict[str, TaskBackend],
-        log_stack: LogStack,
-        threads: ThreadContainer | None = None,
-        db: ControllerDB | None = None,
-        backend_configs: dict[str, BackendConfig] | None = None,
-        federation_peers: Sequence[FederationPeer] | None = None,
-    ):
-        if not config.remote_state_dir:
-            raise ValueError(
-                "remote_state_dir is required. Set via ControllerConfig.remote_state_dir. "
-                "Example: remote_state_dir='gs://my-bucket/iris/state'"
-            )
-        if not backends:
-            raise ValueError("Controller requires at least one backend")
-
-        self._config = config
-        self._stopped = False
-        self._backends: dict[str, TaskBackend] = dict(backends)
-        # Stable processing order: the per-tick loop and the in-tick user-budget
-        # thread walk backends in this order so the decision is deterministic.
-        self._backend_ids: list[str] = sorted(self._backends)
-        # A cluster backend that owns placement (no Iris scheduler) needs the
-        # reconcile tick to drain pending dispatch (promote PENDING→ASSIGNED) and
-        # ride it on the snapshot; a worker-daemon backend reconciles the
-        # already-scheduled worker-bound rows. Resolved per backend from capability.
-        self._dispatch_backends: set[str] = {
-            bid for bid, backend in self._backends.items() if BackendCapability.CLUSTER_VIEW in backend.capabilities
-        }
-
-        # Routing/partition config. Absent (tests with a bare backend) synthesizes
-        # one attribute-less worker-daemon backend per id: every job routes to it
-        # and every scale group maps to it, so routing/partition is the identity.
-        if backend_configs is None:
-            backend_configs = {
-                bid: BackendConfig(
-                    kind="k8s" if BackendCapability.CLUSTER_VIEW in backend.capabilities else "worker_daemon"
-                )
-                for bid, backend in self._backends.items()
-            }
+        *,
+        cluster_id: str,
+        db: ControllerDB,
+        runtime: ResourceRuntime,
+        bundle_store: BundleStore,
+        endpoint_service: EndpointServiceImpl,
+        auth: ControllerAuth,
+        user_budget_defaults: UserBudgetDefaults,
+        capability_url_config: CapabilityUrlConfig,
+        backends: Mapping[str, TaskBackend],
+        backend_configs: Mapping[str, BackendConfig],
+        log_client: LogClient | None = None,
+    ) -> None:
+        if not cluster_id.strip():
+            raise ValueError("cluster_id is required for resource identities")
+        self._cluster_id = cluster_id
+        self._db = db
+        self._runtime = runtime
+        self._jobs = JobResources(
+            db=db,
+            runtime=runtime,
+            bundle_store=bundle_store,
+            auth=auth,
+            user_budget_defaults=user_budget_defaults,
+        )
+        self._endpoint_service = endpoint_service
+        self._auth = auth
+        self._capability_url_config = capability_url_config
+        self._backends = dict(backends)
         if backend_configs.keys() != self._backends.keys():
             raise ValueError("backend_configs keys must exactly match live backend keys")
         self._backend_configs = dict(backend_configs)
-        # The meta-scheduler routes against what each backend advertises, not the
-        # config. Attributes are immutable, so the routing index is built once.
-        self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
-        }
-        self._backend_index = build_backend_index(self._backend_routing)
-        # Worker→backend ownership by scale group, used to wire each backend's
-        # worker source and to route a failed worker's teardown to its owner.
-        self._scale_group_to_backend: dict[str, str] = {
-            scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
-        }
-        self._last_unroutable_jobs: dict[str, str] = {}
-
-        self._promotion_bucket = TokenBucket(
-            capacity=DISPATCH_PROMOTION_RATE,
-            refill_period=Duration.from_minutes(1),
-        )
-
-        config.local_state_dir.mkdir(parents=True, exist_ok=True)
-        if db is not None:
-            self._db = db
-        else:
-            self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Projections self-register into ``self._db.caches`` on construction; every
-        # cursor the DB mints reaches them as ``tx.caches[Projection]`` without any
-        # threaded references.
-        EndpointsProjection(self._db)
-        AttemptCountsProjection(self._db)
-        WorkerAttrsProjection(self._db)
-        RunTemplatesProjection(self._db)
-
-        writes.validate(self._db.caches)
-
-        self._threads = threads if threads is not None else get_thread_container()
-
-        # Federation: remote clusters this controller may delegate whole jobs to.
-        # Inert with no peers configured (build_peers returns nothing, the loops
-        # never start), so a single-cluster deployment is unchanged. The store
-        # gives the manager durable access to this controller's tables. Each peer
-        # connection presents this cluster's federation token (minted from the auth
-        # signing key) so an enforcing peer admits the handoff as a trusted requester.
-        federation_token_provider = (
-            FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
-            if config.peers and config.auth and config.auth.jwt_manager
-            else None
-        )
-        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
-        peers = (
-            list(federation_peers)
-            if federation_peers is not None
-            else build_peers(config.peers, federation_token_provider=federation_token_provider)
-        )
-        self._federation = FederationManager(
-            peers,
-            threads=self._threads,
-            store=ControllerFederationStore(
-                self._db,
-            ),
-            bundles=self._bundle_store,
-            cluster_id=config.cluster_id,
-            heartbeat_interval=config.federation_heartbeat_interval,
-            max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
-        )
-
-        # The log client and its tables are built before the backend and autoscaler
-        # (their finelog handles are constructor args), so the controller only holds
-        # the stack for its own logging and shuts it down at stop().
-        self._log_stack = log_stack
-        self._log_client = log_stack.client
-        self._log_service_address = log_stack.address
-        self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
-
-        self._log_handler.setLevel(logging.DEBUG)
-        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger("iris").addHandler(self._log_handler)
-
-        # Periodic iris.task_state emitter: per-root-job task counts + wait ages
-        # aggregated from the controller DB. Only cluster-view (k8s) controllers
-        # emit it — their rows must ride finelog federation, while a GCP
-        # controller's DB is directly queryable via ExecuteRawQuery. Construction
-        # starts the emitter thread, so it is built in start(), closed in stop().
-        self._task_state_collector: TaskStateCollector | None = None
-
-        # Give each worker-daemon backend its own scale-group-scoped view of the DB
-        # so it sources its own workers (the controller never partitions a worker
-        # snapshot). Each such backend constructs and owns its liveness tracker, then
-        # builds its worker source from the runtime it is bound here; the controller
-        # reaches it through the backend, routed by scale group. A placement-owning
-        # backend (k8s) has no workers and reads its dispatch effects through the
-        # transition reader it received at construction.
-        for backend_id, backend in self._backends.items():
-            if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.bind_runtime(self._build_runtime(backend_id))
-
-        # Seed each backend's liveness from its persisted workers so the scheduler
-        # sees them at startup, and reseed after a DB reopen (checkpoint restore).
-        # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
-        self._seed_backend_liveness()
-        self._db.register_reopen_hook(self._seed_backend_liveness)
-
-        self._endpoint_service = EndpointServiceImpl(
-            db=self._db,
-            system_endpoints={},
-        )
-        capability_url_config = CapabilityUrlConfig(
-            cluster_name=config.cluster_id,
-            local_origin=config.dashboard_url,
-            parent_origin=config.federation_public_parent,
-        )
-        self._resources = ResourceController(
-            cluster_id=config.cluster_id,
-            db=self._db,
-            runtime=self,
-            bundle_store=self._bundle_store,
-            endpoint_service=self._endpoint_service,
-            auth=config.auth or ControllerAuth(),
-            user_budget_defaults=config.user_budget_defaults,
-            capability_url_config=capability_url_config,
-            backends=self._backends,
-            backend_configs=self._backend_configs,
-            log_client=self._log_client,
-        )
-        self._service = ControllerServiceImpl(
-            controller=self,
-            bundle_store=self._bundle_store,
-            log_client=self._log_client,
-            db=self._db,
-            endpoint_service=self._endpoint_service,
-            resources=self._resources,
-            auth=config.auth,
-            user_budget_defaults=config.user_budget_defaults,
-        )
-        self._resource_service = ResourceServiceImpl(self._resources)
-        # Forwards a /proxy request for an endpoint that lives on a federated child
-        # to that peer's controller, presenting this cluster's federation bearer.
-        # Present only when this controller has peers and a signing key to mint with.
-        federated_handoff = (
-            FederatedEndpointHandoff(self._federation.peer_controller_address, federation_token_provider.get_token)
-            if federation_token_provider is not None
-            else None
-        )
-
-        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
-            with self._db.read_snapshot() as q:
-                return reads.has_received_job_from_peer(q, peer_id, root_job)
-
-        external_auth_policy = request_auth_policy(config.auth)
-        proxy_decision_secret = secrets.token_urlsafe(32)
-        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
-        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
-        self._dashboard = ControllerDashboard(
-            self._service,
-            resource_service=self._resource_service,
-            endpoint_service=self._endpoint_service,
-            auth_provider=config.auth_provider,
-            auth_policy=self._auth_policy,
-            reported_auth_policy=external_auth_policy,
-            jwt_manager=config.auth.jwt_manager if config.auth else None,
-            federated_handoff=federated_handoff,
-            federation_owner_check=_federation_owner_check,
-            proxy_decision_secret=proxy_decision_secret,
-        )
-
-        # Wakes the control-tick driver. A submit triggers a schedule-only
-        # mini-tick so submit->assign latency is the schedule time, not gated on
-        # the next reconcile cadence.
-        self._tick_wake = threading.Event()
-        # Set after a tick commits new ASSIGNED rows so the next tick reconciles
-        # immediately (dispatching them) instead of waiting a full poll interval.
-        self._force_reconcile = False
-        # Workers queued off the control loop for teardown on the next tick; see
-        # request_worker_eviction / _drain_pending_evictions.
-        self._pending_evictions: set[WorkerId] = set()
-        self._pending_evictions_lock = threading.Lock()
-        self._server: uvicorn.Server | None = None
-        self._native_proxy = None
-        self._native_proxy_metrics: NativeProxyTelemetry | None = None
-        self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
-        self._control_thread: ManagedThread | None = None
-        self._prune_thread: ManagedThread | None = None
-        self._checkpoint_thread: ManagedThread | None = None
-
-        # Throttles the execution-timeout deadline scan in the reconcile phase.
-        # The reconcile phase runs frequently (poll cadence); the timeout query
-        # only needs minute-granularity, so we gate it behind a 60s limiter.
-        self._timeout_rate_limiter: RateLimiter = RateLimiter(interval_seconds=60.0)
-
-        # Cached scheduling diagnostics: populated each scheduling cycle for
-        # pending jobs that could not be assigned.  Keyed by job wire ID.
-        # RPC handlers read this dict instead of recomputing diagnostics,
-        # avoiding expensive scheduler work on every CLI poll.
-        self._scheduling_diagnostics: dict[str, str] = {}
-        self._scheduling_round: int = 0
-
-        # Last completed scheduling context — None until the first tick runs.
-        # The dashboard diagnostics path reads this instead of rebuilding from
-        # the DB. This is the only ``| None`` attribute on Controller: it is
-        # genuinely None before the first scheduling tick has run.
-        self._last_scheduling_context: SchedulingContext | None = None
-
-        # Set to True once start() is called. Used to gate operations that
-        # are only valid before the controller loops begin (e.g. LoadCheckpoint).
-        self._started = False
-
-        self._atexit_registered = False
-
-        # Rate-limits periodic (best-effort) checkpoint writes.
-        # None when checkpoint_interval is not configured.
-        # mark_run() seeds the last-run time so the first checkpoint fires
-        # one interval after boot rather than immediately — avoids a
-        # checkpoint storm right when the controller comes up.
-        self._periodic_checkpoint_limiter: RateLimiter | None = (
-            RateLimiter(interval_seconds=config.checkpoint_interval.to_seconds())
-            if config.checkpoint_interval is not None
-            else None
-        )
-        if self._periodic_checkpoint_limiter is not None:
-            self._periodic_checkpoint_limiter.mark_run()
-
-    def wake(self) -> None:
-        """Wake the control tick to run a schedule-only mini-tick immediately.
-
-        Called on new job submission so the next tick picks up the new pending
-        tasks (and a fresh assignment then forces the following reconcile) instead
-        of waiting a full poll interval.
-        """
-        self._tick_wake.set()
-
-    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
-        """Queue workers for fail-and-teardown on the next control tick.
-
-        Called off the control-loop thread (the Register RPC, when a worker claims
-        an address still held by a stale row — a recycled internal IP). The
-        teardown reaps the worker's slice through the autoscaler, which is only
-        safe on the control-loop thread, so the work is deferred to the tick drain.
-        """
-        if not worker_ids:
-            return
-        with self._pending_evictions_lock:
-            self._pending_evictions.update(worker_ids)
-        self.wake()
-
-    def _seed_backend_liveness(self) -> None:
-        """Seed each worker-daemon backend's tracker from its own persisted workers.
-
-        Each backend reads its scale-group-scoped workers and heartbeats them into
-        the tracker it owns, so every worker comes up ACTIVE at startup (and again
-        after a DB reopen). Workers that then go unreachable accrue failures through
-        the reconcile fold and are torn down once over threshold.
-        """
-        for backend in self._backends.values():
-            if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.seed_liveness()
-
-    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
-        """Union of every worker-daemon backend's liveness (the trackers are disjoint).
-
-        The controller's Fleet/exec/capacity readers reach worker liveness through
-        this instead of a single shared tracker; a backend that tracks no Iris
-        workers (k8s) contributes nothing.
-        """
-        merged: dict[WorkerId, WorkerLiveness] = {}
-        for backend in self._backends.values():
-            if backend.health is not None:
-                merged.update(backend.health.all())
-        return merged
-
-    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
-        """One worker's liveness from its owning backend's tracker, or a default.
-
-        The backends' trackers are disjoint by scale group, so the union resolves
-        the worker to the single tracker that holds it; an untracked worker yields a
-        default (not-healthy) snapshot, matching a direct tracker miss.
-        """
-        return self.all_liveness().get(worker_id, WorkerLiveness())
+        self._log_client = log_client
 
     @property
-    def started(self) -> bool:
-        """Whether the controller loops have been started."""
-        return self._started
+    def cluster_id(self) -> str:
+        return self._cluster_id
 
-    def start(self) -> None:
-        """Start the dashboard server and the control + housekeeping threads.
+    def received_job_from_peer(self, root_job: JobName, peer_id: str) -> bool:
+        """Whether ``root_job`` is a handoff received from ``peer_id``."""
+        with self._db.read_snapshot() as tx:
+            return reads.has_received_job_from_peer(tx, peer_id, root_job)
 
-        Every backend gets the same threads; each phase no-ops where it does not
-        apply. The unified control tick drives schedule -> reconcile -> autoscale;
-        the reconcile phase is the sole reconcile + liveness channel — it
-        reconciles every active worker (worker-daemon backends) or drains + syncs
-        pods (cluster backends), folds the backend's observed health events, and
-        tears down workers that cross the failure threshold.
-        """
-        self._started = True
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
-
-        if not self._config.dry_run:
-            self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
-            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
-                self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
-
-        # Create and start uvicorn server via spawn_server, which bridges the
-        # ManagedThread stop_event to server.should_exit automatically.
-        # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
-        # intervals of the same length, causing TCP resets on idle connections. Use 120s
-        # to safely cover long polling gaps during job waits.
-        # The native listener is Uvicorn's only ingress and preserves the load
-        # balancer's forwarded headers. Trust its loopback connection so
-        # Starlette builds externally reachable absolute URLs.
-        server_config = uvicorn.Config(
-            self._dashboard.app,
-            host=_PRIVATE_CONTROLLER_HOST,
-            port=0,
-            log_level="warning",
-            log_config=None,
-            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
-            proxy_headers=True,
-            forwarded_allow_ips="*",
-        )
-        self._server = uvicorn.Server(server_config)
-        _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
-        self._threads.spawn_server(self._server, name="controller-server")
-
-        # Register cluster endpoints BEFORE spawning the control loop. Otherwise
-        # the autoscale phase's first tick can create buffer slices whose workers
-        # query the controller for /system/log-server before this dict is
-        # populated, returning an empty result. The slice creation fails, the
-        # group enters backoff, and any task constrained to that group hangs until
-        # the backoff expires.
-        for name, url in self._config.endpoints.items():
-            self._endpoint_service.register_system_endpoint(name, url)
-            logger.info("Registered system endpoint %s -> %s", name, url)
-        self._endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
-
-        # One driver runs schedule -> reconcile -> autoscale as phases of a single
-        # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint
-        # registration because its first autoscale phase may provision buffer slices
-        # whose workers query /system/log-server. In dry-run it runs the schedule
-        # phase only.
-        self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
-
-        if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
-            self._checkpoint_thread = self._threads.spawn(self._run_checkpoint_loop, name="checkpoint-loop")
-
-        # Start the federation capability heartbeat (a no-op with no peers).
-        self._federation.start()
-
-        # Register atexit hook to capture final state for post-mortem analysis.
-        # Unregistered in stop() so it doesn't fire against a closed DB.
-        self._atexit_registered = True
-        atexit.register(self._atexit_checkpoint)
-
-        # Wait for server startup with exponential backoff
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
-            timeout=Duration.from_seconds(5.0),
-        )
-        assert self._server is not None
-        assert self._server.servers
-        private_port = self._server.servers[0].sockets[0].getsockname()[1]
-        self._native_proxy = NativeProxy(
-            self._config.host,
-            self._config.port,
-            f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
-            self._dashboard.proxy_decision_secret,
-            json.dumps(asdict(self._native_proxy_auth_config())),
-        )
-        telemetry.configure(
-            endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
-            service="iris-controller",
-            attributes={"role": "controller"},
-        )
-        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
-        self._replace_native_proxy_registry()
-
-    def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
-        if self._native_proxy is None:
-            return
-        if isinstance(update, ProxyRegistryReset):
-            self._recover_native_proxy_registry()
-            return
-        payload = json.dumps(asdict(update))
-        try:
-            self._native_proxy.update_mappings(payload)
-        except ValueError:
-            logger.exception(
-                "Native proxy rejected endpoint mapping generation %d -> %d; replacing registry",
-                update.base_generation,
-                update.next_generation,
-            )
-            self._recover_native_proxy_registry()
-
-    def _recover_native_proxy_registry(self) -> None:
-        assert self._native_proxy is not None
-        try:
-            self._replace_native_proxy_registry()
-        except ValueError:
-            logger.exception("Native proxy registry replacement failed; pausing native routing")
-            self._native_proxy.pause_registry()
-
-    def _replace_native_proxy_registry(self) -> None:
-        if self._native_proxy is None:
-            return
-        self._native_proxy.pause_registry()
-        snapshot = self._endpoint_service.proxy_registry_snapshot()
-        self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
-
-    def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
-        auth = self._config.auth
-        if auth is None or auth.provider is None:
-            mode = NativeProxyAuthMode.PERMISSIVE
-        elif self._external_auth_allows_anonymous:
-            mode = NativeProxyAuthMode.OPTIONAL
-        else:
-            mode = NativeProxyAuthMode.ENFORCING
-        if auth is not None and auth.jwt_manager is not None:
-            issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
-        else:
-            issuers, jwks = (), {"keys": []}
-        return NativeProxyAuthConfig(
-            mode=mode,
-            issuers=issuers,
-            jwks=jwks,
-            leeway_seconds=NATIVE_PROXY_JWT_LEEWAY_SECONDS,
-            cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
-            cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
-            trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
-            control_audience=CONTROL_PLANE_AUDIENCE,
-            proxy_audience=PROXY_PLANE_AUDIENCE,
-            proxy_scope=ENDPOINT_TOKEN_SCOPE,
-            federation_audience=FEDERATION_AUDIENCE,
-            session_cookie=SESSION_COOKIE,
-            iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
-            iap_issuer=IAP_ISSUER,
-            iap_audience=auth.iap_audience if auth is not None else None,
-            federation_keys=auth.federation_keys if auth is not None else {},
-            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
-            default_user_role=(
-                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
-            ),
-        )
-
-    def stop(self) -> None:
-        """Stop all background components gracefully. Idempotent.
-
-        Shutdown ordering:
-        1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop the control loop so no new work is triggered.
-        3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        4. Stop remaining threads (server) and executors.
-        """
-        if self._stopped:
-            return
-        self._stopped = True
-        # Unregister atexit hook before closing DB connections.
-        if self._atexit_registered:
-            atexit.unregister(self._atexit_checkpoint)
-            self._atexit_registered = False
-        self._tick_wake.set()
-        join_timeout = Duration.from_seconds(5.0)
-        if self._control_thread:
-            self._control_thread.stop()
-            self._control_thread.join(timeout=join_timeout)
-        if self._prune_thread:
-            self._prune_thread.stop()
-            self._prune_thread.join(timeout=join_timeout)
-        if self._checkpoint_thread:
-            self._checkpoint_thread.stop()
-            self._checkpoint_thread.join(timeout=join_timeout)
-        if self._task_state_collector is not None:
-            self._task_state_collector.close()
-        self._federation.stop()
-
-        if self._native_proxy_metrics is not None and self._native_proxy is not None:
-            uninstall_native_proxy_metrics(self._native_proxy)
-            self._native_proxy_metrics = None
-        if self._native_proxy is not None:
-            self._native_proxy.stop()
-        self._threads.stop()
-        # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
-        # stops the platform) and releases the backend's own resources.
-        for backend in self._backends.values():
-            backend.close()
-
-        # Remove log handler before closing log resources to avoid errors
-        # from late log records hitting a closed store or connection.
-        logging.getLogger("iris").removeHandler(self._log_handler)
-        self._log_handler.close()
-        self._log_stack.close()
-        self._db.close()
-        self._bundle_store.close()
-
-    def _atexit_checkpoint(self) -> None:
-        """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
-        if self._config.dry_run:
-            return
-        try:
-            path, _result = write_checkpoint(self._db, self._config.remote_state_dir)
-            logger.info("atexit checkpoint written: %s", path)
-        except Exception:
-            logger.exception("atexit checkpoint failed")
-
-    def _run_prune_loop(self, stop_event: threading.Event) -> None:
-        """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
-        wal_checkpoint_interval = 600.0
-        last_full_prune = 0.0
-        full_prune_interval = self._config.prune_interval.to_seconds()
-
-        while not stop_event.is_set():
-            stop_event.wait(timeout=wal_checkpoint_interval)
-            if stop_event.is_set():
-                break
-
-            try:
-                busy, log_frames, checkpointed = self._db.wal_checkpoint()
-                logger.info(
-                    "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
-                    busy,
-                    log_frames,
-                    checkpointed,
-                )
-            except Exception:
-                logger.exception("WAL checkpoint failed")
-
-            now = time.monotonic()
-            if now - last_full_prune >= full_prune_interval:
-                last_full_prune = now
-                try:
-                    prune_old_data(
-                        self._db,
-                        self._backends.values(),
-                        job_retention=self._config.job_retention,
-                        worker_retention=self._config.worker_retention,
-                        slice_retention=self._config.slice_retention,
-                        stop_event=stop_event,
-                    )
-                except Exception:
-                    logger.exception("Data pruning failed")
-
-    def _run_checkpoint_loop(self, stop_event: threading.Event) -> None:
-        """Periodic checkpoint loop: runs on its own thread so the multi-second
-        backup+upload doesn't stall the control tick cadence."""
-        limiter = self._periodic_checkpoint_limiter
-        assert limiter is not None, "checkpoint loop spawned without configured limiter"
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                write_checkpoint(self._db, self._config.remote_state_dir)
-            except Exception:
-                logger.exception("Periodic checkpoint failed")
-
-    # =========================================================================
-    # Unified control tick
-    # =========================================================================
-
-    def _run_control_loop(self, stop_event: threading.Event) -> None:
-        """Single driver: schedule -> reconcile -> autoscale as phases of one tick.
-
-        Each iteration builds one read snapshot, runs the phases that are due (or,
-        on a wake, a schedule-only mini-tick), folds backend-observed health, and
-        commits through a single end-of-tick write transaction. Wakes every
-        ``poll_interval`` (the reconcile cadence) or sooner on a submit/wake, so
-        the per-phase cadences match the legacy three-loop structure.
-        """
-        base_interval = self._config.poll_interval.to_seconds()
-        schedule_limiter = RateLimiter(interval_seconds=self._config.scheduler_min_interval.to_seconds())
-        reconcile_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
-        autoscale_limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
-        while not stop_event.is_set():
-            woken = self._tick_wake.wait(timeout=base_interval)
-            self._tick_wake.clear()
-            if stop_event.is_set():
-                break
-            try:
-                self._control_tick(
-                    woken=woken,
-                    schedule_limiter=schedule_limiter,
-                    reconcile_limiter=reconcile_limiter,
-                    autoscale_limiter=autoscale_limiter,
-                )
-            except Exception:
-                logger.exception("Control tick failed")
-
-    def _control_tick(
+    def submit_job(
         self,
+        spec: JobSpec,
+        bundle_blob: bytes = b"",
         *,
-        woken: bool,
-        schedule_limiter: RateLimiter,
-        reconcile_limiter: RateLimiter,
-        autoscale_limiter: RateLimiter,
-        force_timeout_scan: bool = False,
-    ) -> None:
-        """Run one control tick: one read snapshot, due phases per backend, one write txn.
-
-        Phase order is schedule -> reconcile -> autoscale. The controller routes
-        pending tasks to each backend (by ``backend_id``) and threads the per-user
-        budget; each backend sources its own workers and runs its
-        ``schedule``/``reconcile``/``autoscale`` over them, and the per-backend
-        results merge into one end-of-tick write transaction. With a single backend
-        every job routes to it, so behavior matches the single-backend path exactly.
-        A wake runs a schedule-only mini-tick; autoscale always pairs with
-        a fresh schedule so it provisions against this tick's residual demand.
-        Execution-timeout finalization and health-driven teardown stay global.
-        """
-        now = Timestamp.now()
-
-        # Dry-run: the schedule phase computes and logs intended assignments but
-        # writes nothing; reconcile and autoscale are suppressed entirely.
-        if self._config.dry_run:
-            self._run_scheduling()
-            return
-
-        self._drain_pending_evictions()
-        run_autoscale = autoscale_limiter.should_run()
-        run_schedule = woken or run_autoscale or schedule_limiter.should_run()
-        run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
-        self._force_reconcile = False
-        scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
-
-        inputs = self._build_tick_inputs(
-            now=now,
-            run_schedule=run_schedule,
-            run_reconcile=run_reconcile,
-            run_autoscale=run_autoscale,
-            scan_timeouts=scan_timeouts,
+        enforce_client_freshness: bool = True,
+    ) -> JobIdentity:
+        job_id = self._jobs.submit(
+            spec,
+            bundle_blob,
+            enforce_client_freshness=enforce_client_freshness,
         )
+        authority = self._job_authorities({job_id})[job_id]
+        key = ResourceKey(authority, ResourceKind.JOB, job_id.to_wire())
+        return self.describe_job(key).summary.identity
 
-        sched_results: dict[str, ScheduleResult] = {}
-        backend_pins: list[tuple[JobName, str]] = []
-        routing_unschedulable: list[tuple[PendingTask, str]] = []
-        if run_schedule:
-            sched = self._schedule_phase(inputs)
-            sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
-
-        # Federation pass: assign queued federated jobs to peers that have room. A pure
-        # decision over the tick's snapshot + the manager's reservation ledger; the
-        # promotions commit (conditionally) in the same end-of-tick transaction. Runs in
-        # the single scheduling thread right after local scheduling, so every scheduling
-        # decision — local placement and peer selection — flows through one place.
-        federation_promotions: list[Promotion] = []
-        if run_schedule and inputs.queued_federation:
-            federation_promotions = self._federation.plan_federation(inputs.queued_federation)
-
-        recon_results: dict[str, ReconcileResult] = {}
-        timeout_decisions: list[TerminalDecision] = []
-        if run_reconcile:
-            timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
-            for backend_id in self._backend_ids:
-                # Worker-daemon backends source their own placement (empty request);
-                # a cluster-view backend gets its dispatch drain.
-                request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
-                recon_results[backend_id] = self._backends[backend_id].reconcile(request)
-
-        auto_results: dict[str, AutoscaleResult] = {}
-        if run_autoscale:
-            for backend_id in self._backend_ids:
-                residual_demand = sched_results[backend_id].residual_demand if backend_id in sched_results else []
-                auto_results[backend_id] = self._backends[backend_id].autoscale(
-                    AutoscaleRequest(residual_demand=residual_demand)
-                )
-
-        merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
-
-        confirmed_promotions = self._commit_tick(
-            sched_result=merged_sched,
-            sched_results=sched_results,
-            backend_pins=backend_pins,
-            routing_unschedulable=routing_unschedulable,
-            recon_results=recon_results,
-            timeout_decisions=timeout_decisions,
-            auto_results=auto_results,
-            federation_promotions=federation_promotions,
-            expired_queued_federation=inputs.expired_queued_federation,
-            now=now,
-        )
-
-        # Charge the reservation ledger only for promotions whose CAS committed, so a
-        # promotion raced by a cancel does not hold phantom peer capacity. The sync
-        # loop delivers each newly-PENDING handle on its next pass.
-        if confirmed_promotions:
-            self._federation.confirm_promotions(confirmed_promotions)
-            logger.info(
-                "Federation: promoted %d queued job(s): %s",
-                len(confirmed_promotions),
-                ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
-            )
-
-        # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
-        # dispatch follow-up for fresh assignments.
-        if merged_sched is not None:
-            self._scheduling_diagnostics = merged_sched.diagnostics
-            self._last_scheduling_context = merged_sched.scheduling_context
-            if merged_sched.assignments:
-                self._force_reconcile = True
-                self._tick_wake.set()
-
-        # Drain each backend's reaped-worker stash (folded during reconcile) AFTER
-        # the reconcile effects are committed, so its teardown reads a fresh snapshot
-        # where the just-finalized terminal attempts are already terminal and skipped.
-        # No worker identity passes through the controller.
-        if run_reconcile:
-            for backend_id in self._backend_ids:
-                self._backends[backend_id].run_teardown()
-
-    def _build_tick_inputs(
+    def submit_federated_job(
         self,
-        *,
-        now: Timestamp,
-        run_schedule: bool,
-        run_reconcile: bool,
-        run_autoscale: bool,
-        scan_timeouts: bool,
-    ) -> _TickInputs:
-        """Assemble the due phases' controller-owned inputs.
+        spec: JobSpec,
+        bundle_blob: bytes,
+        federation: FederationSubmission,
+    ) -> JobIdentity:
+        job_id = self._jobs.submit(
+            spec,
+            bundle_blob,
+            federation=federation,
+            enforce_client_freshness=False,
+        )
+        key = ResourceKey(federation.requester_id, ResourceKind.JOB, job_id.to_wire())
+        return self.describe_job(key).summary.identity
 
-        A placement-owning (``CLUSTER_VIEW``) backend's reconcile request comes
-        from its own dispatch drain (a write), built first. The controller then
-        reads only its own state in one read snapshot — the routing inputs
-        (pending tasks + budgets) for scheduling and the execution-timeout rows;
-        each backend reads its own workers, so nothing here is partitioned.
-        """
-        inputs = _TickInputs()
-
-        # Placement-owning backends each drain their own pending dispatch first.
-        if run_reconcile:
-            for backend_id in self._dispatch_backends:
-                drain = self._drain_dispatch_snapshot(backend_id)
-                inputs.reconcile_requests[backend_id] = ReconcileRequest(
-                    tasks_to_run=drain.tasks_to_run,
-                    running_tasks=drain.running_tasks,
-                )
-
-        # Dedicated control pool: the tick's snapshot must not queue behind a slow
-        # dashboard read for a connection.
-        with self._db.control_read_snapshot() as snap:
-            if run_schedule:
-                inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
-                if self._config.peers:
-                    inputs.queued_federation = build_queued_candidates(snap)
-                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
-            # Execution-timeout finalization is global across worker-daemon and
-            # K8s backends. K8s gangs rely on it because they omit
-            # activeDeadlineSeconds.
-            if run_reconcile and scan_timeouts:
-                inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
-        return inputs
-
-    def _build_runtime(self, backend_id: str) -> BackendRuntime:
-        """Assemble the controller-owned deps a backend builds its worker source from.
-
-        The backend joins this with its own liveness tracker to build a worker source
-        scoped to its scale groups, covering exactly the workers that backend owns.
-        The default backend also owns workers whose scale group is unmapped, matching
-        the scale-group→backend resolution used everywhere else.
-        """
-
-        def owns_scale_group(scale_group: str) -> bool:
-            return self.backend_id_for_scale_group(scale_group) == backend_id
-
-        return BackendRuntime(
-            backend_id=backend_id,
-            db=self._db,
-            owns_scale_group=owns_scale_group,
-            budget_defaults=self._config.user_budget_defaults,
+    def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
+        page_size = _page_size(query.page_size, _MAX_JOB_PAGE)
+        fingerprint = _query_fingerprint(
+            "jobs",
+            {
+                "owner_id": query.owner_id,
+                "parent": query.parent.resource_id if query.parent else None,
+                "job_id_prefix": query.job_id_prefix,
+                "states": sorted(int(state) for state in query.states),
+                "backend_id": query.backend_id,
+                "execution_cluster_id": query.execution_cluster_id,
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        offset = int(position["offset"]) if position is not None else 0
+        parent_job_id = None
+        if query.parent is not None:
+            _require_kind(query.parent, ResourceKind.JOB)
+            parent_job_id = JobName.from_wire(query.parent.resource_id)
+        with self._db.read_snapshot() as tx:
+            rows = reads.list_resource_jobs(
+                tx,
+                owner_id=query.owner_id,
+                job_id_prefix=_escaped_prefix(query.job_id_prefix) if query.job_id_prefix is not None else None,
+                parent_job_id=parent_job_id,
+                states=[int(state) for state in query.states],
+                backend_id=query.backend_id,
+                execution_cluster=(
+                    _stored_cluster(self._cluster_id, query.execution_cluster_id)
+                    if query.execution_cluster_id is not None
+                    else None
+                ),
+                offset=offset,
+                limit=page_size + 1,
+            )
+            parent_coordinates = self._job_coordinates_in_snapshot(
+                tx,
+                {row.parent_job_id for row in rows[:page_size] if row.parent_job_id is not None},
+            )
+        page_rows = rows[:page_size]
+        items = tuple(self._job_summary_from_row(row, parent_coordinates=parent_coordinates) for row in page_rows)
+        if query.parent is not None:
+            items = tuple(item for item in items if item.parent is not None and item.parent.key == query.parent)
+        next_token = None
+        if len(rows) > page_size:
+            next_token = _encode_page_token(fingerprint, {"offset": offset + len(page_rows)})
+        return Page(
+            items=items,
+            next_page_token=next_token,
+            source_statuses=self._source_statuses(),
         )
 
-    def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:
-        """Map each persisted worker to its owning backend via its scale group.
+    def describe_job(self, key: ResourceKey) -> JobDetail:
+        _require_kind(key, ResourceKind.JOB)
+        job_id = JobName.from_wire(key.resource_id)
+        with self._db.read_snapshot() as tx:
+            row = reads.get_job_detail(tx, job_id)
+            coordinates = self._job_rows(tx, {job_id}).get(job_id)
+            workdir_files = reads.get_workdir_files(tx, job_id) if row is not None else {}
+            parent_coordinates = self._job_coordinates_in_snapshot(
+                tx,
+                {row.parent_job_id} if row is not None and row.parent_job_id is not None else set(),
+            )
+        if row is None or coordinates is None:
+            raise ResourceNotFound(key.resource_id)
+        summary = self._job_summary_from_row(
+            row,
+            coordinates=coordinates,
+            parent_coordinates=parent_coordinates,
+        )
+        if summary.identity.key.cluster_id != key.cluster_id:
+            raise ResourceNotFound(key.resource_id)
+        return JobDetail(summary=summary, spec=reconstruct_job_spec(row, workdir_files=workdir_files))
 
-        Used only to route a failed worker's slice teardown to its owning backend;
-        scheduling and reconcile do not partition workers in the controller.
-        """
-        return {
-            wid: self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
-            for wid, scale_group in reads.worker_scale_groups(snap).items()
-        }
+    def job_states(self, resource_ids: Sequence[str]) -> dict[str, JobState]:
+        """Return exact current states for a bounded set of Job IDs."""
+        if len(resource_ids) > _MAX_JOB_STATE_BATCH:
+            raise ValueError(f"Job state batch cannot exceed {_MAX_JOB_STATE_BATCH} items")
+        if not resource_ids:
+            return {}
+        normalized = [JobName.from_wire(resource_id).to_wire() for resource_id in resource_ids]
+        with self._db.read_snapshot() as tx:
+            states = reads.resource_job_states(tx, normalized)
+        return {resource_id: JobState(state) for resource_id, state in states.items()}
 
-    def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
-        """Route unpinned jobs, then run each backend's scheduler over its tasks.
-
-        Returns the per-backend ``ScheduleResult``s, the ``(job_id, backend_id)``
-        pins to stamp, and the ``(task, reason)`` pairs the meta-scheduler could
-        not route (finalized UNSCHEDULABLE in the commit). The decisions do no DB
-        writes. The controller groups *pending tasks* by their routed backend and
-        hands each backend its slice; the backend sources its own workers. The
-        global user budget is threaded across backends in ``self._backend_ids``
-        order so two backends cannot double-spend one user's budget in a tick.
-        """
-        routing = inputs.routing
-        if routing is None:
-            return SchedulePhaseResult({}, [], [])
-        self._scheduling_round += 1
-        trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
-
-        pins, routing_unschedulable = self._route_pending(routing)
-        unschedulable_jobs = {task.job_id for task, _ in routing_unschedulable}
-        backend_of_job = self._make_backend_of_job(pins, unschedulable_jobs, routing)
-
-        tasks_by_backend: dict[str, list[PendingTask]] = {backend_id: [] for backend_id in self._backend_ids}
-        for task in routing.pending_task_rows:
-            backend_id = backend_of_job(task.job_id)
-            if backend_id in tasks_by_backend:
-                tasks_by_backend[backend_id].append(task)
-
-        results: dict[str, ScheduleResult] = {}
-        user_spend = dict(routing.user_spend)
-        for backend_id in self._backend_ids:
-            pending = tasks_by_backend[backend_id]
-            if not pending:
-                results[backend_id] = ScheduleResult()
-                continue
-            kept_jobs = {task.job_id for task in pending}
-            result = self._backends[backend_id].schedule(
-                ScheduleRequest(
-                    pending_task_rows=pending,
-                    requested_bands={jid: band for jid, band in routing.requested_bands.items() if jid in kept_jobs},
-                    user_spend=user_spend,
-                    user_budget_limits=routing.user_budget_limits,
-                    user_budget_defaults=routing.user_budget_defaults,
-                    max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
-                    trace=trace,
+    def observe_jobs(self, summaries: Sequence[JobSummary]) -> tuple[JobObservation, ...]:
+        """Read bounded Task, child, and federation aggregates for Jobs in one snapshot."""
+        if len(summaries) > _MAX_JOB_PAGE:
+            raise ValueError(f"Job observation batch cannot exceed {_MAX_JOB_PAGE} items")
+        if not summaries:
+            return ()
+        job_ids = [JobName.from_wire(summary.identity.key.resource_id) for summary in summaries]
+        if len(set(job_ids)) != len(job_ids):
+            raise ValueError("Job observation keys must be unique")
+        with self._db.read_snapshot() as tx:
+            attempt_counts = reads.attempt_counts_for_jobs(tx, job_ids)
+            task_aggregates = reads.task_summaries_for_jobs(tx, job_ids, attempt_counts=attempt_counts)
+            parents = reads.parent_ids_with_children(tx, job_ids)
+            handoff_states = reads.handoff_states(tx, job_ids)
+        observations = []
+        for summary, job_id in zip(summaries, job_ids, strict=True):
+            aggregate = task_aggregates.get(job_id, reads.TaskJobSummary(job_id=job_id))
+            observations.append(
+                JobObservation(
+                    summary=summary,
+                    tasks=JobTaskAggregate(
+                        task_count=aggregate.task_count,
+                        completed_count=aggregate.completed_count,
+                        failure_count=aggregate.failure_count,
+                        preemption_count=aggregate.preemption_count,
+                        state_counts=tuple(
+                            TaskStateCount(state=TaskState(state), count=count)
+                            for state, count in sorted(aggregate.task_state_counts.items())
+                        ),
+                    ),
+                    has_children=job_id in parents,
+                    federation_posture=self._federation_posture(summary, handoff_states.get(job_id)),
                 )
             )
-            results[backend_id] = result
-            self._accumulate_user_spend(user_spend, result.assignments, routing)
+        return tuple(observations)
 
-        return SchedulePhaseResult(results, list(pins.items()), routing_unschedulable)
+    def _federation_posture(self, summary: JobSummary, handoff_state: int | None) -> FederationPosture:
+        if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+            return FederationPosture.QUEUED
+        if handoff_state == int(HandoffState.PENDING_HANDOFF):
+            return FederationPosture.PENDING_ACCEPTANCE
+        if handoff_state == int(HandoffState.HANDOFF_REJECTED):
+            return FederationPosture.REJECTED
+        if summary.execution_cluster_id == self._cluster_id:
+            return FederationPosture.LOCAL
+        return FederationPosture.ACCEPTED
 
-    def _route_pending(self, routing: RoutingInputs) -> tuple[dict[JobName, str], list[tuple[PendingTask, str]]]:
-        """Run the task->backend meta-scheduler over this tick's unpinned jobs.
+    def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
+        page_size = _page_size(query.page_size, _MAX_TASK_PAGE)
+        fingerprint = _query_fingerprint(
+            "tasks",
+            {
+                "job": query.job.resource_id if query.job else None,
+                "job_id_prefix": query.job_id_prefix,
+                "states": sorted(int(state) for state in query.states),
+                "backend_id": query.backend_id,
+                "authority_cluster_id": query.authority_cluster_id,
+                "execution_cluster_id": query.execution_cluster_id,
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        job_id = None
+        if query.job is not None:
+            _require_kind(query.job, ResourceKind.JOB)
+            job_id = JobName.from_wire(query.job.resource_id)
+        position_submitted_at = None
+        position_task_id = None
+        if position is not None:
+            position_submitted_at = Timestamp.from_ms(int(position["submitted_at_ms"]))
+            position_task_id = JobName.from_wire(str(position["task_id"]))
+        with self._db.read_snapshot() as tx:
+            rows = reads.list_resource_tasks(
+                tx,
+                job_id=job_id,
+                job_id_prefix=_escaped_prefix(query.job_id_prefix) if query.job_id_prefix else None,
+                states=[int(state) for state in query.states],
+                backend_id=query.backend_id,
+                execution_cluster=(
+                    _stored_cluster(self._cluster_id, query.execution_cluster_id)
+                    if query.execution_cluster_id is not None
+                    else None
+                ),
+                position_submitted_at=position_submitted_at,
+                position_task_id=position_task_id,
+                limit=page_size + 1,
+            )
+            page_rows = rows[:page_size]
+            attempt_keys = [
+                (row.task_id, int(row.current_attempt_id)) for row in page_rows if int(row.current_attempt_id) >= 0
+            ]
+            current_attempts = reads.bulk_get_attempts(tx, attempt_keys)
+            jobs = self._job_rows(tx, {row.job_id for row in page_rows})
+        items = tuple(
+            self._task_summary(
+                row,
+                current_attempts.get((row.task_id, int(row.current_attempt_id))),
+                AttemptCounts(row.failure_count, row.preemption_count),
+                jobs[row.job_id],
+            )
+            for row in page_rows
+            if query.authority_cluster_id is None
+            or self._authority_cluster(jobs[row.job_id]) == query.authority_cluster_id
+        )
+        if query.job is not None:
+            items = tuple(item for item in items if item.job.key == query.job)
+        next_token = None
+        if len(rows) > page_size and page_rows:
+            last = page_rows[-1]
+            next_token = _encode_page_token(
+                fingerprint,
+                {"submitted_at_ms": last.submitted_at_ms.epoch_ms(), "task_id": last.task_id.to_wire()},
+            )
+        return Page(items=items, next_page_token=next_token, source_statuses=self._source_statuses())
 
-        Unpinned jobs (``backend_id == ""``) are routed once; pinned jobs keep
-        their backend. Returns the new pins and the per-task UNSCHEDULABLE list for
-        jobs that match no backend.
-        """
-        unpinned: dict[JobName, RoutableJob] = {}
-        rows_by_job: dict[JobName, list[PendingTask]] = {}
-        for task in routing.pending_task_rows:
-            rows_by_job.setdefault(task.job_id, []).append(task)
-            if task.backend_id == "" and task.job_id not in unpinned:
-                unpinned[task.job_id] = RoutableJob(
-                    job_id=task.job_id,
-                    constraints=constraints_from_json(task.constraints_json),
-                )
-        if not unpinned:
-            self._last_unroutable_jobs = {}
-            return {}, []
-        result = route_jobs_to_backends(list(unpinned.values()), self._backend_routing, self._backend_index)
-        routing_unschedulable = [
-            (task, reason) for job_id, reason in result.unschedulable.items() for task in rows_by_job.get(job_id, [])
-        ]
-        self._last_unroutable_jobs = {job_id.to_wire(): reason for job_id, reason in result.unschedulable.items()}
-        return result.pins, routing_unschedulable
+    def describe_task(self, key: ResourceKey) -> TaskDetail:
+        return self._describe_tasks((key,), include_failure_highlights=True)[0]
 
-    def _make_backend_of_job(
-        self, pins: dict[JobName, str], unschedulable_jobs: set[JobName], routing: RoutingInputs
-    ) -> "Callable[[JobName], str]":
-        """Build the job->backend resolver for grouping this tick's pending tasks.
+    def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]:
+        """Describe a bounded Task collection without per-Task finelog enrichment."""
+        return self._describe_tasks(keys, include_failure_highlights=False)
 
-        A job routed UNSCHEDULABLE this tick maps to ``""`` so no backend adopts it
-        (it is finalized in the commit instead); a job pinned this tick maps to its
-        pin; an already-pinned job to its stored backend_id; anything else to the
-        default backend.
-        """
-        db_backend = {task.job_id: task.backend_id for task in routing.pending_task_rows}
-
-        def resolve(job_id: JobName) -> str:
-            if job_id in unschedulable_jobs:
-                return ""
-            if job_id in pins:
-                return pins[job_id]
-            backend_id = db_backend.get(job_id, "")
-            return backend_id if backend_id else DEFAULT_BACKEND_ID
-
-        return resolve
-
-    def _accumulate_user_spend(
-        self, user_spend: dict[str, int], assignments: list[Assignment], routing: RoutingInputs
-    ) -> None:
-        """Add each non-BATCH assignment's resource value to the in-tick spend tally.
-
-        Excludes BATCH (matching ``compute_user_spend``) so a later backend in this
-        tick sees the budget the earlier ones already committed.
-        """
-        if not assignments:
-            return
-        rows_by_task = {task.task_id: task for task in routing.pending_task_rows}
-        for assignment in assignments:
-            if assignment.priority_band == PriorityBand.BATCH:
-                continue
-            row = rows_by_task.get(assignment.task_id)
+    def _describe_tasks(
+        self,
+        keys: Sequence[ResourceKey],
+        *,
+        include_failure_highlights: bool,
+    ) -> tuple[TaskDetail, ...]:
+        if not keys:
+            return ()
+        if len(keys) > _MAX_TASK_PAGE:
+            raise ValueError(f"Task detail batch cannot exceed {_MAX_TASK_PAGE} items")
+        for key in keys:
+            _require_kind(key, ResourceKind.TASK)
+        task_ids = [JobName.from_wire(key.resource_id) for key in keys]
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("Task detail keys must be unique")
+        with self._db.read_snapshot() as tx:
+            rows_by_id = reads.bulk_get_task_detail(tx, task_ids)
+            rows = list(rows_by_id.values())
+            attempts_by_task = reads.all_attempts_for_tasks(tx, task_ids)
+            jobs = self._job_rows(tx, {row.job_id for row in rows})
+        source_statuses = self._source_statuses()
+        details = []
+        for key, task_id in zip(keys, task_ids, strict=True):
+            row = rows_by_id.get(task_id)
             if row is None:
-                continue
-            counts = device_counts_from_json(row.res_device_json)
-            value = resource_value(row.res_cpu_millicores, row.res_memory_bytes, counts.gpu + counts.tpu)
-            user_spend[assignment.task_id.user] = user_spend.get(assignment.task_id.user, 0) + value
-
-    def _merge_schedule_results(self, results: dict[str, ScheduleResult]) -> ScheduleResult:
-        """Concatenate the per-backend schedule results into one for the commit.
-
-        List fields concatenate; diagnostics merge. The cached
-        ``scheduling_context`` (dashboard diagnostics) is the representative
-        backend's post-placement context. With one backend this is exactly that
-        backend's result.
-        """
-        assignments: list[Assignment] = []
-        preemptions: list[TerminalDecision] = []
-        unschedulable: list[PendingTask] = []
-        residual_demand = []
-        diagnostics: dict[str, str] = {}
-        scheduling_context: SchedulingContext | None = None
-        for backend_id in self._backend_ids:
-            result = results.get(backend_id)
-            if result is None:
-                continue
-            assignments.extend(result.assignments)
-            preemptions.extend(result.preemptions)
-            unschedulable.extend(result.unschedulable)
-            residual_demand.extend(result.residual_demand)
-            diagnostics.update(result.diagnostics)
-        representative = results.get(DEFAULT_BACKEND_ID) or next(
-            (results[bid] for bid in self._backend_ids if bid in results), None
-        )
-        if representative is not None and representative.scheduling_context is not None:
-            scheduling_context = representative.scheduling_context
-        return ScheduleResult(
-            assignments=assignments,
-            preemptions=preemptions,
-            unschedulable=unschedulable,
-            residual_demand=residual_demand,
-            diagnostics=diagnostics,
-            scheduling_context=scheduling_context,
-        )
-
-    def _commit_tick(
-        self,
-        *,
-        sched_result: ScheduleResult | None,
-        sched_results: dict[str, ScheduleResult],
-        backend_pins: list[tuple[JobName, str]],
-        routing_unschedulable: list[tuple[PendingTask, str]],
-        recon_results: dict[str, ReconcileResult],
-        timeout_decisions: list[TerminalDecision],
-        auto_results: dict[str, AutoscaleResult],
-        federation_promotions: list[Promotion],
-        expired_queued_federation: list[JobName],
-        now: Timestamp,
-    ) -> list[Promotion]:
-        """Apply this tick's merged decisions and authored effects in one write transaction.
-
-        Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
-        promotions, each backend's reconcile effects, execution-timeout finalizations,
-        per-backend autoscaler state. Each backend already authored its own
-        ``effects`` during reconcile; the controller just commits them uniformly.
-        A no-op tick opens no transaction.
-
-        Returns the federation promotions whose conditional CAS actually committed (a
-        concurrent cancel/terminalize between the tick's read and this write drops the
-        rest); the caller charges the reservation ledger for those.
-        """
-        states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
-
-        has_sched = sched_result is not None and bool(
-            sched_result.unschedulable
-            or sched_result.assignments
-            or sched_result.preemptions
-            or backend_pins
-            or routing_unschedulable
-        )
-        has_recon = any(not result.effects.is_empty for result in recon_results.values())
-        if not (
-            has_sched or has_recon or timeout_decisions or states or federation_promotions or expired_queued_federation
-        ):
-            return []
-
-        confirmed: list[Promotion] = []
-        with self._db.transaction() as cur:
-            if sched_result is not None:
-                self._commit_schedule_decisions(
-                    cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
-                )
-            # Fail queued handoffs past their scheduling deadline before promoting, so a
-            # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
-            for job_id in expired_queued_federation:
-                writes.mark_federated_job_unschedulable(
-                    cur,
-                    job_id,
-                    now_ms=now.epoch_ms(),
-                    error="Scheduling timeout exceeded while queued for a federation peer",
-                )
-            for promotion in federation_promotions:
-                if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
-                    confirmed.append(promotion)
-            for backend_id in self._backend_ids:
-                result = recon_results.get(backend_id)
-                if result is not None and not result.effects.is_empty:
-                    commit_effects(cur, result.effects)
-            if timeout_decisions:
-                finalize(cur, timeout_decisions, now=now)
-            for state in states:
-                persist_autoscaler_state(cur, state)
-        return confirmed
-
-    def _commit_schedule_decisions(
-        self,
-        cur: Tx,
-        result: ScheduleResult,
-        results: dict[str, ScheduleResult],
-        now: Timestamp,
-        backend_pins: list[tuple[JobName, str]],
-        routing_unschedulable: list[tuple[PendingTask, str]],
-    ) -> None:
-        """Persist a ``ScheduleResult`` within the caller's write transaction.
-
-        ``result`` is the merged decision; ``results`` is the per-backend split,
-        used to re-check each backend's assignments against the tracker it owns.
-        Backend pins stamp ``backend_id`` on routed jobs+tasks; jobs that match no
-        backend finalize UNSCHEDULABLE; expired/deadline tasks finalize
-        UNSCHEDULABLE; assignments stamp ASSIGNED (carrying the backend-computed
-        priority band); preemption victims finalize PREEMPT.
-        """
-        if backend_pins:
-            writes.stamp_backend(cur, backend_pins)
-        if routing_unschedulable:
-            finalize(
-                cur,
-                [
-                    TerminalDecision(kind=TerminalKind.UNSCHEDULABLE, task_id=task.task_id, reason=reason)
-                    for task, reason in routing_unschedulable
-                ],
-                now=now,
+                raise ResourceNotFound(key.resource_id)
+            attempts = attempts_by_task.get(task_id, ())
+            current = next((candidate for candidate in attempts if candidate.attempt_id == row.current_attempt_id), None)
+            job = jobs[row.job_id]
+            summary = self._task_summary(
+                row,
+                current,
+                AttemptCounts(row.failure_count, row.preemption_count),
+                job,
             )
-        if result.unschedulable:
-            finalize(cur, self._unschedulable_decisions(result.unschedulable), now=now)
-        # Each backend's assignments are re-checked against the liveness tracker that
-        # backend owns. Walking backends in order reproduces the merged ordering.
-        for backend_id in self._backend_ids:
-            backend_result = results.get(backend_id)
-            if backend_result is None or not backend_result.assignments:
-                continue
-            health = self._backends[backend_id].health
-            assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
-            ops.task.assign(cur, backend_result.assignments, health=health)
-        if result.preemptions:
-            finalize(cur, result.preemptions, now=now)
-            logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
-
-    def _run_scheduling(self) -> SchedulingOutcome:
-        """Run one self-contained scheduling cycle (its own snapshot + commits).
-
-        This is the dry-run scheduling path; the live control tick computes its
-        schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
-        transaction instead.
-
-        The controller reads its own routing inputs (pending tasks + budgets) and
-        hands them to the representative backend, which sources its own workers and
-        returns the pure placement decision; the controller then commits the
-        assignments, preemptions, and unschedulable marks. A worker-daemon backend
-        runs the full gates → order → find_assignments → preemption pipeline; a
-        cluster backend returns an empty result (Kueue schedules).
-
-        No lock is needed since the control driver is single-threaded. Every DB
-        access is serialized by ControllerDB._lock with multi-statement
-        mutations wrapped in BEGIN IMMEDIATE transactions.
-        """
-        self._scheduling_round += 1
-        trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
-
-        with self._db.control_read_snapshot() as snap:
-            routing = build_routing_inputs(snap, self._config.user_budget_defaults)
-
-        if trace:
-            logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks",
-                self._scheduling_round,
-                len(routing.pending_task_rows),
+            if summary.identity.key.cluster_id != key.cluster_id:
+                raise ResourceNotFound(key.resource_id)
+            failure_highlights = (
+                self._failure_highlights(task_id, summary.state)
+                if include_failure_highlights
+                else _FailureHighlights((), None)
             )
-
-        if not routing.pending_task_rows:
-            self._scheduling_diagnostics = {}
-            self._last_scheduling_context = None
-            return SchedulingOutcome.NO_PENDING_TASKS
-
-        result = self._representative_backend.schedule(
-            ScheduleRequest(
-                pending_task_rows=routing.pending_task_rows,
-                requested_bands=routing.requested_bands,
-                user_spend=routing.user_spend,
-                user_budget_limits=routing.user_budget_limits,
-                user_budget_defaults=routing.user_budget_defaults,
-                max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
-                trace=trace,
-            )
-        )
-
-        # Commit the decisions. Expired/deadline tasks are marked UNSCHEDULABLE;
-        # assignments stamp ASSIGNED; preemption finalizes victims.
-        if result.unschedulable:
-            self._mark_tasks_unschedulable(result.unschedulable)
-        if result.assignments:
-            self._commit_assignments(result.assignments)
-        self._apply_preemptions(result.preemptions)
-
-        self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.scheduling_context
-
-        if result.assignments or result.preemptions:
-            log_event(
-                "scheduling_pass_completed",
-                "scheduler",
-                assignments=len(result.assignments),
-                preempted=len(result.preemptions),
-                pending=len(routing.pending_task_rows),
-                workers=len(result.scheduling_context.workers) if result.scheduling_context else 0,
-            )
-            return SchedulingOutcome.ASSIGNMENTS_MADE
-        return SchedulingOutcome.NO_ASSIGNMENTS
-
-    def _commit_assignments(self, assignments: list[Assignment]) -> None:
-        """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
-
-        Each :class:`Assignment` carries the effective priority band the backend
-        computed against the snapshot's user spend, so ``assign_task`` stamps it
-        onto ``tasks.priority_band``. The preemption pass then trusts that
-        stamped value instead of recomputing from current spend every tick.
-
-        The next control tick's reconcile phase reads the ASSIGNED rows and fans
-        out the Reconcile RPCs.
-        """
-        if self._config.dry_run:
-            for assignment in assignments:
-                logger.info("[DRY-RUN] Would assign task %s to worker %s", assignment.task_id, assignment.worker_id)
-            return
-        # The dry-run scheduling path routes through the representative backend, so
-        # these assignments are all its workers — re-checked against its tracker.
-        health = self._representative_backend.health
-        assert health is not None, "scheduling assignments produced by a backend with no liveness tracker"
-        with self._db.transaction() as cur:
-            ops.task.assign(cur, assignments, health=health)
-
-    def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
-        """Finalize the backend's PREEMPT decisions.
-
-        Slice evictions for a coscheduled preemptor's N siblings are
-        all-or-nothing. Victims stop on the next reconcile tick: the planner
-        drops them from the worker's desired set.
-        """
-        if not preemptions:
-            return
-        with self._db.transaction() as cur:
-            finalize(
-                cur,
-                preemptions,
-                now=Timestamp.now(),
-            )
-        logger.info("Preemption pass: %d tasks preempted", len(preemptions))
-
-    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None:
-        """Return cached scheduling diagnostic for a job, or None if unavailable."""
-        return self._scheduling_diagnostics.get(job_wire_id)
-
-    def _timeout_decisions(self, timeout_rows: Sequence[Row], now_ms: int) -> list[TerminalDecision]:
-        """Turn execution-timeout rows from the snapshot into TIMEOUT decisions.
-
-        A row becomes a decision only once its attempt's
-        ``started_at_ms + timeout_ms`` is already in the past.
-        """
-        decisions: list[TerminalDecision] = []
-        for row in timeout_rows:
-            if row.started_at_ms.epoch_ms() + int(row.timeout_ms) > now_ms:
-                continue
-            logger.warning("Task %s exceeded execution timeout, killing", row.task_id)
-            decisions.append(
-                TerminalDecision(
-                    kind=TerminalKind.TIMEOUT,
-                    task_id=row.task_id,
-                    reason="Execution timeout exceeded",
+            detail_sources = source_statuses
+            if failure_highlights.source_status is not None:
+                detail_sources += (failure_highlights.source_status,)
+            details.append(
+                TaskDetail(
+                    summary=summary,
+                    attempts=tuple(self._attempt_summary(row, candidate, job) for candidate in attempts),
+                    source_statuses=detail_sources,
+                    root_cause_highlights=failure_highlights.entries,
                 )
             )
-        return decisions
+        return tuple(details)
 
-    def _mark_tasks_unschedulable(self, tasks: list[PendingTask]) -> None:
-        """Mark a batch of tasks as unschedulable due to scheduling timeout.
-
-        Each entry must be a row from ``reads.pending_tasks_with_jobs``; it carries
-        ``scheduling_timeout_ms`` so no secondary DB fetch is needed.
-        """
-        if not tasks:
-            return
-        if self._config.dry_run:
-            for task in tasks:
-                logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
-            return
-        with self._db.transaction() as cur:
-            finalize(
-                cur,
-                self._unschedulable_decisions(tasks),
-                now=Timestamp.now(),
-            )
-
-    def _unschedulable_decisions(self, tasks: list[PendingTask]) -> list[TerminalDecision]:
-        """Build UNSCHEDULABLE terminal decisions for scheduling-timeout tasks.
-
-        Each entry is a row from ``reads.pending_tasks_with_jobs`` carrying
-        ``scheduling_timeout_ms``. Logs one warning per task.
-        """
-        decisions: list[TerminalDecision] = []
-        for task in tasks:
-            timeout_ms = task.scheduling_timeout_ms
-            timeout = Duration.from_ms(timeout_ms) if timeout_ms is not None else None
-            logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
-            decisions.append(
-                TerminalDecision(
-                    kind=TerminalKind.UNSCHEDULABLE,
-                    task_id=task.task_id,
-                    reason=f"Scheduling timeout exceeded ({timeout})",
-                )
-            )
-        return decisions
-
-    @property
-    def last_scheduling_context(self) -> "SchedulingContext | None":
-        """Return the most recent finalized scheduling context.
-
-        ``None`` before the first scheduling tick has run; otherwise the
-        post-taint context from the last completed ``_run_scheduling`` pass.
-        Consumed by dashboard diagnostics that need a snapshot of capacities
-        and pending tasks without rebuilding from the DB.
-        """
-        return self._last_scheduling_context
-
-    # =========================================================================
-    # Worker reconcile pass (snapshot → backend.reconcile → apply + health)
-    # =========================================================================
-
-    def _drain_dispatch_snapshot(self, backend_id: str) -> reads.ControlSnapshot:
-        """Promote PENDING->ASSIGNED for a placement-owning backend and ride the drain.
-
-        The dispatch drain is the single DB write a ``CLUSTER_VIEW`` backend needs
-        before reconcile (the controller owns the write; the backend places tasks
-        itself). It runs in its own write transaction, so a cluster backend's tick
-        commits twice (drain + end-of-tick) rather than once. With multiple
-        backends the drain is scoped to ``backend_id``'s tasks; a lone backend
-        drains every pending task.
-        """
-        max_promotions = self._promotion_bucket.available
-        backend_filter = None if len(self._backends) == 1 else backend_id
-        with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(
-                cur,
-                max_promotions=max_promotions,
-                backend_id=backend_filter,
-                attempt_backend_id=backend_id,
-                defaults=self._config.user_budget_defaults,
-            )
-        if batch.tasks_to_run:
-            self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        return reads.ControlSnapshot(
-            worker_addresses={},
-            reconcile_rows=[],
-            timeout_rows=[],
-            tasks_to_run=batch.tasks_to_run,
-            running_tasks=batch.running_tasks,
-        )
-
-    def _drain_pending_evictions(self) -> None:
-        """Tear down the workers queued by :meth:`request_worker_eviction`.
-
-        Resolves each evicted worker to its owning backend (by scale group, while
-        the rows still carry it) and hands that backend its share to tear down --
-        the same fail → slice-and-sibling teardown → forget the reconcile fold
-        runs, off the liveness path. The recycled-IP eviction reason is recorded on
-        the failure.
-        """
-        with self._pending_evictions_lock:
-            if not self._pending_evictions:
-                return
-            drained = sorted(self._pending_evictions)
-            self._pending_evictions.clear()
-        with self._db.read_snapshot() as snap:
-            worker_to_backend = self._worker_to_backend_map(snap)
-        reason = "address reused by newly-registered worker (recycled IP)"
-        for backend_id in self._backend_ids:
-            group = [wid for wid in drained if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
-            if group:
-                self._backends[backend_id].teardown(group, reason=reason)
-
-    def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
-        """Write a consistent SQLite checkpoint copy.
-
-        The backup runs through a dedicated read-only source connection
-        (see ``ControllerDB.backup_to``), so writers proceed concurrently
-        under WAL semantics. Heartbeat rounds apply their updates as
-        atomic batches, so each SQLite snapshot already captures a
-        consistent state without needing the heartbeat lock.
-        """
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping checkpoint write")
-            return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
-        backup = backup_databases(self._db)
+    def _failure_highlights(self, task_id: JobName, state: TaskState) -> _FailureHighlights:
+        if state not in (TaskState.FAILED, TaskState.WORKER_FAILED):
+            return _FailureHighlights((), None)
+        if self._log_client is None:
+            status = _unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED))
+            return _FailureHighlights((), status)
+        source, match_scope = build_log_source(task_id)
         try:
-            path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
-        finally:
-            backup.cleanup()
-        log_event(
-            "checkpoint_written",
-            "controller",
-            path=path,
-            jobs=result.job_count,
-            tasks=result.task_count,
-            workers=result.worker_count,
-        )
-        return path, result
-
-    def run_control_tick(self) -> None:
-        """Run one complete control cycle synchronously before :meth:`start`.
-
-        This is the deterministic embedding boundary for callers that own the
-        controller lifecycle themselves. It drives scheduling, reconciliation,
-        and autoscaling once without starting background threads. A running
-        controller already owns its control loop, so mixing the two modes is an
-        error.
-        """
-        if self.started:
-            raise RuntimeError("run_control_tick cannot be used after Controller.start")
-        self._control_tick(
-            woken=True,
-            schedule_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
-            reconcile_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
-            autoscale_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
-            force_timeout_scan=True,
+            entries, _ = fetch_log_entries(
+                self._log_client,
+                source=source,
+                match_scope=match_scope,
+                query=LogQuery(max_lines=200, tail=True),
+            )
+        except (ConnectError, ConnectionError, OSError, RuntimeError) as exc:
+            logger.warning("Finelog unavailable while reading failure highlights for %s: %s", task_id, exc)
+            return _FailureHighlights((), _unavailable_finelog_source(self._cluster_id, exc))
+        return _FailureHighlights(
+            tuple(extract_failure_highlights([entry.data for entry in entries])),
+            _available_source(f"finelog:{self._cluster_id}"),
         )
 
-    @property
-    def resources(self) -> ResourceController:
-        return self._resources
+    def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
+        detail = self.describe_task(locator.task)
+        if locator.attempt_number is None:
+            identity = detail.summary.current_attempt
+            if identity is None:
+                raise ResourceNotFound(f"{locator.task.resource_id}:current")
+            number = identity.attempt_number
+        else:
+            number = locator.attempt_number
+        attempt = next((candidate for candidate in detail.attempts if candidate.identity.attempt_number == number), None)
+        if attempt is None:
+            raise ResourceNotFound(f"{locator.task.resource_id}:{number}")
+        task_id = JobName.from_wire(locator.task.resource_id)
+        with self._db.read_snapshot() as tx:
+            attempt_row = reads.bulk_get_attempts(tx, [(task_id, number)]).get((task_id, number))
+            task_row = reads.get_task_detail(tx, task_id)
+        if attempt_row is None or task_row is None:
+            raise ResourceNotFound(f"{locator.task.resource_id}:{number}")
+        container_id = str(task_row.container_id or "") if number == task_row.current_attempt_id else ""
+        return AttemptDetail(
+            summary=attempt,
+            runtime=self._attempt_runtime(
+                attempt_row,
+                attempt.execution_cluster_id,
+                attempt.backend_id,
+                container_id,
+            ),
+            source_statuses=detail.source_statuses,
+        )
 
-    @property
-    def controller_service(self) -> ControllerServiceImpl:
-        """The ControllerService transport adapter hosted by this controller."""
-        return self._service
+    def require_task(self, identity: TaskIdentity) -> TaskDetail:
+        detail = self.describe_task(identity.key)
+        if detail.summary.identity.task_uid != identity.task_uid:
+            raise ResourceReplaced(identity.key.resource_id)
+        return detail
 
-    # Properties
+    def require_attempt(self, identity: AttemptIdentity) -> AttemptDetail:
+        detail = self.describe_attempt(AttemptLocator(identity.task, identity.attempt_number))
+        if detail.summary.identity.attempt_uid != identity.attempt_uid:
+            raise ResourceReplaced(f"{identity.task.resource_id}:{identity.attempt_number}")
+        return detail
 
-    @property
-    def _representative_backend(self) -> TaskBackend:
-        """The backend the dry-run path and on-demand service RPCs route through.
+    def cancel_job(
+        self,
+        identity: JobIdentity,
+        *,
+        idempotency_key: str,
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
+    ) -> ActionReceipt:
+        payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None)
+        cancel_target: CancelTarget | None = None
+        peer_id: str | None = None
+        execution_cluster_id = ""
+        with self._db.transaction() as tx:
+            duplicate = _duplicate_action(
+                tx,
+                principal_id=principal_id,
+                kind=ActionKind.CANCEL_JOB,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+            )
+            if duplicate is not None:
+                return duplicate
+            row = reads.get_job_detail(tx, JobName.from_wire(identity.key.resource_id))
+            if row is None:
+                raise ResourceNotFound(identity.key.resource_id)
+            coordinates = self._job_rows(tx, {row.job_id})[row.job_id]
+            authority = self._authority_cluster(coordinates)
+            expected = self._job_identity(coordinates).job_uid
+            if identity.key.cluster_id != authority or identity.job_uid != expected:
+                raise ResourceReplaced(identity.key.resource_id)
+            execution_cluster_id = _execution_cluster(self._cluster_id, row.cluster)
+            handle = reads.federated_handle(tx, row.job_id.root_job)
+            if handle is None:
+                job_ops.cancel(tx, job_id=row.job_id, reason="Cancelled by resource action")
+                writes.record_federation_change(tx, row.job_id)
+            elif row.job_id != row.job_id.root_job:
+                peer_id = handle.peer_id
+            else:
+                writes.bump_cancel_intent(tx, row.job_id)
+                if handle.handoff_state in {
+                    int(HandoffState.QUEUED_HANDOFF),
+                    int(HandoffState.PENDING_HANDOFF),
+                }:
+                    writes.mark_federated_job_killed(
+                        tx,
+                        row.job_id,
+                        now_ms=Timestamp.now().epoch_ms(),
+                        error="Cancelled before handoff",
+                    )
+                if handle.handoff_state != int(HandoffState.QUEUED_HANDOFF):
+                    cancel_target = CancelTarget(row.job_id, handle.peer_id)
+            if peer_id is None:
+                receipt = _completed_action(
+                    kind=ActionKind.CANCEL_JOB,
+                    target=identity.key,
+                    expected_target_uid=identity.job_uid,
+                    expected_attempt_uid=None,
+                    result=ActionResult.SATISFIED,
+                )
+                action_persistence.insert_action(
+                    tx,
+                    receipt,
+                    authority_cluster_id=authority,
+                    authority_action_id=receipt.action_id,
+                    backend_id="",
+                    execution_cluster_id=execution_cluster_id,
+                    principal_id=principal_id,
+                    idempotency_key=_require_idempotency_key(idempotency_key),
+                    payload_hash=payload_hash,
+                )
+        if peer_id is not None:
+            receipt = self._runtime.federation.proxy_to_peer(
+                peer_id,
+                lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key),
+            )
+            with self._db.transaction() as tx:
+                duplicate = _duplicate_action(
+                    tx,
+                    principal_id=principal_id,
+                    kind=ActionKind.CANCEL_JOB,
+                    idempotency_key=idempotency_key,
+                    payload_hash=payload_hash,
+                )
+                if duplicate is not None:
+                    return duplicate
+                action_persistence.insert_action(
+                    tx,
+                    receipt,
+                    authority_cluster_id=authority,
+                    authority_action_id=receipt.action_id,
+                    backend_id="",
+                    execution_cluster_id=execution_cluster_id,
+                    principal_id=principal_id,
+                    idempotency_key=_require_idempotency_key(idempotency_key),
+                    payload_hash=payload_hash,
+                )
+            return receipt
+        if cancel_target is not None:
+            self._runtime.federation.deliver_cancel(cancel_target)
+        else:
+            self._runtime.wake()
+        return receipt
 
-        Prefers :data:`DEFAULT_BACKEND_ID`; otherwise the first backend in
-        processing order. With a single backend this is that backend.
-        """
-        return self._backends.get(DEFAULT_BACKEND_ID) or self._backends[self._backend_ids[0]]
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
+    ) -> ActionReceipt:
+        return self._terminal_action(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            idempotency_key=idempotency_key,
+            principal_id=principal_id,
+            kind=ActionKind.RETRY_TASK,
+            terminal_kind=TerminalKind.PREEMPT,
+            result=ActionResult.TARGET_ABSENT,
+        )
 
-    @property
-    def backends(self) -> dict[str, TaskBackend]:
-        """The controller's ``{backend_id: TaskBackend}`` collection."""
-        return self._backends
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
+    ) -> ActionReceipt:
+        task = self.describe_task(identity.task).summary.identity
+        if identity.attempt_number < 0:
+            raise ActionPolicyRejected("attempt_number must be non-negative")
+        return self._terminal_action(
+            task,
+            expected_attempt_uid=identity.attempt_uid,
+            expected_attempt_number=identity.attempt_number,
+            idempotency_key=idempotency_key,
+            principal_id=principal_id,
+            kind=ActionKind.TERMINATE_ATTEMPT,
+            terminal_kind=TerminalKind.TERMINATE,
+            result=ActionResult.SATISFIED,
+        )
 
-    @property
-    def federation(self) -> FederationManager:
-        """The federation manager: peer registry, heartbeat, and submit-time router."""
-        return self._federation
+    def get_action_receipt(self, action_id: str) -> ActionReceipt:
+        with self._db.read_snapshot() as tx:
+            receipt = action_persistence.action_by_id(tx, action_id)
+        if receipt is None:
+            raise ResourceNotFound(action_id)
+        return receipt
 
-    def backend_id_for_scale_group(self, scale_group: str) -> str:
-        """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""
-        return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+    def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]:
+        page_size = _page_size(query.page_size, _MAX_ENDPOINT_PAGE)
+        fingerprint = _query_fingerprint(
+            "endpoints",
+            {
+                "name_prefix": query.name_prefix,
+                "task": query.task.resource_id if query.task is not None else None,
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        task_ids = (JobName.from_wire(query.task.resource_id),) if query.task is not None else ()
+        rows = sorted(
+            self._db.caches[EndpointsProjection].query(
+                ProjectionEndpointQuery(name_prefix=query.name_prefix, task_ids=task_ids)
+            ),
+            key=lambda row: (row.name, row.endpoint_id),
+        )
+        system_endpoints = ()
+        if query.task is None:
+            system_endpoints = tuple(
+                (name, address)
+                for name, address in self._endpoint_service.system_endpoints()
+                if query.name_prefix is None or name.startswith(query.name_prefix)
+            )
+        entries: list[tuple[str, str, EndpointRow | None, str]] = [(row.name, row.endpoint_id, row, "") for row in rows]
+        entries.extend((name, name, None, address) for name, address in system_endpoints)
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        if position is not None:
+            last_key = (str(position["name"]), str(position["endpoint_id"]))
+            entries = [entry for entry in entries if (entry[0], entry[1]) > last_key]
+        page_entries = entries[:page_size]
+        page_rows = [row for _, _, row, _ in page_entries if row is not None]
+        coordinates = self._endpoint_coordinates(page_rows)
+        peer_ids = {execution for authority, execution in coordinates.values() if execution != self._cluster_id}
+        next_token = None
+        if len(entries) > page_size:
+            last_name, last_endpoint_id, _, _ = page_entries[-1]
+            next_token = _encode_page_token(
+                fingerprint,
+                {"name": last_name, "endpoint_id": last_endpoint_id},
+            )
+        return Page(
+            items=tuple(
+                (
+                    self._endpoint_summary(row, coordinates[row.endpoint_id])
+                    if row is not None
+                    else self._system_endpoint_summary(name)
+                )
+                for name, _, row, _ in page_entries
+            ),
+            next_page_token=next_token,
+            source_statuses=(
+                _available_source(f"controller:{self._cluster_id}"),
+                *self._peer_source_statuses(peer_ids),
+            ),
+        )
 
-    @property
-    def scale_group_to_backend(self) -> dict[str, str]:
-        """The ``{scale_group: backend_id}`` routing map."""
-        return self._scale_group_to_backend
+    def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
+        return self.describe_endpoints((key,))[0]
 
-    @property
-    def last_unroutable_jobs(self) -> dict[str, str]:
-        """Job wire ids -> reason from the last scheduling tick's routing pass."""
-        return self._last_unroutable_jobs
+    def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
+        """Return details for a bounded sequence of Endpoint keys."""
+        if len(keys) > _MAX_ENDPOINT_PAGE:
+            raise ValueError(f"Endpoint detail batch cannot exceed {_MAX_ENDPOINT_PAGE} items")
+        for key in keys:
+            _require_kind(key, ResourceKind.ENDPOINT)
 
-    @property
-    def provider(self) -> TaskBackend:
-        return self._representative_backend
+        system_endpoints = dict(self._endpoint_service.system_endpoints())
+        endpoint_ids = tuple(key.resource_id for key in keys if key.resource_id not in system_endpoints)
+        rows = self._db.caches[EndpointsProjection].query(ProjectionEndpointQuery(endpoint_ids=endpoint_ids))
+        rows_by_id = {row.endpoint_id: row for row in rows}
+        coordinates = self._endpoint_coordinates(rows)
+        details: list[EndpointDetail] = []
+        for key in keys:
+            system_address = system_endpoints.get(key.resource_id)
+            if system_address is not None and key.cluster_id == self._cluster_id:
+                details.append(
+                    EndpointDetail(
+                        summary=self._system_endpoint_summary(key.resource_id),
+                        address=system_address,
+                        metadata={},
+                    )
+                )
+                continue
+            row = rows_by_id.get(key.resource_id)
+            if row is None:
+                raise ResourceNotFound(key.resource_id)
+            row_coordinates = coordinates[row.endpoint_id]
+            if row_coordinates[0] != key.cluster_id:
+                raise ResourceNotFound(key.resource_id)
+            details.append(
+                EndpointDetail(
+                    summary=self._endpoint_summary(row, row_coordinates),
+                    address=row.address,
+                    metadata=dict(row.metadata),
+                )
+            )
+        return tuple(details)
 
-    @property
-    def capabilities(self) -> frozenset[BackendCapability]:
-        """Union of every backend's capabilities (which dashboard tabs/RPCs apply)."""
-        return frozenset(cap for backend in self._backends.values() for cap in backend.capabilities)
+    def mint_endpoint_token(self, key: ResourceKey, ttl: Duration | None) -> EndpointToken:
+        detail = self.describe_endpoint(key)
+        if self._auth.jwt_manager is None:
+            raise RuntimeError("JWT manager not configured")
+        row = self._endpoint_service.resolve_task_endpoint(detail.summary.name)
+        if row is None:
+            raise ResourceNotFound(detail.summary.name)
+        if self._auth.provider:
+            authorize_resource_owner(row.task_id.user)
+        ttl_seconds = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
+        if ttl is not None:
+            ttl_seconds = max(1, min(int(ttl.to_seconds()), MAX_ENDPOINT_TOKEN_TTL_SECONDS))
+        now = Timestamp.now()
+        expires_at = Timestamp.from_ms(now.epoch_ms() + ttl_seconds * 1_000)
+        token = self._auth.jwt_manager.create_endpoint_token(
+            row.name,
+            f"iris_ket_{secrets.token_urlsafe(8)}",
+            ttl_seconds=ttl_seconds,
+        )
+        return EndpointToken(
+            token=token,
+            expires_at=expires_at,
+            capability_url=self._capability_url_config.build(row.name, token),
+        )
 
-    @property
-    def port(self) -> int:
-        """Actual bound port (may differ from config if port=0 was specified)."""
-        return self._native_proxy.port if self._native_proxy is not None else self._config.port
+    def fetch_logs(
+        self,
+        target: JobIdentity | TaskIdentity | AttemptIdentity,
+        query: LogQuery = LogQuery(),
+    ) -> LogPage:
+        job_name, attempt_number = self._validated_log_target(target)
+        if self._log_client is None:
+            return LogPage(
+                entries=(),
+                next_cursor=query.cursor,
+                source_statuses=(_unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED)),),
+            )
+        source, match_scope = build_log_source(job_name, attempt_number)
+        try:
+            entries, next_cursor = fetch_log_entries(
+                self._log_client,
+                source=source,
+                match_scope=match_scope,
+                query=query,
+            )
+        except (ConnectError, ConnectionError, OSError, RuntimeError) as exc:
+            return LogPage(
+                entries=(),
+                next_cursor=query.cursor,
+                source_statuses=(_unavailable_finelog_source(self._cluster_id, exc),),
+            )
+        return LogPage(
+            entries=entries,
+            next_cursor=next_cursor,
+            source_statuses=(_available_source(f"finelog:{self._cluster_id}"),),
+        )
 
-    @property
-    def native_proxy_stats(self) -> NativeProxyStats | None:
-        """Return native registry and JWT-cache counters, or ``None`` before startup."""
-        if self._native_proxy is None:
+    def list_activity(self, query: ActivityQuery) -> Page[ActivityEntry]:
+        page_size = _page_size(query.page_size, _MAX_ACTIVITY_PAGE)
+        fingerprint = _query_fingerprint(
+            "activity",
+            {
+                "cluster_id": query.target.cluster_id,
+                "kind": query.target.kind.value,
+                "resource_id": query.target.resource_id,
+                "attempt_uid": query.attempt_uid,
+                "after_ms": query.after.epoch_ms() if query.after is not None else None,
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        before_time = None
+        before_source_rank = None
+        before_source_key: tuple[int | str, ...] = ()
+        if position is not None:
+            try:
+                before_time = Timestamp.from_ms(int(position["occurred_at_ms"]))
+                before_source_rank = int(position["source_rank"])
+                source_key = position["source_key"]
+                if before_source_rank not in (0, 1) or not isinstance(source_key, list):
+                    raise ValueError
+                before_source_key = tuple(source_key)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise InvalidPageToken("malformed activity page position") from exc
+        attempt_uids = self._activity_attempt_uids(query)
+        action_before = None
+        if before_time is not None:
+            if before_source_rank == 0:
+                if len(before_source_key) != 1 or not isinstance(before_source_key[0], str):
+                    raise InvalidPageToken("malformed action activity position")
+                action_before = (before_time, f"action:{before_source_key[0]}")
+            else:
+                action_before = (before_time, "\U0010ffff")
+        with self._db.read_snapshot() as tx:
+            receipts = action_persistence.actions_for_target(
+                tx,
+                query.target,
+                after=query.after,
+                before=action_before,
+                limit=page_size + 1,
+            )
+        entries = [_ActivityItem(self._action_activity(receipt), 0, (receipt.action_id,)) for receipt in receipts]
+        source_statuses = [_available_source(f"controller:{self._cluster_id}")]
+        if attempt_uids:
+            event_entries, event_status = self._task_event_activity(
+                query.target,
+                attempt_uids,
+                query.after,
+                before_time,
+                before_source_rank,
+                before_source_key,
+                page_size + 1,
+            )
+            entries.extend(event_entries)
+            source_statuses.append(event_status)
+        else:
+            source_statuses.append(_unsupported_source(f"finelog:{self._cluster_id}"))
+        entries.sort(key=lambda item: item.order_key, reverse=True)
+        items = tuple(item.entry for item in entries[:page_size])
+        next_token = None
+        if len(entries) > page_size:
+            last = entries[page_size - 1]
+            next_token = _encode_page_token(
+                fingerprint,
+                {
+                    "occurred_at_ms": last.entry.occurred_at.epoch_ms(),
+                    "source_rank": last.source_rank,
+                    "source_key": last.source_key,
+                },
+            )
+        return Page(items=items, next_page_token=next_token, source_statuses=tuple(source_statuses))
+
+    def _activity_attempt_uids(self, query: ActivityQuery) -> tuple[str, ...]:
+        target = query.target
+        if target.kind is ResourceKind.JOB:
+            self.describe_job(target)
+            return ()
+        if target.kind is ResourceKind.TASK:
+            detail = self.describe_task(target)
+            available = tuple(item.identity.attempt_uid for item in detail.attempts)
+        elif target.kind is ResourceKind.ATTEMPT:
+            task_id, _, number_text = target.resource_id.rpartition(":")
+            task_key = ResourceKey(target.cluster_id, ResourceKind.TASK, task_id)
+            detail = self.describe_attempt(AttemptLocator(task_key, int(number_text)))
+            available = (detail.summary.identity.attempt_uid,)
+        else:
+            raise InvalidResourceKey(f"activity is unsupported for {target.kind.value}")
+        if query.attempt_uid is None:
+            return available
+        if query.attempt_uid not in available:
+            raise ResourceReplaced(target.resource_id)
+        return (query.attempt_uid,)
+
+    def _task_event_activity(
+        self,
+        target: ResourceKey,
+        attempt_uids: tuple[str, ...],
+        after: Timestamp | None,
+        before_time: Timestamp | None,
+        before_source_rank: int | None,
+        before_source_key: tuple[int | str, ...],
+        limit: int,
+    ) -> tuple[tuple[_ActivityItem, ...], ResourceSourceStatus]:
+        if self._log_client is None:
+            error = RuntimeError(_FINELOG_NOT_CONFIGURED)
+            return (), _unavailable_finelog_source(self._cluster_id, error)
+        task_id = target.resource_id.rpartition(":")[0] if target.kind is ResourceKind.ATTEMPT else target.resource_id
+        task_literal = task_id.replace("'", "''")
+        uid_literals = ", ".join(f"'{uid.replace("'", "''")}'" for uid in attempt_uids)
+        after_predicate = f" AND ts > to_timestamp({after.epoch_ms()} / 1000.0)" if after is not None else ""
+        before_predicate = ""
+        if before_time is not None:
+            before_ms = before_time.epoch_ms()
+            before_timestamp = f"to_timestamp({before_ms} / 1000.0)"
+            before_predicate = f" AND ts < {before_timestamp}"
+            if before_source_rank == 1:
+                event_key = _validated_task_event_source_key(before_source_key)
+                equal_time_predicate = _sql_key_before(
+                    ("attempt_id", "attempt_uid", "type", "reason", "message", "source", "count"),
+                    event_key,
+                )
+                before_predicate = (
+                    f" AND (ts < {before_timestamp} OR (ts = {before_timestamp} AND ({equal_time_predicate})))"
+                )
+        sql = (
+            "SELECT attempt_id, attempt_uid, ts, type, reason, message, source, count "
+            f"FROM \"{TASK_EVENT_NAMESPACE}\" WHERE task_id = '{task_literal}' "
+            f"AND attempt_uid IN ({uid_literals}){after_predicate}{before_predicate} "
+            "ORDER BY ts DESC, attempt_id DESC, attempt_uid DESC, type DESC, reason DESC, "
+            f"message DESC, source DESC, count DESC LIMIT {limit}"
+        )
+        try:
+            rows = self._log_client.query(sql, max_rows=limit).to_pylist()
+        except (ConnectError, ConnectionError, OSError, RuntimeError, StatsError) as exc:
+            return (), _unavailable_finelog_source(self._cluster_id, exc)
+        entries = tuple(
+            _ActivityItem(self._task_event_entry(task_id, row), 1, _task_event_source_key(row)) for row in rows
+        )
+        return entries, _available_source(f"finelog:{self._cluster_id}")
+
+    def _task_event_entry(self, task_id: str, row: Mapping[str, object]) -> ActivityEntry:
+        attempt_number = row["attempt_id"]
+        attempt_uid = row["attempt_uid"]
+        occurred_at = row["ts"]
+        values = (row["type"], row["reason"], row["message"], row["source"])
+        if not isinstance(attempt_number, int) or not isinstance(attempt_uid, str):
+            raise ValueError("finelog task event has invalid Attempt identity")
+        if not isinstance(occurred_at, datetime) or not all(isinstance(value, str) for value in values):
+            raise ValueError("finelog task event has invalid typed fields")
+        normalized = occurred_at.replace(tzinfo=UTC) if occurred_at.tzinfo is None else occurred_at.astimezone(UTC)
+        severity, kind, message, source = values
+        sequence_source = json.dumps(
+            [task_id, attempt_uid, normalized.isoformat(), severity, kind, message, source, row["count"]],
+            separators=(",", ":"),
+        ).encode()
+        sequence = int.from_bytes(hashlib.sha256(sequence_source).digest()[:8], "big")
+        return ActivityEntry(
+            entry_id=f"finelog:task-events:{sequence}",
+            occurred_at=Timestamp.from_seconds(normalized.timestamp()),
+            source=source,
+            severity=severity,
+            kind=kind,
+            message=message,
+            target=ResourceKey(self._cluster_id, ResourceKind.ATTEMPT, f"{task_id}:{attempt_number}"),
+            attempt_uid=attempt_uid,
+            correlation_id=None,
+            attributes={"count": str(row["count"])},
+        )
+
+    @staticmethod
+    def _action_activity(receipt: ActionReceipt) -> ActivityEntry:
+        return ActivityEntry(
+            entry_id=f"action:{receipt.action_id}",
+            occurred_at=receipt.updated_at,
+            source="controller",
+            severity="error" if receipt.state is ActionState.FAILED else "info",
+            kind=receipt.kind.value,
+            message=receipt.result_message or receipt.result_code.value,
+            target=receipt.target,
+            attempt_uid=receipt.expected_attempt_uid,
+            correlation_id=receipt.action_id,
+            attributes={"state": receipt.state.value, "result": receipt.result_code.value},
+        )
+
+    def exec_attempt(
+        self,
+        identity: AttemptIdentity,
+        command: tuple[str, ...],
+        timeout: Duration | None,
+    ) -> ExecResult:
+        attempt = self.describe_attempt(AttemptLocator(identity.task, identity.attempt_number))
+        if attempt.summary.identity != identity:
+            raise ResourceReplaced(identity.task.resource_id)
+        self._require_current_attempt(identity)
+        task_id = JobName.from_wire(identity.task.resource_id)
+        request = ExecRequest(identity, command, timeout)
+        handle = self._federated_handle(task_id)
+        if handle is not None:
+            return self._runtime.federation.proxy_to_peer(
+                handle.peer_id,
+                lambda peer: peer.exec_in_container(request),
+            )
+        target, backend = self._task_target(identity)
+        self._require_current_attempt(identity)
+        return backend.exec_in_container(target, request)
+
+    def profile_attempt(
+        self,
+        identity: AttemptIdentity,
+        profile: ProfileConfiguration | None,
+        duration: Duration | None,
+    ) -> ProfileResult:
+        attempt = self.describe_attempt(AttemptLocator(identity.task, identity.attempt_number))
+        if attempt.summary.identity != identity:
+            raise ResourceReplaced(identity.task.resource_id)
+        self._require_current_attempt(identity)
+        task_id = JobName.from_wire(identity.task.resource_id)
+        request = ProfileRequest(identity, profile, duration)
+        handle = self._federated_handle(task_id)
+        if handle is not None:
+            return self._runtime.federation.proxy_to_peer(
+                handle.peer_id,
+                lambda peer: peer.profile_task(request),
+            )
+        target, backend = self._task_target(identity)
+        self._require_current_attempt(identity)
+        return backend.profile_task(target, request)
+
+    def _federated_handle(self, task_id: JobName):
+        with self._db.read_snapshot() as tx:
+            return reads.federated_handle(tx, task_id.root_job)
+
+    def _task_target(self, identity: AttemptIdentity) -> tuple[TaskTarget, TaskBackend]:
+        task_id = JobName.from_wire(identity.task.resource_id)
+        with self._db.read_snapshot() as tx:
+            task = reads.get_task_detail(tx, task_id)
+            attempt = reads.bulk_get_attempts(tx, [(task_id, identity.attempt_number)]).get(
+                (task_id, identity.attempt_number)
+            )
+        if task is None or attempt is None:
+            raise ResourceNotFound(identity.task.resource_id)
+        if task.current_attempt_id != identity.attempt_number or str(attempt.attempt_uid) != identity.attempt_uid:
+            raise ResourceReplaced(f"{identity.task.resource_id}:{identity.attempt_number}")
+        backend = self._backends[self._backend_id(str(task.backend_id))]
+        if BackendCapability.CLUSTER_VIEW in backend.capabilities:
+            return (
+                TaskTarget(
+                    task_id=task_id.to_wire(),
+                    attempt_id=identity.attempt_number,
+                    worker_id=None,
+                    address=None,
+                    attempt_uid=identity.attempt_uid,
+                ),
+                backend,
+            )
+        worker_id = attempt.worker_id or task.current_worker_id
+        if worker_id is None:
+            raise ActionPolicyRejected(f"Task {task_id} is not assigned to a node")
+        if not self._runtime.liveness_for_worker(worker_id).healthy:
+            raise ResourceSourceUnavailable(f"Node {worker_id} is unavailable")
+        return (
+            TaskTarget(
+                task_id=task_id.to_wire(),
+                attempt_id=identity.attempt_number,
+                worker_id=worker_id,
+                address=task.current_worker_address,
+                attempt_uid=identity.attempt_uid,
+            ),
+            backend,
+        )
+
+    def _validated_log_target(
+        self,
+        target: JobIdentity | TaskIdentity | AttemptIdentity,
+    ) -> tuple[JobName, int]:
+        if isinstance(target, JobIdentity):
+            detail = self.describe_job(target.key)
+            if detail.summary.identity.job_uid != target.job_uid:
+                raise ResourceReplaced(target.key.resource_id)
+            return JobName.from_wire(target.key.resource_id), -1
+        if isinstance(target, TaskIdentity):
+            self.require_task(target)
+            return JobName.from_wire(target.key.resource_id), -1
+        self.require_attempt(target)
+        return JobName.from_wire(target.task.resource_id), target.attempt_number
+
+    def _require_current_attempt(self, identity: AttemptIdentity) -> None:
+        task_id = JobName.from_wire(identity.task.resource_id)
+        with self._db.read_snapshot() as tx:
+            row = reads.current_attempt_identity(tx, task_id)
+        if row is None:
+            raise ResourceNotFound(identity.task.resource_id)
+        if row.attempt_id != identity.attempt_number or str(row.attempt_uid or "") != identity.attempt_uid:
+            raise ResourceReplaced(f"{identity.task.resource_id}:{identity.attempt_number}")
+
+    def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]:
+        """List one bounded page of canonical Nodes."""
+        page, _details = self.list_nodes_with_details(query)
+        return page
+
+    def list_nodes_with_details(
+        self,
+        query: NodeQuery = NodeQuery(),
+    ) -> tuple[Page[NodeSummary], Mapping[tuple[str, str], _NodeDetails]]:
+        """List Nodes and their row-local details without loading attempt history."""
+        page_size = _page_size(query.page_size, _MAX_TASK_PAGE)
+        fingerprint = _query_fingerprint(
+            "nodes",
+            {
+                "backend_id": query.backend_id,
+                "contains": query.contains,
+                "health": sorted(value.value for value in query.health),
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        last_key = (
+            (
+                str(position["backend_id"]),
+                str(position["node_id"]),
+                str(position["node_uid"]),
+            )
+            if position is not None
+            else None
+        )
+        provider_snapshot = self._provider_node_snapshot()
+        candidates: list[_NodeCandidate] = [
+            candidate
+            for candidate in provider_snapshot.candidates
+            if (query.backend_id is None or candidate.summary.identity.backend_id == query.backend_id)
+            and (
+                query.contains is None
+                or query.contains.casefold() in candidate.summary.identity.key.resource_id.casefold()
+            )
+            and (not query.health or candidate.summary.health in query.health)
+            and (last_key is None or _node_candidate_key(candidate) > last_key)
+        ]
+        with self._db.read_snapshot() as tx:
+            candidates.extend(self._worker_node_candidates(tx, query, last_key, page_size + 1))
+            candidates.sort(key=_node_candidate_key)
+            selected = candidates[:page_size]
+            worker_nodes, worker_details = self._materialize_worker_nodes(
+                tx,
+                [candidate for candidate in selected if isinstance(candidate, _WorkerNodeCandidate)],
+            )
+
+        nodes_by_key = {_node_summary_key(node): node for node in worker_nodes}
+        details: dict[tuple[str, str], _NodeDetails] = dict(worker_details)
+        items: list[NodeSummary] = []
+        for candidate in selected:
+            if isinstance(candidate, _ProviderNodeCandidate):
+                node = candidate.summary
+                details[(node.identity.backend_id, node.identity.node_uid)] = candidate.details
+            else:
+                node = nodes_by_key[_node_candidate_key(candidate)]
+            items.append(node)
+
+        next_token = None
+        if len(candidates) > page_size:
+            last = items[-1]
+            next_token = _encode_page_token(
+                fingerprint,
+                {
+                    "backend_id": last.identity.backend_id,
+                    "node_id": last.identity.key.resource_id,
+                    "node_uid": last.identity.node_uid,
+                },
+            )
+        return (
+            Page(
+                items=tuple(items),
+                next_page_token=next_token,
+                source_statuses=provider_snapshot.source_statuses,
+            ),
+            details,
+        )
+
+    def describe_node(self, locator: NodeLocator) -> NodeDetail:
+        provider_snapshot = self._provider_node_snapshot()
+        matches: list[tuple[NodeSummary, _NodeDetails]] = [
+            (candidate.summary, candidate.details)
+            for candidate in provider_snapshot.candidates
+            if candidate.summary.identity.key == locator.key
+            and candidate.summary.identity.backend_id == locator.backend_id
+            and (locator.node_uid is None or candidate.summary.identity.node_uid == locator.node_uid)
+        ]
+        backend = self._backends.get(locator.backend_id)
+        if backend is not None and BackendCapability.WORKER_DAEMON in backend.capabilities:
+            worker_id = WorkerId(locator.key.resource_id)
+            with self._db.read_snapshot() as tx:
+                worker = reads.get_worker_detail(tx, worker_id)
+                if (
+                    worker is not None
+                    and self._runtime.backend_id_for_scale_group(str(worker.scale_group or "")) == locator.backend_id
+                    and (locator.node_uid is None or locator.node_uid == worker_id)
+                ):
+                    nodes, details = self._materialize_worker_nodes(
+                        tx,
+                        [_WorkerNodeCandidate(locator.backend_id, worker, self._runtime.liveness_for_worker(worker_id))],
+                    )
+                    node = nodes[0]
+                    matches.append((node, details[(locator.backend_id, node.identity.node_uid)]))
+        if not matches:
+            raise ResourceNotFound(locator.key.resource_id)
+        if len(matches) != 1:
+            raise ActionPolicyRejected(f"Node locator {locator.key.resource_id!r} is ambiguous")
+        node, details = matches[0]
+        return NodeDetail(
+            summary=node,
+            address=details.address,
+            attributes=details.attributes,
+            recent_attempts=self._recent_attempts_for_node(node),
+            bootstrap_log_key=None,
+            source_statuses=provider_snapshot.source_statuses,
+        )
+
+    def _recent_attempts_for_node(self, node: NodeSummary) -> tuple[AttemptSummary, ...]:
+        backend = self._backends[node.identity.backend_id]
+        with self._db.read_snapshot() as tx:
+            if BackendCapability.WORKER_DAEMON in backend.capabilities:
+                attempts = reads.recent_attempts_for_worker(
+                    tx,
+                    WorkerId(node.identity.key.resource_id),
+                    limit=_MAX_NODE_RECENT_ATTEMPTS,
+                )
+            elif BackendCapability.CLUSTER_VIEW in backend.capabilities:
+                attempts = reads.recent_attempts_for_provider_node(
+                    tx,
+                    node.identity.backend_id,
+                    node.identity.key.resource_id,
+                    limit=_MAX_NODE_RECENT_ATTEMPTS,
+                )
+            else:
+                return ()
+            if not attempts:
+                return ()
+            task_ids = {attempt.task_id for attempt in attempts}
+            tasks = reads.bulk_get_task_detail(tx, task_ids)
+            jobs = self._job_rows(tx, {task.job_id for task in tasks.values()})
+        return tuple(
+            self._attempt_summary(tasks[attempt.task_id], attempt, jobs[tasks[attempt.task_id].job_id])
+            for attempt in attempts
+        )
+
+    def list_slices(self, query: SliceQuery = SliceQuery()) -> Page[SliceSummary]:
+        page_size = _page_size(query.page_size, _MAX_TASK_PAGE)
+        fingerprint = _query_fingerprint(
+            "slices",
+            {
+                "backend_id": query.backend_id,
+                "scaling_group_id": query.scaling_group_id,
+                "page_size": page_size,
+            },
+        )
+        position = _decode_page_token(query.page_token, fingerprint)
+        snapshot = self._slice_snapshot()
+        filtered = [
+            item
+            for item in snapshot.slices
+            if (query.backend_id is None or item.identity.backend_id == query.backend_id)
+            and (query.scaling_group_id is None or item.scaling_group_id == query.scaling_group_id)
+        ]
+        filtered.sort(
+            key=lambda item: (
+                item.identity.backend_id,
+                item.identity.key.resource_id,
+                item.identity.slice_uid,
+            )
+        )
+        if position is not None:
+            last_key = (
+                str(position["backend_id"]),
+                str(position["slice_id"]),
+                str(position["slice_uid"]),
+            )
+            filtered = [
+                item
+                for item in filtered
+                if (item.identity.backend_id, item.identity.key.resource_id, item.identity.slice_uid) > last_key
+            ]
+        items = tuple(filtered[:page_size])
+        next_token = None
+        if len(filtered) > page_size:
+            last = items[-1]
+            next_token = _encode_page_token(
+                fingerprint,
+                {
+                    "backend_id": last.identity.backend_id,
+                    "slice_id": last.identity.key.resource_id,
+                    "slice_uid": last.identity.slice_uid,
+                },
+            )
+        return Page(items=items, next_page_token=next_token, source_statuses=snapshot.source_statuses)
+
+    def describe_slice(self, locator: SliceLocator) -> SliceDetail:
+        snapshot = self._slice_snapshot()
+        matches = [
+            item
+            for item in snapshot.slices
+            if item.identity.key == locator.key
+            and item.identity.backend_id == locator.backend_id
+            and (locator.slice_uid is None or item.identity.slice_uid == locator.slice_uid)
+        ]
+        if not matches:
+            raise ResourceNotFound(locator.key.resource_id)
+        if len(matches) != 1:
+            raise ActionPolicyRejected(f"Slice locator {locator.key.resource_id!r} is ambiguous")
+        item = matches[0]
+        return SliceDetail(
+            summary=item,
+            members=snapshot.members.get((item.identity.backend_id, item.identity.slice_uid), ()),
+            source_statuses=snapshot.source_statuses,
+        )
+
+    def _provider_node_snapshot(self) -> _ProviderNodeSnapshot:
+        candidates: list[_ProviderNodeCandidate] = []
+        statuses: list[ResourceSourceStatus] = []
+        for backend_id, backend in sorted(self._backends.items()):
+            try:
+                observation = observe_backend_resources(backend)
+            except (ConnectionError, ProviderError) as exc:
+                statuses.append(_unavailable_backend_source(backend_id, exc))
+            else:
+                if len(observation.nodes) > MAX_PROVIDER_SNAPSHOT_ITEMS:
+                    statuses.append(
+                        _unavailable_backend_source(
+                            backend_id,
+                            ValueError(f"provider returned more than {MAX_PROVIDER_SNAPSHOT_ITEMS} nodes"),
+                        )
+                    )
+                    continue
+                observed_at = Timestamp.now()
+                for node in observation.nodes:
+                    identity = NodeIdentity(
+                        ResourceKey(self._cluster_id, ResourceKind.NODE, node.provider_node_id),
+                        backend_id,
+                        _opaque_uid(f"kubernetes:{backend_id}:{node.provider_node_id}:{node.incarnation}"),
+                    )
+                    summary = NodeSummary(
+                        identity=identity,
+                        health=NodeHealth.READY if node.ready else NodeHealth.UNAVAILABLE,
+                        schedulable=node.schedulable,
+                        capacity=node.capacity,
+                        scaling_group_id=None,
+                        slice=None,
+                        running_task_count=node.running_task_count,
+                        observed_at=observed_at,
+                        region=node.region,
+                    )
+                    attributes = tuple(
+                        attribute
+                        for attribute in (
+                            _string_node_attribute("instance_type", node.instance_type or ""),
+                            _string_node_attribute("region", node.region or ""),
+                        )
+                        if attribute is not None
+                    )
+                    candidates.append(_ProviderNodeCandidate(summary, _NodeDetails(None, attributes)))
+                statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
+        return _ProviderNodeSnapshot(tuple(candidates), tuple(statuses))
+
+    def _worker_node_candidates(
+        self,
+        tx: Tx,
+        query: NodeQuery,
+        last_key: tuple[str, str, str] | None,
+        limit: int,
+    ) -> list[_WorkerNodeCandidate]:
+        configured_scale_groups = {
+            scale_group: backend_id
+            for backend_id, config in self._backend_configs.items()
+            for scale_group in config.scale_groups
+        }
+        candidates: list[_WorkerNodeCandidate] = []
+        for backend_id, backend in sorted(self._backends.items()):
+            if BackendCapability.WORKER_DAEMON not in backend.capabilities:
+                continue
+            if query.backend_id is not None and query.backend_id != backend_id:
+                continue
+            if last_key is not None and backend_id < last_key[0]:
+                continue
+            after_worker_id = WorkerId(last_key[1]) if last_key is not None and backend_id == last_key[0] else None
+            include_after = after_worker_id is not None
+            while len(candidates) < limit:
+                if backend_id == DEFAULT_BACKEND_ID:
+                    rows = reads.worker_detail_page_outside_scale_groups(
+                        tx,
+                        [
+                            scale_group
+                            for scale_group, owner in configured_scale_groups.items()
+                            if owner != DEFAULT_BACKEND_ID
+                        ],
+                        after_worker_id=after_worker_id,
+                        include_after=include_after,
+                        limit=_NODE_WORKER_SCAN_BATCH,
+                    )
+                else:
+                    rows = reads.worker_detail_page_in_scale_groups(
+                        tx,
+                        [scale_group for scale_group, owner in configured_scale_groups.items() if owner == backend_id],
+                        after_worker_id=after_worker_id,
+                        include_after=include_after,
+                        limit=_NODE_WORKER_SCAN_BATCH,
+                    )
+                if not rows:
+                    break
+                for worker in rows:
+                    worker_id = WorkerId(worker.worker_id)
+                    candidate = _WorkerNodeCandidate(
+                        backend_id,
+                        worker,
+                        self._runtime.liveness_for_worker(worker_id),
+                    )
+                    if last_key is not None and _node_candidate_key(candidate) <= last_key:
+                        continue
+                    if query.contains is not None and query.contains.casefold() not in worker_id.casefold():
+                        continue
+                    health = NodeHealth.READY if candidate.liveness.healthy else NodeHealth.DEGRADED
+                    if query.health and health not in query.health:
+                        continue
+                    candidates.append(candidate)
+                    if len(candidates) == limit:
+                        break
+                if len(candidates) == limit or len(rows) < _NODE_WORKER_SCAN_BATCH:
+                    break
+                after_worker_id = WorkerId(rows[-1].worker_id)
+                include_after = False
+        return candidates
+
+    def _materialize_worker_nodes(
+        self,
+        tx: Tx,
+        candidates: Sequence[_WorkerNodeCandidate],
+    ) -> tuple[tuple[NodeSummary, ...], Mapping[tuple[str, str], _NodeDetails]]:
+        if not candidates:
+            return (), {}
+        worker_ids = [WorkerId(candidate.worker.worker_id) for candidate in candidates]
+        attributes_by_worker: dict[WorkerId, dict[str, str | int | float]] = {}
+        for row in reads.worker_attribute_rows(tx, worker_ids):
+            key, value = decode_attribute_value(row)
+            attributes_by_worker.setdefault(WorkerId(row.worker_id), {})[key] = value
+        running = reads.running_tasks_by_worker(tx, set(worker_ids))
+        nodes: list[NodeSummary] = []
+        details: dict[tuple[str, str], _NodeDetails] = {}
+        for candidate in candidates:
+            worker = candidate.worker
+            worker_id = WorkerId(worker.worker_id)
+            stored_attributes = attributes_by_worker.get(worker_id, {})
+            metadata = worker_node_metadata(worker, stored_attributes)
+            identity = NodeIdentity(
+                ResourceKey(self._cluster_id, ResourceKind.NODE, worker_id),
+                candidate.backend_id,
+                worker_id,
+            )
+            slice_identity = None
+            if metadata.slice_id:
+                slice_identity = SliceIdentity(
+                    ResourceKey(self._cluster_id, ResourceKind.SLICE, metadata.slice_id),
+                    candidate.backend_id,
+                    _opaque_uid(f"rpc:{candidate.backend_id}:{metadata.slice_id}"),
+                )
+            nodes.append(
+                NodeSummary(
+                    identity=identity,
+                    health=NodeHealth.READY if candidate.liveness.healthy else NodeHealth.DEGRADED,
+                    schedulable=candidate.liveness.healthy,
+                    capacity=metadata.capacity,
+                    scaling_group_id=str(worker.scale_group or "") or None,
+                    slice=slice_identity,
+                    running_task_count=len(running.get(worker_id, set())),
+                    observed_at=Timestamp.from_ms(candidate.liveness.last_heartbeat_ms),
+                    region=metadata.region,
+                )
+            )
+            details[(candidate.backend_id, identity.node_uid)] = _NodeDetails(
+                str(worker.address or "") or None,
+                metadata.attributes,
+            )
+        return tuple(nodes), details
+
+    def _slice_snapshot(self) -> _SliceSnapshot:
+        slices: list[SliceSummary] = []
+        members: dict[tuple[str, str], tuple[SliceMember, ...]] = {}
+        statuses: list[ResourceSourceStatus] = []
+        for backend_id, backend in sorted(self._backends.items()):
+            if BackendCapability.IRIS_AUTOSCALER not in backend.capabilities:
+                statuses.append(_unsupported_source(f"backend:{backend_id}", backend_id=backend_id))
+                continue
+            try:
+                observation = observe_autoscaler_resources(backend)
+            except (ConnectionError, ProviderError) as exc:
+                statuses.append(_unavailable_backend_source(backend_id, exc))
+                continue
+            if len(observation.slices) > MAX_PROVIDER_SNAPSHOT_ITEMS:
+                statuses.append(
+                    _unavailable_backend_source(
+                        backend_id,
+                        ValueError(f"provider returned more than {MAX_PROVIDER_SNAPSHOT_ITEMS} slices"),
+                    )
+                )
+                continue
+            statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
+            for item in observation.slices:
+                slice_uid = _opaque_uid(
+                    f"rpc:{backend_id}:{item.slice_id}:{item.created_at.epoch_ms() if item.created_at else 0}"
+                )
+                identity = SliceIdentity(
+                    ResourceKey(self._cluster_id, ResourceKind.SLICE, item.slice_id),
+                    backend_id,
+                    slice_uid,
+                )
+                lifecycle = _slice_lifecycle(item.lifecycle_state)
+                membership_state = (
+                    MembershipState.OBSERVED if lifecycle is SliceLifecycle.READY else MembershipState.UNKNOWN
+                )
+                slices.append(
+                    SliceSummary(
+                        identity=identity,
+                        scaling_group_id=item.scaling_group_id,
+                        lifecycle=lifecycle,
+                        membership_state=membership_state,
+                        observed_member_count=len(item.provider_node_ids),
+                        observed_at=observation.observed_at,
+                        error_message=item.error_message,
+                    )
+                )
+                members[(backend_id, slice_uid)] = tuple(
+                    SliceMember(
+                        provider_node_id=provider_node_id,
+                        node=None,
+                        observed_at=observation.observed_at,
+                    )
+                    for provider_node_id in item.provider_node_ids
+                )
+        return _SliceSnapshot(tuple(slices), members, tuple(statuses))
+
+    def _terminal_action(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+        principal_id: str,
+        kind: ActionKind,
+        terminal_kind: TerminalKind,
+        result: ActionResult,
+        expected_attempt_number: int | None = None,
+    ) -> ActionReceipt:
+        payload_hash = _action_payload_hash(kind, identity.task_uid, expected_attempt_uid)
+        peer_id: str | None = None
+        backend_id = ""
+        execution_cluster_id = ""
+        remote_attempt: AttemptIdentity | None = None
+        with self._db.transaction() as tx:
+            duplicate = _duplicate_action(
+                tx,
+                principal_id=principal_id,
+                kind=kind,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+            )
+            if duplicate is not None:
+                return duplicate
+            task_id = JobName.from_wire(identity.key.resource_id)
+            row = reads.get_task_detail(tx, task_id)
+            if row is None:
+                raise ResourceNotFound(identity.key.resource_id)
+            job = self._job_rows(tx, {row.job_id})[row.job_id]
+            authority = self._authority_cluster(job)
+            current_identity = _task_uid(self._job_identity(job).job_uid, row.task_id)
+            if identity.key.cluster_id != authority or identity.task_uid != current_identity:
+                raise ResourceReplaced(identity.key.resource_id)
+            attempt = reads.bulk_get_attempts(tx, [(row.task_id, int(row.current_attempt_id))]).get(
+                (row.task_id, int(row.current_attempt_id))
+            )
+            if attempt is None:
+                raise ActionPolicyRejected("Task has no current Attempt")
+            if expected_attempt_number is not None and int(attempt.attempt_id) != expected_attempt_number:
+                raise ResourceReplaced(f"{identity.key.resource_id}:{expected_attempt_number}")
+            if str(attempt.attempt_uid) != expected_attempt_uid:
+                raise ResourceReplaced(f"{identity.key.resource_id}:{attempt.attempt_id}")
+            handle = reads.federated_handle(tx, row.task_id.root_job)
+            if handle is not None:
+                peer_id = handle.peer_id
+                backend_id = str(row.backend_id or "")
+                execution_cluster_id = _execution_cluster(self._cluster_id, str(row.cluster))
+                remote_attempt = AttemptIdentity(identity.key, int(attempt.attempt_id), str(attempt.attempt_uid))
+            else:
+                finalize(
+                    tx,
+                    [
+                        TerminalDecision(
+                            kind=terminal_kind,
+                            task_id=row.task_id,
+                            reason="Requested through the resource action API",
+                        )
+                    ],
+                    now=Timestamp.now(),
+                )
+            target = identity.key
+            if kind is ActionKind.TERMINATE_ATTEMPT:
+                target = ResourceKey(
+                    authority,
+                    ResourceKind.ATTEMPT,
+                    f"{row.task_id.to_wire()}:{attempt.attempt_id}",
+                )
+            if peer_id is None:
+                receipt = _completed_action(
+                    kind=kind,
+                    target=target,
+                    expected_target_uid=identity.task_uid,
+                    expected_attempt_uid=expected_attempt_uid,
+                    result=result,
+                )
+                action_persistence.insert_action(
+                    tx,
+                    receipt,
+                    authority_cluster_id=authority,
+                    authority_action_id=receipt.action_id,
+                    backend_id=self._backend_id(str(row.backend_id)),
+                    execution_cluster_id=_execution_cluster(self._cluster_id, str(row.cluster)),
+                    principal_id=principal_id,
+                    idempotency_key=_require_idempotency_key(idempotency_key),
+                    payload_hash=payload_hash,
+                )
+                return receipt
+
+        assert peer_id is not None and remote_attempt is not None
+        if kind is ActionKind.RETRY_TASK:
+            receipt = self._runtime.federation.proxy_to_peer(
+                peer_id,
+                lambda peer: peer.retry_task(
+                    identity,
+                    expected_attempt_uid=expected_attempt_uid,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        else:
+            receipt = self._runtime.federation.proxy_to_peer(
+                peer_id,
+                lambda peer: peer.terminate_attempt(remote_attempt, idempotency_key=idempotency_key),
+            )
+        with self._db.transaction() as tx:
+            duplicate = _duplicate_action(
+                tx,
+                principal_id=principal_id,
+                kind=kind,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+            )
+            if duplicate is not None:
+                return duplicate
+            action_persistence.insert_action(
+                tx,
+                receipt,
+                authority_cluster_id=authority,
+                authority_action_id=receipt.action_id,
+                backend_id=backend_id,
+                execution_cluster_id=execution_cluster_id,
+                principal_id=principal_id,
+                idempotency_key=_require_idempotency_key(idempotency_key),
+                payload_hash=payload_hash,
+            )
+        return receipt
+
+    def _job_summary_from_row(
+        self,
+        row,
+        *,
+        coordinates=None,
+        parent_coordinates: Mapping[JobName, reads.JobCoordinates] | None = None,
+    ) -> JobSummary:
+        job_id = row.job_id
+        authority = self._authority_cluster(coordinates or row)
+        execution = _execution_cluster(self._cluster_id, str(row.cluster))
+        submitted_at = row.submitted_at_ms
+        parent = None
+        if row.parent_job_id is not None:
+            parent_id = row.parent_job_id
+            parent_row = (parent_coordinates or {}).get(parent_id)
+            if parent_row is not None:
+                parent = JobIdentity(
+                    ResourceKey(authority, ResourceKind.JOB, parent_id.to_wire()),
+                    _job_uid(
+                        authority,
+                        parent_id,
+                        parent_row.submitted_at_ms,
+                        handoff_nonce=str(parent_row.handoff_nonce or ""),
+                    ),
+                )
+        return JobSummary(
+            identity=JobIdentity(
+                ResourceKey(authority, ResourceKind.JOB, job_id.to_wire()),
+                _job_uid(
+                    authority,
+                    job_id,
+                    submitted_at,
+                    handoff_nonce=str(getattr(coordinates or row, "handoff_nonce", "") or ""),
+                ),
+            ),
+            owner_id=job_id.user,
+            parent=parent,
+            state=JobState(row.state),
+            execution_cluster_id=execution,
+            backend_id=self._known_backend_id(str(row.backend_id or ""), execution),
+            num_tasks=int(row.num_tasks),
+            submitted_at=submitted_at,
+            started_at=row.started_at_ms,
+            finished_at=row.finished_at_ms,
+            error_message=str(row.error or ""),
+            pending_reason=self._job_pending_reason(row, coordinates or row),
+        )
+
+    def _job_pending_reason(self, row, coordinates) -> str:
+        if JobState(row.state) is not JobState.PENDING:
+            return ""
+        if getattr(coordinates, "direction", None) == int(FederationDirection.SENT):
+            peer_id = str(getattr(coordinates, "peer_id", "") or "")
+            handoff_state = getattr(coordinates, "handoff_state", None)
+            if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+                if peer_id:
+                    return f"Queued for peer {peer_id} to report free capacity"
+                return "Queued for a federation peer to report free capacity"
+            if handoff_state == int(HandoffState.PENDING_HANDOFF):
+                return f"Awaiting acceptance by peer {peer_id}"
+            return f"Pending on peer {peer_id}"
+
+        scheduler_reason = self._runtime.get_job_scheduling_diagnostics(row.job_id.to_wire())
+        pending_reason = scheduler_reason or "Pending scheduler feedback"
+        hint = None
+        for backend in self._backends.values():
+            if backend.autoscaler is not None:
+                hint = backend.autoscaler.get_pending_hints().get(row.job_id.to_wire())
+                if hint is not None:
+                    break
+        if hint is None:
+            return pending_reason
+        scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+        return f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
+
+    def _task_summary(self, row, current_attempt, counts: AttemptCounts, job) -> TaskSummary:
+        authority = self._authority_cluster(job)
+        execution = _execution_cluster(self._cluster_id, str(row.cluster))
+        task_key = ResourceKey(authority, ResourceKind.TASK, row.task_id.to_wire())
+        job_identity = self._job_identity(job)
+        task_identity = TaskIdentity(task_key, _task_uid(job_identity.job_uid, row.task_id))
+        attempt_identity = None
+        node_identity = None
+        stored_backend_id = str(row.backend_id)
+        backend_id = (
+            self._execution_backend_id(stored_backend_id, execution)
+            if stored_backend_id or current_attempt is not None
+            else ""
+        )
+        if current_attempt is not None:
+            attempt_identity = AttemptIdentity(
+                task_key, int(current_attempt.attempt_id), str(current_attempt.attempt_uid)
+            )
+            node_id = str(
+                current_attempt.node_name or current_attempt.worker_id or getattr(row, "peer_worker_label", "") or ""
+            )
+            if node_id and backend_id:
+                node_identity = self._current_node_identity(execution, backend_id, node_id)
+        return TaskSummary(
+            identity=task_identity,
+            job=job_identity,
+            task_index=int(row.task_index),
+            state=TaskState(row.state),
+            execution_cluster_id=execution,
+            backend_id=backend_id,
+            current_attempt=attempt_identity,
+            current_node=node_identity,
+            failure_count=counts.failure_count,
+            preemption_count=counts.preemption_count,
+            submitted_at=row.submitted_at_ms,
+            started_at=current_attempt.started_at_ms if current_attempt is not None else None,
+            finished_at=current_attempt.finished_at_ms if current_attempt is not None else None,
+            status_message=str(row.status_message or ""),
+            error_message=str(row.error or ""),
+        )
+
+    def _attempt_summary(self, task, attempt, job) -> AttemptSummary:
+        authority = self._authority_cluster(job)
+        task_key = ResourceKey(authority, ResourceKind.TASK, task.task_id.to_wire())
+        backend_id = str(attempt.backend_id or task.backend_id or "")
+        execution = _execution_cluster(self._cluster_id, str(task.cluster)) if backend_id else ""
+        node_id = str(attempt.node_name or attempt.worker_id or "")
+        node = None
+        if node_id and backend_id:
+            node = self._current_node_identity(execution, backend_id, node_id)
+        return AttemptSummary(
+            identity=AttemptIdentity(task_key, int(attempt.attempt_id), str(attempt.attempt_uid)),
+            state=TaskState(attempt.state),
+            execution_cluster_id=execution,
+            backend_id=backend_id,
+            node=node,
+            created_at=attempt.created_at_ms,
+            started_at=attempt.started_at_ms,
+            finished_at=attempt.finished_at_ms,
+            exit_code=attempt.exit_code,
+            error_message=str(attempt.error or ""),
+            terminal_reason=str(attempt.terminal_reason or ""),
+        )
+
+    def _attempt_runtime(
+        self,
+        attempt,
+        execution_cluster_id: str,
+        backend_id: str,
+        container_id: str,
+    ) -> AttemptRuntimeObject | None:
+        config = self._backend_configs.get(backend_id) if execution_cluster_id == self._cluster_id else None
+        provider_kind = ""
+        namespace = ""
+        provider_node_id = ""
+        if config is not None and config.kind == "k8s":
+            provider_kind = "kubernetes"
+            if config.kubernetes_provider is not None:
+                namespace = config.kubernetes_provider.namespace
+            provider_node_id = str(attempt.node_name or "")
+        elif config is not None and config.kind == "worker_daemon":
+            provider_kind = "rpc"
+            provider_node_id = str(attempt.worker_id or "")
+        name = str(attempt.pod_name or "")
+        provider_uid = str(attempt.pod_uid or "")
+        if not any((namespace, name, provider_uid, provider_node_id, container_id)):
             return None
-        return NativeProxyStats.from_json(self._native_proxy.stats_json)
+        observed_at = attempt.finished_at_ms or attempt.started_at_ms or attempt.created_at_ms
+        return AttemptRuntimeObject(
+            provider_kind=provider_kind,
+            namespace=namespace,
+            name=name,
+            provider_uid=provider_uid,
+            provider_node_id=provider_node_id,
+            provider_node_uid="",
+            container_id=container_id,
+            observed_at=observed_at,
+        )
 
-    @property
-    def external_host(self) -> str:
-        """Externally-reachable host address.
+    def _job_identity(self, row) -> JobIdentity:
+        authority = self._authority_cluster(row)
+        return JobIdentity(
+            ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
+            _job_uid(
+                authority,
+                row.job_id,
+                row.submitted_at_ms,
+                handoff_nonce=str(getattr(row, "handoff_nonce", "") or ""),
+            ),
+        )
 
-        When bound to 0.0.0.0, probes for the real network IP via
-        ``probe_outbound_ip``.
-        """
-        return resolve_external_host(self._config.host)
+    def _current_node_identity(self, execution: str, backend_id: str, node_id: str) -> NodeIdentity | None:
+        if execution != self._cluster_id or not backend_id or not node_id:
+            return None
+        backend = self._backends.get(backend_id)
+        if backend is None or BackendCapability.WORKER_DAEMON not in backend.capabilities:
+            return None
+        return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
 
-    @property
-    def url(self) -> str:
-        return f"http://{self.external_host}:{self.port}"
+    def _authority_cluster(self, row) -> str:
+        direction = getattr(row, "direction", None)
+        if direction == int(FederationDirection.RECEIVED):
+            return str(row.peer_id)
+        return self._cluster_id
+
+    def _backend_id(self, stored: str) -> str:
+        if stored:
+            if stored not in self._backends:
+                raise BackendIdentityUnknown(stored)
+            return stored
+        if len(self._backends) == 1:
+            return next(iter(self._backends))
+        raise BackendIdentityUnknown("Task has no retained backend coordinate")
+
+    def _execution_backend_id(self, stored: str, execution_cluster_id: str) -> str:
+        if execution_cluster_id != self._cluster_id:
+            return stored
+        return self._backend_id(stored)
+
+    def _known_backend_id(self, stored: str, execution_cluster_id: str) -> str:
+        if stored or execution_cluster_id != self._cluster_id:
+            return stored
+        if len(self._backends) == 1:
+            return next(iter(self._backends))
+        return ""
+
+    def _endpoint_summary(self, row: EndpointRow, coordinates: tuple[str, str]) -> EndpointSummary:
+        authority, execution = coordinates
+        task = ResourceKey(authority, ResourceKind.TASK, row.task_id.to_wire())
+        return EndpointSummary(
+            key=ResourceKey(authority, ResourceKind.ENDPOINT, row.endpoint_id),
+            endpoint_id=row.endpoint_id,
+            name=row.name,
+            task=task,
+            execution_cluster_id=execution,
+            access=EndpointAccess.from_storage(row.access),
+            lease_deadline=row.lease_deadline,
+        )
+
+    def _system_endpoint_summary(self, name: str) -> EndpointSummary:
+        return EndpointSummary(
+            key=ResourceKey(self._cluster_id, ResourceKind.ENDPOINT, name),
+            endpoint_id=name,
+            name=name,
+            task=None,
+            execution_cluster_id=self._cluster_id,
+            access=EndpointAccess.PRIVATE,
+            lease_deadline=None,
+        )
+
+    def _endpoint_coordinates(self, rows: list[EndpointRow]) -> dict[str, tuple[str, str]]:
+        if not rows:
+            return {}
+        roots = {row.task_id.root_job for row in rows}
+        with self._db.read_snapshot() as tx:
+            jobs = self._job_rows(tx, roots)
+        coordinates: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            job = jobs.get(row.task_id.root_job)
+            if job is None:
+                raise ResourceNotFound(row.task_id.root_job.to_wire())
+            coordinates[row.endpoint_id] = (
+                self._authority_cluster(job),
+                row.peer_id or self._cluster_id,
+            )
+        return coordinates
+
+    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
+        return reads.job_coordinates(tx, job_ids)
+
+    def _job_authorities(self, job_ids) -> dict[JobName, str]:
+        ids = set(job_ids)
+        with self._db.read_snapshot() as tx:
+            return {job_id: self._authority_cluster(row) for job_id, row in self._job_rows(tx, ids).items()}
+
+    @staticmethod
+    def _job_coordinates_in_snapshot(
+        tx: Tx,
+        job_ids: set[JobName],
+    ) -> dict[JobName, reads.JobCoordinates]:
+        return reads.job_coordinates(tx, job_ids)
+
+    def _source_statuses(self) -> tuple[ResourceSourceStatus, ...]:
+        statuses = [_available_source(f"controller:{self._cluster_id}")]
+        for backend_id, backend in sorted(self._backends.items()):
+            try:
+                observe_backend_resources(backend)
+            except (ConnectionError, ProviderError) as exc:
+                statuses.append(_unavailable_backend_source(backend_id, exc))
+            else:
+                statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
+        peer_observations = {peer.peer_id: peer for peer in self._runtime.federation.peer_observations()}
+        statuses.extend(self._peer_source_statuses(set(peer_observations), observations=peer_observations))
+        return tuple(statuses)
+
+    def _peer_source_statuses(
+        self,
+        peer_ids: set[str],
+        *,
+        observations: Mapping[str, FederationPeerObservation] | None = None,
+    ) -> tuple[ResourceSourceStatus, ...]:
+        if not peer_ids:
+            return ()
+        if observations is None:
+            observations = {peer.peer_id: peer for peer in self._runtime.federation.peer_observations()}
+        statuses = []
+        for peer_id in sorted(peer_ids):
+            peer = observations.get(peer_id)
+            if peer is None:
+                statuses.append(
+                    ResourceSourceStatus(
+                        source_id=f"federation:{peer_id}",
+                        backend_id="",
+                        state=SourceState.UNAVAILABLE,
+                        freshness=Freshness.UNKNOWN,
+                        observed_at=None,
+                        error_code=_PEER_UNAVAILABLE,
+                        error_message=f"Federation peer {peer_id} is not configured",
+                    )
+                )
+                continue
+            observed_at = Timestamp.from_ms(peer.last_contact_ms) if peer.last_contact_ms else None
+            if peer.reachable:
+                statuses.append(
+                    ResourceSourceStatus(
+                        source_id=f"federation:{peer.peer_id}",
+                        backend_id="",
+                        state=SourceState.AVAILABLE,
+                        freshness=Freshness.CURRENT,
+                        observed_at=observed_at,
+                        error_code="",
+                        error_message="",
+                    )
+                )
+            else:
+                statuses.append(
+                    ResourceSourceStatus(
+                        source_id=f"federation:{peer.peer_id}",
+                        backend_id="",
+                        state=SourceState.UNAVAILABLE,
+                        freshness=Freshness.STALE if observed_at is not None else Freshness.UNKNOWN,
+                        observed_at=observed_at,
+                        error_code=_PEER_UNAVAILABLE,
+                        error_message=f"Federation peer {peer.peer_id} is unreachable",
+                    )
+                )
+        return tuple(statuses)
+
+
+def _node_summary_key(node: NodeSummary) -> tuple[str, str, str]:
+    return (
+        node.identity.backend_id,
+        node.identity.key.resource_id,
+        node.identity.node_uid,
+    )
+
+
+def _node_candidate_key(candidate: _NodeCandidate) -> tuple[str, str, str]:
+    if isinstance(candidate, _ProviderNodeCandidate):
+        return _node_summary_key(candidate.summary)
+    worker_id = str(candidate.worker.worker_id)
+    return (candidate.backend_id, worker_id, worker_id)
+
+
+def _page_size(value: int, maximum: int) -> int:
+    if value <= 0 or value > maximum:
+        raise ValueError(f"page_size must be between 1 and {maximum}")
+    return value
+
+
+def _require_kind(key: ResourceKey, kind: ResourceKind) -> None:
+    if key.kind is not kind:
+        raise ValueError(f"expected {kind.value}, got {key.kind.value}")
+
+
+def _stored_cluster(local_cluster_id: str, execution_cluster_id: str | None) -> str:
+    if execution_cluster_id is None:
+        return ""
+    return LOCAL_CLUSTER if execution_cluster_id == local_cluster_id else execution_cluster_id
+
+
+def _escaped_prefix(prefix: str) -> str:
+    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
+def _require_idempotency_key(value: str) -> str:
+    if not value.strip():
+        raise ValueError("idempotency_key is required")
+    return value
+
+
+def _action_payload_hash(kind: ActionKind, target_uid: str, attempt_uid: str | None) -> str:
+    encoded = json.dumps(
+        {"kind": kind.value, "target_uid": target_uid, "attempt_uid": attempt_uid},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _duplicate_action(
+    tx: Tx,
+    *,
+    principal_id: str,
+    kind: ActionKind,
+    idempotency_key: str,
+    payload_hash: str,
+) -> ActionReceipt | None:
+    existing = action_persistence.action_by_idempotency_key(
+        tx,
+        principal_id=principal_id,
+        kind=kind,
+        idempotency_key=_require_idempotency_key(idempotency_key),
+    )
+    if existing is None:
+        return None
+    receipt, stored_hash = existing
+    if stored_hash != payload_hash:
+        raise ActionIdempotencyConflict("idempotency key was already used for a different action")
+    return receipt
+
+
+def _completed_action(
+    *,
+    kind: ActionKind,
+    target: ResourceKey,
+    expected_target_uid: str,
+    expected_attempt_uid: str | None,
+    result: ActionResult,
+) -> ActionReceipt:
+    now = Timestamp.now()
+    return ActionReceipt(
+        action_id=uuid.uuid4().hex,
+        kind=kind,
+        target=target,
+        expected_target_uid=expected_target_uid,
+        expected_attempt_uid=expected_attempt_uid,
+        state=ActionState.SUCCEEDED,
+        result_code=result,
+        result_message="",
+        created_at=now,
+        updated_at=now,
+        completed_at=now,
+    )

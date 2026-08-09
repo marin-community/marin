@@ -26,16 +26,16 @@ from iris.cluster.composer import make_backends
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.checkpoint import (
+from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.persistence.checkpoint import (
     download_checkpoint_to_local,
     latest_checkpoint_epoch_ms,
     parse_checkpoint_epoch_ms,
     probe_database_dir,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
+from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 
@@ -148,7 +148,7 @@ def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, s
     Each EndpointSpec is dispatched through ``resolve_endpoint_uri`` so callers
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
 
-    ``/system/log-server`` is optional: when absent, the Controller starts a
+    ``/system/log-server`` is optional: when absent, the ControllerRuntime starts a
     bundled in-process finelog log server as a fallback (state lives in
     a tempdir for the controller's lifetime). Production deployments should
     declare an external endpoint.
@@ -203,7 +203,7 @@ def run_controller_serve(
         logger.info("Resolved %d cluster endpoints; log server: %s", len(endpoints), log_service_address)
     else:
         logger.warning(
-            "%s not in endpoints config — Controller will host a bundled in-process "
+            "%s not in endpoints config — ControllerRuntime will host a bundled in-process "
             "MemStore log server. Logs are lost on restart and capped in memory. "
             "Run finelog-server out-of-band for production.",
             LOG_SERVER_ENDPOINT_NAME,
@@ -217,7 +217,7 @@ def run_controller_serve(
         local_state_dir = Path(cluster_config.storage.local_state_dir)
     else:
         local_state_dir = LOCAL_STATE_DIR_DEFAULT
-    logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
+    logger.info("ControllerRuntime local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
@@ -293,18 +293,18 @@ def run_controller_serve(
     if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
-    controller = Controller(
+    controller = ControllerRuntime(
         config=config,
         backends=backends,
         log_stack=log_stack,
         db=db,
         backend_configs=resolve_backends(cluster_config),
     )
-    logger.info("Controller instance created")
+    logger.info("ControllerRuntime instance created")
 
     controller.start()
-    logger.info("Controller started successfully on %s:%d", host, port)
-    logger.info("Controller is ready to accept connections")
+    logger.info("ControllerRuntime started successfully on %s:%d", host, port)
+    logger.info("ControllerRuntime is ready to accept connections")
 
     stop_event = threading.Event()
 
@@ -332,7 +332,7 @@ def run_controller_serve(
                 )
             except Exception:
                 logger.exception("Final checkpoint on shutdown failed")
-        logger.info("Controller exiting")
+        logger.info("ControllerRuntime exiting")
         stop_event.set()
 
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -396,7 +396,7 @@ def controller_serve_options(command):
 
 @click.group()
 def cli():
-    """Iris Controller - Cluster control plane."""
+    """Iris ControllerRuntime - Cluster control plane."""
     pass
 
 
