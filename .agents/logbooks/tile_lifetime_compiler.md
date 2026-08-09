@@ -2731,3 +2731,20 @@ author: dlwh
 - JAX continues to own AD and the natural frontend. Collectives, relation-index
   construction, views, and non-bottleneck runtime plumbing remain outside the
   current arithmetic replacement boundary.
+
+### 2026-08-09 - TLTC-XLA-038 RMS component profile is non-attributable
+
+- The exact-source H100 replay reproduced the full generated RMS reverse gap at
+  `0.104100 ms` versus `0.070481 ms` XLA, or `1.476984x`. Correctness and
+  deterministic-output checks passed.
+- The separately generated input and feature components are alternate Fold
+  programs, not the K1 and K2 kernels from the full pipeline. They change input
+  algebra, dtypes, output dtypes, and the K0 scratch interface. Their outputs
+  differ from the full generated path by maxima `0.0312643` and `0.512909`.
+- Their isolated timings therefore cannot attribute the full latency gap or
+  justify a schedule change. This is preserved as a negative benchmark result.
+- The next exact attribution is a single profiler-delimited trace of the
+  unchanged typed-FFI call, retaining its scratch allocator and sequential K0,
+  K1, and K2 launches. That capture is prepared but has not been launched.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_components_non_attributable_fdd838/`.

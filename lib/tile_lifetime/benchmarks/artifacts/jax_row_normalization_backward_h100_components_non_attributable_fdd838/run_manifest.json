@@ -1,0 +1,39 @@
+{
+  "allocation": {
+    "cpu_kueue_usage": "4050m",
+    "cpu_pod_request": "4",
+    "cpu_user_request": "1",
+    "gpu_request": "H100x1",
+    "job_id": "/dlwh/shuttle-rms-backward-h100-fdd838-components",
+    "job_state": "succeeded",
+    "max_retries": 0,
+    "node": "g73bb8a",
+    "pod_phase": "Succeeded",
+    "preemptions": 0
+  },
+  "environment": {
+    "cuda_compiler": "13.3.73",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_memory_clock_mhz_at_start": 2619,
+    "gpu_power_limit_watts": 700.0,
+    "gpu_sm_clock_mhz_at_start": 345,
+    "gpu_sm_clock_mhz_after_measurement": 1830,
+    "gpu_uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "pci_bus_id": "00000000:4C:00.0"
+  },
+  "preserved_archive": {
+    "local_path": "/tmp/shuttle-rms-backward-h100-fdd838-components.tar.gz",
+    "sha256": "2b820bd63bbcc54043ca5f3e4eed653e86b678b4dc1ae8a5f416f66ca38edd39"
+  },
+  "source": {
+    "manifest_entries": 90,
+    "manifest_sha256": "c318cf0568d91b9650dabb0a14e8c1771c3e35e94b53ea7436cc4e11d9e59774",
+    "pyproject_sha256": "65b05d57831249203c66d774b62ea74af4aa31c46f39bdd80c88a2bca970f6a2",
+    "revision": "fdd8380cf0a37809c5fafa6ab4a82be09cd1f1b1",
+    "tile_lifetime_pyproject_sha256": "71331ac1b0c19e527ab0559dc2e5ec79be4b6399ed5b7fd2d164cf64945eb385",
+    "uv_lock_sha256": "ec2e010b73ea63aec40cc5a21b0647ecce20f566708c4b1162056970fd4884a5"
+  }
+}
