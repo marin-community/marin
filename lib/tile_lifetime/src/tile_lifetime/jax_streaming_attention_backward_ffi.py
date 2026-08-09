@@ -60,6 +60,25 @@ class StreamingAttentionBackwardFfiBuffer:
     name: str
     dtype: DType
     shape: tuple[int, ...]
+    layout: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        layout = self.layout or tuple(reversed(range(len(self.shape))))
+        _validate_minor_to_major(self.name, self.shape, layout)
+        object.__setattr__(self, "layout", layout)
+
+    @property
+    def strides(self) -> tuple[int, ...]:
+        """Return logical-axis strides implied by the physical layout."""
+        return _layout_strides(self.shape, self.layout)
+
+
+@dataclass(frozen=True)
+class StreamingAttentionBackwardFfiBufferLayout:
+    """One requested physical layout keyed by a generic FFI buffer name."""
+
+    buffer_name: str
+    minor_to_major: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -147,6 +166,7 @@ def generate_streaming_attention_backward_ffi(
     *,
     target_name: str,
     state_policy: StreamingAttentionBackwardStatePolicy = StreamingAttentionBackwardStatePolicy.RECOMPUTE,
+    output_layouts: tuple[StreamingAttentionBackwardFfiBufferLayout, ...] = (),
     num_warps: int = 8,
     num_stages: int = 3,
 ) -> GeneratedStreamingAttentionBackwardFfi:
@@ -182,10 +202,15 @@ def generate_streaming_attention_backward_ffi(
             )
         )
     inputs.append(StreamingAttentionBackwardFfiBuffer("output_cotangent", DType.BF16, output_shape))
-    outputs = (
-        StreamingAttentionBackwardFfiBuffer("query_cotangent", DType.BF16, query_shape),
-        StreamingAttentionBackwardFfiBuffer("key_cotangent", DType.BF16, key_shape),
-        StreamingAttentionBackwardFfiBuffer("value_cotangent", DType.BF16, value_shape),
+    output_shapes = {
+        "query_cotangent": query_shape,
+        "key_cotangent": key_shape,
+        "value_cotangent": value_shape,
+    }
+    layout_by_name = _validated_output_layouts(output_shapes, output_layouts)
+    outputs = tuple(
+        StreamingAttentionBackwardFfiBuffer(name, DType.BF16, shape, layout_by_name[name])
+        for name, shape in output_shapes.items()
     )
     kernels: list[TritonAotKernelPlan] = []
     if state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE:
@@ -206,11 +231,12 @@ def generate_streaming_attention_backward_ffi(
             parameters,
             program.output_scale,
             schedule,
+            outputs=outputs,
             num_warps=num_warps,
             num_stages=num_stages,
         )
     )
-    semantic_fingerprint = _semantic_fingerprint(program, schedule, state_policy)
+    semantic_fingerprint = _semantic_fingerprint(program, schedule, state_policy, outputs)
     handler_template = _handler_template(
         handler_symbol=handler_symbol,
         state_policy=state_policy,
@@ -276,6 +302,8 @@ def call_streaming_attention_backward_ffi(
         generated.target_name,
         result_shapes,
         vmap_method="broadcast_all",
+        input_layouts=tuple(specification.layout for specification in generated.inputs),
+        output_layouts=tuple(specification.layout for specification in generated.outputs),
     )(*ordered)
     query_cotangent, key_cotangent, value_cotangent = tuple(results)
     return query_cotangent, key_cotangent, value_cotangent
@@ -511,6 +539,7 @@ def _reverse_aot_plans(
     output_scale: float,
     schedule: StreamingAttentionBackwardTileSchedule,
     *,
+    outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
     num_warps: int,
     num_stages: int,
 ) -> tuple[TritonAotKernelPlan, TritonAotKernelPlan]:
@@ -518,6 +547,10 @@ def _reverse_aot_plans(
     key_value_heads = key_shape[2]
     q_strides = _contiguous_strides(query_shape)
     k_strides = _contiguous_strides(key_shape)
+    output_by_name = {output.name: output for output in outputs}
+    query_cotangent_strides = output_by_name["query_cotangent"].strides
+    key_cotangent_strides = output_by_name["key_cotangent"].strides
+    value_cotangent_strides = output_by_name["value_cotangent"].strides
     scalar = (
         str(sequence),
         str(query_heads),
@@ -542,7 +575,7 @@ def _reverse_aot_plans(
         *(str(value) for value in k_strides),
         *(str(value) for value in q_strides),
         *(str(value) for value in q_strides),
-        *(str(value) for value in q_strides),
+        *(str(value) for value in query_cotangent_strides),
         str(schedule.query_tile_size),
         str(schedule.key_value_tile_size),
         str(dimension),
@@ -564,8 +597,8 @@ def _reverse_aot_plans(
         *(str(value) for value in k_strides),
         *(str(value) for value in k_strides),
         *(str(value) for value in q_strides),
-        *(str(value) for value in k_strides),
-        *(str(value) for value in k_strides),
+        *(str(value) for value in key_cotangent_strides),
+        *(str(value) for value in value_cotangent_strides),
         str(schedule.query_tile_size),
         str(schedule.key_value_tile_size),
         str(dimension),
@@ -816,6 +849,7 @@ def _semantic_fingerprint(
     program: StreamingAttentionBackwardProgram,
     schedule: StreamingAttentionBackwardTileSchedule,
     state_policy: StreamingAttentionBackwardStatePolicy,
+    outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
 ) -> str:
     payload = {
         "query": program.forward.qk.inputs[0].shape,
@@ -827,6 +861,7 @@ def _semantic_fingerprint(
         "maximum_vjp": program.maximum_vjp.value,
         "reassociation": program.reassociation.value,
         "state_policy": state_policy.value,
+        "output_layouts": {output.name: output.layout for output in outputs},
         "schedule": {
             "query_tile": schedule.query_tile_size,
             "key_value_tile": schedule.key_value_tile_size,
@@ -845,6 +880,39 @@ def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
         strides.append(stride)
         stride *= extent
     return tuple(reversed(strides))
+
+
+def _validated_output_layouts(
+    output_shapes: Mapping[str, tuple[int, ...]],
+    requested: tuple[StreamingAttentionBackwardFfiBufferLayout, ...],
+) -> dict[str, tuple[int, ...]]:
+    if not requested:
+        return {name: tuple(reversed(range(len(shape)))) for name, shape in output_shapes.items()}
+    names = tuple(layout.buffer_name for layout in requested)
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate streaming reverse output layout names: {names}")
+    if set(names) != set(output_shapes):
+        raise ValueError("streaming reverse output layouts must cover exactly " f"{tuple(output_shapes)}, found {names}")
+    layouts = {layout.buffer_name: layout.minor_to_major for layout in requested}
+    for name, shape in output_shapes.items():
+        _validate_minor_to_major(name, shape, layouts[name])
+    return layouts
+
+
+def _validate_minor_to_major(name: str, shape: tuple[int, ...], layout: tuple[int, ...]) -> None:
+    expected = tuple(range(len(shape)))
+    if tuple(sorted(layout)) != expected:
+        raise ValueError(f"FFI buffer {name!r} layout must be a permutation of {expected}, found {layout}")
+
+
+def _layout_strides(shape: tuple[int, ...], minor_to_major: tuple[int, ...]) -> tuple[int, ...]:
+    _validate_minor_to_major("physical", shape, minor_to_major)
+    strides = [0] * len(shape)
+    stride = 1
+    for axis in minor_to_major:
+        strides[axis] = stride
+        stride *= shape[axis]
+    return tuple(strides)
 
 
 def _float_token(value: float) -> str:

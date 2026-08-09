@@ -20,6 +20,7 @@ from enum import StrEnum
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     GeneratedStreamingAttentionBackwardFfi,
     StreamingAttentionBackwardFfiBuffer,
+    StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
 )
 from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProgram
@@ -78,7 +79,7 @@ class StreamingReverseHloValue:
     role: StreamingReverseHloRole
     instruction: str
     physical_shape: str
-    canonical_shape: str
+    ffi_shape: str
 
 
 @dataclass(frozen=True)
@@ -227,11 +228,11 @@ def replace_streaming_attention_backward_region_with_custom_call(
             indent=indent,
             source=value.instruction,
             source_shape=value.physical_shape,
-            target_shape=value.canonical_shape,
+            target_shape=value.ffi_shape,
             name=f"shuttle.region.{value.role.value}.canonical",
         )
         input_names[value.role] = adapted
-    output_shapes = ", ".join(value.canonical_shape for value in plan.outputs)
+    output_shapes = ", ".join(value.ffi_shape for value in plan.outputs)
     operands = ", ".join(
         f"%{input_names[role]}"
         for role in (
@@ -241,7 +242,7 @@ def replace_streaming_attention_backward_region_with_custom_call(
             StreamingReverseHloRole.OUTPUT_COTANGENT,
         )
     )
-    constraints = ", ".join(value.canonical_shape for value in plan.inputs)
+    constraints = ", ".join(value.ffi_shape for value in plan.inputs)
     call_name = "shuttle.generated.streaming_reverse.region"
     lines.append(
         f"{indent}%{call_name} = ({output_shapes}) custom-call({operands}), "
@@ -252,13 +253,13 @@ def replace_streaming_attention_backward_region_with_custom_call(
     for index, value in enumerate(plan.outputs):
         canonical_name = f"shuttle.region.{value.role.value}.canonical"
         lines.append(
-            f"{indent}%{canonical_name} = {value.canonical_shape} " f"get-tuple-element(%{call_name}), index={index}"
+            f"{indent}%{canonical_name} = {value.ffi_shape} " f"get-tuple-element(%{call_name}), index={index}"
         )
         physical_name = _emit_boundary_adapter(
             lines,
             indent=indent,
             source=canonical_name,
-            source_shape=value.canonical_shape,
+            source_shape=value.ffi_shape,
             target_shape=value.physical_shape,
             name=f"shuttle.region.{value.role.value}.physical",
         )
@@ -321,6 +322,19 @@ def audit_streaming_attention_backward_region_replacement(
             name for name in (*plan.internal_instructions, *(value.instruction for value in plan.outputs))
         ),
         preserved_shared_users=tuple(preserved_users),
+    )
+
+
+def derive_streaming_attention_backward_ffi_output_layouts(
+    plan: StreamingReverseHloReplacementPlan,
+) -> tuple[StreamingAttentionBackwardFfiBufferLayout, ...]:
+    """Derive generic FFI output layouts from the proven physical boundary."""
+    return tuple(
+        StreamingAttentionBackwardFfiBufferLayout(
+            buffer_name=value.role.value,
+            minor_to_major=_shape_layout(value.physical_shape),
+        )
+        for value in plan.outputs
     )
 
 
@@ -493,11 +507,11 @@ def replace_streaming_attention_backward_entry_with_custom_call(
     lines: list[str] = []
     for value in plan.inputs:
         name = value.instruction
-        if value.physical_shape != value.canonical_shape:
+        if value.physical_shape != value.ffi_shape:
             name = f"shuttle.{value.role.value}.canonical"
-            lines.append(f"{indent}%{name} = {value.canonical_shape} copy(%{value.instruction})")
+            lines.append(f"{indent}%{name} = {value.ffi_shape} copy(%{value.instruction})")
         names[value.role] = name
-    output_shapes = ", ".join(value.canonical_shape for value in plan.outputs)
+    output_shapes = ", ".join(value.ffi_shape for value in plan.outputs)
     operands = ", ".join(
         f"%{names[role]}"
         for role in (
@@ -507,7 +521,7 @@ def replace_streaming_attention_backward_entry_with_custom_call(
             StreamingReverseHloRole.OUTPUT_COTANGENT,
         )
     )
-    constraints = ", ".join(value.canonical_shape for value in plan.inputs)
+    constraints = ", ".join(value.ffi_shape for value in plan.inputs)
     call_name = "shuttle.generated.streaming_reverse"
     lines.append(
         f"{indent}%{call_name} = ({output_shapes}) custom-call({operands}), "
@@ -516,11 +530,11 @@ def replace_streaming_attention_backward_entry_with_custom_call(
     )
     output_names: dict[StreamingReverseHloRole, str] = {}
     for index, value in enumerate(plan.outputs):
-        canonical_name = f"shuttle.{value.role.value}.canonical"
+        canonical_name = f"shuttle.{value.role.value}.ffi"
         get_tuple_element = f"get-tuple-element(%{call_name}), index={index}"
-        lines.append(f"{indent}%{canonical_name} = {value.canonical_shape} {get_tuple_element}")
+        lines.append(f"{indent}%{canonical_name} = {value.ffi_shape} {get_tuple_element}")
         output_name = canonical_name
-        if value.physical_shape != value.canonical_shape:
+        if value.physical_shape != value.ffi_shape:
             output_name = f"shuttle.{value.role.value}.physical"
             lines.append(f"{indent}%{output_name} = {value.physical_shape} copy(%{canonical_name})")
         output_names[value.role] = output_name
@@ -755,7 +769,7 @@ def _plan_reverse_region_from_maximum(
             role=role,
             instruction=role_names[role],
             physical_shape=instructions[role_names[role]].shape,
-            canonical_shape=_canonical_shape(specifications[role.value]),
+            ffi_shape=_ffi_shape(specifications[role.value]),
         )
         for role in (
             StreamingReverseHloRole.QUERY,
@@ -769,12 +783,12 @@ def _plan_reverse_region_from_maximum(
             role=role,
             instruction=name,
             physical_shape=instructions[name].shape,
-            canonical_shape=_canonical_shape(specifications[role.value]),
+            ffi_shape=_ffi_shape(specifications[role.value]),
         )
         for role, name in output_bindings
     )
     for value in (*inputs, *outputs):
-        _boundary_adapter_opcode(value.physical_shape, value.canonical_shape)
+        _boundary_adapter_opcode(value.physical_shape, value.ffi_shape)
 
     insertion_instruction = max((value.instruction for value in inputs), key=source_order.__getitem__)
     first_internal = min(internal | output_names, key=source_order.__getitem__)
@@ -1233,7 +1247,7 @@ def _bind_outputs(
             role=role,
             instruction=by_role[role][0],
             physical_shape=entry_instructions[by_role[role][0]].shape,
-            canonical_shape=_canonical_shape(specifications[role.value]),
+            ffi_shape=_ffi_shape(specifications[role.value]),
         )
         for role in (
             StreamingReverseHloRole.QUERY_COTANGENT,
@@ -1254,7 +1268,7 @@ def _input_value(
         role=role,
         instruction=instruction.name,
         physical_shape=instruction.shape,
-        canonical_shape=_canonical_shape(specification),
+        ffi_shape=_ffi_shape(specification),
     )
 
 
@@ -1402,10 +1416,21 @@ def _program_score_policy(program: StreamingAttentionBackwardProgram) -> tuple[f
     return visit(program.forward.score_map.expression), causal
 
 
-def _canonical_shape(specification: StreamingAttentionBackwardFfiBuffer) -> str:
+def _ffi_shape(specification: StreamingAttentionBackwardFfiBuffer) -> str:
     dimensions = ",".join(str(value) for value in specification.shape)
-    layout = ",".join(str(value) for value in reversed(range(len(specification.shape))))
+    layout = ",".join(str(value) for value in specification.layout)
     return f"{specification.dtype.value}[{dimensions}]{{{layout}}}"
+
+
+def _shape_layout(shape: str) -> tuple[int, ...]:
+    match = _ARRAY_SHAPE.fullmatch(shape.strip())
+    if match is None or match.group("layout") is None:
+        raise ValueError(f"physical HLO output requires one explicit dense layout: {shape!r}")
+    layout = tuple(int(value) for value in match.group("layout").split(","))
+    rank = len(tuple(value for value in match.group("dims").split(",") if value))
+    if tuple(sorted(layout)) != tuple(range(rank)):
+        raise ValueError(f"physical HLO output layout is not a rank-{rank} permutation: {layout}")
+    return layout
 
 
 def _shape_signature(shape: str) -> tuple[str, tuple[int, ...]]:
