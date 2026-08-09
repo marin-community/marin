@@ -20,6 +20,7 @@ _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
 _SLICE_RANGES = re.compile(r"slice=\{(?P<ranges>[^}]*)\}")
 _SLICE_RANGE = re.compile(r"\[(?P<start>-?[0-9]+):(?P<limit>-?[0-9]+)(?::(?P<stride>[0-9]+))?\]")
 _CONSTANT = re.compile(r"constant\((?P<value>true|false|[-+0-9.eE]+)\)")
+_PARAMETER_NUMBER = re.compile(r"parameter\((?P<number>[0-9]+)\)")
 
 
 def import_hlo_scalar_map(
@@ -149,7 +150,9 @@ def import_hlo_scalar_computation(computation: HloComputation) -> CastScalarProg
     """
     nodes = {instruction.name: instruction for instruction in computation.instructions}
     parameters = tuple(instruction for instruction in computation.instructions if instruction.opcode == "parameter")
-    parameter_indices = {instruction.name: index for index, instruction in enumerate(parameters)}
+    parameter_indices = {instruction.name: _parameter_number(instruction.attributes) for instruction in parameters}
+    if set(parameter_indices.values()) != set(range(len(parameters))):
+        raise ValueError(f"scalar computation {computation.name!r} parameters are not contiguous from zero")
     memo: dict[str, CastScalarExpression] = {}
 
     def import_node(node_id: str) -> CastScalarExpression:
@@ -258,3 +261,10 @@ def _constant_value(attributes: str) -> float | bool:
     if value == "false":
         return False
     return float(value)
+
+
+def _parameter_number(attributes: str) -> int:
+    match = _PARAMETER_NUMBER.search(attributes)
+    if match is None:
+        raise ValueError(f"scalar computation parameter has no index: {attributes!r}")
+    return int(match.group("number"))
