@@ -39,4 +39,30 @@ The offline fix is commit `d25dbcd0a3` on the canonical branch. Forty-two focuse
 ## Future work
 
 - [x] Add regression coverage for the exact round-tripped HLO mismatch.
-- [ ] Rerun the bounded H100 replay only after the offline audit test passes.
+- [x] Rerun the bounded H100 replay only after the offline audit test passes.
+
+## Hypothesis 2
+
+The exact `6c718d8d4b` H100 replay passed the post-roundtrip audit and executed all seven handlers 35 times. Its final evidence guard then reported target occurrences `(1, 1, 1, 1, 1, 17, 17)`. The two axis-Fold targets are embedded in generated adapter and instruction names, so a substring count does not measure the number of custom calls.
+
+The H100 was released and verified inactive. The run produced no accepted correctness or timing artifact because the terminal guard failed.
+
+## Changes to make
+
+Count exact parsed `custom_call_target` attributes before warmup and timing. Keep handler-count validation after execution. Reject missing and duplicate target attributes, and preserve partial evidence if a post-execution guard fails.
+
+## Results
+
+The offline fix is commit `49c572a6ec` on the canonical branch. It parses every
+post-roundtrip custom call, requires exactly one `custom_call_target` attribute,
+and verifies that each selected target occurs exactly once before any correctness,
+warmup, or timed execution. Post-execution failures now preserve raw samples,
+hashes, comparisons, and handler counts in an explicitly unaccepted artifact.
+
+The regression reproduces the axis-Fold target fragments in adapter names while
+proving their exact attribute count is one; missing and duplicate target
+attributes fail closed. Forty-two focused streaming-attention-backward,
+routed-training, and shared-Contract/multi-Map tests pass after integration.
+
+The previous H100 run remains unaccepted because its raw timing samples existed
+only in process memory. One bounded H100 replay is still required.

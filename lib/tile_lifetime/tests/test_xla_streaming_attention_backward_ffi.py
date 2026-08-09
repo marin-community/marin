@@ -16,6 +16,7 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
 )
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
     _generate_axis_fold_programs,
+    _single_custom_call_target_occurrences,
 )
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
@@ -633,6 +634,35 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
     assert len({value.call_instruction for value in audit.axis_folds}) == 2
     assert all(value.call_instruction.startswith("shuttle.generated.axis_fold.region.") for value in audit.axis_folds)
     assert rewritten.count('custom_call_target="shuttle.combined.') == 7
+    selected_targets = (
+        _SIX_TARGETS.routed_attention.routed.forward,
+        _SIX_TARGETS.routed_attention.routed.input_adjoint,
+        *_SIX_TARGETS.routed_attention.routed.weight_gradients,
+        _SIX_TARGETS.routed_attention.attention_backward,
+        *_SIX_TARGETS.axis_folds,
+    )
+    exact_occurrences = _single_custom_call_target_occurrences(rewritten, selected_targets)
+    assert set(exact_occurrences.values()) == {1}
+    assert all(rewritten.count(target) > exact_occurrences[target] for target in _SIX_TARGETS.axis_folds)
+
+    axis_target = _SIX_TARGETS.axis_folds[0]
+    axis_call_line = next(line for line in rewritten.splitlines() if f'custom_call_target="{axis_target}"' in line)
+    missing_attribute_line = axis_call_line.replace(f', custom_call_target="{axis_target}"', "", 1)
+    with pytest.raises(RuntimeError, match="has 0 exact custom_call_target attributes"):
+        _single_custom_call_target_occurrences(
+            rewritten.replace(axis_call_line, missing_attribute_line, 1),
+            selected_targets,
+        )
+    duplicate_attribute_line = axis_call_line.replace(
+        f'custom_call_target="{axis_target}"',
+        f'custom_call_target="{axis_target}", custom_call_target="{axis_target}"',
+        1,
+    )
+    with pytest.raises(RuntimeError, match="has 2 exact custom_call_target attributes"):
+        _single_custom_call_target_occurrences(
+            rewritten.replace(axis_call_line, duplicate_attribute_line, 1),
+            selected_targets,
+        )
     parse_hlo_module_text(rewritten)
 
 
