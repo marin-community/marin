@@ -794,3 +794,27 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Terminal state: the run had advanced to step 55 when queried. Stopped the coordinator at 17:06:58 UTC after the requested measurement window, releasing eight GPUs.
 - Interpretation: latency hiding is the causal knob for the E96 first-backward corruption. The exact mechanism is likely XLA scheduling/buffer-lifetime interaction with the zero-copy symmetric-output ragged kernel: metadata and declared bounds pass, disabling async wrapping or synchronizing CUDA launches does not help, while disabling the scheduler does. This is specific to the one-shot ragged path; ring and dense decomposition are finite with latency hiding enabled.
 - Decision: keep `--xla_gpu_enable_latency_hiding_scheduler=false` for all remaining ragged EP treatments. Preserve the queued LHS-on E48 run as the exact default baseline, then compare an otherwise identical four-node LHS-off run on the same single-domain placement. Only clean exact runs determine whether MFU exceeds 20%.
+
+### 2026-08-09 17:13 UTC - Clean overlap-four replication queued
+
+- Run: `ra2a-s22-ep8-e96-lhs-off-clean-20260809`; coordinator `/power/ra2a-s22-ep8-e96-lhs-off-clean-20260809-coord`; two-node child of the same run ID.
+- Controlled change from S21: disable inline gradient watch, which restores the production collective overlap limit from 1 to 4. Keep stable JAX 0.11.0, process-per-GPU, default one-shot, PGLE off, 1 MiB NCCL FIFO, disabled command buffers, latency hiding off, EP8/E96 geometry, data, and 750-token optimizer schedule fixed.
+- Purpose: verify the latency-hiding fix survives the clean production-overlap configuration and obtain an uncontaminated small-slice timing window. This is a correctness and relative-throughput screen; its d768 MFU does not count toward the hero's 20% target.
+- Scheduling: the coordinator dispatched successfully at interactive priority. Both GPU tasks are pending with zero failures or preemptions. The exact S15b four-node LHS-on baseline remains Kueue-gated with no GPU allocation; production retains priority.
+- Launch correction: the first attempt admitted on two nodes but inherited `WANDB_MODE=offline`; it was stopped before step 0 while loading data. Resubmitted the identical configuration as `ra2a-s22-ep8-e96-lhs-off-clean-20260809-r1` with online W&B logging. Its two tasks are temporarily waiting for the stopped pods' memory to drain, with zero training failures.
+
+### 2026-08-09 17:22 UTC - Clean overlap-four run is finite but slower
+
+- Run: `ra2a-s22-ep8-e96-lhs-off-clean-20260809-r1`; workers `sbxsxs64` and `sdgwxs64`, both in rack 126 and NVLink domain `DH1-126-US-EAST-08A`. This exactly matches the S10n-S21 hardware.
+- Correctness: finite through the final W&B step 65, with loss moving from 11.8043 at step 5 to 11.7833 at step 24 and zero dropped assignments. No watch metrics were computed. The run was stopped after the requested window to release eight GPUs.
+- Timing: steps 5-24 averaged 1.60172 seconds and 327,371 tokens/s; median duration was 1.59992 seconds. W&B's d768 MFU was 1.66930 and is not the hero gate.
+- Comparison: S21 averaged 1.21903 seconds despite inline watch work. Its watch configuration forces collective overlap limit 1, while this clean run restored overlap limit 4. The overlap-four clean path is 31.4% longer per step, making overlap serialization the highest-value remaining control.
+- Next arm: submitted clean `ra2a-s23-ep8-e96-lhs-off-overlap1-clean-20260809`, changing only the overlap limit from 4 to 1 while retaining latency hiding off and online W&B. This directly measures the overlap effect without watch contamination.
+
+### 2026-08-09 17:27 UTC - Overlap limit one recovers 31.6% throughput
+
+- Run: `ra2a-s23-ep8-e96-lhs-off-overlap1-clean-20260809`; same `sbxsxs64` and `sdgwxs64` hosts and `DH1-126-US-EAST-08A` domain as S22. Effective environment verified latency hiding off, overlap limit 1, PGLE off, `NCCL_BUFFSIZE=1048576`, command buffers off, and online W&B.
+- Correctness: finite through final W&B step 50. Loss moved from 11.8043 at step 5 to 11.7833 at step 24, with zero dropped assignments. Stopped the coordinator after the measurement window and released eight GPUs.
+- Timing: steps 5-24 averaged 1.21747 seconds and 430,693 tokens/s; median duration was 1.21697 seconds and sample standard deviation 0.01416 seconds. W&B's d768 MFU was 2.19616 and is not the hero gate.
+- Controlled comparison: S22's overlap-four mean was 1.60172 seconds and 327,371 tokens/s. Overlap one therefore reduced step duration by 24.0% and increased throughput by 31.6%. It also reproduces S21's 1.21903-second watched result, confirming that the gain is the overlap setting rather than watch contamination.
+- Decision: exact ragged treatment uses both `--xla_gpu_enable_latency_hiding_scheduler=false` for correctness and `--xla_gpu_experimental_parallel_collective_overlap_limit=1` for throughput. Preserve S15b's enabled/four-way defaults as the paired baseline.
