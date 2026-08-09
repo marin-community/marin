@@ -2,12 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+from dataclasses import replace
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from tile_lifetime.xla_contract_relation_fold_ffi import (
+    audit_contract_relation_fold_replacement,
+    evaluate_contract_relation_fold_plan,
+    generate_cuda_contract_relation_fold_ffi,
+    replace_contract_relation_fold_with_custom_call,
+)
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_rank_two_contract_ffi import (
     audit_rank_two_contract_replacement,
@@ -113,6 +120,51 @@ def test_generated_calls_own_contract_map_and_nested_folds_before_collective() -
     assert "generated_inner_fold_update" in generated_fold.source
     assert "generated_outer_fold_update" in generated_fold.source
     parse_hlo_module_text(transformed)
+
+
+def test_bounded_contract_relation_fold_candidate_erases_payload_materialization_and_launch() -> None:
+    hlo = _hlo()
+    plan = plan_weighted_relation_reverse_typed_ffi(hlo)
+    target = "shuttle.contract_relation_fold.test"
+    generated = generate_cuda_contract_relation_fold_ffi(
+        plan.payload_contract,
+        plan.edge_fold,
+        target=target,
+    )
+    transformed = replace_contract_relation_fold_with_custom_call(
+        hlo,
+        plan.payload_contract,
+        plan.edge_fold,
+        target=target,
+    )
+    audit = audit_contract_relation_fold_replacement(
+        hlo,
+        transformed,
+        plan.payload_contract,
+        plan.edge_fold,
+        target=target,
+    )
+
+    assert generated.cost.contract_fma_count == 16 * 32 * 128
+    assert generated.cost.payload_elements == 16 * 32
+    assert generated.cost.payload_global_bytes == 0
+    assert generated.cost.kernel_launches == 1
+    assert generated.cost.threads_per_block == 512
+    assert generated.cost.shared_bytes == 16 * 32 * 2 + 16 * 4
+    assert transformed.count(f'custom_call_target="{target}"') == 1
+    assert audit.call_instruction == "scatter-add.41"
+    assert audit.operands == (
+        "reshape.363",
+        "reshape.364",
+        "broadcast.102",
+        "broadcast_in_dim.427",
+        "reshape.735",
+    )
+    assert audit.external_users == ("reshape.230",)
+    assert "dot.69" in audit.dead_instructions
+    assert "slice.35" in audit.dead_instructions
+    assert "cublas" not in generated.source
+    assert "atomicAdd(" not in generated.source
 
 
 def test_weighted_reverse_composes_after_existing_generated_routed_regions() -> None:
@@ -248,6 +300,18 @@ def test_weighted_relation_reverse_cpu_semantics_match_independent_reference() -
 
     assert np.array_equal(observed, expected)
     assert np.array_equal(
+        evaluate_contract_relation_fold_plan(
+            plan.payload_contract,
+            plan.edge_fold,
+            lhs,
+            rhs,
+            initial,
+            source_indices,
+            edge_cotangent,
+        ),
+        expected,
+    )
+    assert np.array_equal(
         observed,
         evaluate_weighted_relation_reverse_plan(
             plan,
@@ -282,3 +346,34 @@ def test_scalar_map_mutation_regenerates_same_generic_nested_fold() -> None:
     assert baseline.source_digest != regenerated.source_digest
     assert "__fmul_rn" in baseline.source
     assert "__fadd_rn" in regenerated.source
+
+    baseline_fused = generate_cuda_contract_relation_fold_ffi(
+        baseline_plan.payload_contract,
+        baseline_plan.edge_fold,
+        target="shuttle.contract_relation_fold.mutation",
+    )
+    regenerated_fused = generate_cuda_contract_relation_fold_ffi(
+        mutated_plan.payload_contract,
+        mutated_plan.edge_fold,
+        target="shuttle.contract_relation_fold.mutation",
+    )
+    assert baseline_fused.cost == regenerated_fused.cost
+    assert baseline_fused.semantic_digest != regenerated_fused.semantic_digest
+    assert baseline_fused.source_digest != regenerated_fused.source_digest
+    assert "__fmul_rn" in baseline_fused.source
+    assert "__fadd_rn" in regenerated_fused.source
+
+
+def test_bounded_contract_relation_fold_rejects_non_source_ordered_fold() -> None:
+    plan = plan_weighted_relation_reverse_typed_ffi(_hlo())
+    unsafe_fold = replace(
+        plan.edge_fold,
+        numerical_contract=replace(plan.edge_fold.numerical_contract, deterministic=False),
+    )
+
+    with pytest.raises(ValueError, match="deterministic atomic-free Fold ownership"):
+        generate_cuda_contract_relation_fold_ffi(
+            plan.payload_contract,
+            unsafe_fold,
+            target="shuttle.contract_relation_fold.unsafe",
+        )
