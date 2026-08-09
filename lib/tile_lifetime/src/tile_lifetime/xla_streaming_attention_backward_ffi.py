@@ -252,9 +252,7 @@ def replace_streaming_attention_backward_region_with_custom_call(
     replacements: dict[str, str] = {}
     for index, value in enumerate(plan.outputs):
         canonical_name = f"shuttle.region.{value.role.value}.canonical"
-        lines.append(
-            f"{indent}%{canonical_name} = {value.ffi_shape} " f"get-tuple-element(%{call_name}), index={index}"
-        )
+        lines.append(f"{indent}%{canonical_name} = {value.ffi_shape} " f"get-tuple-element(%{call_name}), index={index}")
         physical_name = _emit_boundary_adapter(
             lines,
             indent=indent,
