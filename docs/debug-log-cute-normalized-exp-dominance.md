@@ -27,8 +27,15 @@ the existing H100 compile command before making any performance claim.
 ## Results
 
 The local alias change preserves all normalized-exp and Event Tensor semantic
-tests: 21 targeted tests pass. An actual H100 replay is in progress; no compile
-or performance claim is made yet.
+tests: 21 targeted tests pass. The first H100 replay falsified the finalize-only
+version: the same child-region dominance failure remained.
+
+## Hypothesis 2
+
+The non-dominating value is produced earlier by `update`, which wrote register
+state through repeated dataclass-field lookup inside its row child region. The
+upstream helper also binds state to locals before the update loop. Apply the
+same explicit SSA discipline to both update and finalize, then replay.
 
 ## Future work
 
