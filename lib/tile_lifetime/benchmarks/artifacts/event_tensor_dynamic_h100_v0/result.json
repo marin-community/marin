@@ -1,0 +1,94 @@
+{
+  "kind": "generated_dynamic_event_tensor_h100_validation",
+  "date": "2026-08-09",
+  "shuttle_revision": "5620501f02ce3918d08e6175d953d48f00699aaa",
+  "device_code_revision": "0b66914b08aac8af92421f0a464a2088f9858203",
+  "failed_barrier_revision": "f4c64eb0ac17f07c4a8f534917233368ae4ace4d",
+  "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "compute_capability": "9.0",
+    "driver": "595.71.05",
+    "power_limit_watts": 700.0,
+    "priority": "batch",
+    "host_request": "--cpu 1 --memory 16GB --disk 50GB"
+  },
+  "toolchain": {
+    "torch": "2.11.0+cu128",
+    "torch_cuda": "12.8",
+    "nvcc": "13.2.78",
+    "linked_cuda_runtime": "12.x from nvidia-cuda-runtime-cu12"
+  },
+  "runtime_relation": {
+    "configuration": {
+      "source_items": 2048,
+      "route_slots": 2,
+      "destination_count": 64,
+      "active_destinations": 48,
+      "maximum_event_count": 108,
+      "empty_event_count": 16
+    },
+    "correctness": {
+      "bitwise_source_order_reference": true,
+      "output_sha256": "a2bd13c1f30d5abf82bd9f99e7b95911af95c76025a1fdd4d3fcdd07277e4d63"
+    },
+    "mutation_smoke": {
+      "first_counts": [2, 0, 0, 0, 0, 3, 4, 7],
+      "first_output_sha256": "1ea45e55b9adb3bd933e85ec561f68bb9048a51b29cabc826ffbf4ac638f6229",
+      "second_counts": [4, 0, 5, 3, 0, 4, 0, 0],
+      "second_output_sha256": "523d24aafa0e74a8aa74669dc56ce77bf662f2a6efcda5c0d5b393c235878afb",
+      "same_compiled_module": true
+    },
+    "timing_ms": {
+      "samples": [0.004309439957141876, 0.004146240055561066, 0.004155519902706146, 0.0042003199458122255, 0.004211840033531189, 0.0041795200109481815, 0.0042022401094436645, 0.004182080030441284, 0.00418368011713028, 0.004187839925289154, 0.004196479916572571, 0.004205760061740876, 0.004160960018634796, 0.004192320108413697, 0.0041942399740219115, 0.004180479943752289, 0.0041961601376533505, 0.0041942399740219115, 0.004192320108413697, 0.004172160029411316, 0.0041808000206947325, 0.0041727998852729795, 0.004177600145339966, 0.004199039936065674, 0.00418720006942749, 0.004193919897079468, 0.004200960099697113, 0.004156799912452698, 0.00417248010635376, 0.0041961601376533505],
+      "median": 0.004190080016851425,
+      "mean": 0.004189386685689291,
+      "minimum": 0.004146240055561066,
+      "maximum": 0.004309439957141876,
+      "warmups": 10,
+      "repeats": 30,
+      "iterations_per_sample": 100
+    }
+  },
+  "phased_contract_fold_contract": {
+    "configuration": {
+      "generations": 32,
+      "pipeline_depth": 8,
+      "dimension": 128
+    },
+    "correctness": {
+      "maximum_absolute_error": 1.7881393432617188e-07,
+      "output_sha256": "2591e4f2188008091478c05da304dec20e42062eee2dd80374c1b8f493952024",
+      "repeat_bitwise": true
+    },
+    "mutation": {
+      "generations": 33,
+      "pipeline_depth": 4,
+      "dimension": 128,
+      "maximum_absolute_error": 1.1920928955078125e-07,
+      "output_sha256": "614eaa9f36a9386e6df1aa137cfb1624266c7fc47257f9bfeefd63d11b78e48d",
+      "repeat_bitwise": true,
+      "same_compiled_module": true
+    },
+    "timing_ms": {
+      "samples": [0.20821216583251953, 0.20846975326538086, 0.20845600128173827, 0.20805280685424804, 0.2084227180480957, 0.20803167343139647, 0.2081439971923828, 0.20811712265014648, 0.20819999694824218, 0.2078726387023926, 0.20792640686035158, 0.20788768768310548, 0.20823999404907226, 0.2081180763244629, 0.20806304931640626, 0.2086249542236328, 0.20830560684204102, 0.20825567245483398, 0.2080601692199707, 0.20826751708984376, 0.2081760025024414, 0.20811647415161133, 0.20839168548583983, 0.20809055328369142, 0.20829696655273439, 0.20796159744262696, 0.2080771255493164, 0.20799968719482423, 0.2080681610107422, 0.20835296630859376],
+      "median": 0.20813103675842284,
+      "mean": 0.20817530759175618,
+      "minimum": 0.2078726387023926,
+      "maximum": 0.2086249542236328,
+      "warmups": 10,
+      "repeats": 30,
+      "iterations_per_sample": 100
+    }
+  },
+  "generated_sources": {
+    "runtime_event_sha256": "90317b9845ffe40e3b5803d721778f80717bf58b4cb2fe537ef210972d1ae020",
+    "phased_pipeline_sha256": "c7b35327c5d9288d8440012a7775cfc45a6d70609c47495835ec0d93048bca7d"
+  },
+  "caveats": [
+    "The Torch C++ extension harness is prototype-only; Shuttle's intended runtime is JAX-registered and Torch-free by default.",
+    "The full artifact-producing harness exceeded its 60-second process bound after loading the cached runtime extension; the exact subsequent host stage was not instrumented. Both device correctness probes and the direct counterbalanced timing completed separately.",
+    "The phased kernel validates generic normalized Fold readiness and generation-safe slot reuse; it is not a production FlashAttention pipeline or throughput result.",
+    "The runtime relation kernel validates generic RelationPlan-derived segment readiness; it is not a distributed MoE end-to-end result."
+  ]
+}

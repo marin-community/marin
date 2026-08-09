@@ -4,9 +4,9 @@
 
 This work keeps `TaskDependence` and `EventTensorPlan` target-independent. CUDA is a legalization of a selected plan, not an event semantic.
 
-The first lowering accepts a verified, exact, CTA-scope plan with one consumer and at most 1,024 producers per event. It creates one fresh `cuda::barrier<cuda::thread_scope_block>` per CTA invocation. Producer tasks store FP32 partials and call `arrive`; the consumer waits before reading those partials. A generated CTA `__syncthreads` kernel and a two-kernel producer/finalizer sequence are controls.
+The first lowering accepts a verified, exact, CTA-scope plan with one consumer and at most 1,024 producers per event. The static proof emits a CTA `cuda::barrier`. The runtime-relation proof uses device count/offset/source tables, releases producer writes, decrements a shared event count, and runs the deterministic finalizer on the transition to zero. This avoids a resident waiting worker and matches the dynamic ready-on-zero interpretation.
 
-The first checkpoint does not support phased persistent reuse, device-wide semaphores, coarsened events, or multiple consumers per event. Unsupported plans are rejected before source generation.
+The bounded phased proof supports generation-tagged CTA-local slot reuse. It does not support device-wide semaphores, a concurrent ready queue, cross-CTA persistent scheduling, or multiple consumers per event. Unsupported plans are rejected before source generation.
 
 ## Pre-hardware validation
 
@@ -97,7 +97,7 @@ without a pod or any GPU time. No H100 and GB200 reservation was active
 simultaneously. Retry only after the existing Shuttle gradient holder releases;
 do not increase host resources to bypass the queue.
 
-The command records raw repeated-run samples, execution order, generated-source hash, plan fingerprint, kernel resource attributes, toolchain, driver, clocks, and power telemetry. Correctness runs use two producer permutations and nonzero producer delays. Repeated fresh kernel invocations verify the declared `per_invocation` generation policy.
+The command records raw repeated-run samples, execution order, generated-source hash, plan fingerprint, toolchain, driver, clocks, and power telemetry. Correctness runs mutate the runtime relation and phased schedule dimensions while reusing the same compiled modules. Repeated invocations verify source-order results and generation-safe slot reuse.
 
 Release immediately after copying the JSON and generated CUDA source:
 
@@ -150,3 +150,37 @@ The runtime mutation changes relation counts and offsets while reusing the same
 compiled module. The phased mutation changes generation count and pipeline depth
 through the same compiled module. Both paths check correctness and repeat hashes
 before timing.
+
+## H100 device result
+
+The reduced-host batch request admitted one H100 80GB HBM3. The accepted device
+code is revision `0b66914b08aac8af92421f0a464a2088f9858203`; the harness-only build-cache
+fix is included in revision `5620501f02ce3918d08e6175d953d48f00699aaa`.
+
+The first physical counted-event revision, `f4c64eb0ac17f07c4a8f534917233368ae4ace4d`,
+compiled but hung on its shared `cuda::barrier`. CUDA 13.2 warned that dynamic
+initialization of that function-scope shared barrier was unsupported. The fixed
+lowering uses release plus atomic decrement and lets the producer observing the
+one-to-zero transition execute the finalizer.
+
+Both generic device cases pass:
+
+| Case | Configuration | Correctness | Median latency |
+|---|---|---:|---:|
+| Runtime `RelationPlan` readiness | 2,048 sources × 2 routes, 64 segments, 16 empty | bitwise source-order match | 0.004190 ms |
+| Phased Contract/Fold/Contract | 32 generations, 8 slots, dimension 128 | max error 1.788e-7; repeat bitwise | 0.208131 ms |
+
+The relation mutation changes counts from `[2,0,0,0,0,3,4,7]` to
+`[4,0,5,3,0,4,0,0]` without recompiling the physical body. The phased mutation
+changes 32 generations × 8 slots to 33 × 4 through the same compiled body and
+has maximum error 1.192e-7.
+
+The all-in-one harness exceeded its 60-second process bound after loading the
+cached runtime extension; that run did not instrument the exact subsequent host
+stage. Separate device correctness probes and a counterbalanced 30 × 100 timing
+run completed. Raw samples, generated source, hashes, and failure logs are in
+`lib/tile_lifetime/benchmarks/artifacts/event_tensor_dynamic_h100_v0/`.
+
+The Torch C++ extension is a prototype compilation harness. It is not a runtime
+dependency target. Production Shuttle should register generated kernels with JAX
+and remain Torch-free by default.

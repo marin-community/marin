@@ -1,0 +1,1401 @@
+[1/2] /tmp/cuda13-home/bin/nvcc -MD -MF shuttle_runtime_event_1b0cbec553399322.cuda.o.d -DTORCH_EXTENSION_NAME=shuttle_runtime_event_1b0cbec553399322 -DTORCH_API_INCLUDE_EXTENSION_H -isystem /app/.venv/lib/python3.12/site-packages/torch/include -isystem /app/.venv/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -isystem /tmp/cuda13-home/include -isystem /usr/local/include/python3.12 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_90a,code=sm_90a --compiler-options '-fPIC' -O3 --threads=4 -lineinfo --ptxas-options=-v -std=c++17 -c /tmp/shuttle-dynamic-event-tensor/shuttle_runtime_event_1b0cbec553399322.cu -o shuttle_runtime_event_1b0cbec553399322.cuda.o 
+/tmp/shuttle-dynamic-event-tensor/shuttle_runtime_event_1b0cbec553399322.cu(24): warning #20054-D: dynamic initialization is not supported for a function-scope static __shared__ variable within a __device__/__global__ function
+              cuda::barrier<cuda::thread_scope_block> event;
+                                                      ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+ptxas info    : 28 bytes gmem
+ptxas info    : Compiling entry function '_ZN74_GLOBAL__N__2b5834b9_41_shuttle_runtime_event_1b0cbec553399322_cu_ab4dea6129shuttle_runtime_counted_eventEPKfPfS2_PKiS4_S4_i' for 'sm_90a'
+ptxas info    : Function properties for _ZN74_GLOBAL__N__2b5834b9_41_shuttle_runtime_event_1b0cbec553399322_cu_ab4dea6129shuttle_runtime_counted_eventEPKfPfS2_PKiS4_S4_i
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 8 bytes smem
+ptxas info    : Compile time = 10.029 ms
+[2/2] c++ shuttle_runtime_event_1b0cbec553399322.cuda.o -shared -L/app/.venv/lib/python3.12/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/tmp/cuda13-home/lib64 -lcudart -o shuttle_runtime_event_1b0cbec553399322.so
+[1/2] /tmp/cuda13-home/bin/nvcc -MD -MF shuttle_phased_event_9bf3a40e0925614d.cuda.o.d -DTORCH_EXTENSION_NAME=shuttle_phased_event_9bf3a40e0925614d -DTORCH_API_INCLUDE_EXTENSION_H -isystem /app/.venv/lib/python3.12/site-packages/torch/include -isystem /app/.venv/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -isystem /tmp/cuda13-home/include -isystem /usr/local/include/python3.12 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_90a,code=sm_90a --compiler-options '-fPIC' -O3 --threads=4 -lineinfo --ptxas-options=-v -std=c++17 -c /tmp/shuttle-dynamic-event-tensor/shuttle_phased_event_9bf3a40e0925614d.cu -o shuttle_phased_event_9bf3a40e0925614d.cuda.o 
+ptxas info    : 28 bytes gmem
+ptxas info    : Compiling entry function '_ZN73_GLOBAL__N__ea7bc90f_40_shuttle_phased_event_9bf3a40e0925614d_cu_d3ed7a9237shuttle_phased_contract_fold_pipelineEPKfS1_S1_Pfiii' for 'sm_90a'
+ptxas info    : Function properties for _ZN73_GLOBAL__N__ea7bc90f_40_shuttle_phased_event_9bf3a40e0925614d_cu_d3ed7a9237shuttle_phased_contract_fold_pipelineEPKfS1_S1_Pfiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 33 registers, used 1 barriers, 896 bytes smem
+ptxas info    : Compile time = 26.955 ms
+[2/2] c++ shuttle_phased_event_9bf3a40e0925614d.cuda.o -shared -L/app/.venv/lib/python3.12/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/tmp/cuda13-home/lib64 -lcudart -o shuttle_phased_event_9bf3a40e0925614d.so
+{
+  "command": {
+    "argv": [
+      "lib/tile_lifetime/benchmarks/gpu_event_tensor_dynamic_validation.py",
+      "--warmups",
+      "10",
+      "--repeats",
+      "30",
+      "--iterations",
+      "100",
+      "--shuttle-revision",
+      "f4c64eb0ac17f07c4a8f534917233368ae4ace4d",
+      "--holder-revision",
+      "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+      "--nvcc",
+      "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+      "--json-output",
+      "/tmp/event-tensor-dynamic-device-h100.json"
+    ],
+    "environment": {
+      "CUDA_HOME": "/tmp/cuda13-home",
+      "MAX_JOBS": "2",
+      "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc",
+      "TORCH_CUDA_ARCH_LIST": "9.0a"
+    },
+    "shell": "lib/tile_lifetime/benchmarks/gpu_event_tensor_dynamic_validation.py --warmups 10 --repeats 30 --iterations 100 --shuttle-revision f4c64eb0ac17f07c4a8f534917233368ae4ace4d --holder-revision eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc --json-output /tmp/event-tensor-dynamic-device-h100.json",
+    "working_directory": "/tmp/shuttle-event-tensor"
+  },
+  "gpu": {
+    "after": {
+      "field_errors": {},
+      "gpus": [
+        {
+          "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+          "clocks.applications.memory": "[Requested functionality has been deprecated]",
+          "clocks.current.graphics": "1830",
+          "clocks.current.memory": "2619",
+          "clocks.current.sm": "1830",
+          "clocks.max.graphics": "1980",
+          "clocks.max.memory": "2619",
+          "clocks.max.sm": "1980",
+          "driver_version": "595.71.05",
+          "index": "0",
+          "name": "NVIDIA H100 80GB HBM3",
+          "pci.bus_id": "00000000:4C:00.0",
+          "persistence_mode": "Enabled",
+          "power.draw": "126.56",
+          "power.limit": "700.00",
+          "pstate": "P0",
+          "temperature.gpu": "36",
+          "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e"
+        }
+      ],
+      "topology": {
+        "arguments": [
+          "nvidia-smi",
+          "topo",
+          "-m"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tNIC13\tNIC14\tNIC15\tNIC16\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC1\tNODE\tNODE\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC2\tPIX\tNODE\tNODE\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tNODE\tNODE\tNODE\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tSYS\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC6\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC7\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC8\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC11\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC12\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC13\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC14\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC15\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC16\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: ibp4\n  NIC5: ibp5\n  NIC6: ibp6\n  NIC7: ibp7\n  NIC8: mlx5_0\n  NIC9: mlx5_1\n  NIC10: mlx5_2\n  NIC11: mlx5_3\n  NIC12: mlx5_4\n  NIC13: mlx5_5\n  NIC14: mlx5_6\n  NIC15: mlx5_7\n  NIC16: mlx5_8"
+      }
+    },
+    "before": {
+      "field_errors": {},
+      "gpus": [
+        {
+          "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+          "clocks.applications.memory": "[Requested functionality has been deprecated]",
+          "clocks.current.graphics": "1830",
+          "clocks.current.memory": "2619",
+          "clocks.current.sm": "1830",
+          "clocks.max.graphics": "1980",
+          "clocks.max.memory": "2619",
+          "clocks.max.sm": "1980",
+          "driver_version": "595.71.05",
+          "index": "0",
+          "name": "NVIDIA H100 80GB HBM3",
+          "pci.bus_id": "00000000:4C:00.0",
+          "persistence_mode": "Enabled",
+          "power.draw": "125.98",
+          "power.limit": "700.00",
+          "pstate": "P0",
+          "temperature.gpu": "36",
+          "uuid": "GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e"
+        }
+      ],
+      "topology": {
+        "arguments": [
+          "nvidia-smi",
+          "topo",
+          "-m"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tNIC13\tNIC14\tNIC15\tNIC16\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC1\tNODE\tNODE\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC2\tPIX\tNODE\tNODE\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tNODE\tNODE\tNODE\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tSYS\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC6\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC7\tSYS\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC8\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC11\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC12\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC13\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC14\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC15\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC16\tSYS\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: ibp4\n  NIC5: ibp5\n  NIC6: ibp6\n  NIC7: ibp7\n  NIC8: mlx5_0\n  NIC9: mlx5_1\n  NIC10: mlx5_2\n  NIC11: mlx5_3\n  NIC12: mlx5_4\n  NIC13: mlx5_5\n  NIC14: mlx5_6\n  NIC15: mlx5_7\n  NIC16: mlx5_8"
+      }
+    },
+    "capability": [
+      9,
+      0
+    ],
+    "name": "NVIDIA H100 80GB HBM3"
+  },
+  "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "kind": "generated_dynamic_event_tensor_gpu_validation",
+  "observed_shuttle_revision": "f4c64eb0ac17f07c4a8f534917233368ae4ace4d",
+  "phased_pipeline": {
+    "generated_source": {
+      "path": "/tmp/shuttle-dynamic-event-tensor/shuttle_phased_event_9bf3a40e0925614d.cu",
+      "sha256": "9bf3a40e0925614d0d36867efb7e23723c4f4bffc04fbaaa9a7c96c0efdbb3c9"
+    },
+    "generation_assertion": {
+      "acquire": "atomic generation poll before shared-buffer read",
+      "identity": "physical slot plus monotonically increasing generation",
+      "policy": "phased",
+      "release": "threadfence_block then atomic generation publish"
+    },
+    "logical_execution_trace": {
+      "entry_count": 3416,
+      "head": [
+        {
+          "coordinate": [
+            0,
+            0
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 0,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            1
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 1,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            2
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 2,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            3
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 3,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            4
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 4,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            5
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 5,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            6
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 6,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            7
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 7,
+          "subject": "fold_finalize_to_first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            0
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 8,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            1
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 9,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            2
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 10,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            3
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 11,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            4
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 12,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            5
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 13,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            6
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 14,
+          "subject": "first_contract"
+        },
+        {
+          "coordinate": [
+            0,
+            7
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 15,
+          "subject": "first_contract"
+        }
+      ],
+      "sha256": "054c873e41568e039e6cf45d668aa5d976835a32103bbf0ea6730c231f92455b",
+      "tail": [
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 6,
+          "step": 3400,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            2
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3401,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 5,
+          "step": 3402,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            3
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3403,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 4,
+          "step": 3404,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            4
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3405,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 3,
+          "step": 3406,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            5
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3407,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 2,
+          "step": 3408,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            6
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3409,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 1,
+          "step": 3410,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31,
+            7
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3411,
+          "subject": "second_contract"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "notify",
+          "remaining": 0,
+          "step": 3412,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 3413,
+          "subject": "second_contract_to_fold_finalize"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "task_ready",
+          "remaining": null,
+          "step": 3414,
+          "subject": "fold_finalize"
+        },
+        {
+          "coordinate": [
+            31
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 3415,
+          "subject": "fold_finalize"
+        }
+      ]
+    },
+    "mutation": {
+      "dimension": 128,
+      "generations": 33,
+      "maximum_absolute_error": 1.1920928955078125e-07,
+      "output_sha256": "614eaa9f36a9386e6df1aa137cfb1624266c7fc47257f9bfeefd63d11b78e48d",
+      "pipeline_depth": 4,
+      "repeat_bitwise": true
+    },
+    "primary": {
+      "dimension": 128,
+      "generations": 32,
+      "maximum_absolute_error": 1.7881393432617188e-07,
+      "output_sha256": "2591e4f2188008091478c05da304dec20e42062eee2dd80374c1b8f493952024",
+      "pipeline_depth": 8,
+      "repeat_bitwise": true
+    },
+    "same_compiled_module": true
+  },
+  "requested_shuttle_revision": "f4c64eb0ac17f07c4a8f534917233368ae4ace4d",
+  "runtime_relation": {
+    "first": {
+      "bitwise_reference": true,
+      "event_counts": [
+        90,
+        83,
+        103,
+        95,
+        95,
+        69,
+        0,
+        108,
+        88,
+        0,
+        85,
+        0,
+        86,
+        86,
+        90,
+        81,
+        0,
+        79,
+        0,
+        0,
+        81,
+        0,
+        0,
+        78,
+        77,
+        83,
+        0,
+        82,
+        78,
+        93,
+        81,
+        69,
+        83,
+        78,
+        0,
+        0,
+        82,
+        86,
+        0,
+        76,
+        80,
+        87,
+        104,
+        78,
+        0,
+        0,
+        85,
+        94,
+        77,
+        107,
+        91,
+        83,
+        91,
+        72,
+        94,
+        83,
+        0,
+        86,
+        88,
+        0,
+        92,
+        81,
+        81,
+        77
+      ],
+      "event_source_offsets": [
+        0,
+        90,
+        173,
+        276,
+        371,
+        466,
+        535,
+        535,
+        643,
+        731,
+        731,
+        816,
+        816,
+        902,
+        988,
+        1078,
+        1159,
+        1159,
+        1238,
+        1238,
+        1238,
+        1319,
+        1319,
+        1319,
+        1397,
+        1474,
+        1557,
+        1557,
+        1639,
+        1717,
+        1810,
+        1891,
+        1960,
+        2043,
+        2121,
+        2121,
+        2121,
+        2203,
+        2289,
+        2289,
+        2365,
+        2445,
+        2532,
+        2636,
+        2714,
+        2714,
+        2714,
+        2799,
+        2893,
+        2970,
+        3077,
+        3168,
+        3251,
+        3342,
+        3414,
+        3508,
+        3591,
+        3591,
+        3677,
+        3765,
+        3765,
+        3857,
+        3938,
+        4019,
+        4096
+      ],
+      "initially_ready_events": [
+        6,
+        9,
+        11,
+        16,
+        18,
+        19,
+        21,
+        22,
+        26,
+        34,
+        35,
+        38,
+        44,
+        45,
+        56,
+        59
+      ],
+      "maximum_count": 108,
+      "output_sha256": "8be1e167ba8448daea94a0233644b07feacab67ed570ce2dbb5c7ea95b616bdb"
+    },
+    "generated_source": {
+      "path": "/tmp/shuttle-dynamic-event-tensor/shuttle_runtime_event_1b0cbec553399322.cu",
+      "sha256": "1b0cbec5533993228b5873b492e36367538b91dc5ec5fc649d35425f62982421"
+    },
+    "logical_execution_trace": {
+      "entry_count": 12480,
+      "head": [
+        {
+          "coordinate": [
+            6
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 0,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            9
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 1,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            11
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 2,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            16
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 3,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            18
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 4,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            19
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 5,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            21
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 6,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            22
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 7,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            26
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 8,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            34
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 9,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            35
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 10,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            38
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 11,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            44
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 12,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            45
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 13,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            56
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 14,
+          "subject": "runtime_segment_readiness"
+        },
+        {
+          "coordinate": [
+            59
+          ],
+          "generation": 0,
+          "kind": "event_ready",
+          "remaining": 0,
+          "step": 15,
+          "subject": "runtime_segment_readiness"
+        }
+      ],
+      "sha256": "c8adee10845096f96f91751645996a334bf5d11a0726c19270d5a7dda34eef3e",
+      "tail": [
+        {
+          "coordinate": [
+            46
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12464,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            47
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12465,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            48
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12466,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            49
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12467,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            50
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12468,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            51
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12469,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            52
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12470,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            53
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12471,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            54
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12472,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            55
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12473,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            57
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12474,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            58
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12475,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            60
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12476,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            61
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12477,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            62
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12478,
+          "subject": "segment_consumer"
+        },
+        {
+          "coordinate": [
+            63
+          ],
+          "generation": 0,
+          "kind": "task_execute",
+          "remaining": null,
+          "step": 12479,
+          "subject": "segment_consumer"
+        }
+      ]
+    },
+    "mutation": {
+      "bitwise_reference": true,
+      "event_counts": [
+        83,
+        82,
+        99,
+        70,
+        85,
+        80,
+        87,
+        0,
+        86,
+        82,
+        104,
+        82,
+        0,
+        90,
+        88,
+        88,
+        85,
+        73,
+        84,
+        0,
+        0,
+        81,
+        79,
+        87,
+        79,
+        88,
+        84,
+        0,
+        95,
+        95,
+        97,
+        0,
+        94,
+        73,
+        0,
+        0,
+        89,
+        76,
+        0,
+        0,
+        87,
+        0,
+        94,
+        87,
+        84,
+        0,
+        75,
+        82,
+        80,
+        85,
+        78,
+        90,
+        0,
+        0,
+        98,
+        89,
+        81,
+        0,
+        74,
+        90,
+        0,
+        84,
+        95,
+        78
+      ],
+      "event_source_offsets": [
+        0,
+        83,
+        165,
+        264,
+        334,
+        419,
+        499,
+        586,
+        586,
+        672,
+        754,
+        858,
+        940,
+        940,
+        1030,
+        1118,
+        1206,
+        1291,
+        1364,
+        1448,
+        1448,
+        1448,
+        1529,
+        1608,
+        1695,
+        1774,
+        1862,
+        1946,
+        1946,
+        2041,
+        2136,
+        2233,
+        2233,
+        2327,
+        2400,
+        2400,
+        2400,
+        2489,
+        2565,
+        2565,
+        2565,
+        2652,
+        2652,
+        2746,
+        2833,
+        2917,
+        2917,
+        2992,
+        3074,
+        3154,
+        3239,
+        3317,
+        3407,
+        3407,
+        3407,
+        3505,
+        3594,
+        3675,
+        3675,
+        3749,
+        3839,
+        3839,
+        3923,
+        4018,
+        4096
+      ],
+      "initially_ready_events": [
+        7,
+        12,
+        19,
+        20,
+        27,
+        31,
+        34,
+        35,
+        38,
+        39,
+        41,
+        45,
+        52,
+        53,
+        57,
+        60
+      ],
+      "maximum_count": 104,
+      "output_sha256": "059c6483890f2372c129f21e70641fe89ccac93cad3c0a880c2d73b8d228ebee"
+    },
+    "same_compiled_module": true,
+    "visibility_assertion": {
+      "acquire_before_consumer": true,
+      "physical_realization": "cuda block barrier wait after producer arrivals",
+      "release_on_notify": true,
+      "scope": "cta",
+      "zero_count_policy": "initially ready identity; no barrier initialized"
+    }
+  },
+  "timing": {
+    "execution_order": [
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ],
+      [
+        "runtime_segment",
+        "phased_pipeline"
+      ],
+      [
+        "phased_pipeline",
+        "runtime_segment"
+      ]
+    ],
+    "variants": {
+      "phased_pipeline": {
+        "maximum_ms": 0.21370271682739259,
+        "mean_ms": 0.21320983441670735,
+        "median_ms": 0.2132140827178955,
+        "minimum_ms": 0.2125094413757324,
+        "samples_ms": [
+          0.21301311492919922,
+          0.21312320709228516,
+          0.21301023483276368,
+          0.21308319091796876,
+          0.21316064834594728,
+          0.21354528427124023,
+          0.21289247512817383,
+          0.2125094413757324,
+          0.21283359527587892,
+          0.21287456512451172,
+          0.2130076789855957,
+          0.21336992263793944,
+          0.21338592529296874,
+          0.21346815109252928,
+          0.21338783264160155,
+          0.21340160369873046,
+          0.2136809539794922,
+          0.21332096099853515,
+          0.21320480346679688,
+          0.2133590316772461,
+          0.21330976486206055,
+          0.21370271682739259,
+          0.21320735931396484,
+          0.21352127075195312,
+          0.21301408767700195,
+          0.21322080612182617,
+          0.21314336776733397,
+          0.21341407775878907,
+          0.21327648162841797,
+          0.21285247802734375
+        ]
+      },
+      "runtime_segment": {
+        "maximum_ms": 0.004186559915542603,
+        "mean_ms": 0.004025386661291122,
+        "median_ms": 0.004010560065507889,
+        "minimum_ms": 0.003984319865703583,
+        "samples_ms": [
+          0.004091840088367462,
+          0.003994559943675995,
+          0.004011200070381165,
+          0.004186559915542603,
+          0.003992640078067779,
+          0.004022719860076904,
+          0.0040217599272727965,
+          0.004053120017051697,
+          0.004002240002155304,
+          0.003984319865703583,
+          0.00398719996213913,
+          0.00404992014169693,
+          0.004033600091934204,
+          0.00405375987291336,
+          0.004016000032424927,
+          0.004009920060634613,
+          0.004002879858016967,
+          0.004060479998588562,
+          0.0039929598569869995,
+          0.004003520011901855,
+          0.003994559943675995,
+          0.004118080139160156,
+          0.003995200097560883,
+          0.004031679928302765,
+          0.004007680118083954,
+          0.004000000059604645,
+          0.004020799994468689,
+          0.00400736004114151,
+          0.00399071991443634,
+          0.004024319946765899
+        ]
+      }
+    }
+  },
+  "toolchain": {
+    "nvcc": {
+      "arguments": [
+        "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:12:51_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0"
+    },
+    "platform": {
+      "arguments": [
+        "uname",
+        "-a"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Linux g73bb8a 6.8.12-680-6063-coreweave-amd64-f81899c8 #1 SMP PREEMPT_DYNAMIC Fri Apr 25 14:33:53 UTC 2025 x86_64 GNU/Linux"
+    },
+    "ptxas": {
+      "arguments": [
+        "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/ptxas",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "ptxas: NVIDIA (R) Ptx optimizing assembler\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:12:51_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0"
+    },
+    "python": "3.12.13 (main, Aug  5 2026, 01:10:24) [GCC 14.2.0]"
+  },
+  "torch": {
+    "cuda": "12.8",
+    "version": "2.11.0+cu128"
+  }
+}
