@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -331,6 +332,7 @@ def compile_streaming_attention_backward_ffi(
         raise ValueError(f"CUDA compiler does not exist: {nvcc}")
     interpreter = python or Path(sys.executable)
     directory.mkdir(parents=True, exist_ok=True)
+    triton_cache_directory = directory / ".triton-cache"
     _write_aot_input_sources(generated, repository=repository, directory=directory)
     aot_sources: list[Path] = []
     launchers: dict[str, str] = {}
@@ -341,7 +343,11 @@ def compile_streaming_attention_backward_ffi(
             target=triton_target,
             python=interpreter,
         )
-        subprocess.run(command, check=True, cwd=repository)
+        _run_triton_aot_compile(
+            command,
+            repository=repository,
+            cache_directory=triton_cache_directory,
+        )
         candidates = sorted(directory.glob(f"{kernel.output_name}.*.c"))
         headers = sorted(directory.glob(f"{kernel.output_name}.*.h"))
         if len(candidates) != 1 or len(headers) != 1:
@@ -404,6 +410,19 @@ def compile_streaming_attention_backward_ffi(
         aot_sources=tuple(aot_sources),
         compile_argv=command,
     )
+
+
+def _run_triton_aot_compile(
+    command: tuple[str, ...],
+    *,
+    repository: Path,
+    cache_directory: Path,
+) -> None:
+    """Run Triton AOT with an owned cache instead of ambient home state."""
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment["TRITON_CACHE_DIR"] = str(cache_directory.resolve())
+    subprocess.run(command, check=True, cwd=repository, env=environment)
 
 
 def _aot_launcher_declarations(launcher: str, pointer_count: int) -> str:
@@ -909,7 +928,7 @@ def _validated_output_layouts(
     if len(set(names)) != len(names):
         raise ValueError(f"duplicate streaming reverse output layout names: {names}")
     if set(names) != set(output_shapes):
-        raise ValueError("streaming reverse output layouts must cover exactly " f"{tuple(output_shapes)}, found {names}")
+        raise ValueError(f"streaming reverse output layouts must cover exactly {tuple(output_shapes)}, found {names}")
     layouts = {layout.buffer_name: layout.minor_to_major for layout in requested}
     for name, shape in output_shapes.items():
         _validate_minor_to_major(name, shape, layouts[name])
