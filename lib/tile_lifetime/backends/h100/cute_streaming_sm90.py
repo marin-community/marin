@@ -81,8 +81,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         self.value_pipeline_stages = self.num_stages if value_pipeline_stages is None else value_pipeline_stages
         self.pipeline_barriers_per_stage = pipeline_barriers_per_stage
         self.event_transfer_warps = transfer_warps
-        self.event_matrix_warpgroups = matrix_warpgroups
-        self.scheduler_arrival_threads = scheduler_arrival_threads
+        self.event_matrix_warpgroups = self.tile_m // 64 if matrix_warpgroups is None else matrix_warpgroups
+        self.scheduler_arrival_threads = (
+            2 * 128 if self.event_matrix_warpgroups > 1 else 0
+        ) if scheduler_arrival_threads is None else scheduler_arrival_threads
         self.event_transaction_bytes = {
             "Q": query_transaction_bytes,
             "K": key_transaction_bytes,
@@ -246,18 +248,14 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         self.num_threads_per_warp_group = 128
         self.num_wg_mma = self.num_mma_threads // self.num_threads_per_warp_group
         assert self.num_wg_mma in [1, 2, 3]
-        if self.event_matrix_warpgroups is not None:
-            assert self.num_wg_mma == self.event_matrix_warpgroups
+        assert self.num_wg_mma == self.event_matrix_warpgroups
         self.num_threads = self.num_threads_per_warp_group * (self.num_wg_mma + 1)
         self.num_producer_threads = 32
         assert self.num_producer_threads == self.event_transfer_warps * cute.arch.WARP_SIZE
         expected_scheduler_arrivals = (
             2 * self.num_threads_per_warp_group if self.num_wg_mma > 1 else 0
         )
-        if self.scheduler_arrival_threads is None:
-            self.scheduler_arrival_threads = expected_scheduler_arrivals
-        else:
-            assert self.scheduler_arrival_threads == expected_scheduler_arrivals
+        assert self.scheduler_arrival_threads == expected_scheduler_arrivals
         self.num_Q_load_threads = self.num_threads_per_warp_group  # If not TMA_Q
         self.num_epilogue_threads = self.num_mma_threads
         self.num_mma_regs, self.num_producer_regs = {1: (256, 56), 2: (240, 24), 3: (160, 32)}[
@@ -318,7 +316,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             ]
         }
         for name, expected_bytes in self.event_transaction_bytes.items():
-            if expected_bytes is not None:
+            if const_expr(expected_bytes is not None):
                 assert self.tma_copy_bytes[name] == expected_bytes
         make_tiled_tma_atom_fn = (
             partial(make_packgqa_tiled_tma_atom, qhead_per_kvhead=self.qhead_per_kvhead, head_idx=2)
