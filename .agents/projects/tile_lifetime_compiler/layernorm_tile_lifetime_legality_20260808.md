@@ -107,7 +107,29 @@ The backend-neutral prototype now includes:
 - numerical equivalence and cancellation tests.
 
 The focused compiler tests pass. This establishes the algebra and planning
-legality only. Remaining work is StableHLO recovery, a Welford/two-pass Fold if
-source-order statistics are required, generated CUDA for the new primitives,
-cache invalidation for `gamma @ W` and `beta @ W`, and H100 performance
-measurement.
+legality.
+
+The training path now also accepts an ordinary centered JAX normalization,
+lets JAX form its VJP, recovers the resulting StableHLO as generic row Folds,
+and generates a four-stage typed-FFI pipeline:
+
+```text
+row-mean Fold
+→ centered-second-moment Fold
+→ input-cotangent Fold + Map
+→ feature-scale-cotangent Fold
+```
+
+The exact HLO replacement is shared with the uncentered RMS-style path. It
+contains no LayerNorm dispatch key, and the generated source contains only the
+recovered scalar expressions and generic axis-Fold stages. CPU/reference
+execution matches the natural JAX VJP within the declared BF16 reassociation
+tolerance.
+
+This is an executable-generation proof, not a GPU performance result. The
+centered pipeline is currently four separate GPU stages, and the generic
+feature-axis Fold remains slower than XLA in the measured uncentered case.
+Remaining work is a Welford/two-pass Fold for a source-ordered statistics
+policy, a faster generic row-Fold lowering, H100/GB200 measurement of the
+centered path, and cache invalidation for the delayed `gamma @ W` and `beta @
+W` inference candidate.
