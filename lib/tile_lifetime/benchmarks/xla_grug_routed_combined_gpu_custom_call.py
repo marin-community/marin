@@ -67,6 +67,13 @@ from tile_lifetime.xla_axis_fold_ffi import (
     recover_axis_fold_hlo_region_candidates,
     replace_axis_fold_hlo_region_with_custom_call,
 )
+from tile_lifetime.xla_contract_relation_fold_ffi import (
+    ContractRelationFoldReplacementAudit,
+    GeneratedContractRelationFoldFfi,
+    audit_contract_relation_fold_replacement,
+    generate_cuda_contract_relation_fold_ffi,
+    replace_contract_relation_fold_with_custom_call,
+)
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_rank_two_contract_ffi import (
     GeneratedRankTwoContractFfi,
@@ -156,6 +163,7 @@ _SHARED_ROUTED_TARGETS = RoutedSharedMapTrainingFfiTargets(
 )
 _WEIGHTED_RELATION_CONTRACT_TARGET = "shuttle.routed_training.weighted_relation.contract.v1"
 _WEIGHTED_RELATION_FOLD_TARGET = "shuttle.routed_training.weighted_relation.fold.v1"
+_WEIGHTED_RELATION_FUSED_TARGET = "shuttle.routed_training.weighted_relation.contract_fold.v1"
 
 
 class RoutedTrainingCompositionMode(StrEnum):
@@ -163,6 +171,24 @@ class RoutedTrainingCompositionMode(StrEnum):
 
     MONOLITHIC_INPUT_ADJOINT = "monolithic_input_adjoint"
     SHARED_MAP_XLA_REMAINDER = "shared_map_xla_remainder"
+    SHARED_MAP_FUSED_WEIGHTED_REVERSE = "shared_map_fused_weighted_reverse"
+
+    @property
+    def uses_shared_map(self) -> bool:
+        """Whether this composition exposes the shared-Map routed subregions."""
+        return self is not RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT
+
+    @property
+    def fuses_weighted_reverse(self) -> bool:
+        """Whether one bounded Contract/Map/Fold call owns weighted reverse."""
+        return self is RoutedTrainingCompositionMode.SHARED_MAP_FUSED_WEIGHTED_REVERSE
+
+    @property
+    def independent_custom_call_count(self) -> int:
+        """Return the exact generated-call count selected by this composition."""
+        if self is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+            return 7
+        return 11 if self.fuses_weighted_reverse else 12
 
 
 @dataclass(frozen=True)
@@ -177,10 +203,10 @@ class SharedMapTrainingAttentionAndAxisFoldPlan:
 
 @dataclass(frozen=True)
 class SharedMapTrainingAttentionAndAxisFoldAudit:
-    """Post-roundtrip evidence for the clean twelve-call composition."""
+    """Post-roundtrip evidence for one clean shared-Map composition."""
 
     routed: RoutedSharedMapTrainingReplacementAudit
-    weighted_relation_reverse: WeightedRelationReverseReplacementAudit
+    weighted_relation_reverse: WeightedRelationReverseReplacementAudit | ContractRelationFoldReplacementAudit
     attention_backward_instruction: str
     axis_folds: tuple[AxisFoldHloRegionReplacementAudit, ...]
 
@@ -208,6 +234,16 @@ def _single_custom_call_target_occurrences(hlo_text: str, targets: tuple[str, ..
     if invalid:
         raise RuntimeError(f"expected one exact custom-call target attribute per selected target, found {invalid}")
     return counts
+
+
+def _target_occurrence(hlo_text: str, target: str) -> int:
+    """Count an exact custom-call target attribute without requiring its presence."""
+    module = parse_hlo_module_text(hlo_text)
+    return sum(
+        instruction.opcode == "custom-call" and _CUSTOM_CALL_TARGET_ATTRIBUTE.findall(instruction.attributes) == [target]
+        for computation in module.computations
+        for instruction in computation.instructions
+    )
 
 
 def _attention_reverse_program() -> tuple[Any, Any, bytes]:
@@ -269,7 +305,7 @@ def _plan_shared_map_composition(
     generated_attention: Any,
     generated_axis_folds: tuple[Any, ...],
 ) -> SharedMapTrainingAttentionAndAxisFoldPlan:
-    """Plan twelve disjoint calls while retaining collectives and physical views."""
+    """Plan disjoint shared-Map calls while retaining collectives and physical views."""
     if len(generated_axis_folds) != len(_TARGETS.axis_folds):
         raise ValueError("shared-Map composition requires one generated body per axis-Fold target")
     axis_folds = tuple(
@@ -297,8 +333,10 @@ def _plan_shared_map_composition(
 def _replace_shared_map_composition(
     hlo_text: str,
     plan: SharedMapTrainingAttentionAndAxisFoldPlan,
+    *,
+    fuse_weighted_reverse: bool,
 ) -> str:
-    """Apply the clean twelve-call composition while retaining physical views."""
+    """Apply one clean shared-Map composition while retaining physical views."""
     rewritten = replace_streaming_attention_backward_region_with_custom_call(
         hlo_text,
         plan.attention_backward,
@@ -309,12 +347,20 @@ def _replace_shared_map_composition(
         plan.routed,
         targets=_SHARED_ROUTED_TARGETS,
     )
-    rewritten = replace_weighted_relation_reverse_with_custom_calls(
-        rewritten,
-        plan.weighted_relation_reverse,
-        contract_target=_WEIGHTED_RELATION_CONTRACT_TARGET,
-        fold_target=_WEIGHTED_RELATION_FOLD_TARGET,
-    )
+    if fuse_weighted_reverse:
+        rewritten = replace_contract_relation_fold_with_custom_call(
+            rewritten,
+            plan.weighted_relation_reverse.payload_contract,
+            plan.weighted_relation_reverse.edge_fold,
+            target=_WEIGHTED_RELATION_FUSED_TARGET,
+        )
+    else:
+        rewritten = replace_weighted_relation_reverse_with_custom_calls(
+            rewritten,
+            plan.weighted_relation_reverse,
+            contract_target=_WEIGHTED_RELATION_CONTRACT_TARGET,
+            fold_target=_WEIGHTED_RELATION_FOLD_TARGET,
+        )
     for axis_fold, target in zip(plan.axis_folds, _TARGETS.axis_folds, strict=True):
         rewritten = replace_axis_fold_hlo_region_with_custom_call(rewritten, axis_fold, target=target)
     return rewritten
@@ -324,6 +370,8 @@ def _audit_shared_map_composition(
     original_hlo: str,
     transformed_hlo: str,
     plan: SharedMapTrainingAttentionAndAxisFoldPlan,
+    *,
+    fuse_weighted_reverse: bool,
 ) -> SharedMapTrainingAttentionAndAxisFoldAudit:
     """Audit every generated call and the XLA-owned physical views."""
     routed = audit_routed_shared_map_training_replacement(
@@ -332,13 +380,22 @@ def _audit_shared_map_composition(
         plan.routed,
         targets=_SHARED_ROUTED_TARGETS,
     )
-    weighted_relation_reverse = audit_weighted_relation_reverse_replacement(
-        original_hlo,
-        transformed_hlo,
-        plan.weighted_relation_reverse,
-        contract_target=_WEIGHTED_RELATION_CONTRACT_TARGET,
-        fold_target=_WEIGHTED_RELATION_FOLD_TARGET,
-    )
+    if fuse_weighted_reverse:
+        weighted_relation_reverse = audit_contract_relation_fold_replacement(
+            original_hlo,
+            transformed_hlo,
+            plan.weighted_relation_reverse.payload_contract,
+            plan.weighted_relation_reverse.edge_fold,
+            target=_WEIGHTED_RELATION_FUSED_TARGET,
+        )
+    else:
+        weighted_relation_reverse = audit_weighted_relation_reverse_replacement(
+            original_hlo,
+            transformed_hlo,
+            plan.weighted_relation_reverse,
+            contract_target=_WEIGHTED_RELATION_CONTRACT_TARGET,
+            fold_target=_WEIGHTED_RELATION_FOLD_TARGET,
+        )
     attention = audit_streaming_attention_backward_region_replacement(
         original_hlo,
         transformed_hlo,
@@ -435,11 +492,9 @@ def run_smoke(
     runtime_dependencies: dict[str, tuple[str, ...]] = {}
     attention_library_path: Path | None = None
     selected_routed_targets = (
-        _TARGETS.routed_attention.routed
-        if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT
-        else _SHARED_ROUTED_TARGETS
+        _SHARED_ROUTED_TARGETS if composition_mode.uses_shared_map else _TARGETS.routed_attention.routed
     )
-    if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+    if not composition_mode.uses_shared_map:
         selected_targets = (
             selected_routed_targets.forward,
             selected_routed_targets.input_adjoint,
@@ -448,14 +503,18 @@ def run_smoke(
             *_TARGETS.axis_folds,
         )
     else:
+        weighted_targets = (
+            (_WEIGHTED_RELATION_FUSED_TARGET,)
+            if composition_mode.fuses_weighted_reverse
+            else (_WEIGHTED_RELATION_CONTRACT_TARGET, _WEIGHTED_RELATION_FOLD_TARGET)
+        )
         selected_targets = (
             selected_routed_targets.forward,
             *selected_routed_targets.input_contracts,
             selected_routed_targets.shared_contract_multi_map,
             selected_routed_targets.source_fold,
             *selected_routed_targets.weight_gradients,
-            _WEIGHTED_RELATION_CONTRACT_TARGET,
-            _WEIGHTED_RELATION_FOLD_TARGET,
+            *weighted_targets,
             _TARGETS.routed_attention.attention_backward,
             *_TARGETS.axis_folds,
         )
@@ -540,7 +599,8 @@ def run_smoke(
                 source_fold: GeneratedSourceIndexedFoldFfi | None = None
                 weighted_relation_contract: GeneratedRankTwoContractFfi | None = None
                 weighted_relation_fold: GeneratedRelationEdgeFoldFfi | None = None
-                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                weighted_relation_fused: GeneratedContractRelationFoldFfi | None = None
+                if not composition_mode.uses_shared_map:
                     input_adjoint = generate_cuda_routed_input_adjoint_ffi(
                         routed_plan.input_adjoint,
                         target=_TARGETS.routed_attention.routed.input_adjoint,
@@ -563,14 +623,21 @@ def run_smoke(
                         routed_plan.source_fold,
                         target=_SHARED_ROUTED_TARGETS.source_fold,
                     )
-                    weighted_relation_contract = generate_cuda_rank_two_contract_ffi(
-                        plan.weighted_relation_reverse.payload_contract,
-                        target=_WEIGHTED_RELATION_CONTRACT_TARGET,
-                    )
-                    weighted_relation_fold = generate_cuda_relation_edge_fold_ffi(
-                        plan.weighted_relation_reverse.edge_fold,
-                        target=_WEIGHTED_RELATION_FOLD_TARGET,
-                    )
+                    if composition_mode.fuses_weighted_reverse:
+                        weighted_relation_fused = generate_cuda_contract_relation_fold_ffi(
+                            plan.weighted_relation_reverse.payload_contract,
+                            plan.weighted_relation_reverse.edge_fold,
+                            target=_WEIGHTED_RELATION_FUSED_TARGET,
+                        )
+                    else:
+                        weighted_relation_contract = generate_cuda_rank_two_contract_ffi(
+                            plan.weighted_relation_reverse.payload_contract,
+                            target=_WEIGHTED_RELATION_CONTRACT_TARGET,
+                        )
+                        weighted_relation_fold = generate_cuda_relation_edge_fold_ffi(
+                            plan.weighted_relation_reverse.edge_fold,
+                            target=_WEIGHTED_RELATION_FOLD_TARGET,
+                        )
                     routed_weight_targets = _SHARED_ROUTED_TARGETS.weight_gradients
                 weights = tuple(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
@@ -588,6 +655,7 @@ def run_smoke(
                     *((source_fold.source,) if source_fold is not None else ()),
                     *((weighted_relation_contract.source,) if weighted_relation_contract is not None else ()),
                     *((weighted_relation_fold.source,) if weighted_relation_fold is not None else ()),
+                    *((weighted_relation_fused.source,) if weighted_relation_fused is not None else ()),
                     *(weight.source for weight in weights),
                     *(axis_fold.source for axis_fold in generated_axis_folds),
                 )
@@ -626,18 +694,27 @@ def run_smoke(
                         _SHARED_ROUTED_TARGETS.source_fold,
                         "source_indexed_fold",
                     )
-                    if weighted_relation_contract is None or weighted_relation_fold is None:
-                        raise RuntimeError("shared-Map composition did not generate weighted relation reverse bodies")
-                    compile_target(
-                        weighted_relation_contract.source,
-                        _WEIGHTED_RELATION_CONTRACT_TARGET,
-                        "weighted_relation_contract",
-                    )
-                    compile_target(
-                        weighted_relation_fold.source,
-                        _WEIGHTED_RELATION_FOLD_TARGET,
-                        "weighted_relation_fold",
-                    )
+                    if composition_mode.fuses_weighted_reverse:
+                        if weighted_relation_fused is None:
+                            raise RuntimeError("shared-Map composition did not generate fused weighted reverse")
+                        compile_target(
+                            weighted_relation_fused.source,
+                            _WEIGHTED_RELATION_FUSED_TARGET,
+                            "weighted_relation_contract_fold",
+                        )
+                    else:
+                        if weighted_relation_contract is None or weighted_relation_fold is None:
+                            raise RuntimeError("shared-Map composition did not generate weighted reverse bodies")
+                        compile_target(
+                            weighted_relation_contract.source,
+                            _WEIGHTED_RELATION_CONTRACT_TARGET,
+                            "weighted_relation_contract",
+                        )
+                        compile_target(
+                            weighted_relation_fold.source,
+                            _WEIGHTED_RELATION_FOLD_TARGET,
+                            "weighted_relation_fold",
+                        )
                 for index, (weight, target) in enumerate(zip(weights, routed_weight_targets, strict=True)):
                     compile_target(weight.source, target, f"group_batched_weight_gradient_{index}")
                 for index, (axis_fold, target) in enumerate(zip(generated_axis_folds, _TARGETS.axis_folds, strict=True)):
@@ -657,14 +734,18 @@ def run_smoke(
                     compiled_attention.source_path.read_text(),
                 )
                 attention_library_path = compiled_attention.library_path
-                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                if not composition_mode.uses_shared_map:
                     rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
                         original,
                         plan,
                         targets=_TARGETS,
                     )
                 else:
-                    rewritten = _replace_shared_map_composition(original, plan)
+                    rewritten = _replace_shared_map_composition(
+                        original,
+                        plan,
+                        fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
+                    )
                 recovered_plans.append(plan)
                 generated_programs.append(
                     {
@@ -675,6 +756,7 @@ def run_smoke(
                         "source_fold": source_fold,
                         "weighted_relation_contract": weighted_relation_contract,
                         "weighted_relation_fold": weighted_relation_fold,
+                        "weighted_relation_fused": weighted_relation_fused,
                         "weights": weights,
                         "attention": compiled_attention,
                         "attention_source_sha256": {
@@ -687,7 +769,7 @@ def run_smoke(
                 transformed_module = hlo.hlo_module_from_text(rewritten)
                 transformed_text = transformed_module.to_string()
                 transformed_modules.append(transformed_text)
-                if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+                if not composition_mode.uses_shared_map:
                     replacement_audits.append(
                         audit_routed_training_attention_and_axis_fold_replacement(
                             original,
@@ -702,6 +784,7 @@ def run_smoke(
                             original,
                             transformed_text,
                             plan,
+                            fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
                         )
                     )
                 attention_liveness_audits.append(
@@ -808,7 +891,7 @@ def run_smoke(
                     for index in range(2)
                 ],
             }
-            if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+            if not composition_mode.uses_shared_map:
                 call_counts["input_adjoint"] = _call_count(
                     libraries["routed_input_adjoint"],
                     "shuttle_routed_input_adjoint_call_count",
@@ -829,14 +912,20 @@ def run_smoke(
                     libraries["source_indexed_fold"],
                     "shuttle_source_indexed_fold_call_count",
                 )
-                call_counts["weighted_relation_contract"] = _call_count(
-                    libraries["weighted_relation_contract"],
-                    "shuttle_rank_two_contract_call_count",
-                )
-                call_counts["weighted_relation_fold"] = _call_count(
-                    libraries["weighted_relation_fold"],
-                    "shuttle_relation_edge_fold_call_count",
-                )
+                if composition_mode.fuses_weighted_reverse:
+                    call_counts["weighted_relation_contract_fold"] = _call_count(
+                        libraries["weighted_relation_contract_fold"],
+                        "shuttle_contract_relation_fold_call_count",
+                    )
+                else:
+                    call_counts["weighted_relation_contract"] = _call_count(
+                        libraries["weighted_relation_contract"],
+                        "shuttle_rank_two_contract_call_count",
+                    )
+                    call_counts["weighted_relation_fold"] = _call_count(
+                        libraries["weighted_relation_fold"],
+                        "shuttle_relation_edge_fold_call_count",
+                    )
     finally:
         if artifact_directory is not None:
             for name in (
@@ -848,6 +937,7 @@ def run_smoke(
                 "source_indexed_fold",
                 "weighted_relation_contract",
                 "weighted_relation_fold",
+                "weighted_relation_contract_fold",
                 "group_batched_weight_gradient_0",
                 "group_batched_weight_gradient_1",
                 "axis_fold_0",
@@ -881,13 +971,14 @@ def run_smoke(
     source_fold: GeneratedSourceIndexedFoldFfi | None = generated["source_fold"]
     weighted_relation_contract: GeneratedRankTwoContractFfi | None = generated["weighted_relation_contract"]
     weighted_relation_fold: GeneratedRelationEdgeFoldFfi | None = generated["weighted_relation_fold"]
+    weighted_relation_fused: GeneratedContractRelationFoldFfi | None = generated["weighted_relation_fused"]
     weights = generated["weights"]
     compiled_attention = generated["attention"]
     attention_source_sha256 = generated["attention_source_sha256"]
     generated_axis_folds = generated["axis_folds"]
     weighted_relation_plan: WeightedRelationReverseTypedFfiPlan | None = None
-    weighted_relation_audit: WeightedRelationReverseReplacementAudit | None = None
-    if composition_mode is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
+    weighted_relation_audit: WeightedRelationReverseReplacementAudit | ContractRelationFoldReplacementAudit | None = None
+    if not composition_mode.uses_shared_map:
         routed_plan = plan.routed_attention.routed
         attention_plan = plan.routed_attention.attention_backward
         axis_fold_plans = plan.axis_folds
@@ -929,14 +1020,21 @@ def run_smoke(
             "shared Contract -> two generated scalar Maps",
             "rank-two input-adjoint Contract 1",
             "deterministic source-indexed Fold",
-            "weighted RelationProgram reverse Contract -> edge Map -> hidden Fold -> source-slot Fold",
+            (
+                "one-CTA weighted RelationProgram reverse Contract -> edge Map -> hidden Fold -> source-slot Fold"
+                if composition_mode.fuses_weighted_reverse
+                else "weighted RelationProgram reverse Contract -> edge Map -> hidden Fold -> source-slot Fold"
+            ),
         ]
     if mode_generated is None:
         raise RuntimeError(f"composition {composition_mode.value} did not generate its routed mode body")
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER and (
-        weighted_relation_contract is None or weighted_relation_fold is None
-    ):
-        raise RuntimeError("shared-Map composition did not retain generated weighted relation reverse bodies")
+    if composition_mode.uses_shared_map:
+        if composition_mode.fuses_weighted_reverse and weighted_relation_fused is None:
+            raise RuntimeError("shared-Map composition did not retain fused weighted reverse")
+        if not composition_mode.fuses_weighted_reverse and (
+            weighted_relation_contract is None or weighted_relation_fold is None
+        ):
+            raise RuntimeError("shared-Map composition did not retain generated weighted relation reverse bodies")
     if exact_target_occurrences is None:
         raise RuntimeError("exact custom-call target validation did not run before execution")
     target_occurrences: dict[str, Any] = {
@@ -946,13 +1044,30 @@ def run_smoke(
         "attention_backward": exact_target_occurrences[_TARGETS.routed_attention.attention_backward],
         "axis_folds": [exact_target_occurrences[target] for target in _TARGETS.axis_folds],
     }
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
+    if composition_mode.uses_shared_map:
         target_occurrences["input_contracts"] = [
             exact_target_occurrences[target] for target in routed_targets.input_contracts
         ]
         target_occurrences["source_fold"] = exact_target_occurrences[routed_targets.source_fold]
-        target_occurrences["weighted_relation_contract"] = exact_target_occurrences[_WEIGHTED_RELATION_CONTRACT_TARGET]
-        target_occurrences["weighted_relation_fold"] = exact_target_occurrences[_WEIGHTED_RELATION_FOLD_TARGET]
+        if composition_mode.fuses_weighted_reverse:
+            target_occurrences["weighted_relation_contract_fold"] = exact_target_occurrences[
+                _WEIGHTED_RELATION_FUSED_TARGET
+            ]
+            target_occurrences["eliminated_weighted_relation_targets"] = {
+                _WEIGHTED_RELATION_CONTRACT_TARGET: _target_occurrence(
+                    transformed_modules[0], _WEIGHTED_RELATION_CONTRACT_TARGET
+                ),
+                _WEIGHTED_RELATION_FOLD_TARGET: _target_occurrence(
+                    transformed_modules[0], _WEIGHTED_RELATION_FOLD_TARGET
+                ),
+            }
+            if any(target_occurrences["eliminated_weighted_relation_targets"].values()):
+                raise RuntimeError("separated weighted-reverse custom calls remain in fused transformed HLO")
+        else:
+            target_occurrences["weighted_relation_contract"] = exact_target_occurrences[
+                _WEIGHTED_RELATION_CONTRACT_TARGET
+            ]
+            target_occurrences["weighted_relation_fold"] = exact_target_occurrences[_WEIGHTED_RELATION_FOLD_TARGET]
     minimum_calls = repeats + warmup + 1
     observed_calls = [
         call_counts["forward"],
@@ -961,13 +1076,19 @@ def run_smoke(
         call_counts["attention_backward"],
         *call_counts["axis_folds"],
     ]
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
+    if composition_mode.uses_shared_map:
         observed_calls.extend(
             (
                 *call_counts["input_contracts"],
                 call_counts["source_fold"],
-                call_counts["weighted_relation_contract"],
-                call_counts["weighted_relation_fold"],
+                *(
+                    (call_counts["weighted_relation_contract_fold"],)
+                    if composition_mode.fuses_weighted_reverse
+                    else (
+                        call_counts["weighted_relation_contract"],
+                        call_counts["weighted_relation_fold"],
+                    )
+                ),
             )
         )
 
@@ -975,7 +1096,24 @@ def run_smoke(
         if artifact_directory is None:
             return
         weighted_relation_evidence = None
-        if weighted_relation_contract is not None and weighted_relation_fold is not None:
+        if weighted_relation_fused is not None:
+            weighted_relation_evidence = {
+                "targets": {"contract_map_fold": _WEIGHTED_RELATION_FUSED_TARGET},
+                "semantic_sha256": {"contract_map_fold": weighted_relation_fused.semantic_digest},
+                "source_sha256": {"contract_map_fold": weighted_relation_fused.source_digest},
+                "physical_cost": {
+                    "contract_fma_count": weighted_relation_fused.cost.contract_fma_count,
+                    "payload_elements": weighted_relation_fused.cost.payload_elements,
+                    "payload_global_bytes": weighted_relation_fused.cost.payload_global_bytes,
+                    "kernel_launches": weighted_relation_fused.cost.kernel_launches,
+                    "threads_per_block": weighted_relation_fused.cost.threads_per_block,
+                    "shared_bytes": weighted_relation_fused.cost.shared_bytes,
+                },
+                "placement_collective": (
+                    weighted_relation_audit.placement_collective if weighted_relation_audit is not None else None
+                ),
+            }
+        elif weighted_relation_contract is not None and weighted_relation_fold is not None:
             weighted_relation_evidence = {
                 "targets": {
                     "contract": _WEIGHTED_RELATION_CONTRACT_TARGET,
@@ -1017,7 +1155,7 @@ def run_smoke(
     if any(count < minimum_calls for count in observed_calls):
         fail_after_execution(f"custom-call handler evidence mismatch: minimum={minimum_calls}, calls={observed_calls}")
     weighted_relation_inputs: tuple[str, ...] = ()
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
+    if composition_mode.uses_shared_map:
         if weighted_relation_plan is None:
             fail_after_execution("shared-Map composition lost its weighted relation reverse plan")
         weighted_relation_inputs = (
@@ -1039,7 +1177,7 @@ def run_smoke(
             routed_plan.source_fold.contributions.instruction,
             *weighted_relation_inputs,
         )
-        if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+        if composition_mode.uses_shared_map
         else ()
     )
     all_operands = tuple(
@@ -1056,7 +1194,7 @@ def run_smoke(
     )
     parameter_ancestors = entry_parameter_ancestors(original, all_operands)
     static_bindings = [(operand.role.value, operand.value.instruction) for operand in mode_operands]
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
+    if composition_mode.uses_shared_map:
         static_bindings.extend(
             (
                 ("source_fold.initial", routed_plan.source_fold.initial.instruction),
@@ -1086,37 +1224,68 @@ def run_smoke(
     weighted_relation_source_hashes: dict[str, str] = {}
     weighted_relation_target_instructions: tuple[str, ...] = ()
     weighted_relation_collectives: tuple[str, ...] = ()
-    if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER:
-        if (
-            weighted_relation_plan is None
-            or weighted_relation_audit is None
-            or weighted_relation_contract is None
-            or weighted_relation_fold is None
-        ):
+    if composition_mode.uses_shared_map:
+        if weighted_relation_plan is None or weighted_relation_audit is None:
             fail_after_execution("shared-Map weighted relation reverse evidence is incomplete")
         weighted_relation_report = {
             "weighted_relation_reverse": {
                 "contract": weighted_relation_plan.payload_contract.numerical_contract.numerical_policy.value,
                 "fold": weighted_relation_plan.edge_fold.numerical_contract.numerical_policy.value,
                 "payload_policy": weighted_relation_plan.payload_policy.value,
+                "contract_output_dtype": weighted_relation_plan.payload_contract.numerical_contract.output_dtype,
+                "contract_output_rounding": weighted_relation_plan.payload_contract.numerical_contract.output_rounding,
+                "map_dtype": weighted_relation_plan.edge_fold.numerical_contract.map_dtype,
+                "inner_state_dtype": weighted_relation_plan.edge_fold.numerical_contract.inner_state_dtype,
+                "outer_state_dtype": weighted_relation_plan.edge_fold.numerical_contract.outer_state_dtype,
+                "deterministic": weighted_relation_plan.edge_fold.numerical_contract.deterministic,
+                "atomic_accumulation": weighted_relation_plan.edge_fold.numerical_contract.atomic_accumulation,
             }
         }
-        weighted_relation_targets = {
-            "weighted_relation_contract": _WEIGHTED_RELATION_CONTRACT_TARGET,
-            "weighted_relation_fold": _WEIGHTED_RELATION_FOLD_TARGET,
-        }
-        weighted_relation_semantic_hashes = {
-            "weighted_relation_contract": weighted_relation_contract.semantic_digest,
-            "weighted_relation_fold": weighted_relation_fold.semantic_digest,
-        }
-        weighted_relation_source_hashes = {
-            "weighted_relation_contract": weighted_relation_contract.source_digest,
-            "weighted_relation_fold": weighted_relation_fold.source_digest,
-        }
-        weighted_relation_target_instructions = (
-            weighted_relation_audit.contract_instruction,
-            weighted_relation_audit.fold_instruction,
-        )
+        if composition_mode.fuses_weighted_reverse:
+            if weighted_relation_fused is None or not isinstance(
+                weighted_relation_audit, ContractRelationFoldReplacementAudit
+            ):
+                fail_after_execution("fused weighted relation reverse evidence is incomplete")
+            weighted_relation_targets = {"weighted_relation_contract_fold": _WEIGHTED_RELATION_FUSED_TARGET}
+            weighted_relation_semantic_hashes = {
+                "weighted_relation_contract_fold": weighted_relation_fused.semantic_digest
+            }
+            weighted_relation_source_hashes = {"weighted_relation_contract_fold": weighted_relation_fused.source_digest}
+            weighted_relation_target_instructions = (weighted_relation_audit.call_instruction,)
+            weighted_relation_report["weighted_relation_reverse"]["physical_cost"] = {
+                "contract_fma_count": weighted_relation_fused.cost.contract_fma_count,
+                "payload_elements": weighted_relation_fused.cost.payload_elements,
+                "payload_global_bytes": weighted_relation_fused.cost.payload_global_bytes,
+                "kernel_launches": weighted_relation_fused.cost.kernel_launches,
+                "threads_per_block": weighted_relation_fused.cost.threads_per_block,
+                "shared_bytes": weighted_relation_fused.cost.shared_bytes,
+            }
+            weighted_relation_report["weighted_relation_reverse"][
+                "dead_instructions"
+            ] = weighted_relation_audit.dead_instructions
+        else:
+            if (
+                weighted_relation_contract is None
+                or weighted_relation_fold is None
+                or not isinstance(weighted_relation_audit, WeightedRelationReverseReplacementAudit)
+            ):
+                fail_after_execution("separated weighted relation reverse evidence is incomplete")
+            weighted_relation_targets = {
+                "weighted_relation_contract": _WEIGHTED_RELATION_CONTRACT_TARGET,
+                "weighted_relation_fold": _WEIGHTED_RELATION_FOLD_TARGET,
+            }
+            weighted_relation_semantic_hashes = {
+                "weighted_relation_contract": weighted_relation_contract.semantic_digest,
+                "weighted_relation_fold": weighted_relation_fold.semantic_digest,
+            }
+            weighted_relation_source_hashes = {
+                "weighted_relation_contract": weighted_relation_contract.source_digest,
+                "weighted_relation_fold": weighted_relation_fold.source_digest,
+            }
+            weighted_relation_target_instructions = (
+                weighted_relation_audit.contract_instruction,
+                weighted_relation_audit.fold_instruction,
+            )
         weighted_relation_collectives = (weighted_relation_audit.placement_collective,)
     write_execution_evidence("execution_checks_passed", None)
     return {
@@ -1146,7 +1315,7 @@ def run_smoke(
                     ],
                     "source_fold": routed_plan.source_fold.numerical_contract.numerical_policy.value,
                 }
-                if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+                if composition_mode.uses_shared_map
                 else {}
             ),
             "weight_gradients": [
@@ -1162,7 +1331,7 @@ def run_smoke(
                 *weighted_relation_collectives,
                 *routed_audit.weight_gradient_collectives,
             )
-            if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+            if composition_mode.uses_shared_map
             else routed_audit.weight_gradient_collectives
         ),
         "uses_atomic_accumulation": False,
@@ -1177,7 +1346,7 @@ def run_smoke(
                     "input_contracts": routed_targets.input_contracts,
                     "source_fold": routed_targets.source_fold,
                 }
-                if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+                if composition_mode.uses_shared_map
                 else {}
             ),
             "weight_gradients": routed_targets.weight_gradients,
@@ -1213,7 +1382,7 @@ def run_smoke(
                     "input_contracts": [contract.semantic_digest for contract in input_contracts],
                     "source_fold": source_fold.semantic_digest if source_fold is not None else None,
                 }
-                if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+                if composition_mode.uses_shared_map
                 else {}
             ),
             "weight_gradients": [weight.semantic_digest for weight in weights],
@@ -1229,7 +1398,7 @@ def run_smoke(
                     "input_contracts": [contract.source_digest for contract in input_contracts],
                     "source_fold": source_fold.source_digest if source_fold is not None else None,
                 }
-                if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+                if composition_mode.uses_shared_map
                 else {}
             ),
             "weight_gradients": [weight.source_digest for weight in weights],
@@ -1241,13 +1410,9 @@ def run_smoke(
         "generated_median_ms": transformed_median,
         "generated_over_baseline": transformed_median / baseline_median,
         "generated_minus_baseline_ms": transformed_median - baseline_median,
-        "independent_custom_call_count": (
-            12 if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER else 7
-        ),
+        "independent_custom_call_count": composition_mode.independent_custom_call_count,
         "latency_delta_per_custom_call_us": (
-            (transformed_median - baseline_median)
-            * 1e3
-            / (12 if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER else 7)
+            (transformed_median - baseline_median) * 1e3 / composition_mode.independent_custom_call_count
         ),
         "latency_delta_attribution": (
             "Whole-step delta includes fixed typed-FFI dispatches and changed kernels; the per-call quotient is "
@@ -1264,7 +1429,7 @@ def run_smoke(
             "The relation index plane, placement collectives, and harmless input-adjoint view wrappers remain "
             "under XLA. Shuttle owns both input-adjoint Contracts, the input source Fold, and the weighted "
             "RelationProgram reverse through its source-slot Fold; router normalization remains under XLA."
-            if composition_mode is RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER
+            if composition_mode.uses_shared_map
             else "The rematerialized routed forward chain, relation index plane, and placement collectives remain "
             "under XLA; the monolithic generated input-adjoint region owns the overlapping reverse path."
         ),
