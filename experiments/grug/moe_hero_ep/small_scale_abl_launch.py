@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536.
+"""Small-scale hero-shape ablation from d768 through d2048.
 
 Downsized copies of the ``moe_hero_ep`` hero shape (128 experts, top-4, two shared, SConv,
-hybrid GQA, ``fixed_all_to_all`` EP MoE) at the three small sweep widths, each trained to its 60x
-token budget (60 tokens per active parameter). The architecture, data (datakit two-phase mixture),
-evals (paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid
-(issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
-width/depth/head split and the token budget shrink relative to the d6144 shape.
+hybrid GQA, and a selectable MoE backend) at five sweep widths, each trained to its 60x token
+budget (60 tokens per active parameter). The architecture, data (datakit two-phase mixture), evals
+(paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid so these
+runs are comparable to the FSDP sweep points; only the width/depth/head split and token budget
+shrink relative to the d6144 shape.
 
 Each ``--size`` submits one job on the fleet ``--target`` names: four GB200 nodes (EP16), a GB200
 rack (EP64), 8 H100 nodes (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it
@@ -43,6 +43,7 @@ from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.jax_runtime import jax_nightly_pip_packages
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
+    FLAVORS,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
@@ -62,6 +63,7 @@ TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
 SLIDING_WINDOW = 512
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
+BASELINE_TOKENS_PER_ACTIVE_PARAM = 60
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -130,28 +132,6 @@ TARGETS: dict[str, Target] = {
 
 
 @dataclasses.dataclass(frozen=True)
-class Flavor:
-    """How the MoE layer shards, and what that implies for routing capacity.
-
-    ``ep`` spans the fleet with expert parallelism and drops assignments above each fixed
-    (sender shard, expert) cell. ``fsdp-nodrop`` keeps one expert axis, so every device holds the
-    whole bank and `_moe_mlp_local` computes every assignment: `expert_chunks` above one is the only
-    local path that drops, and it needs the Blackwell-only `sonic_cute` kernel anyway.
-    """
-
-    expert_axis_size: int | None  # None spans the fleet
-    moe_implementation: str
-    expert_chunks: int
-
-
-FLAVORS: dict[str, Flavor] = {
-    "ep": Flavor(None, "fixed_all_to_all", 1),
-    "ep-ragged": Flavor(None, "ragged_all_to_all", 1),
-    "fsdp-nodrop": Flavor(1, "scatter", 1),
-}
-
-
-@dataclasses.dataclass(frozen=True)
 class SmallShape:
     hidden_dim: int
     num_layers: int
@@ -161,7 +141,8 @@ class SmallShape:
     num_steps: int  # 60x token budget = round(60 * active_params / (batch * seq_len))
 
 
-# hidden/depth/head split and the 60x step count come straight from the sweep grid in #7856.
+# Hidden/depth/head split and the 60x step count come from the sweep grid in
+# https://github.com/marin-community/marin/issues/7856.
 SMALL_SHAPES: dict[str, SmallShape] = {
     "d768": SmallShape(768, 8, 6, 1, 1, num_steps=3105),
     "d1024": SmallShape(1024, 12, 8, 2, 1, num_steps=8325),
@@ -193,9 +174,8 @@ def _small_model(
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
-    Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
-    depth, head split, and intermediate width shrink. ``fixed_all_to_all`` is the EP MoE backend, so
-    ``num_experts`` (128) still divides the EP64 expert axis.
+    Every routing and attention-kernel field is kept from the d6144 hero shape; only the width,
+    depth, head split, intermediate width, expert count, and caller-selected MoE backend can change.
     """
     return GrugModelConfig(
         vocab_size=128_256,
@@ -248,7 +228,7 @@ def build_small_run(
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
-    tokens_per_active_param: int = 60,
+    tokens_per_active_param: int = BASELINE_TOKENS_PER_ACTIVE_PARAM,
     watch_interval: int = 0,
     jax_nightly_version: str | None = None,
     version: str | None = None,
@@ -284,7 +264,16 @@ def build_small_run(
     # The 60x token budget is what the step count encodes, so a wider step needs proportionally
     # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
     # capacity is ceil(factor * tokens_per_shard * top-k / experts).
-    num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step * tokens_per_active_param / 60))
+    num_steps = max(
+        1,
+        round(
+            shape.num_steps
+            * TOKENS_PER_STEP
+            / tokens_per_step
+            * tokens_per_active_param
+            / BASELINE_TOKENS_PER_ACTIVE_PARAM
+        ),
+    )
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
@@ -427,7 +416,7 @@ def build_small_run(
     "--size",
     type=click.Choice(sorted(SMALL_SHAPES)),
     required=True,
-    help="Downsized hero shape to run on one EP64 rack.",
+    help="Downsized hero shape to run on the selected accelerator fleet.",
 )
 @click.option(
     "--target",
@@ -481,7 +470,7 @@ def build_small_run(
 @click.option(
     "--tokens-per-active-param",
     type=click.IntRange(min=1),
-    default=60,
+    default=BASELINE_TOKENS_PER_ACTIVE_PARAM,
     help="Token budget per active parameter. The shapes carry 60; issue #8062 specifies 750.",
 )
 @click.option(

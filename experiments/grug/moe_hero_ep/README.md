@@ -16,7 +16,8 @@ This self-contained variant is the selected one-rack EP64 configuration for GB20
 - MoE backend: `fixed_all_to_all` with gather dispatch, structured custom VJPs, and capacity
   factor 1.33.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: GPU command buffers off, `cuda_async`, PGLE on, and collective overlap limit 4.
+- Runtime: GPU command buffers off, `cuda_async`, and collective overlap limit 4. Auto-PGLE is off
+  for the process-per-GPU topology because a node cannot run four concurrent profiling sessions.
 - Output: Metrics only. This throughput run does not write a checkpoint.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -69,11 +70,13 @@ Print the plan without a GPU run:
 ```bash
 python -m experiments.grug.moe_hero_ep.launch \
   --run-id mhep-017-200 \
+  --dp-racks 1 \
   --num-steps 200 \
   --version 2026.08.05
 
 python -m experiments.grug.moe_hero_ep.launch \
   --run-id mhep-011-e256-i2560 \
+  --dp-racks 1 \
   --num-steps 25 \
   --num-experts 256 --intermediate-dim 2560 \
   --version 2026.08.05
@@ -90,7 +93,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch \
-    --run-id "$run_id" --num-steps 200 --version 2026.08.05 --run
+    --run-id "$run_id" --dp-racks 1 --num-steps 200 --version 2026.08.05 --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with

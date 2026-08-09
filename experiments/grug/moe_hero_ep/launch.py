@@ -61,6 +61,7 @@ class Flavor:
 
     expert_axis_size: int | None  # None spans the EP fleet
     moe_implementation: str
+    expert_chunks: int = 1
 
 
 FLAVORS: dict[str, Flavor] = {
@@ -133,8 +134,8 @@ def build_hero_run(
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero throughput run on an explicitly sized EP fleet.
 
-    The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
-    hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
+    The overrides sweep expert count, expert width, routed top-k, latent width, and routing capacity
+    from the hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
 
     ``ep_nodes`` controls the expert axis and allocated nodes while preserving one process per GPU.

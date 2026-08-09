@@ -612,3 +612,10 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Numerical result: the second attempted step produced `Non-finite loss (nan) at step 2` on all ranks, so the run cannot supply steady-state timing. The 52-step screen used `tokens_per_active_param=1`; the optimizer heuristic therefore hit its maximum MuonH rate on an intentionally abbreviated schedule.
 - Terminal state: stopped `/power/ra2a-s09c-ep16-oneshot-pgle-off-20260809-coord` at 06:00:01 UTC to prevent retries. No communication failure, OOM, CUDA illegal address, or NCCL error appeared.
 - Interpretation: pinned JAX 0.11's one-shot path is reachable on EP16/process-per-GPU when auto-PGLE is disabled. The immediate next baseline should keep communication identical and use the standard 60-token-per-active-parameter optimizer schedule, then stop manually after step 25.
+
+### 2026-08-09 06:02 UTC - Stable-schedule timing baseline queued
+
+- Run: `ra2a-s10-ep16-oneshot-pgle-off-standard-schedule-20260809`; coordinator `/power/ra2a-s10-ep16-oneshot-pgle-off-standard-schedule-20260809-coord` and expected four-node child of the same run ID.
+- Controlled change from S09c: increase `tokens_per_active_param` from 1 to the ladder's standard 60. This restores the intended optimizer token budget and learning-rate schedule. Process-per-GPU, JAX 0.11 one-shot ragged, d768/L8, E192, expert width 384, top-4, capacity 1.33, 1,048,576 tokens per step, `NCCL_BUFFSIZE=1048576`, allocator, latency hiding, command buffers, and metric controls are unchanged.
+- Stop/scoring contract: score steps 5-24 if loss remains finite, then stop manually. Watch and explicit profiling remain disabled; eval is at step 1000 and the 30-minute checkpoint is outside the expected timing window.
+- Scheduling state: the same 4 x GB200, 120 CPU, 850 GiB task shape admitted S09c immediately and is known schedulable. S10 is currently Kueue-gated behind production, with zero failures or preemptions. Retain the single-NVLink-domain gang constraint and wait.
