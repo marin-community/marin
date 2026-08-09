@@ -1,0 +1,666 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Generate and benchmark a deterministic streamed normalized-exp reverse pass."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import statistics
+import subprocess
+from collections.abc import Callable
+from pathlib import Path
+
+import torch
+import torch.nn.functional as functional
+import triton
+import triton.language as tl
+from h100_generated_streaming_attention import _inputs, _program, emit_streaming_attention, lower_score_map
+
+from tile_lifetime import derive_streaming_attention_backward
+from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProgram
+from tile_lifetime.tensor_program import serialize_scalar_expression
+
+LOG2_E = 1.4426950408889634
+
+
+@triton.jit
+def _output_dot_kernel(
+    output,
+    output_cotangent,
+    output_dot,
+    sequence_length,
+    query_heads,
+    stride_ob: tl.constexpr,
+    stride_os: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
+    stride_db: tl.constexpr,
+    stride_ds: tl.constexpr,
+    stride_dh: tl.constexpr,
+    stride_dd: tl.constexpr,
+    head_dimension: tl.constexpr,
+):
+    row = tl.program_id(0)
+    batch_index = row // (query_heads * sequence_length)
+    query_head = (row // sequence_length) % query_heads
+    query_token = row % sequence_length
+    feature = tl.arange(0, head_dimension)
+    output_offset = batch_index * stride_ob + query_token * stride_os + query_head * stride_oh + feature * stride_od
+    cotangent_offset = batch_index * stride_db + query_token * stride_ds + query_head * stride_dh + feature * stride_dd
+    value = tl.load(output + output_offset).to(tl.float32)
+    cotangent = tl.load(output_cotangent + cotangent_offset).to(tl.float32)
+    tl.store(output_dot + row, tl.sum(value * cotangent, axis=0))
+
+
+@triton.jit
+def _streaming_dq_kernel(
+    query,
+    key,
+    value,
+    output_cotangent,
+    log_sum_exp,
+    output_dot,
+    query_cotangent,
+    sequence_length,
+    query_heads,
+    key_value_heads,
+    scale,
+    scale_log2,
+    softcap,
+    output_scale,
+    stride_qb: tl.constexpr,
+    stride_qs: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_kb: tl.constexpr,
+    stride_ks: tl.constexpr,
+    stride_kh: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_vb: tl.constexpr,
+    stride_vs: tl.constexpr,
+    stride_vh: tl.constexpr,
+    stride_vd: tl.constexpr,
+    stride_db: tl.constexpr,
+    stride_ds: tl.constexpr,
+    stride_dh: tl.constexpr,
+    stride_dd: tl.constexpr,
+    stride_dqb: tl.constexpr,
+    stride_dqs: tl.constexpr,
+    stride_dqh: tl.constexpr,
+    stride_dqd: tl.constexpr,
+    block_m: tl.constexpr,
+    block_n: tl.constexpr,
+    head_dimension: tl.constexpr,
+    causal: tl.constexpr,
+    has_softcap: tl.constexpr,
+):
+    query_block_index = tl.program_id(0)
+    batch_query_head = tl.program_id(1)
+    batch_index = batch_query_head // query_heads
+    query_head = batch_query_head % query_heads
+    head_group_size = query_heads // key_value_heads
+    key_value_head = query_head // head_group_size
+    query_start = query_block_index * block_m
+    query_offsets = query_start + tl.arange(0, block_m)
+    key_offsets = tl.arange(0, block_n)
+    query_block = tl.make_block_ptr(
+        base=query + batch_index * stride_qb + query_head * stride_qh,
+        shape=(sequence_length, head_dimension),
+        strides=(stride_qs, stride_qd),
+        offsets=(query_start, 0),
+        block_shape=(block_m, head_dimension),
+        order=(1, 0),
+    )
+    output_cotangent_block = tl.make_block_ptr(
+        base=output_cotangent + batch_index * stride_db + query_head * stride_dh,
+        shape=(sequence_length, head_dimension),
+        strides=(stride_ds, stride_dd),
+        offsets=(query_start, 0),
+        block_shape=(block_m, head_dimension),
+        order=(1, 0),
+    )
+    query_cotangent_block = tl.make_block_ptr(
+        base=query_cotangent + batch_index * stride_dqb + query_head * stride_dqh,
+        shape=(sequence_length, head_dimension),
+        strides=(stride_dqs, stride_dqd),
+        offsets=(query_start, 0),
+        block_shape=(block_m, head_dimension),
+        order=(1, 0),
+    )
+    query_tile = tl.load(query_block)
+    output_cotangent_tile = tl.load(output_cotangent_block)
+    row_offset = batch_query_head * sequence_length + query_offsets
+    lse = tl.load(log_sum_exp + row_offset)
+    delta = tl.load(output_dot + row_offset)
+    query_gradient = tl.zeros((block_m, head_dimension), tl.float32)
+    for key_start in tl.range(0, sequence_length, block_n):
+        key_start = tl.multiple_of(key_start, block_n)
+        key_block = tl.make_block_ptr(
+            base=key + batch_index * stride_kb + key_value_head * stride_kh,
+            shape=(head_dimension, sequence_length),
+            strides=(stride_kd, stride_ks),
+            offsets=(0, key_start),
+            block_shape=(head_dimension, block_n),
+            order=(0, 1),
+        )
+        value_block = tl.make_block_ptr(
+            base=value + batch_index * stride_vb + key_value_head * stride_vh,
+            shape=(head_dimension, sequence_length),
+            strides=(stride_vd, stride_vs),
+            offsets=(0, key_start),
+            block_shape=(head_dimension, block_n),
+            order=(0, 1),
+        )
+        key_tile = tl.load(key_block)
+        value_tile = tl.load(value_block)
+        score = tl.dot(query_tile, key_tile) * scale_log2
+        score_slope = tl.full((block_m, block_n), scale, tl.float32)
+        if has_softcap:
+            cap_log2 = softcap * 1.4426950408889634
+            tanh_score = 2.0 * tl.sigmoid(2.0 * score / cap_log2) - 1.0
+            score = cap_log2 * tanh_score
+            score_slope *= 1.0 - tanh_score * tanh_score
+        valid = tl.full((block_m, block_n), True, tl.int1)
+        if causal:
+            valid &= query_offsets[:, None] >= key_start + key_offsets[None, :]
+        probability = tl.math.exp2(score - lse[:, None])
+        probability = tl.where(valid, probability, 0.0)
+        probability_cotangent = tl.dot(output_cotangent_tile, value_tile) * output_scale
+        mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
+        raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
+        query_gradient += tl.dot(raw_score_cotangent.to(tl.bfloat16), tl.trans(key_tile))
+    tl.store(query_cotangent_block, query_gradient.to(tl.bfloat16))
+
+
+@triton.jit
+def _streaming_dkdv_kernel(
+    query,
+    key,
+    value,
+    output_cotangent,
+    log_sum_exp,
+    output_dot,
+    key_cotangent,
+    value_cotangent,
+    sequence_length,
+    query_heads,
+    key_value_heads,
+    scale,
+    scale_log2,
+    softcap,
+    output_scale,
+    stride_qb: tl.constexpr,
+    stride_qs: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_kb: tl.constexpr,
+    stride_ks: tl.constexpr,
+    stride_kh: tl.constexpr,
+    stride_kd: tl.constexpr,
+    stride_vb: tl.constexpr,
+    stride_vs: tl.constexpr,
+    stride_vh: tl.constexpr,
+    stride_vd: tl.constexpr,
+    stride_db: tl.constexpr,
+    stride_ds: tl.constexpr,
+    stride_dh: tl.constexpr,
+    stride_dd: tl.constexpr,
+    stride_dkb: tl.constexpr,
+    stride_dks: tl.constexpr,
+    stride_dkh: tl.constexpr,
+    stride_dkd: tl.constexpr,
+    stride_dvb: tl.constexpr,
+    stride_dvs: tl.constexpr,
+    stride_dvh: tl.constexpr,
+    stride_dvd: tl.constexpr,
+    block_m: tl.constexpr,
+    block_n: tl.constexpr,
+    head_dimension: tl.constexpr,
+    head_group_size: tl.constexpr,
+    causal: tl.constexpr,
+    has_softcap: tl.constexpr,
+):
+    key_block_index = tl.program_id(0)
+    batch_key_value_head = tl.program_id(1)
+    batch_index = batch_key_value_head // key_value_heads
+    key_value_head = batch_key_value_head % key_value_heads
+    key_start = key_block_index * block_n
+    query_offsets = tl.arange(0, block_m)
+    key_offsets = key_start + tl.arange(0, block_n)
+    key_block = tl.make_block_ptr(
+        base=key + batch_index * stride_kb + key_value_head * stride_kh,
+        shape=(head_dimension, sequence_length),
+        strides=(stride_kd, stride_ks),
+        offsets=(0, key_start),
+        block_shape=(head_dimension, block_n),
+        order=(0, 1),
+    )
+    value_block = tl.make_block_ptr(
+        base=value + batch_index * stride_vb + key_value_head * stride_vh,
+        shape=(head_dimension, sequence_length),
+        strides=(stride_vd, stride_vs),
+        offsets=(0, key_start),
+        block_shape=(head_dimension, block_n),
+        order=(0, 1),
+    )
+    key_tile = tl.load(key_block)
+    value_tile = tl.load(value_block)
+    key_gradient = tl.zeros((block_n, head_dimension), tl.float32)
+    value_gradient = tl.zeros((block_n, head_dimension), tl.float32)
+    for query_head_offset in tl.static_range(0, head_group_size):
+        query_head = key_value_head * head_group_size + query_head_offset
+        batch_query_head = batch_index * query_heads + query_head
+        for query_start in tl.range(0, sequence_length, block_m):
+            query_start = tl.multiple_of(query_start, block_m)
+            query_block = tl.make_block_ptr(
+                base=query + batch_index * stride_qb + query_head * stride_qh,
+                shape=(sequence_length, head_dimension),
+                strides=(stride_qs, stride_qd),
+                offsets=(query_start, 0),
+                block_shape=(block_m, head_dimension),
+                order=(1, 0),
+            )
+            output_cotangent_block = tl.make_block_ptr(
+                base=output_cotangent + batch_index * stride_db + query_head * stride_dh,
+                shape=(sequence_length, head_dimension),
+                strides=(stride_ds, stride_dd),
+                offsets=(query_start, 0),
+                block_shape=(block_m, head_dimension),
+                order=(1, 0),
+            )
+            query_tile = tl.load(query_block)
+            output_cotangent_tile = tl.load(output_cotangent_block)
+            row_offset = batch_query_head * sequence_length + query_start + query_offsets
+            lse = tl.load(log_sum_exp + row_offset)
+            delta = tl.load(output_dot + row_offset)
+            score = tl.dot(query_tile, key_tile) * scale_log2
+            score_slope = tl.full((block_m, block_n), scale, tl.float32)
+            if has_softcap:
+                cap_log2 = softcap * 1.4426950408889634
+                tanh_score = 2.0 * tl.sigmoid(2.0 * score / cap_log2) - 1.0
+                score = cap_log2 * tanh_score
+                score_slope *= 1.0 - tanh_score * tanh_score
+            valid = tl.full((block_m, block_n), True, tl.int1)
+            if causal:
+                valid &= query_start + query_offsets[:, None] >= key_offsets[None, :]
+            probability = tl.math.exp2(score - lse[:, None])
+            probability = tl.where(valid, probability, 0.0)
+            value_gradient += output_scale * tl.dot(
+                tl.trans(probability.to(tl.bfloat16)),
+                output_cotangent_tile,
+            )
+            probability_cotangent = tl.dot(output_cotangent_tile, value_tile) * output_scale
+            mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
+            raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
+            key_gradient += tl.dot(tl.trans(raw_score_cotangent.to(tl.bfloat16)), query_tile)
+    key_cotangent_block = tl.make_block_ptr(
+        base=key_cotangent + batch_index * stride_dkb + key_value_head * stride_dkh,
+        shape=(sequence_length, head_dimension),
+        strides=(stride_dks, stride_dkd),
+        offsets=(key_start, 0),
+        block_shape=(block_n, head_dimension),
+        order=(1, 0),
+    )
+    value_cotangent_block = tl.make_block_ptr(
+        base=value_cotangent + batch_index * stride_dvb + key_value_head * stride_dvh,
+        shape=(sequence_length, head_dimension),
+        strides=(stride_dvs, stride_dvd),
+        offsets=(key_start, 0),
+        block_shape=(block_n, head_dimension),
+        order=(1, 0),
+    )
+    tl.store(key_cotangent_block, key_gradient.to(tl.bfloat16))
+    tl.store(value_cotangent_block, value_gradient.to(tl.bfloat16))
+
+
+def emit_streaming_attention_backward(
+    program: StreamingAttentionBackwardProgram,
+    inputs: dict[str, torch.Tensor],
+    output: torch.Tensor,
+    log_sum_exp: torch.Tensor,
+    output_cotangent: torch.Tensor,
+    query_cotangent: torch.Tensor,
+    key_cotangent: torch.Tensor,
+    value_cotangent: torch.Tensor,
+    output_dot: torch.Tensor,
+    *,
+    block_m: int,
+    block_n: int,
+    num_warps: int,
+    num_stages: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Execute a generated query-major/key-major reverse schedule."""
+    forward = program.forward
+    lowered = lower_score_map(forward)
+    if lowered.bias_name is not None or lowered.mask_name is not None:
+        raise ValueError("the first reverse emitter supports domain predicates and scalar score Maps only")
+    query = inputs[forward.qk.inputs[0].name]
+    key = inputs[forward.qk.inputs[1].name]
+    value = inputs[forward.pv.inputs[1].name]
+    if any(tensor.dtype is not torch.bfloat16 for tensor in (query, key, value, output, output_cotangent)):
+        raise ValueError("the first reverse emitter requires BF16 Q/K/V/output/cotangent")
+    if any(tensor.dtype is not torch.bfloat16 for tensor in (query_cotangent, key_cotangent, value_cotangent)):
+        raise ValueError("the first reverse emitter writes BF16 input cotangents")
+    if query.shape != output.shape or query.shape != output_cotangent.shape or query.shape != query_cotangent.shape:
+        raise ValueError("query/output/cotangent shapes must match")
+    if key.shape != value.shape or key.shape != key_cotangent.shape or value.shape != value_cotangent.shape:
+        raise ValueError("K/V and their cotangent shapes must match")
+    if query.shape[1] % block_m or key.shape[1] % block_n:
+        raise ValueError("the first reverse emitter requires tile-aligned sequence lengths")
+    if query.shape[-1] not in (64, 128) or key.shape[-1] != query.shape[-1]:
+        raise ValueError("the first reverse emitter supports head dimensions 64 and 128")
+    if query.shape[2] % key.shape[2]:
+        raise ValueError("query heads must be divisible by key/value heads")
+    expected_state_shape = (query.shape[0], query.shape[2], query.shape[1])
+    if log_sum_exp.shape != expected_state_shape or output_dot.shape != expected_state_shape:
+        raise ValueError("saved Fold state and output-dot buffer shapes must be [batch, head, query]")
+    if log_sum_exp.dtype is not torch.float32 or output_dot.dtype is not torch.float32:
+        raise ValueError("saved Fold state and output-dot buffer must be FP32")
+
+    _output_dot_kernel[(output_dot.numel(),)](
+        output,
+        output_cotangent,
+        output_dot,
+        query.shape[1],
+        query.shape[2],
+        *output.stride(),
+        *output_cotangent.stride(),
+        query.shape[-1],
+        num_warps=1,
+    )
+    common = (
+        query,
+        key,
+        value,
+        output_cotangent,
+        log_sum_exp,
+        output_dot,
+    )
+    scalar_arguments = (
+        query.shape[1],
+        query.shape[2],
+        key.shape[2],
+        lowered.scale,
+        lowered.scale * LOG2_E,
+        lowered.softcap or 1.0,
+        program.output_scale,
+    )
+    common_strides = (*query.stride(), *key.stride(), *value.stride(), *output_cotangent.stride())
+    _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * query.shape[2])](
+        *common,
+        query_cotangent,
+        *scalar_arguments,
+        *common_strides,
+        *query_cotangent.stride(),
+        block_m,
+        block_n,
+        query.shape[-1],
+        lowered.causal,
+        lowered.softcap is not None,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+    head_group_size = query.shape[2] // key.shape[2]
+    _streaming_dkdv_kernel[(triton.cdiv(key.shape[1], block_n), key.shape[0] * key.shape[2])](
+        *common,
+        key_cotangent,
+        value_cotangent,
+        *scalar_arguments,
+        *common_strides,
+        *key_cotangent.stride(),
+        *value_cotangent.stride(),
+        block_m,
+        block_n,
+        query.shape[-1],
+        head_group_size,
+        lowered.causal,
+        lowered.softcap is not None,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+    return query_cotangent, key_cotangent, value_cotangent
+
+
+def _error(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
+    difference = (actual.float() - expected.float()).abs()
+    return {
+        "maximum_absolute_error": difference.max().item(),
+        "mean_absolute_error": difference.mean().item(),
+    }
+
+
+def _hash(tensors: tuple[torch.Tensor, ...]) -> str:
+    digest = hashlib.sha256()
+    for tensor in tensors:
+        digest.update(tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _benchmark_variants(
+    variants: tuple[tuple[str, Callable[[], None]], ...],
+    *,
+    warmups: int,
+    repeats: int,
+    iterations: int,
+) -> dict[str, object]:
+    for _ in range(warmups):
+        for _, function in variants:
+            function()
+    torch.cuda.synchronize()
+    samples: dict[str, list[float]] = {name: [] for name, _ in variants}
+    orders: list[list[str]] = []
+    for repeat in range(repeats):
+        order = variants if repeat % 2 == 0 else tuple(reversed(variants))
+        orders.append([name for name, _ in order])
+        for name, function in order:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            for _ in range(iterations):
+                function()
+            end.record()
+            end.synchronize()
+            samples[name].append(start.elapsed_time(end) / iterations)
+    records = {
+        name: {"samples_ms": values, "median_ms": statistics.median(values), "minimum_ms": min(values)}
+        for name, values in samples.items()
+    }
+    result: dict[str, object] = {"variants": records, "execution_order": orders}
+    if "oracle" in records:
+        result["ratio_generated_to_oracle"] = records["generated"]["median_ms"] / records["oracle"]["median_ms"]
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sequence", type=int, default=2048)
+    parser.add_argument("--mutation", choices=("causal", "softcap"), default="causal")
+    parser.add_argument("--scale", type=float, default=1.0 / math.sqrt(128))
+    parser.add_argument("--block-m", type=int, choices=(16, 32, 64), default=32)
+    parser.add_argument("--block-n", type=int, choices=(16, 32, 64), default=32)
+    parser.add_argument("--num-warps", type=int, choices=(4, 8), default=8)
+    parser.add_argument("--num-stages", type=int, choices=(2, 3, 4), default=3)
+    parser.add_argument("--warmups", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--json-output", type=Path, required=True)
+    parser.add_argument("--shuttle-revision", required=True)
+    args = parser.parse_args()
+    if args.repeats % 2:
+        raise ValueError("counterbalanced benchmark requires an even repeat count")
+    if not torch.cuda.is_available():
+        raise RuntimeError("streaming backward benchmark requires CUDA")
+
+    forward = _program(args.sequence, score_scale=args.scale, mutation=args.mutation)
+    backward = derive_streaming_attention_backward(forward)
+    inputs = _inputs(forward, mutation=args.mutation)
+    output = torch.empty_like(inputs["query"])
+    log_sum_exp = torch.empty(
+        (inputs["query"].shape[0], inputs["query"].shape[2], args.sequence),
+        dtype=torch.float32,
+        device="cuda",
+    )
+    emit_streaming_attention(
+        forward,
+        inputs,
+        output,
+        log_sum_exp,
+        block_m=32,
+        block_n=64,
+        heads_per_program=4,
+        num_warps=8,
+        num_stages=3,
+    )
+    generator = torch.Generator(device="cuda").manual_seed(20260809)
+    output_cotangent = torch.randn(output.shape, dtype=torch.bfloat16, device="cuda", generator=generator)
+    query_cotangent = torch.empty_like(inputs["query"])
+    key_cotangent = torch.empty_like(inputs["key"])
+    value_cotangent = torch.empty_like(inputs["value"])
+    output_dot = torch.empty_like(log_sum_exp)
+
+    def generated_call() -> None:
+        emit_streaming_attention_backward(
+            backward,
+            inputs,
+            output,
+            log_sum_exp,
+            output_cotangent,
+            query_cotangent,
+            key_cotangent,
+            value_cotangent,
+            output_dot,
+            block_m=args.block_m,
+            block_n=args.block_n,
+            num_warps=args.num_warps,
+            num_stages=args.num_stages,
+        )
+
+    generated_call()
+    torch.cuda.synchronize()
+    first_hash = _hash((query_cotangent, key_cotangent, value_cotangent))
+    generated_call()
+    torch.cuda.synchronize()
+    second_hash = _hash((query_cotangent, key_cotangent, value_cotangent))
+    if first_hash != second_hash:
+        raise AssertionError("generated streaming backward is not deterministic")
+
+    oracle_state: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+    q_oracle = inputs["query"].transpose(1, 2).detach().requires_grad_(True)
+    k_oracle = inputs["key"].transpose(1, 2).detach().requires_grad_(True)
+    v_oracle = inputs["value"].transpose(1, 2).detach().requires_grad_(True)
+    oracle_output = functional.scaled_dot_product_attention(
+        q_oracle,
+        k_oracle,
+        v_oracle,
+        is_causal=args.mutation == "causal",
+        scale=args.scale,
+        enable_gqa=q_oracle.shape[1] != k_oracle.shape[1],
+    )
+    oracle_cotangent = output_cotangent.transpose(1, 2)
+
+    def oracle_call() -> None:
+        oracle_state["grads"] = torch.autograd.grad(
+            oracle_output,
+            (q_oracle, k_oracle, v_oracle),
+            oracle_cotangent,
+            retain_graph=True,
+        )
+
+    measurements: dict[str, object]
+    correctness: dict[str, object]
+    if args.mutation == "causal":
+        oracle_call()
+        oracle_query, oracle_key, oracle_value = oracle_state["grads"]
+        correctness = {
+            "query": _error(query_cotangent, oracle_query.transpose(1, 2)),
+            "key": _error(key_cotangent, oracle_key.transpose(1, 2)),
+            "value": _error(value_cotangent, oracle_value.transpose(1, 2)),
+            "deterministic_hash": first_hash,
+        }
+        measurements = _benchmark_variants(
+            (("generated", generated_call), ("oracle", oracle_call)),
+            warmups=args.warmups,
+            repeats=args.repeats,
+            iterations=args.iterations,
+        )
+    else:
+        correctness = {"deterministic_hash": first_hash, "oracle": "softcap mutation has no matched SDPA oracle"}
+        measurements = _benchmark_variants(
+            (("generated", generated_call),),
+            warmups=args.warmups,
+            repeats=args.repeats,
+            iterations=args.iterations,
+        )
+
+    telemetry = subprocess.check_output(
+        (
+            "nvidia-smi",
+            "--query-gpu=name,driver_version,power.limit,clocks.current.sm,clocks.current.memory",
+            "--format=csv,noheader,nounits",
+            "--id=0",
+        ),
+        text=True,
+    ).strip()
+    result = {
+        "schema_version": 1,
+        "workload": {
+            "sequence": args.sequence,
+            "query_heads": inputs["query"].shape[2],
+            "key_value_heads": inputs["key"].shape[2],
+            "head_dimension": inputs["query"].shape[-1],
+            "mutation": args.mutation,
+            "dtype": "bfloat16",
+        },
+        "semantic_generation": {
+            "stages": [stage.value for stage in backward.stages],
+            "score_map_vjp": serialize_scalar_expression(backward.score_map_vjp.expression),
+            "reassociation": backward.reassociation.value,
+            "materialized_values": [value.name for value in backward.materialized_values],
+        },
+        "schedule": {
+            "block_m": args.block_m,
+            "block_n": args.block_n,
+            "num_warps": args.num_warps,
+            "num_stages": args.num_stages,
+            "query_gradient_orientation": "query_major",
+            "key_value_gradient_orientation": "key_value_major",
+            "atomic_accumulation": False,
+        },
+        "correctness": correctness,
+        "measurements": measurements,
+        "acceptance": {
+            "oracle": "torch SDPA selected backend backward, matched causal GQA semantics",
+            "threshold": 1.2,
+            "ratio": measurements.get("ratio_generated_to_oracle"),
+            "passes": (
+                measurements.get("ratio_generated_to_oracle") is not None
+                and measurements["ratio_generated_to_oracle"] <= 1.2
+            ),
+        },
+        "benchmark": {
+            "warmups": args.warmups,
+            "repeats": args.repeats,
+            "iterations_per_sample": args.iterations,
+            "counterbalanced_order": args.mutation == "causal",
+        },
+        "environment": {
+            "torch": torch.__version__,
+            "triton": triton.__version__,
+            "cuda": torch.version.cuda,
+            "device": torch.cuda.get_device_name(0),
+            "telemetry": telemetry,
+        },
+        "revisions": {"shuttle": args.shuttle_revision},
+        "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+    args.json_output.parent.mkdir(parents=True, exist_ok=True)
+    args.json_output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

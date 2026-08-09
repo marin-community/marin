@@ -368,6 +368,15 @@ class StreamingAttentionProgram:
     materialized_values: tuple[ProgramValue, ...]
 
 
+@dataclass(frozen=True)
+class StreamingAttentionExecution:
+    """Materialized output and bounded normalized-exponential state."""
+
+    output: np.ndarray
+    row_max: np.ndarray
+    row_sum_exp: np.ndarray
+
+
 def streaming_attention_from_semantic_operation(
     operation: ScaledDotProductAttentionOp,
     *,
@@ -481,6 +490,14 @@ def execute_streaming_attention(
     inputs: dict[str, np.ndarray],
 ) -> np.ndarray:
     """Execute derived online-softmax state without sequence-squared materialization."""
+    return execute_streaming_attention_with_state(program, inputs).output
+
+
+def execute_streaming_attention_with_state(
+    program: StreamingAttentionProgram,
+    inputs: dict[str, np.ndarray],
+) -> StreamingAttentionExecution:
+    """Execute streaming attention and retain its generic Fold state."""
     values = _validated_inputs(program.source, inputs)
     query_value, key_value = program.qk.inputs
     value_value = program.pv.inputs[1]
@@ -492,6 +509,8 @@ def execute_streaming_attention(
     row_axes = program.state.row_max.axes
     accumulator_axes = program.state.weighted_value_accumulator.axes
     output = np.empty(program.finalize.output.shape, dtype=np.float32)
+    saved_row_max = np.empty(program.state.row_max.shape, dtype=np.float32)
+    saved_row_sum_exp = np.empty(program.state.row_sum_exp.shape, dtype=np.float32)
 
     for query_start in range(0, query_axis.extent, program.schedule.query_tile_size):
         query_stop = min(query_start + program.schedule.query_tile_size, query_axis.extent)
@@ -553,7 +572,16 @@ def execute_streaming_attention(
             for axis in program.finalize.output.axes
         )
         output[output_slices] = normalized
-    return output
+        row_slices = tuple(
+            slice(query_start, query_stop) if axis == query_axis else slice(None) for axis in program.state.row_max.axes
+        )
+        saved_row_max[row_slices] = row_max
+        saved_row_sum_exp[row_slices] = row_sum_exp
+    return StreamingAttentionExecution(
+        output=output,
+        row_max=saved_row_max,
+        row_sum_exp=saved_row_sum_exp,
+    )
 
 
 def _validated_inputs(program: TensorProgram, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

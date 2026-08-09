@@ -290,6 +290,7 @@ from tile_lifetime.streaming_attention import (
     OnlineAttentionState,
     ScoreInputSpec,
     ScoreMapSpec,
+    StreamingAttentionExecution,
     StreamingAttentionProgram,
     StreamingAttentionStage,
     StreamingTileSchedule,
@@ -300,9 +301,18 @@ from tile_lifetime.streaming_attention import (
     build_attention_tensor_program,
     derive_streaming_attention,
     execute_streaming_attention,
+    execute_streaming_attention_with_state,
     execute_tensor_program,
     scaled_score_map,
     streaming_attention_from_semantic_operation,
+)
+from tile_lifetime.streaming_attention_backward import (
+    StreamingAttentionBackwardExecution,
+    StreamingAttentionBackwardProgram,
+    StreamingAttentionBackwardReassociation,
+    StreamingAttentionBackwardStage,
+    derive_streaming_attention_backward,
+    execute_streaming_attention_backward,
 )
 from tile_lifetime.swiglu import compile_swiglu_region
 from tile_lifetime.tensor_program import (
