@@ -25,6 +25,7 @@ author: dlwh
 - `GRUG-XEM-007` found that a layer-3 rank-8 routed-function adapter is not a useful unlock. It improved the matched bank-only control by only 0.000028 validation and 0.000026 Paloma at 50.07M continuation tokens, capturing 0.57% of the untied-oracle advantage while missing both utility and promotion gates.
 - `GRUG-XEM-008` found material direct shared-bank gradient conflict only at the 25.03M-token midpoint, not at the Stage-A start or 50.07M endpoint. The preregistered persistent-conflict gate required two of three checkpoints and returned inconclusive. No optimizer intervention or larger surgery is justified by this diagnostic.
 - `GRUG-XEM-009` was canceled before TPU allocation after a 3-hour-48-minute central2 capacity wait. Neither arm produced a W&B run or checkpoint. Central1 is not a valid substitute because it lacks the exact approximately 25 TB training cache and does not offer `v4-2048`; the large architecture result remains unmeasured.
+- `GRUG-XEM-011` passed the d1024 architecture and compression-normalized gates. Tying removed 45.45% of expert parameters and finished +0.03076 Paloma above the matched control, with zero overflow, all experts active, balanced shared-bank updates, and 1.66% higher throughput. The raw penalty grew by 0.00222 from d768 and effective speed was 0.812x, so tying remains an architecture target rather than a compute-speed recipe.
 - The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
 
 ## Baseline
@@ -38,7 +39,7 @@ author: dlwh
 ### Active
 
 - `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Resume only with a new preregistered d512 shared-bank hypothesis.
-- `GRUG-XEM-H14`: With two anchors at each end and core tie groups no larger than four, the tied-from-scratch Paloma penalty remains at most +0.04 at d1024. This is an architecture-scale test, not an effective-speed promotion gate.
+- `GRUG-XEM-H15`: With two anchors at each end, one singleton core layer, and the remaining core layers tied in groups of four, the tied-from-scratch Paloma penalty remains at most +0.04 at d1280. This is the final central1 architecture-scale test in the registered progression, not an effective-speed promotion gate.
 
 ### Blocked
 
@@ -60,6 +61,7 @@ author: dlwh
 - `GRUG-XEM-H3`: The LR ablation did not support `1/sqrt(g)` as best for this d512 MuonH recipe; unscaled tying was slightly better at full schedule for both topologies. Keep LR scaling configurable rather than treating Jaggi's setting as a Grug default.
 - `GRUG-XEM-H7`: The d768 middle-four penalty diminished to +0.02855 Paloma from +0.03817 at d512 with unscaled MuonH. The d768 tied architecture passed the +0.06 screening gate but had 0.849x effective speed.
 - `GRUG-XEM-H8`: CE+KL bank-only Stage A improved the MoE-only control by 0.01837 validation and 0.01967 Paloma at 50M tokens without material local-fit regression. The later shared recovery still missed H4's strict validation gate.
+- `GRUG-XEM-H14`: The d1024 tied core passed at +0.03076 Paloma with 45.45% fewer expert parameters. Its compression-normalized penalty was below +0.03460, routing and updates were healthy, and throughput was 1.66% higher; raw penalty grew slightly from d768 and effective speed was 0.812x.
 
 ## Background Research Brief
 
@@ -869,3 +871,14 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Full command: `.venv/bin/iris --config lib/iris/config/marin.yaml job run --no-wait --region us-central1 --cpu 1 --memory 2GB --extra cpu --job-name grug-xem-011-d1024-full-20260808 -e MARIN_PREFIX gs://marin-us-central1 -e GRUG_TIED_MODEL d1024 -e GRUG_TIED_PHASE full -- python -m experiments.grug.moe.launch_tied_experts --version 2026.08.08 --run --max-concurrent 2`.
 - Full controller: `/dlwh/grug-xem-011-d1024-full-20260808`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-011-d1024-full-20260808. Submission completed at 14:02:23 PDT. A dedicated babysitter owns both arms through terminal W&B, step-16149 artifacts, exact final-100 history checks, and gate application.
 - Next action: wait for both 8,466,726,912-token arms. A full Paloma delta `<=+0.040` with all health checks passes the architecture gate; no post-hoc larger surgery is authorized.
+
+### 2026-08-09 05:41 - GRUG-XEM-011 d1024 full result
+
+- Terminal state: the controller and both children succeeded without retry. Both W&B runs are `finished` at zero-indexed step 16148 and exactly 8,466,726,912 tokens. Both registered roots contain `.artifact.json` and `checkpoints/step-16149/metadata.json`; all 23 terminal component losses are finite.
+- Quality: terminal Paloma is control `3.039182186` and treatment `3.069946766`, delta `+0.030764580`. This passes the `<=+0.040` architecture gate and the `<=+0.034604` compression-normalized non-worsening threshold. The raw penalty is `+0.002216580` larger than d768's `+0.028548`, so the raw gap stopped diminishing.
+- Exact final-100 audit: both arms contain one complete finite sample for every required metric at each step 16049-16148. Capacity overflow is zero in every layer/step; every layer uses all 256 experts over the window; per-layer mean entropy ranges `5.5307-5.5381` control and `5.5272-5.5386` treatment.
+- Shared-bank health: treatment bank-2/bank-3 gradient medians are `0.0376510/0.0354184`, ratio `1.06304`; update medians are `0.1438597/0.1438694`, ratio `1.00007`. Cross-loop top-1 agreement median is `0.0315427`; top-4 set-overlap median is `0.0747550`.
+- Throughput and parameters: final-100 median throughput is control `166,013.747` and treatment `168,767.628` tokens/s, a 1.659% treatment increase. Effective speed is `0.811946x` with `C_needed=9.26489e18`, so the experiment does not pass the formal compute-speed protocol. Unique counts are control `4,764,584,704` total/`4,429,185,024` expert and treatment `2,751,318,784` total/`2,415,919,104` expert. The treatment removes `2,013,265,920` expert parameters: 45.455% of expert and 42.255% of whole-model unique parameters.
+- Activation medians, layers 0-10: control `[0.055693,0.063832,0.074180,0.089233,0.110958,0.146620,0.187044,0.235773,0.308889,0.397997,0.581765]`; treatment `[0.054812,0.068244,0.078559,0.093141,0.111923,0.138898,0.172576,0.216190,0.276104,0.377443,0.592719]`.
+- Interpretation: the architecture hypothesis remains alive at d1024. The raw loss penalty did not continue shrinking, but it remained acceptable after accounting for the larger removed-bank fraction. Low cross-loop agreement confirms independent routers use the common dictionary differently. Tying is not a compute-speed win under this schedule.
+- Decision: promote H14 and prepare the separately preregistered d1280 architecture comparison. Do not launch post-hoc d1024/d1280/67B surgery from this result.
