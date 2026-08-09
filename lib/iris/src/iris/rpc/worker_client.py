@@ -22,22 +22,15 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
 )
 from iris.cluster.types import AttemptUid, WorkerId
-from iris.resources.attempt import AttemptLaunch, AttemptObservation
+from iris.resources.attempt import AttemptObservation
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.legacy.job_codec import (
-    constraint_to_proto,
-    environment_to_proto,
-    resource_spec_to_proto,
-    runtime_entrypoint_to_proto,
-)
 from iris.rpc.profile_codec import profile_configuration_to_proto
-from iris.rpc.worker_codec import process_info_from_proto
+from iris.rpc.worker_codec import attempt_launch_to_proto, process_info_from_proto
 from iris.rpc.worker_connect import WorkerServiceClient
-from iris.time_proto import duration_to_proto
 
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 RECONCILE_RPC_TIMEOUT = Duration.from_seconds(3.0)
@@ -59,30 +52,6 @@ _STOP_REASON_TO_WIRE = {
 }
 
 
-def _attempt_launch_to_proto(launch: AttemptLaunch) -> job_pb2.RunTaskRequest:
-    template = launch.template
-    result = job_pb2.RunTaskRequest(
-        task_id=launch.task_id.to_wire(),
-        attempt_id=launch.attempt_id,
-        attempt_uid=launch.attempt_uid,
-        num_tasks=template.num_tasks,
-        entrypoint=runtime_entrypoint_to_proto(template.entrypoint),
-        environment=environment_to_proto(template.environment),
-        bundle_id=template.bundle_id,
-        resources=resource_spec_to_proto(template.resources),
-        ports=template.ports,
-        constraints=[constraint_to_proto(constraint) for constraint in template.constraints],
-        task_image=template.task_image,
-        priority=int(template.priority_band),
-        container_profile=int(template.container_profile),
-    )
-    if template.timeout is not None:
-        result.timeout.CopyFrom(duration_to_proto(template.timeout))
-    if template.coscheduling is not None:
-        result.coscheduling.group_by = template.coscheduling.group_by
-    return result
-
-
 def _reconcile_request_to_proto(request: WorkerReconcileRequest) -> worker_pb2.Worker.ReconcileRequest:
     desired = []
     for item in request.desired:
@@ -90,7 +59,7 @@ def _reconcile_request_to_proto(request: WorkerReconcileRequest) -> worker_pb2.W
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=item.attempt_uid,
-                    run=worker_pb2.Worker.AttemptSpec(request=_attempt_launch_to_proto(item.launch)),
+                    run=worker_pb2.Worker.AttemptSpec(request=attempt_launch_to_proto(item.launch)),
                 )
             )
         elif isinstance(item, KeepAttempt):

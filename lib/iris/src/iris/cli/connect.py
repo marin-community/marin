@@ -191,24 +191,6 @@ def connect_controller(
         raise
 
 
-def iris_client_for_ctx(
-    ctx: click.Context,
-    *,
-    workspace: Path | None,
-    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
-    extra_bundle_includes: Sequence[str] = (),
-) -> IrisClient:
-    """Build an IrisClient from an active Iris CLI context."""
-    obj = ctx.obj or {}
-    return IrisClient.remote(
-        require_controller_url(ctx),
-        workspace=workspace,
-        credentials=obj.get("credentials"),
-        timeout_ms=timeout_ms,
-        extra_bundle_includes=extra_bundle_includes,
-    )
-
-
 def resource_client_for_ctx(
     ctx: click.Context,
     *,

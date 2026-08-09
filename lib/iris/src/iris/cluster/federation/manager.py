@@ -282,21 +282,6 @@ class FederationManager:
 
     # -- cancel (parent side) ------------------------------------------------
 
-    def cancel_federated(self, local_job_id: JobName) -> None:
-        """Route a versioned cancel for a federated job to its peer.
-
-        Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
-        delivered and a retried cancel is a no-op) and routes the idempotent
-        ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
-        failure is not fatal — the sync loop re-drives the cancel until the peer acks
-        or sync observes the job terminal/pruned.
-        """
-        if self._store is None:
-            raise RuntimeError("federation cancel requires a store")
-        target = self._store.bump_cancel_intent(local_job_id)
-        if target is not None:
-            self._deliver_cancel(target)
-
     def deliver_cancel(self, target: CancelTarget) -> None:
         """Deliver an already-persisted cancel intent to its execution peer."""
         self._deliver_cancel(target)

@@ -40,12 +40,10 @@ from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.legacy.job_codec import (
-    constraint_to_proto,
     device_from_proto,
-    environment_to_proto,
     resource_spec_to_proto,
-    runtime_entrypoint_to_proto,
 )
+from iris.rpc.legacy.job_service_codec import job_spec_to_legacy_request
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.resource_client_codec import (
     action_receipt_from_proto,
@@ -265,41 +263,16 @@ def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider
 def handoff_to_legacy_request(delivery: HandoffDelivery) -> controller_pb2.Controller.LaunchJobRequest:
     """Encode a canonical handoff for the old ControllerService boundary."""
 
-    spec = delivery.spec
-    request = controller_pb2.Controller.LaunchJobRequest(
-        name=spec.name,
-        entrypoint=runtime_entrypoint_to_proto(spec.entrypoint),
-        resources=resource_spec_to_proto(spec.resources),
-        environment=environment_to_proto(spec.environment),
-        bundle_id=spec.bundle_id,
-        bundle_blob=delivery.bundle_blob,
-        ports=spec.ports,
-        max_task_failures=spec.max_task_failures,
-        max_retries_failure=spec.max_retries_failure,
-        max_retries_preemption=spec.max_retries_preemption,
-        constraints=[constraint_to_proto(constraint) for constraint in spec.constraints],
-        replicas=spec.replicas,
-        fail_if_exists=spec.fail_if_exists,
-        preemption_policy=spec.preemption_policy,
-        existing_job_policy=spec.existing_job_policy,
-        priority_band=spec.priority_band,
-        task_image=spec.task_image,
-        submit_argv=spec.submit_argv,
-        client_revision_date=spec.client_revision_date,
-        container_profile=spec.container_profile,
-        federation=controller_pb2.Controller.FederationHandoff(
+    request = job_spec_to_legacy_request(delivery.spec)
+    request.bundle_blob = delivery.bundle_blob
+    request.federation.CopyFrom(
+        controller_pb2.Controller.FederationHandoff(
             requester_id=delivery.requester_id,
             owner_principal=delivery.owner_principal,
             submitting_user=delivery.submitting_user,
             handoff_nonce=delivery.handoff_nonce,
-        ),
+        )
     )
-    if spec.scheduling_timeout is not None:
-        request.scheduling_timeout.CopyFrom(duration_to_proto(spec.scheduling_timeout))
-    if spec.coscheduling is not None:
-        request.coscheduling.group_by = spec.coscheduling.group_by
-    if spec.timeout is not None:
-        request.timeout.CopyFrom(duration_to_proto(spec.timeout))
     return request
 
 
