@@ -15,7 +15,13 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 from jaxtyping import Array, Float, Int
-from rigging.cache import PersistentKvCache, compile_cache_key, installed_distribution_fingerprint
+from rigging.cache import (
+    PersistentKvCache,
+    combined_content_hash,
+    directory_content_hash,
+    file_content_hash,
+    workspace_lock_hash,
+)
 
 from levanter.kernels.pallas import autotune_utils
 
@@ -246,12 +252,19 @@ def _autotune_jaxpr_hash(
 
 @lru_cache(maxsize=None)
 def _autotune_revision(impl_name: str) -> str:
-    environment = [_AUTOTUNE_SOURCE_SCHEMA, f"jax={jax.__version__}", f"jaxlib={jaxlib.__version__}"]
-    if impl_name == "pallas_tpu":
-        environment.append(f"libtpu={installed_distribution_fingerprint(['libtpu'])}")
     source_root = pathlib.Path(__file__).resolve().parent
     autotune_helpers = source_root.parent / "autotune_utils.py"
-    return compile_cache_key([source_root, autotune_helpers], environment=environment)
+    return combined_content_hash(
+        [
+            _AUTOTUNE_SOURCE_SCHEMA,
+            f"implementation={impl_name}",
+            f"source={directory_content_hash(source_root)}",
+            f"autotune_helpers={file_content_hash(autotune_helpers)}",
+            f"dependencies={workspace_lock_hash(pathlib.Path(__file__))}",
+            f"jax={jax.__version__}",
+            f"jaxlib={jaxlib.__version__}",
+        ]
+    )
 
 
 def _autotune_cache_key(

@@ -5,28 +5,27 @@
 File: `lib/rigging/src/rigging/cache.py`
 
 ```python
-def compile_cache_key(
-    source_paths: Sequence[pathlib.Path],
-    *,
-    environment: Sequence[str],
-) -> str: ...
+def file_content_hash(path: pathlib.Path) -> str: ...
 
 
-def installed_distribution_fingerprint(
-    distribution_names: Sequence[str],
-) -> str: ...
+def directory_content_hash(directory: pathlib.Path) -> str: ...
+
+
+def combined_content_hash(components: Sequence[str]) -> str: ...
+
+
+def workspace_lock_hash(start: pathlib.Path) -> str: ...
 ```
 
-`compile_cache_key` consumes roots and environment strings in caller order. A
-directory is recursive and sorted by logical relative path. SHA-256 inputs are
-length framed and include root indices, paths, and bytes. Absolute roots, mtimes,
-`.pyc`, and `__pycache__` are excluded. Missing roots, non-regular entries, and
-symlinks raise `ValueError`.
+File hashes cover bytes. Directory hashes recursively cover sorted logical paths
+and bytes while excluding absolute roots, mtimes, `.pyc`, and `__pycache__`.
+Combiners consume ordered labeled strings with length framing. Missing inputs,
+non-regular entries, and symlinks raise `ValueError`.
 
-`installed_distribution_fingerprint` consumes names in caller order and includes
-installed distribution name, version, metadata-listed logical paths, and actual
-file bytes. Missing distributions, absent file inventories, missing files,
-non-regular files, and symlinks raise `ValueError`.
+`workspace_lock_hash` finds the nearest Marin UV workspace and hashes its
+`uv.lock`. An absent workspace or lock raises `ValueError`; callers must disable
+shared persistence. The external dependency contract is a frozen installation
+of that lock. Manual same-version patches outside the lock are unsupported.
 
 ## CuTeDSL object cache
 
@@ -36,15 +35,13 @@ The artifact key is SHA-256 over:
 
 1. cache schema;
 2. factory module, qualified name, and sorted keyword configuration;
-3. `compile_cache_key([levanter/grug, cuda, cutlass, flash_attn, quack,
-   tvm_ffi], environment=[schema, toolchain digest, package names])`;
+3. `combined_content_hash([schema, directory_content_hash(levanter/grug),
+   workspace_lock_hash(cutlass_kernel_cache.py)])`;
 4. stable `repr(spec)`;
 5. observed JAX device platform and compute capability/device kind.
 
-The toolchain digest covers actual installed bytes for the declared TVM FFI,
-CUDA Python, nvdisasm, Cutlass DSL/libraries, FlashAttention 4, and Quack
-distributions. The explicit whole-package trees cover editable source changes
-without walking or inferring an import graph.
+Any external dependency change in `uv.lock`, including Cutlass DSL/libraries,
+FlashAttention, CUDA Python, TVM FFI, Quack, or nvdisasm, changes the key.
 
 A launcher without an identity, a launcher defined outside `levanter.grug`, or
 a spec containing a process address compiles without persistent storage. Failure
@@ -60,10 +57,10 @@ configuration are invalid and must change the contract before opting in.
 File: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
 
 The existing key gains schema and revision fields. The revision is
-`compile_cache_key([fused_cross_entropy_loss package, pallas/autotune_utils.py],
-environment=[schema, JAX version, jaxlib version, optional libtpu digest])`. TPU
-uses actual installed `libtpu` bytes. Shapes, dtypes, options, backend, observed
-device kind, and jaxpr remain.
+`combined_content_hash([schema, implementation, directory_content_hash(
+fused_cross_entropy_loss), file_content_hash(pallas/autotune_utils.py),
+workspace_lock_hash(api.py), JAX version, jaxlib version])`. Shapes, dtypes,
+options, backend, observed device kind, and jaxpr remain.
 
 If jaxpr tracing or revision construction fails, `_autotune_cache_key` returns
 `None`. Autotuning may continue, but the cache is neither read nor written; this

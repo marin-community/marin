@@ -1,23 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pathlib
-import types
 
 import pytest
 import rigging.cache as cache_module
 from rigging.cache import (
     PersistentKvCache,
     SyncedDirectory,
-    compile_cache_key,
+    combined_content_hash,
+    directory_content_hash,
+    file_content_hash,
     flush_background_writes,
-    installed_distribution_fingerprint,
     sync_kv_cache,
+    workspace_lock_hash,
 )
 from rigging.provenance import Provenance
 
 
-def test_compile_cache_key_is_independent_of_checkout_location(tmp_path):
+def test_directory_content_hash_is_independent_of_checkout_location(tmp_path):
     first = tmp_path / "first"
     second = tmp_path / "second"
     first.mkdir()
@@ -25,41 +25,38 @@ def test_compile_cache_key_is_independent_of_checkout_location(tmp_path):
     (first / "kernel.py").write_text("source")
     (second / "kernel.py").write_text("source")
 
-    assert compile_cache_key([first], environment=["compiler-v1"]) == compile_cache_key(
-        [second], environment=["compiler-v1"]
-    )
+    assert directory_content_hash(first) == directory_content_hash(second)
 
 
-def test_compile_cache_key_changes_with_source_path_content_and_environment(tmp_path):
+def test_directory_content_hash_changes_with_path_and_content(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     kernel = source / "kernel.py"
     kernel.write_text("first")
-    original = compile_cache_key([source], environment=["compiler-v1"])
+    original = directory_content_hash(source)
 
     kernel.write_text("second")
-    changed_content = compile_cache_key([source], environment=["compiler-v1"])
+    changed_content = directory_content_hash(source)
     kernel.rename(source / "renamed.py")
-    changed_path = compile_cache_key([source], environment=["compiler-v1"])
-    changed_environment = compile_cache_key([source], environment=["compiler-v2"])
+    changed_path = directory_content_hash(source)
 
-    assert len({original, changed_content, changed_path, changed_environment}) == 4
+    assert len({original, changed_content, changed_path}) == 3
 
 
-def test_compile_cache_key_ignores_derived_bytecode(tmp_path):
+def test_directory_content_hash_ignores_derived_bytecode(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "kernel.py").write_text("source")
-    original = compile_cache_key([source], environment=[])
+    original = directory_content_hash(source)
 
     bytecode = source / "__pycache__"
     bytecode.mkdir()
     (bytecode / "kernel.cpython-312.pyc").write_bytes(b"derived")
 
-    assert compile_cache_key([source], environment=[]) == original
+    assert directory_content_hash(source) == original
 
 
-def test_compile_cache_key_rejects_missing_paths_and_symlinks(tmp_path):
+def test_directory_content_hash_rejects_missing_paths_and_symlinks(tmp_path):
     source = tmp_path / "source.py"
     source.write_text("source")
     symlink = tmp_path / "linked.py"
@@ -71,30 +68,40 @@ def test_compile_cache_key_rejects_missing_paths_and_symlinks(tmp_path):
     (bytecode / "kernel.pyc").symlink_to(source)
 
     with pytest.raises(ValueError, match="does not exist"):
-        compile_cache_key([tmp_path / "missing.py"], environment=[])
+        directory_content_hash(tmp_path / "missing")
     with pytest.raises(ValueError, match="cannot be symlinks"):
-        compile_cache_key([symlink], environment=[])
+        directory_content_hash(symlink)
     with pytest.raises(ValueError, match="cannot be symlinks"):
-        compile_cache_key([source_tree], environment=[])
+        directory_content_hash(source_tree)
 
 
-def test_installed_distribution_fingerprint_hashes_actual_installed_bytes(tmp_path, monkeypatch):
-    installed = tmp_path / "demo"
-    installed.mkdir()
-    module = installed / "kernel.py"
-    module.write_text("first")
-    distribution = types.SimpleNamespace(
-        metadata={"Name": "demo"},
-        version="1.0",
-        files=[pathlib.PurePosixPath("kernel.py")],
-        locate_file=lambda relative: installed / relative,
-    )
-    monkeypatch.setattr(cache_module.importlib_metadata, "distribution", lambda _name: distribution)
-    original = installed_distribution_fingerprint(["demo"])
+def test_file_content_hash_changes_with_content(tmp_path):
+    source = tmp_path / "uv.lock"
+    source.write_text("first")
+    original = file_content_hash(source)
 
-    module.write_text("locally patched")
+    source.write_text("second")
 
-    assert installed_distribution_fingerprint(["demo"]) != original
+    assert file_content_hash(source) != original
+
+
+def test_combined_content_hash_frames_and_orders_components():
+    assert combined_content_hash(["ab", "c"]) != combined_content_hash(["a", "bc"])
+    assert combined_content_hash(["first", "second"]) != combined_content_hash(["second", "first"])
+
+
+def test_workspace_lock_hash_finds_and_hashes_the_marin_lockfile(tmp_path):
+    workspace = tmp_path / "workspace"
+    nested = workspace / "lib" / "levanter"
+    nested.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = []\n")
+    lockfile = workspace / "uv.lock"
+    lockfile.write_text("revision = 1")
+
+    original = workspace_lock_hash(nested)
+    lockfile.write_text("revision = 2")
+
+    assert original != workspace_lock_hash(nested)
 
 
 def test_store_then_load_round_trips_bytes(tmp_path):

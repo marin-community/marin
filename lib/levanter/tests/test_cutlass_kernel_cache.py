@@ -165,29 +165,24 @@ def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tm
     assert len(list(tmp_path.iterdir())) == 2
 
 
-def test_source_revision_hashes_complete_toolchain_package_trees(tmp_path, monkeypatch):
-    package_roots = {}
-    for package_name in cutlass_kernel_cache._CUTE_TOOLCHAIN_PACKAGES:
-        package_root = tmp_path / package_name
-        package_root.mkdir()
-        (package_root / "kernel.py").write_text("source")
-        package_roots[package_name] = package_root
-
-    def package_specification(package_name):
-        return types.SimpleNamespace(submodule_search_locations=[str(package_roots[package_name])], origin=None)
-
-    monkeypatch.setattr(cutlass_kernel_cache.importlib.util, "find_spec", package_specification)
-    monkeypatch.setattr(cutlass_kernel_cache, "installed_distribution_fingerprint", lambda _names: "toolchain-v1")
+def test_source_revision_combines_internal_source_and_dependency_lock(monkeypatch):
+    source_hash = ["source-v1"]
+    dependency_hash = ["dependencies-v1"]
+    monkeypatch.setattr(cutlass_kernel_cache, "directory_content_hash", lambda _path: source_hash[0])
+    monkeypatch.setattr(cutlass_kernel_cache, "workspace_lock_hash", lambda _path: dependency_hash[0])
     cutlass_kernel_cache._kernel_source_revision.cache_clear()
     try:
         original = cutlass_kernel_cache._kernel_source_revision()
-        (package_roots["flash_attn"] / "kernel.py").write_text("edited source")
+        source_hash[0] = "source-v2"
         cutlass_kernel_cache._kernel_source_revision.cache_clear()
-        edited = cutlass_kernel_cache._kernel_source_revision()
+        changed_source = cutlass_kernel_cache._kernel_source_revision()
+        dependency_hash[0] = "dependencies-v2"
+        cutlass_kernel_cache._kernel_source_revision.cache_clear()
+        changed_dependency = cutlass_kernel_cache._kernel_source_revision()
     finally:
         cutlass_kernel_cache._kernel_source_revision.cache_clear()
 
-    assert edited != original
+    assert len({original, changed_source, changed_dependency}) == 3
 
 
 def test_a_launcher_outside_the_covered_source_tree_is_not_stored(fake_cutlass, tmp_path):

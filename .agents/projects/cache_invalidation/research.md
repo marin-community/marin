@@ -22,8 +22,8 @@ object to run.
 | --- | --- | --- | --- | --- |
 | JAX persistent compilation cache | XLA executable in region-local object storage | Non-optimized HLO, `jaxlib`, relevant XLA flags, device topology, compression, optional custom hook | The compiler already owns the semantic key. A git identity would only add false misses. Multi-node jobs need shared storage because only process 0 writes. | Keep the native JAX key and shared directory. |
 | XLA per-fusion autotune cache | Compiler-owned directory under `/cache`, mirrored by `SyncedDirectory` | XLA owns per-fusion entries; Rigging adds the launch tree as the outer directory | The tree is broader than the artifact, but replacing it with requested Iris GPU resources is unsafe: requests can be `auto`, contain alternatives, and differ from placement. A fleet-wide version directory would also make `SyncedDirectory` fetch an unbounded tree. | Keep the bounded tree namespace in this PR. Follow up with observed-device identity, a bounded remote layout, and local generation cleanup as one change. |
-| CuTeDSL object cache | One object per key in a 30-day region-local bucket | Launcher identity/config, full launch tree, argument spec, GPU architecture | Safe but far too broad. Commit hashes miss dirty edits; one defining module is unsafe; the whole tree invalidates on docs, experiments, Iris, and unrelated Levanter work. | Hash the complete `levanter/grug` tree, whole imported toolchain package trees, and actual installed bytes of the declared distributions. Retain launcher config, spec, and observed device. Do not persist launchers defined outside that boundary. |
-| Fused cross-entropy autotune cache | Selected block sizes or a negative result in `PersistentKvCache` | Backend, device kind, shapes/dtypes/options, jaxpr digest | Candidate-policy, shared autotune-helper, JAX, `jaxlib`, or `libtpu` changes can alter the decision without changing the jaxpr. Negative entries are highest risk because they suppress later attempts. | Add the full fused-CE source tree, shared Pallas autotune helpers, JAX, `jaxlib`, and actual `libtpu` bytes for TPU. Do not share a result when jaxpr or source identity is unavailable. |
+| CuTeDSL object cache | One object per key in a 30-day region-local bucket | Launcher identity/config, full launch tree, argument spec, GPU architecture | Safe but far too broad. Commit hashes miss dirty edits; one defining module is unsafe; the whole tree invalidates on docs, experiments, Iris, and unrelated Levanter work. | Hash the complete `levanter/grug` tree and `uv.lock`. Retain launcher config, spec, and observed device. Do not persist launchers defined outside that boundary or without a visible lock. |
+| Fused cross-entropy autotune cache | Selected block sizes or a negative result in `PersistentKvCache` | Backend, device kind, shapes/dtypes/options, jaxpr digest | Candidate-policy, shared autotune-helper, JAX, `jaxlib`, or `libtpu` changes can alter the decision without changing the jaxpr. Negative entries are highest risk because they suppress later attempts. | Add the full fused-CE source tree, shared Pallas autotune helpers, `uv.lock`, JAX, and `jaxlib`. Do not share a result when jaxpr, source, or lock identity is unavailable. |
 | DeepEP layout FFI | Local `.so` under `~/.cache/marin` or `MARIN_DEEPEP_CACHE_DIR` | Two CUDA files, absolute paths, architecture, manual schema | Transitive headers, JAX FFI headers, build logic, host compiler, `nvcc`, and atomic publication are outside the key. Absolute paths create false misses. | Treat as a follow-up: content-address the full inputs and make concurrent builds private and atomic together. A partial key edit would imply safety it does not provide. |
 | DeepEP transport FFI | Local `.so`/extension beside build outputs | Selected source/header bytes, module bytes, paths, flags/options, manual schema | Better than layout, but selected files can miss transitive headers and shared build helpers. Host compiler, Torch/Python ABI details, absolute paths, and concurrent publication remain. | Use the same complete build-input and atomic-publication follow-up as layout. |
 | Triton/JAX-Triton Sonic cache | Triton-owned directory at `/tmp/marin-triton-cache` | Native kernel source/AST, signature/constants, backend/compiler target and versions | Invalidation belongs to Triton. The directory only survives the task/container. | Keep the native key. Measure compile cost and concurrent-writer behavior before adding persistence. |
@@ -52,19 +52,20 @@ defining Python file is not enough: launchers instantiate kernels from sibling
 modules and external distributions, and FA4 uses dynamic imports that defeat a
 simple static import walk.
 
-`local source-set hash + environment` is the recommended application-owned key.
-The caller declares a conservative directory boundary; Rigging hashes logical
-paths and actual bytes, then adds compiler/runtime identities, observed device,
-compile options, and an explicit schema. This enables reuse across commits and
-unrelated worktree edits without accepting stale artifacts.
+`internal source hash + dependency lock + configuration` is the recommended
+application-owned key. The caller declares a conservative directory boundary;
+Rigging hashes its logical paths and bytes, hashes `uv.lock` as the external
+dependency generation, then combines compiler/runtime identities, observed
+device, compile options, and a schema. This enables reuse across commits and
+unrelated worktree edits without inspecting installed packages at runtime.
 
 ## Remaining uncertainty
 
-The installed CuTe distributions total roughly 100 MB and `libtpu` roughly 200
-MB. Their installed bytes and the whole imported CuTe package trees are hashed
-once per process at first cache use. Version or `RECORD` metadata would be
-cheaper but would miss locally patched installations; the byte scan is the cost
-of fail-closed persistence.
+The dependency lock is deliberately broad: an unrelated dependency update
+invalidates CuTe and Pallas entries. It is also cheap to hash and changes much
+less often than the worktree. Safety depends on Marin's normal frozen-sync
+contract. A task bundle without `uv.lock` compiles without shared persistence;
+a manually patched environment that diverges from the lock is outside contract.
 
 CuTe's declared Levanter boundary is definition-site based: all current opted-in
 factories live below `levanter.grug`. Future runtime patching from outside that

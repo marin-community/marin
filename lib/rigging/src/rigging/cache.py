@@ -29,9 +29,9 @@ import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
-from importlib import metadata as importlib_metadata
 from typing import Protocol
 
+from rigging.config_discovery import find_project_root
 from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
 from rigging.provenance import launch_provenance
 
@@ -54,81 +54,65 @@ class _Digest(Protocol):
     def update(self, value: bytes, /) -> None: ...
 
 
-def compile_cache_key(source_paths: Sequence[pathlib.Path], *, environment: Sequence[str]) -> str:
-    """Hash source trees and environment identities for a compiled artifact.
-
-    Directory roots are identified by their position rather than their absolute
-    path, so identical checkouts share a key. Relative file paths and file bytes
-    remain significant. Bytecode is excluded because it is derived from source;
-    missing paths and symlinks are rejected because either would make the input
-    boundary ambiguous.
-
-    Args:
-        source_paths: Files or directories whose contents determine the artifact.
-        environment: Ordered compiler, runtime, or schema identities.
-
-    Returns:
-        The hexadecimal SHA-256 content address.
-    """
+def file_content_hash(path: pathlib.Path) -> str:
+    """Return a checkout-independent SHA-256 identity for one file's bytes."""
+    _reject_missing_or_symlink(path)
+    if not path.is_file():
+        raise ValueError(f"content-hash input is not a regular file: {path}")
     digest = hashlib.sha256()
-    _hash_component(digest, "schema", b"rigging-compile-cache-v1")
-    for index, value in enumerate(environment):
-        _hash_component(digest, f"environment/{index}", value.encode())
+    _hash_component(digest, "schema", b"rigging-file-content-v1")
+    _hash_component(digest, "content", path.read_bytes())
+    return digest.hexdigest()
 
-    for index, source_path in enumerate(source_paths):
-        _reject_missing_or_symlink(source_path)
-        root = source_path.resolve()
-        if root.is_file():
-            _hash_component(digest, f"source/{index}/{root.name}", root.read_bytes())
+
+def directory_content_hash(directory: pathlib.Path) -> str:
+    """Return a checkout-independent SHA-256 identity for a directory tree.
+
+    Relative paths and bytes are significant. Absolute roots and mtimes are
+    excluded. Derived Python bytecode is excluded; missing paths, non-regular
+    entries, and symlinks are rejected because they make the boundary ambiguous.
+    """
+    _reject_missing_or_symlink(directory)
+    root = directory.resolve()
+    if not root.is_dir():
+        raise ValueError(f"content-hash input is not a directory: {directory}")
+
+    digest = hashlib.sha256()
+    _hash_component(digest, "schema", b"rigging-directory-content-v1")
+    for candidate in sorted(root.rglob("*")):
+        relative = candidate.relative_to(root)
+        _reject_missing_or_symlink(candidate)
+        if _is_derived_bytecode(relative):
             continue
-        if not root.is_dir():
-            raise ValueError(f"compile-cache source is neither a file nor a directory: {source_path}")
-
-        _hash_component(digest, f"source-root/{index}", b"directory")
-        for candidate in sorted(root.rglob("*")):
-            relative = candidate.relative_to(root)
-            _reject_missing_or_symlink(candidate)
-            if _is_derived_bytecode(relative):
-                continue
-            if candidate.is_file():
-                _hash_component(digest, f"source/{index}/{relative.as_posix()}", candidate.read_bytes())
-            elif not candidate.is_dir():
-                raise ValueError(f"compile-cache source is not a regular file or directory: {candidate}")
-
+        if candidate.is_file():
+            _hash_component(digest, relative.as_posix(), candidate.read_bytes())
+        elif not candidate.is_dir():
+            raise ValueError(f"content-hash input is not a regular file or directory: {candidate}")
     return digest.hexdigest()
 
 
-def installed_distribution_fingerprint(distribution_names: Sequence[str]) -> str:
-    """Hash the installed bytes of Python distributions in caller-specified order.
-
-    Distribution versions alone do not identify editable, rebuilt, or locally
-    patched installs. This fingerprint covers each installed file listed by the
-    distribution metadata, excluding derived bytecode. Callers with editable
-    packages must also include their imported source trees in the artifact key.
-    """
+def combined_content_hash(components: Sequence[str]) -> str:
+    """Combine ordered, labeled identities into one unambiguous SHA-256 address."""
     digest = hashlib.sha256()
-    _hash_component(digest, "schema", b"rigging-installed-distributions-v1")
-    for index, requested_name in enumerate(distribution_names):
-        try:
-            distribution = importlib_metadata.distribution(requested_name)
-        except importlib_metadata.PackageNotFoundError as exc:
-            raise ValueError(f"distribution is not installed: {requested_name}") from exc
-        installed_name = distribution.metadata.get("Name", requested_name)
-        _hash_component(digest, f"distribution/{index}/name", installed_name.encode())
-        _hash_component(digest, f"distribution/{index}/version", distribution.version.encode())
-        files = distribution.files
-        if files is None:
-            raise ValueError(f"distribution does not enumerate installed files: {requested_name}")
-        for relative in sorted(files, key=lambda path: pathlib.PurePosixPath(path).as_posix()):
-            logical_path = pathlib.PurePosixPath(relative)
-            installed_path = pathlib.Path(distribution.locate_file(relative))
-            _reject_missing_or_symlink(installed_path)
-            if _is_derived_bytecode(logical_path):
-                continue
-            if not installed_path.is_file():
-                raise ValueError(f"distribution file is not a regular file: {installed_path}")
-            _hash_component(digest, f"distribution/{index}/{logical_path.as_posix()}", installed_path.read_bytes())
+    _hash_component(digest, "schema", b"rigging-combined-content-v1")
+    for index, component in enumerate(components):
+        _hash_component(digest, str(index), component.encode())
     return digest.hexdigest()
+
+
+def workspace_lock_hash(start: pathlib.Path) -> str:
+    """Return the Marin ``uv.lock`` content identity visible from ``start``.
+
+    A missing workspace or lockfile raises so callers can disable shared
+    persistence when the external dependency generation is unknown.
+    """
+    workspace = find_project_root(start)
+    if workspace is None:
+        raise ValueError(f"Marin workspace is unavailable from {start}")
+    lockfile = workspace / "uv.lock"
+    if not lockfile.is_file():
+        raise ValueError(f"Marin dependency lockfile is unavailable: {lockfile}")
+    return file_content_hash(lockfile)
 
 
 def _hash_component(digest: _Digest, name: str, value: bytes) -> None:

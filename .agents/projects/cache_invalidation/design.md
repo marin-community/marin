@@ -16,13 +16,16 @@ compilers over multiple source trees.
 
 A narrow key must remain fail-closed. PR #8065 showed that hashing a launcher's
 defining file was incomplete because it dynamically loaded a sibling kernel
-implementation. Package versions have the same weakness for editable, rebuilt,
-or locally patched installs.
+implementation. External packages have a simpler repository-level generation:
+Marin installs them from the committed `uv.lock` with `uv sync --frozen`.
 
 ## Costs and risks
 
-- The CuTe toolchain and `libtpu` scans read about 100 MB and 200 MB respectively
-  once per process, when those caches are first used.
+- Any `uv.lock` change starts Levanter-owned compile caches cold, including
+  changes to unrelated dependencies. Dependency changes are infrequent enough
+  that this broad boundary is preferable to runtime package inspection.
+- A task without the Marin workspace lock disables shared Levanter-owned caches.
+  An environment manually patched away from its lock violates the cache contract.
 - New schemas leave old entries cold; the 30-day object lifecycle reclaims them.
 - `levanter/grug` is a declared definition-site boundary, not a dynamic import
   tracer. Opted-in launchers outside it compile without persistent storage.
@@ -31,32 +34,27 @@ or locally patched installs.
 
 ## Design
 
-Rigging adds `compile_cache_key`, which hashes ordered file or directory roots
-plus explicit environment strings. Length-framed components include root index,
-logical relative path, and file bytes. Absolute checkout paths and mtimes are
-excluded. Python bytecode is excluded. Missing paths and symlinks raise rather
-than producing an ambiguous key.
-
-Rigging also adds `installed_distribution_fingerprint`. It hashes distribution
-name, version, installed logical paths, and the actual bytes listed by package
-metadata. Actual bytes, rather than `RECORD` checksums alone, cover local patches
-made without metadata updates.
+Rigging adds three small content primitives: `directory_content_hash` for an
+internal source tree, `file_content_hash` for a file such as `uv.lock`, and
+`combined_content_hash` for ordered labeled identities. Components are length
+framed. Directory hashes include logical relative paths and bytes but exclude
+absolute checkout paths, mtimes, and Python bytecode. Missing paths and symlinks
+raise rather than producing an ambiguous key. `workspace_lock_hash` locates and
+hashes the Marin lockfile, raising when no locked workspace is available.
 
 CuTeDSL replaces `launch_provenance().tree_hash` with a process-cached digest of
-`levanter/grug`, the complete imported `cuda`, `cutlass`, `flash_attn`, `quack`,
-and `tvm_ffi` package trees, and a declared toolchain distribution set. Hashing
-whole package trees covers editable installs without inferring an import graph.
-The artifact key retains launcher configuration, stable argument spec, and
-observed JAX device architecture. The launcher factory marks whether its
-definition is inside `levanter.grug`; uncovered launchers compile normally but
-are never written to shared storage. If source identity cannot be built, the
-entire CuTe persistent layer degrades to compile-only for that process.
+the whole `levanter/grug` directory and `uv.lock`. The artifact key retains
+launcher configuration, stable argument spec, and observed JAX device
+architecture. The launcher factory marks whether its definition is inside
+`levanter.grug`; uncovered launchers compile normally but are never written to
+shared storage. If source or lock identity cannot be built, the entire CuTe
+persistent layer degrades to compile-only for that process.
 
 The fused cross-entropy key adds a digest of its package source, shared Pallas
-autotune helpers, and JAX/`jaxlib` versions. TPU decisions additionally include
-actual installed `libtpu` bytes. Shapes, dtypes, options, backend, observed
-device kind, and jaxpr remain. If jaxpr tracing or source identity fails, the
-sweep can run but neither a winner nor a negative result is shared.
+autotune helpers, `uv.lock`, and observed JAX/`jaxlib` versions. Shapes, dtypes,
+options, backend, observed device kind, and jaxpr remain. If jaxpr tracing,
+source identity, or the lock is unavailable, the sweep can run but neither a
+winner nor a negative result is shared.
 
 JAX and Triton keep their compiler-native keys. XLA retains the existing
 tree-scoped mirror in this PR: an observed GPU identity is not available at the
@@ -66,9 +64,9 @@ invalidation also requires atomic/private build publication.
 
 ## Testing
 
-Rigging tests cover checkout-location independence; source content, logical path,
-and environment invalidation; bytecode exclusion; missing/symlink rejection; and
-actual installed-file changes without a version bump.
+Rigging tests cover checkout-location independence; directory content and
+logical-path invalidation; file and lockfile invalidation; unambiguous combining;
+bytecode exclusion; and missing/symlink rejection.
 
 CuTe tests cover reuse across a simulated process restart, source-revision
 invalidation, source-identity failure, and a launcher outside the declared
@@ -78,9 +76,9 @@ concurrency, and positive/negative decision coverage.
 
 ## Decisions
 
-- Use source-set plus environment hashes for Levanter-owned artifacts.
-- Use actual installed bytes where editable or patched packages can affect code
-  generation.
+- Use internal source-tree hashes plus `uv.lock` for Levanter-owned artifacts.
+- Treat a frozen lock-derived environment as a cache invariant; fail closed when
+  the lock is unavailable.
 - Keep compiler-native keys when the compiler already owns the semantic inputs.
 - Keep a broader safe boundary when narrowing requires missing observed state or
   a storage/publication redesign.

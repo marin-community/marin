@@ -11,9 +11,9 @@ on-disk caches cannot cover it either: ``cutlass.cute.compile`` forces
 ``no_cache=True``, leaving only an in-process dict keyed on launcher identity.
 
 :func:`install` wraps ``get_or_compile_kernel`` to consult an object store first,
-keyed on the launcher's configuration, the kernel source and installed compiler
-bytes, the argument specification, and the device architecture. ``cutlass.jax``
-derives a kernel's fingerprint from its object code by SHA-256, so a stored blob
+keyed on the launcher's configuration, the kernel source and dependency lock,
+the argument specification, and the device architecture. ``cutlass.jax`` derives
+a kernel's fingerprint from its object code by SHA-256, so a stored blob
 reconstructs a compile with nothing else.
 
 Launchers opt in through :func:`cute_launcher_factory`.
@@ -22,14 +22,13 @@ Launchers opt in through :func:`cute_launcher_factory`.
 import functools
 import hashlib
 import importlib
-import importlib.util
 import inspect
 import logging
 import pathlib
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache, compile_cache_key, installed_distribution_fingerprint
+from rigging.cache import PersistentKvCache, combined_content_hash, directory_content_hash, workspace_lock_hash
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +36,6 @@ _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
 _KERNEL_SOURCE_COVERED_ATTR = "_levanter_cute_kernel_source_covered"
 _KERNEL_CACHE_PREFIX = "cutlass-kernels"
 _KERNEL_CACHE_SCHEMA = "cutlass-object-v3"
-_CUTE_TOOLCHAIN_DISTRIBUTIONS = (
-    "apache-tvm-ffi",
-    "cuda-bindings",
-    "cuda-python",
-    "flash-attn-4",
-    "nvidia-cuda-nvdisasm",
-    "nvidia-cutlass-dsl",
-    "nvidia-cutlass-dsl-libs-base",
-    "nvidia-cutlass-dsl-libs-core",
-    "nvidia-cutlass-dsl-libs-cu13",
-    "quack-kernels",
-)
-_CUTE_TOOLCHAIN_PACKAGES = ("cuda", "cutlass", "flash_attn", "quack", "tvm_ffi")
 
 
 def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
@@ -204,26 +190,13 @@ def _kernel_key(fn: Any, spec: Any, source_revision: str | None) -> str | None:
 @functools.lru_cache(maxsize=None)
 def _kernel_source_revision() -> str:
     grug_sources = pathlib.Path(__file__).resolve().parent / "grug"
-    toolchain = installed_distribution_fingerprint(_CUTE_TOOLCHAIN_DISTRIBUTIONS)
-    return compile_cache_key(
-        [grug_sources, *_toolchain_source_roots()],
-        environment=[_KERNEL_CACHE_SCHEMA, toolchain, *_CUTE_TOOLCHAIN_PACKAGES],
+    return combined_content_hash(
+        [
+            _KERNEL_CACHE_SCHEMA,
+            f"grug={directory_content_hash(grug_sources)}",
+            f"dependencies={workspace_lock_hash(pathlib.Path(__file__))}",
+        ]
     )
-
-
-def _toolchain_source_roots() -> list[pathlib.Path]:
-    roots: list[pathlib.Path] = []
-    for package_name in _CUTE_TOOLCHAIN_PACKAGES:
-        specification = importlib.util.find_spec(package_name)
-        if specification is None:
-            raise ValueError(f"CuTe toolchain package is unavailable: {package_name}")
-        if specification.submodule_search_locations is not None:
-            roots.extend(pathlib.Path(location) for location in specification.submodule_search_locations)
-        elif specification.origin not in (None, "built-in", "frozen"):
-            roots.append(pathlib.Path(specification.origin))
-        else:
-            raise ValueError(f"CuTe toolchain package has no source tree: {package_name}")
-    return roots
 
 
 def _device_architecture() -> str:
