@@ -1,0 +1,21 @@
+{
+  "custom_call_input_copies": 0,
+  "explicit_hlo_copies": 2,
+  "nominal_copy_read_write_bytes": 16777216,
+  "output_copies": [
+    {
+      "logical_payload_bytes": 4194304,
+      "role": "key_cotangent",
+      "source_layout": "{3,2,1,0}",
+      "target_layout": "{3,1,2,0}"
+    },
+    {
+      "logical_payload_bytes": 4194304,
+      "role": "value_cotangent",
+      "source_layout": "{3,2,1,0}",
+      "target_layout": "{1,3,2,0}"
+    }
+  ],
+  "query_cotangent_copy": false,
+  "total_copied_payload_bytes": 8388608
+}

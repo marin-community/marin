@@ -1,0 +1,24 @@
+{
+  "architecture": "sm_90a",
+  "device_kind": "NVIDIA H100 80GB HBM3",
+  "errors": {
+    "key": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.0006191646680235863
+    },
+    "query": {
+      "maximum_absolute_error": 0.03125,
+      "mean_absolute_error": 0.0003470323863439262
+    },
+    "value": {
+      "maximum_absolute_error": 0.0625,
+      "mean_absolute_error": 0.0006807392346672714
+    }
+  },
+  "failure_stage": "post_typed_ffi_execution_correctness_gate",
+  "head_dimension": 128,
+  "key_value_heads": 8,
+  "query_heads": 32,
+  "sequence": 64,
+  "shuttle_revision": "ab6c6493f14f447cb723640dd04a4a7bfa0a5562"
+}
