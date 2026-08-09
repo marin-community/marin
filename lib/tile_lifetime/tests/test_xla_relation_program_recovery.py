@@ -17,15 +17,18 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarKind,
     evaluate_cast_scalar_program,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     ContractChainRole,
     RoutedForwardCodegenDisposition,
     RoutedForwardFfiOperandRole,
     RoutedInputAdjointFfiOperandRole,
+    RoutedWeightGradientFfiOperandRole,
     SegmentedLayoutRelation,
     plan_routed_forward_typed_ffi,
     plan_routed_input_adjoint_typed_ffi,
+    plan_routed_weight_gradient_typed_ffi,
     recover_relation_programs,
 )
 from tile_lifetime.xla_routed_forward_ffi import (
@@ -37,6 +40,11 @@ from tile_lifetime.xla_routed_input_adjoint_ffi import (
     evaluate_routed_input_adjoint_plan,
     generate_cuda_routed_input_adjoint_ffi,
     replace_routed_input_adjoint_region_with_custom_call,
+)
+from tile_lifetime.xla_routed_weight_gradient_ffi import (
+    evaluate_group_batched_contract_plan,
+    generate_cuda_group_batched_contract_ffi,
+    replace_group_batched_contract_with_custom_call,
 )
 
 _ARTIFACT = (
@@ -203,6 +211,144 @@ def test_routed_input_adjoint_gb200_artifact_preserves_acceptance_evidence() -> 
     assert "ShuttleReverseMapKernel" in source
     assert "ShuttleSourceFoldKernel" in source
     assert "atomicAdd" not in source
+
+
+def test_natural_grug_hlo_forms_generic_routed_weight_gradient_plans() -> None:
+    plans = plan_routed_weight_gradient_typed_ffi(_natural_train_gpu_hlo())
+
+    assert tuple(plan.region.insertion_instruction for plan in plans) == ("dot.6", "dot.7")
+    assert tuple(plan.contract.output_shape for plan in plans) == (
+        "bf16[4,32,64]{2,1,0}",
+        "bf16[4,32,32]{2,1,0}",
+    )
+    assert tuple(plan.region.external_collectives for plan in plans) == (("psum.52",), ("psum.53",))
+    assert all(plan.region.convex and plan.region.topologically_insertable for plan in plans)
+    assert all(
+        tuple(operand.role for operand in plan.operands) == tuple(RoutedWeightGradientFfiOperandRole) for plan in plans
+    )
+    assert tuple(tuple(operand.value.instruction for operand in plan.operands) for plan in plans) == (
+        ("select.6", "select.7"),
+        ("select.5", "select.3"),
+    )
+    assert all(operand.parameter_ancestors for plan in plans for operand in plan.operands)
+    assert all(plan.output_alias_operand is None for plan in plans)
+    assert all(plan.numerical_contract.input_dtype == "bf16" for plan in plans)
+    assert all(plan.numerical_contract.accumulation_dtype == "f32" for plan in plans)
+    assert all(plan.numerical_contract.output_dtype == "bf16" for plan in plans)
+    assert all(plan.numerical_contract.deterministic_accumulation for plan in plans)
+
+
+def test_routed_weight_gradient_generation_replaces_contracts_but_not_collectives() -> None:
+    hlo = _natural_train_gpu_hlo()
+    plans = plan_routed_weight_gradient_typed_ffi(hlo)
+    generated = tuple(
+        generate_cuda_group_batched_contract_ffi(plan, target=f"shuttle.routed_weight_gradient.{index}")
+        for index, plan in enumerate(plans)
+    )
+    rewritten = hlo
+    for index, plan in enumerate(plans):
+        rewritten = replace_group_batched_contract_with_custom_call(
+            rewritten,
+            plan,
+            target=f"shuttle.routed_weight_gradient.{index}",
+        )
+
+    assert all("cublasGemmStridedBatchedEx" in artifact.source for artifact in generated)
+    assert all("CUBLAS_COMPUTE_32F_PEDANTIC" in artifact.source for artifact in generated)
+    assert all("atomicAdd" not in artifact.source for artifact in generated)
+    assert generated[0].semantic_digest != generated[1].semantic_digest
+    assert generated[0].source_digest != generated[1].source_digest
+    assert rewritten.count('custom_call_target="shuttle.routed_weight_gradient.') == 2
+    assert "%dot.6 = bf16[4,32,64]{2,1,0} custom-call" in rewritten
+    assert "%dot.7 = bf16[4,32,32]{2,1,0} custom-call" in rewritten
+    assert "%psum.52 = bf16[4,32,64]{2,1,0} all-reduce(%dot.6)" in rewritten
+    assert "%psum.53 = bf16[4,32,32]{2,1,0} all-reduce(%dot.7)" in rewritten
+    assert rewritten.count(" copy(") == hlo.count(" copy(")
+    assert rewritten.count(" transpose(") == hlo.count(" transpose(")
+    parse_hlo_module_text(rewritten)
+
+
+def test_routed_weight_gradient_cpu_interpreter_matches_independent_contract() -> None:
+    plans = plan_routed_weight_gradient_typed_ffi(_natural_train_gpu_hlo())
+    rng = np.random.default_rng(13)
+    for plan in plans:
+        operand_shapes = tuple(
+            tuple(int(value) for value in operand.value.shape.split("[", 1)[1].split("]", 1)[0].split(","))
+            for operand in plan.operands
+        )
+        operands = tuple(rng.normal(size=shape).astype(np.float32) for shape in operand_shapes)
+        first = evaluate_group_batched_contract_plan(plan, operands)
+        second = evaluate_group_batched_contract_plan(plan, operands)
+        expected = np.asarray(
+            jnp.asarray(
+                np.einsum("gkm,gkn->gmn", operands[0].astype(np.float32), operands[1].astype(np.float32)),
+                dtype=jnp.bfloat16,
+            ),
+            dtype=np.float32,
+        )
+
+        assert np.array_equal(first, second)
+        np.testing.assert_array_equal(first, expected)
+
+
+def test_routed_weight_gradient_operand_mutation_rebinds_same_generic_skeleton() -> None:
+    hlo = _natural_train_gpu_hlo()
+    original = "%dot.7 = bf16[4,32,32]{2,1,0} dot(%select.5, %select.3)"
+    mutated = "%dot.7 = bf16[4,32,32]{2,1,0} dot(%select.5, %select.6)"
+    assert hlo.count(original) == 1
+    baseline_plan = plan_routed_weight_gradient_typed_ffi(hlo)[1]
+    mutated_hlo = hlo.replace(original, mutated, 1)
+    mutated_plan = plan_routed_weight_gradient_typed_ffi(mutated_hlo)[1]
+    baseline = generate_cuda_group_batched_contract_ffi(
+        baseline_plan,
+        target="shuttle.routed_weight_gradient.mutation",
+    )
+    regenerated = generate_cuda_group_batched_contract_ffi(
+        mutated_plan,
+        target="shuttle.routed_weight_gradient.mutation",
+    )
+    rewritten = replace_group_batched_contract_with_custom_call(
+        mutated_hlo,
+        mutated_plan,
+        target="shuttle.routed_weight_gradient.mutation",
+    )
+
+    assert baseline_plan.operands[1].value.instruction == "select.3"
+    assert mutated_plan.operands[1].value.instruction == "select.6"
+    assert baseline.semantic_digest != regenerated.semantic_digest
+    assert baseline.source_digest == regenerated.source_digest
+    assert "custom-call(%select.5, %select.6)" in rewritten
+
+
+def test_routed_weight_gradient_shape_mutation_regenerates_generic_contract() -> None:
+    hlo = _natural_train_gpu_hlo()
+    original = "%dot.6 = bf16[4,32,64]{2,1,0} dot(%select.6, %select.7)"
+    mutated = "%dot.6 = bf16[4,32,32]{2,1,0} dot(%select.6, %select.3)"
+    assert hlo.count(original) == 1
+    baseline_plan = plan_routed_weight_gradient_typed_ffi(hlo)[0]
+    mutated_plan = plan_routed_weight_gradient_typed_ffi(hlo.replace(original, mutated, 1))[0]
+    baseline = generate_cuda_group_batched_contract_ffi(
+        baseline_plan,
+        target="shuttle.group_batched_contract.shape_mutation",
+    )
+    regenerated = generate_cuda_group_batched_contract_ffi(
+        mutated_plan,
+        target="shuttle.group_batched_contract.shape_mutation",
+    )
+
+    assert baseline_plan.contract.output_shape == "bf16[4,32,64]{2,1,0}"
+    assert mutated_plan.contract.output_shape == "bf16[4,32,32]{2,1,0}"
+    assert "constexpr int kRhsFeatures = 64;" in baseline.source
+    assert "constexpr int kRhsFeatures = 32;" in regenerated.source
+    assert baseline.source_digest != regenerated.source_digest
+
+
+def test_routed_weight_gradient_rejects_bitwise_reduction_claim() -> None:
+    with pytest.raises(ValueError, match="unspecified bitwise dot reduction tree"):
+        plan_routed_weight_gradient_typed_ffi(
+            _natural_train_gpu_hlo(),
+            numerical_policy=NumericalPolicy.BITWISE_EXACT,
+        )
 
 
 def test_gpu_grug_hlo_generates_bf16_routed_forward_executor() -> None:
