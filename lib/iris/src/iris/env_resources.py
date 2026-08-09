@@ -16,12 +16,11 @@ GPU/TPU counts are only available via the ``IRIS_TASK_RESOURCES`` env var.
 
 import dataclasses
 import functools
+import json
 import logging
 import os
 
-from google.protobuf import json_format
-
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 
 logger = logging.getLogger(__name__)
 
@@ -58,20 +57,12 @@ class TaskResources:
         limit is found. GPU/TPU counts default to 0 when running outside an
         Iris task.
         """
-        proto = _read_iris_resource_proto()
+        resources = _read_iris_resources()
 
-        memory = _resolve_memory(proto)
-        cpu = _resolve_cpu(proto)
-        gpu = (
-            proto.device.gpu.count
-            if proto is not None and proto.HasField("device") and proto.device.HasField("gpu")
-            else 0
-        )
-        tpu = (
-            proto.device.tpu.count
-            if proto is not None and proto.HasField("device") and proto.device.HasField("tpu")
-            else 0
-        )
+        memory = _resolve_memory(resources)
+        cpu = _resolve_cpu(resources)
+        gpu = resources.device.count if resources is not None and isinstance(resources.device, GpuDevice) else 0
+        tpu = resources.device.count if resources is not None and isinstance(resources.device, TpuDevice) else 0
 
         result = TaskResources(memory_bytes=memory, cpu_cores=cpu, gpu_count=gpu, tpu_count=tpu)
         logger.info("TaskResources: %s", result)
@@ -84,16 +75,33 @@ class TaskResources:
 
 
 @functools.cache
-def _read_iris_resource_proto() -> job_pb2.ResourceSpecProto | None:
-    """Parse ``IRIS_TASK_RESOURCES`` into a ``ResourceSpecProto``, or None."""
+def _read_iris_resources() -> ResourceSpec | None:
+    """Parse ``IRIS_TASK_RESOURCES`` in its stable protobuf-JSON wire shape."""
     raw = os.environ.get(_IRIS_TASK_RESOURCES_ENV)
     if not raw:
         return None
     try:
-        proto = job_pb2.ResourceSpecProto()
-        json_format.Parse(raw, proto)
-        return proto
-    except json_format.ParseError:
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("resource value must be an object")
+        device_value = value.get("device")
+        device = None
+        if isinstance(device_value, dict):
+            if isinstance(gpu := device_value.get("gpu"), dict):
+                device = GpuDevice(str(gpu.get("variant", "")), int(gpu.get("count", 0) or 1))
+            elif isinstance(tpu := device_value.get("tpu"), dict):
+                device = TpuDevice(
+                    str(tpu.get("variant", "")),
+                    str(tpu.get("topology", "")),
+                    int(tpu.get("count", 0)),
+                )
+        return ResourceSpec(
+            cpu=int(value.get("cpu_millicores", 0)) / 1_000,
+            memory=int(value.get("memory_bytes", 0)),
+            disk=int(value.get("disk_bytes", 0)),
+            device=device,
+        )
+    except (json.JSONDecodeError, TypeError, ValueError):
         logger.warning("Failed to parse %s: %s", _IRIS_TASK_RESOURCES_ENV, raw)
         return None
 
@@ -123,10 +131,10 @@ def _read_proc_meminfo_total() -> int | None:
     return None
 
 
-def _resolve_memory(proto: job_pb2.ResourceSpecProto | None) -> int:
+def _resolve_memory(resources: ResourceSpec | None) -> int:
     """Return memory limit in bytes using the escalation chain."""
-    if proto is not None and proto.memory_bytes:
-        return proto.memory_bytes
+    if resources is not None and resources.memory:
+        return resources.memory
 
     for path in _CGROUP_MEMORY_PATHS:
         value = _read_cgroup_file(path)
@@ -146,10 +154,10 @@ def _resolve_memory(proto: job_pb2.ResourceSpecProto | None) -> int:
     return 0
 
 
-def _resolve_cpu(proto: job_pb2.ResourceSpecProto | None) -> float:
+def _resolve_cpu(resources: ResourceSpec | None) -> float:
     """Return CPU limit in cores using the escalation chain."""
-    if proto is not None and proto.cpu_millicores:
-        return proto.cpu_millicores / 1000
+    if resources is not None and resources.cpu_millicores:
+        return resources.cpu
 
     # cgroup v2: "quota period" (e.g., "200000 100000" means 2 cores)
     value = _read_cgroup_file(_CGROUP_CPU_QUOTA_PATH)

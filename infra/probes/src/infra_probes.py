@@ -24,8 +24,8 @@ from iris.client.client import IrisClient
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, zone_constraint
 from iris.cluster.resources.endpoint import EndpointQuery
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.resources.node import NodeQuery
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from provisioning import collect_provisioning

@@ -68,9 +68,11 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.attempt import AttemptLaunch
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.rpc import controller_pb2, vm_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,7 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
         rows_by_worker[row.worker_id].append(row)
     return build_reconcile_plans(
         ReconcileInputs(
-            job_specs=snapshot.job_specs,
+            launch_templates=snapshot.launch_templates,
             worker_ids=list(snapshot.worker_addresses),
             rows_by_worker=rows_by_worker,
         )
@@ -287,7 +289,7 @@ class ReconcileRequest:
     and applies it to its cluster.
     """
 
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    tasks_to_run: list[AttemptLaunch] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
@@ -647,11 +649,7 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         """Fetch full process status. Raises ProviderUnsupportedError if N/A."""
         ...
 

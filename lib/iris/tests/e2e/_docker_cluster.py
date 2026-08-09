@@ -35,15 +35,13 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.types import find_free_port
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     AcceleratorType,
     CapacityType,
-    Entrypoint,
-    EnvironmentSpec,
     JobName,
-    ResourceSpec,
 )
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig

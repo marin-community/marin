@@ -35,11 +35,15 @@ from iris.cluster.federation.peer import (
 )
 from iris.cluster.federation.store import FederationSyncBatch
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.legacy_job_codec import constraint_to_proto
 from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.worker_codec import process_info_from_proto
+from rigging.provenance import Provenance
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
@@ -122,10 +126,28 @@ class _ProxyPeerConnection:
             )
         return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
 
-    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: str) -> ProcessInfo:
         self.status_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            return self._service.get_process_status(request, None)
+            response = self._service.get_process_status(job_pb2.GetProcessStatusRequest(target=target), None)
+        return process_info_from_proto(response.process_info)
+
+
+def _process_info(*, thread_count: int = 7) -> ProcessInfo:
+    return ProcessInfo(
+        hostname="task",
+        pid=1,
+        python_version="3.12",
+        uptime_ms=1,
+        memory_rss_bytes=2,
+        memory_vms_bytes=3,
+        thread_count=thread_count,
+        open_fd_count=4,
+        memory_total_bytes=5,
+        cpu_count=6,
+        cpu_millicores=7,
+        provenance=Provenance("tree", "base", False, None, None),
+    )
 
 
 def _make_service(
@@ -155,7 +177,9 @@ def _attach_federation(parent_service: ControllerServiceImpl, connection: _Proxy
 
 def _cluster_pinned_request(name: str, peer: str = "cw") -> controller_pb2.Controller.LaunchJobRequest:
     request = make_direct_job_request(name, replicas=1)
-    request.constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=peer).to_proto())
+    request.constraints.append(
+        constraint_to_proto(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=peer))
+    )
     return request
 
 
@@ -278,16 +302,16 @@ def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_
         manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
         job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
 
-        peer_service._controller.provider.get_process_status.return_value = job_pb2.GetProcessStatusResponse(
-            process_info=job_pb2.ProcessInfo(pid=1, thread_count=7)
-        )
+        expected = _process_info()
+        peer_service._controller.provider.get_process_status.return_value = expected
         resp = parent_service.get_process_status(
             job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire()),
             None,
         )
 
-        # The status could only have come from the peer's backend.
-        assert resp.process_info.thread_count == 7
+        # Every observation field crosses both old ControllerService adapters,
+        # while the federation path itself carries the native record.
+        assert process_info_from_proto(resp.process_info) == expected
         # The federated task was never dispatched to the parent's local fallback backend.
         parent_service._controller.provider.get_process_status.assert_not_called()
         # The peer resolved the task under the same, cluster-invariant job id.
@@ -316,9 +340,7 @@ def test_process_status_scopes_a_federated_peer_to_the_jobs_it_handed_off(tmp_pa
             endpoint_service=peer_service._endpoint_service,
             auth=ControllerAuth(provider="iap"),
         )
-        peer_service._controller.provider.get_process_status.return_value = job_pb2.GetProcessStatusResponse(
-            process_info=job_pb2.ProcessInfo(pid=1, thread_count=7)
-        )
+        peer_service._controller.provider.get_process_status.return_value = _process_info()
         request = job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire())
 
         # "parent" is the requester on the received handle — it may read the task.

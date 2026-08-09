@@ -11,8 +11,9 @@ from enum import StrEnum
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
-from iris.cluster.types import JobName, WorkerId, WorkerUsability, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2, vm_pb2
+from iris.cluster.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
+from iris.cluster.types import JobName, WorkerId, WorkerUsability
+from iris.rpc import vm_pb2
 
 
 @dataclass(frozen=True)
@@ -97,13 +98,13 @@ def overlay_worker_usability(
             )
 
 
-def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
+def _resource_spec_proto(resources: ResourceSpec) -> vm_pb2.ResourceSpec:
     return vm_pb2.ResourceSpec(
         cpu_millicores=resources.cpu_millicores,
-        memory_bytes=resources.memory_bytes,
-        disk_bytes=resources.disk_bytes,
-        gpu_count=get_gpu_count(resources.device),
-        tpu_count=get_tpu_count(resources.device),
+        memory_bytes=resources.memory,
+        disk_bytes=resources.disk,
+        gpu_count=get_gpu_count(resources.device) if resources.device else 0,
+        tpu_count=get_tpu_count(resources.device) if resources.device else 0,
     )
 
 

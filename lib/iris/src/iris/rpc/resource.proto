@@ -17,7 +17,6 @@ edition = "2023";
 package iris.resource;
 
 import "iris_logging.proto";
-import "job.proto";
 import "time.proto";
 
 option features.field_presence = EXPLICIT;
@@ -97,6 +96,186 @@ enum EndpointAccess {
   ENDPOINT_ACCESS_LINK = 1;
 }
 
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_PENDING = 1;
+  JOB_STATE_BUILDING = 2;
+  JOB_STATE_RUNNING = 3;
+  JOB_STATE_SUCCEEDED = 4;
+  JOB_STATE_FAILED = 5;
+  JOB_STATE_KILLED = 6;
+  JOB_STATE_WORKER_FAILED = 7;
+  JOB_STATE_UNSCHEDULABLE = 8;
+}
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_BUILDING = 2;
+  TASK_STATE_RUNNING = 3;
+  TASK_STATE_SUCCEEDED = 4;
+  TASK_STATE_FAILED = 5;
+  TASK_STATE_KILLED = 6;
+  TASK_STATE_WORKER_FAILED = 7;
+  TASK_STATE_UNSCHEDULABLE = 8;
+  TASK_STATE_ASSIGNED = 9;
+  TASK_STATE_PREEMPTED = 10;
+  TASK_STATE_COSCHED_FAILED = 11;
+  TASK_STATE_MISSING = 12;
+}
+
+enum ConstraintOp {
+  CONSTRAINT_OP_EQ = 0;
+  CONSTRAINT_OP_NE = 1;
+  CONSTRAINT_OP_EXISTS = 2;
+  CONSTRAINT_OP_NOT_EXISTS = 3;
+  CONSTRAINT_OP_GT = 4;
+  CONSTRAINT_OP_GE = 5;
+  CONSTRAINT_OP_LT = 6;
+  CONSTRAINT_OP_LE = 7;
+  CONSTRAINT_OP_IN = 8;
+}
+
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;
+  CONSTRAINT_MODE_PREFERRED = 1;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
+}
+
+enum PriorityBand {
+  PRIORITY_BAND_INHERIT = 0;
+  PRIORITY_BAND_PRODUCTION = 1;
+  PRIORITY_BAND_INTERACTIVE = 2;
+  PRIORITY_BAND_BATCH = 3;
+}
+
+enum ContainerProfile {
+  CONTAINER_PROFILE_UNSPECIFIED = 0;
+  CONTAINER_PROFILE_RESTRICTED = 1;
+  CONTAINER_PROFILE_DEFAULT = 2;
+  CONTAINER_PROFILE_DOCKER_ACCESS = 3;
+  CONTAINER_PROFILE_PRIVILEGED = 4;
+  CONTAINER_PROFILE_GVISOR = 5;
+}
+
+message CpuProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;
+    SPEEDSCOPE = 2;
+    RAW = 3;
+  }
+
+  Format format = 1;
+  int32 rate_hz = 2;
+  bool native = 3;
+}
+
+message MemoryProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;
+    TABLE = 2;
+    STATS = 3;
+    RAW = 4;
+  }
+
+  Format format = 1;
+  bool leaks = 2;
+}
+
+message ThreadsProfile {
+  bool locals = 1;
+}
+
+message ProfileType {
+  oneof profiler {
+    CpuProfile cpu = 1;
+    MemoryProfile memory = 2;
+    ThreadsProfile threads = 3;
+  }
+}
+
+message DeviceConfig {
+  oneof device {
+    CpuDevice cpu = 1;
+    GpuDevice gpu = 2;
+    TpuDevice tpu = 3;
+  }
+}
+
+message CpuDevice {
+  string variant = 1;
+}
+
+message GpuDevice {
+  string variant = 1;
+  int32 count = 2;
+}
+
+message TpuDevice {
+  string variant = 1;
+  string topology = 2;
+  int32 count = 3;
+}
+
+message ResourceSpecProto {
+  int32 cpu_millicores = 1;
+  int64 memory_bytes = 4;
+  int64 disk_bytes = 9;
+  DeviceConfig device = 5;
+}
+
+message EnvironmentConfig {
+  map<string, string> env_vars = 2;
+  repeated string setup_scripts = 6;
+
+  reserved 1, 3, 4, 5;
+}
+
+message CommandEntrypoint {
+  repeated string argv = 1;
+}
+
+message RuntimeEntrypoint {
+  repeated string setup_commands = 1;
+  CommandEntrypoint run_command = 2;
+  map<string, bytes> workdir_files = 3;
+  map<string, string> workdir_file_refs = 4;
+}
+
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+message Constraint {
+  string key = 1;
+  ConstraintOp op = 2;
+  AttributeValue value = 3;
+  repeated AttributeValue values = 4;
+  ConstraintMode mode = 5;
+}
+
+message CoschedulingConfig {
+  string group_by = 1;
+}
+
 message ResourceKey {
   string cluster_id = 1;
   ResourceKind kind = 2;
@@ -171,27 +350,27 @@ message PageInfo {
 message JobSpec {
   uint32 version = 1;
   string name = 2;
-  iris.job.RuntimeEntrypoint entrypoint = 3;
-  iris.job.ResourceSpecProto resources = 4;
-  iris.job.EnvironmentConfig environment = 5;
+  RuntimeEntrypoint entrypoint = 3;
+  ResourceSpecProto resources = 4;
+  EnvironmentConfig environment = 5;
   string bundle_id = 6;
   iris.time.Duration scheduling_timeout = 7;
   repeated string ports = 8;
   int32 max_task_failures = 9;
   int32 max_retries_failure = 10;
   int32 max_retries_preemption = 11;
-  repeated iris.job.Constraint constraints = 12;
-  iris.job.CoschedulingConfig coscheduling = 13;
+  repeated Constraint constraints = 12;
+  CoschedulingConfig coscheduling = 13;
   int32 replicas = 14;
   iris.time.Duration timeout = 15;
   bool fail_if_exists = 16;
-  iris.job.JobPreemptionPolicy preemption_policy = 17;
-  iris.job.ExistingJobPolicy existing_job_policy = 18;
-  iris.job.PriorityBand priority_band = 19;
+  JobPreemptionPolicy preemption_policy = 17;
+  ExistingJobPolicy existing_job_policy = 18;
+  PriorityBand priority_band = 19;
   string task_image = 20;
   repeated string submit_argv = 21;
   string client_revision_date = 22;
-  iris.job.ContainerProfile container_profile = 23;
+  ContainerProfile container_profile = 23;
 }
 
 message SubmitJobRequest {
@@ -207,7 +386,7 @@ message JobQuery {
   string owner_id = 1;
   ResourceKey parent = 2;
   string job_id_prefix = 3;
-  repeated iris.job.JobState states = 4;
+  repeated JobState states = 4;
   string backend_id = 5;
   string execution_cluster_id = 6;
   PageRequest page = 7;
@@ -217,7 +396,7 @@ message JobSummary {
   JobIdentity identity = 1;
   string owner_id = 2;
   JobIdentity parent = 3;
-  iris.job.JobState state = 4;
+  JobState state = 4;
   string execution_cluster_id = 5;
   string backend_id = 6;
   int32 num_tasks = 7;
@@ -253,7 +432,7 @@ message DescribeJobResponse {
 message TaskQuery {
   ResourceKey job = 1;
   string job_id_prefix = 2;
-  repeated iris.job.TaskState states = 3;
+  repeated TaskState states = 3;
   string backend_id = 4;
   string authority_cluster_id = 5;
   string execution_cluster_id = 6;
@@ -264,7 +443,7 @@ message TaskSummary {
   TaskIdentity identity = 1;
   JobIdentity job = 2;
   int32 task_index = 3;
-  iris.job.TaskState state = 4;
+  TaskState state = 4;
   string execution_cluster_id = 5;
   string backend_id = 6;
   AttemptIdentity current_attempt = 7;
@@ -280,7 +459,7 @@ message TaskSummary {
 
 message AttemptSummary {
   AttemptIdentity identity = 1;
-  iris.job.TaskState state = 2;
+  TaskState state = 2;
   string execution_cluster_id = 3;
   string backend_id = 4;
   NodeIdentity node = 5;
@@ -625,7 +804,7 @@ message ExecAttemptResponse {
 
 message ProfileAttemptRequest {
   AttemptIdentity attempt = 1;
-  iris.job.ProfileType profile = 2;
+  ProfileType profile = 2;
   iris.time.Duration duration = 3;
 }
 

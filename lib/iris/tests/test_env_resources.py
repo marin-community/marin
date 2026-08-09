@@ -4,20 +4,18 @@
 """Tests for iris.env_resources."""
 
 import io
+import json
 import os
 
 import pytest
-from google.protobuf import json_format
-from iris.env_resources import TaskResources, _read_iris_resource_proto
-from iris.rpc import job_pb2
+from iris.env_resources import TaskResources, _read_iris_resources
 
 
 @pytest.fixture(autouse=True)
-def _clear_proto_cache():
-    """Clear the cached proto between tests so env var changes take effect."""
-    _read_iris_resource_proto.cache_clear()
+def _clear_resource_cache():
+    _read_iris_resources.cache_clear()
     yield
-    _read_iris_resource_proto.cache_clear()
+    _read_iris_resources.cache_clear()
 
 
 def _make_resource_env(
@@ -26,16 +24,17 @@ def _make_resource_env(
     gpu_count: int = 0,
     tpu_count: int = 0,
 ) -> str:
-    """Build an IRIS_TASK_RESOURCES JSON string from a proto."""
-    proto = job_pb2.ResourceSpecProto(
-        cpu_millicores=cpu_millicores,
-        memory_bytes=memory_bytes,
-    )
+    """Build the stable ResourceSpecProto JSON wire used by task environments."""
+    value: dict[str, object] = {
+        "cpu_millicores": cpu_millicores,
+        "memory_bytes": str(memory_bytes),
+        "disk_bytes": "0",
+    }
     if gpu_count:
-        proto.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpu_count))
+        value["device"] = {"gpu": {"variant": "H100", "count": gpu_count}}
     if tpu_count:
-        proto.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=tpu_count))
-    return json_format.MessageToJson(proto, preserving_proto_field_name=True)
+        value["device"] = {"tpu": {"variant": "v4", "topology": "", "count": tpu_count}}
+    return json.dumps(value)
 
 
 @pytest.fixture

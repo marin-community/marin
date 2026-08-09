@@ -64,9 +64,10 @@ from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
-from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
+from iris.cluster.provenance import is_same_image_provenance
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
+from iris.rpc.worker_codec import provenance_from_proto
 from iris.time_proto import timestamp_from_proto
 
 AMD64_IMAGE_PLATFORM = "linux/amd64"

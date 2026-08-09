@@ -5,11 +5,29 @@
 
 from rigging.redaction import redact_value
 
-from iris.cluster.constraints import Constraint
-from iris.cluster.resources.job import JobSpec, JobSummary, JobTaskAggregate
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    CoschedulingConfig,
+    ExistingJobPolicy,
+    JobPreemptionPolicy,
+    JobSpec,
+    JobSummary,
+    JobTaskAggregate,
+    PriorityBand,
+)
 from iris.cluster.resources.task import TaskDetail
-from iris.cluster.types import LOCAL_CLUSTER, CoschedulingConfig, ResourceSpec
+from iris.cluster.types import LOCAL_CLUSTER
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy_job_codec import (
+    constraint_from_proto,
+    constraint_to_proto,
+    environment_from_proto,
+    environment_to_proto,
+    resource_spec_from_proto,
+    resource_spec_to_proto,
+    runtime_entrypoint_from_proto,
+    runtime_entrypoint_to_proto,
+)
 from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
@@ -31,21 +49,16 @@ def redact_request_env_vars(
 
 def job_spec_from_legacy_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobSpec:
     """Decode the retired LaunchJob wire request into the resource contract."""
-    resources = ResourceSpec(
-        cpu=request.resources.cpu_millicores / 1_000,
-        memory=request.resources.memory_bytes,
-        disk=request.resources.disk_bytes,
-        device=request.resources.device if request.resources.HasField("device") else None,
-    )
+    resources = resource_spec_from_proto(request.resources)
     coscheduling = (
         CoschedulingConfig(group_by=request.coscheduling.group_by) if request.HasField("coscheduling") else None
     )
     return JobSpec(
         version=1,
         name=request.name,
-        entrypoint=request.entrypoint,
+        entrypoint=runtime_entrypoint_from_proto(request.entrypoint),
         resources=resources,
-        environment=request.environment,
+        environment=environment_from_proto(request.environment),
         bundle_id=request.bundle_id,
         scheduling_timeout=(
             duration_from_proto(request.scheduling_timeout) if request.HasField("scheduling_timeout") else None
@@ -54,33 +67,33 @@ def job_spec_from_legacy_request(request: controller_pb2.Controller.LaunchJobReq
         max_task_failures=request.max_task_failures,
         max_retries_failure=request.max_retries_failure,
         max_retries_preemption=request.max_retries_preemption,
-        constraints=tuple(Constraint.from_proto(candidate) for candidate in request.constraints),
+        constraints=tuple(constraint_from_proto(candidate) for candidate in request.constraints),
         coscheduling=coscheduling,
         replicas=request.replicas,
         timeout=duration_from_proto(request.timeout) if request.HasField("timeout") else None,
         fail_if_exists=request.fail_if_exists,
-        preemption_policy=request.preemption_policy,
-        existing_job_policy=request.existing_job_policy,
-        priority_band=request.priority_band,
+        preemption_policy=JobPreemptionPolicy(request.preemption_policy),
+        existing_job_policy=ExistingJobPolicy(request.existing_job_policy),
+        priority_band=PriorityBand(request.priority_band),
         task_image=request.task_image,
         submit_argv=tuple(request.submit_argv),
         client_revision_date=request.client_revision_date,
-        container_profile=request.container_profile,
+        container_profile=ContainerProfile(request.container_profile),
     )
 
 
 def job_spec_to_legacy_request(spec: JobSpec) -> controller_pb2.Controller.LaunchJobRequest:
     request = controller_pb2.Controller.LaunchJobRequest(
         name=spec.name,
-        entrypoint=spec.entrypoint,
-        resources=spec.resources.to_exact_proto(),
-        environment=spec.environment,
+        entrypoint=runtime_entrypoint_to_proto(spec.entrypoint),
+        resources=resource_spec_to_proto(spec.resources),
+        environment=environment_to_proto(spec.environment),
         bundle_id=spec.bundle_id,
         ports=spec.ports,
         max_task_failures=spec.max_task_failures,
         max_retries_failure=spec.max_retries_failure,
         max_retries_preemption=spec.max_retries_preemption,
-        constraints=[constraint.to_proto() for constraint in spec.constraints],
+        constraints=[constraint_to_proto(constraint) for constraint in spec.constraints],
         replicas=spec.replicas,
         fail_if_exists=spec.fail_if_exists,
         preemption_policy=spec.preemption_policy,
@@ -94,7 +107,7 @@ def job_spec_to_legacy_request(spec: JobSpec) -> controller_pb2.Controller.Launc
     if spec.scheduling_timeout is not None:
         request.scheduling_timeout.CopyFrom(duration_to_proto(spec.scheduling_timeout))
     if spec.coscheduling is not None:
-        request.coscheduling.CopyFrom(spec.coscheduling.to_proto())
+        request.coscheduling.group_by = spec.coscheduling.group_by
     if spec.timeout is not None:
         request.timeout.CopyFrom(duration_to_proto(spec.timeout))
     return request

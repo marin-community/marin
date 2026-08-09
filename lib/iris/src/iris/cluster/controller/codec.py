@@ -1,24 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical JSON/proto codec for controller DB columns.
+"""Canonical JSON codec for controller DB columns.
 
-All serialization between protobuf messages and the JSON columns stored in the
+All serialization between native records and the JSON columns stored in the
 controller SQLite database goes through this module.
 """
 
 import functools
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple, Protocol
 
-from google.protobuf import json_format
+from rigging.provenance import Provenance
 from rigging.timing import Duration
 
-from iris.cluster.constraints import Constraint, get_device_variant
-from iris.cluster.resources.job import JobSpec
-from iris.cluster.types import CoschedulingConfig, ResourceSpec, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
+from iris.cluster.resources.execution import (
+    CommandEntrypoint,
+    CpuDevice,
+    Environment,
+    GpuDevice,
+    ResourceSpec,
+    RuntimeEntrypoint,
+    TpuDevice,
+)
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    CoschedulingConfig,
+    ExistingJobPolicy,
+    JobPreemptionPolicy,
+    JobSpec,
+    PriorityBand,
+)
+from iris.cluster.resources.worker import WorkerMetadata
 
 
 class WorkerAttributeRow(Protocol):
@@ -31,8 +46,26 @@ class WorkerAttributeRow(Protocol):
     float_value: float | None
 
 
-# Shared kwargs for MessageToDict so every call site is consistent.
-_TO_DICT_OPTS = dict(preserving_proto_field_name=True, use_integers_for_enums=True)
+class WorkerMetadataRow(Protocol):
+    """Structural shape of the worker columns used by the metadata decoder."""
+
+    md_hostname: str
+    md_ip_address: str
+    md_cpu_count: int
+    md_memory_bytes: int
+    md_disk_bytes: int
+    md_tpu_name: str
+    md_tpu_worker_hostnames: str
+    md_tpu_worker_id: str
+    md_tpu_chips_per_host_bounds: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_instance_name: str
+    md_gce_zone: str
+    md_device_json: str | None
+    md_provenance_json: str | None
+
 
 # Maxsize for the JSON->proto decode caches. Sized to comfortably hold the
 # distinct JSON column values in flight across a scheduling cycle.
@@ -40,23 +73,39 @@ _CODEC_CACHE_SIZE = 8192
 
 
 # ---------------------------------------------------------------------------
-# Generic helpers
+# Persisted scalar helpers
 # ---------------------------------------------------------------------------
 
 
-def proto_to_json(msg) -> str:
-    """Serialize any protobuf message to a JSON string (snake_case keys, integer enums)."""
-    return json.dumps(json_format.MessageToDict(msg, **_TO_DICT_OPTS))
+def provenance_to_json(value: Provenance | None) -> str:
+    """Serialize provenance in the established protobuf-JSON storage shape."""
+    if value is None:
+        return "{}"
+    item: dict[str, object] = {}
+    if value.tree_hash:
+        item["tree_hash"] = value.tree_hash
+    if value.base_commit:
+        item["base_commit"] = value.base_commit
+    if value.dirty:
+        item["dirty"] = True
+    if value.branch:
+        item["branch"] = value.branch
+    if value.built_by:
+        item["built_by"] = value.built_by
+    return json.dumps(item)
 
 
-@functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
-def proto_from_json(json_str: str, proto_cls):
-    """Deserialize a JSON string into a new protobuf message of *proto_cls*.
-
-    Ignores unknown fields so jobs persisted before a field was removed still
-    replay across a controller restart.
-    """
-    return json_format.ParseDict(json.loads(json_str), proto_cls(), ignore_unknown_fields=True)
+def provenance_from_json(value: str) -> Provenance:
+    """Decode the provenance fields retained by the controller schema."""
+    item = json.loads(value)
+    tree_hash = str(item.get("tree_hash", ""))
+    return Provenance(
+        tree_hash=tree_hash,
+        base_commit=str(item.get("base_commit", "")) or tree_hash,
+        dirty=bool(item.get("dirty", False)),
+        branch=str(item["branch"]) if item.get("branch") else None,
+        built_by=str(item["built_by"]) if item.get("built_by") else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -64,17 +113,38 @@ def proto_from_json(json_str: str, proto_cls):
 # ---------------------------------------------------------------------------
 
 
-def resource_spec_from_scalars(cpu: int, mem: int, disk: int, device_json: str | None) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from the scalar columns stored on jobs/job_config."""
-    res = job_pb2.ResourceSpecProto(cpu_millicores=cpu, memory_bytes=mem, disk_bytes=disk)
-    if device_json:
-        res.device.CopyFrom(proto_from_json(device_json, job_pb2.DeviceConfig))
-    return res
+def resource_spec_from_scalars(cpu: int, mem: int, disk: int, device_json: str | None) -> ResourceSpec:
+    """Reconstruct a native resource specification from persisted scalar columns."""
+    return ResourceSpec(
+        cpu=cpu / 1_000,
+        memory=mem,
+        disk=disk,
+        device=_device_from_json(device_json) if device_json else None,
+    )
 
 
-def constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None:
-    """Serialize a list of Constraint protos to a JSON array.  Returns None if empty."""
-    items = [json_format.MessageToDict(c, **_TO_DICT_OPTS) for c in constraints]
+def _attribute_value_to_json(value: AttributeValue) -> dict[str, object]:
+    if isinstance(value.value, str):
+        return {"string_value": value.value}
+    if isinstance(value.value, int):
+        return {"int_value": str(value.value)}
+    return {"float_value": value.value}
+
+
+def constraints_to_json(constraints: Iterable[Constraint]) -> str | None:
+    """Serialize native constraints in the established protobuf-JSON shape."""
+    items = []
+    for constraint in constraints:
+        item: dict[str, object] = {"key": constraint.key}
+        if constraint.op is not ConstraintOp.EQ:
+            item["op"] = int(constraint.op)
+        if constraint.op is ConstraintOp.IN:
+            item["values"] = [_attribute_value_to_json(value) for value in constraint.values]
+        elif constraint.values:
+            item["value"] = _attribute_value_to_json(constraint.values[0])
+        if constraint.mode is not ConstraintMode.REQUIRED:
+            item["mode"] = int(constraint.mode)
+        items.append(item)
     return json.dumps(items) if items else None
 
 
@@ -82,27 +152,109 @@ def constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None
 def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
     """Deserialize a JSON array of constraints to native Constraint objects.
 
-    Goes through proto for JSON parsing, then normalizes via Constraint.from_proto
-    (which strips/lowercases string values for case-insensitive comparison).
-    Native Constraint is the canonical hot-path type — protos only at serialization.
+    Integer attribute values retain protobuf JSON's decimal-string representation.
     """
     if not constraints_json:
         return []
-    return [
-        Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())) for item in json.loads(constraints_json)
-    ]
+    constraints = []
+    for item in json.loads(constraints_json):
+        op = ConstraintOp(int(item.get("op", 0)))
+        encoded_values = item.get("values", ()) if op is ConstraintOp.IN else (item.get("value", {}),)
+        if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
+            encoded_values = ()
+        values = tuple(_attribute_value_from_json(value) for value in encoded_values)
+        constraints.append(
+            Constraint(
+                key=str(item.get("key", "")),
+                op=op,
+                values=values,
+                mode=ConstraintMode(int(item.get("mode", 0))),
+            )
+        )
+    return constraints
 
 
-def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
+def _attribute_value_from_json(value: dict[str, object]) -> AttributeValue:
+    if "string_value" in value:
+        return AttributeValue(str(value["string_value"]))
+    if "int_value" in value:
+        return AttributeValue(int(value["int_value"]))
+    if "float_value" in value:
+        return AttributeValue(float(value["float_value"]))
+    return AttributeValue("")
+
+
+def entrypoint_to_json(entrypoint: RuntimeEntrypoint) -> str:
     """Serialize a RuntimeEntrypoint, excluding inline workdir_files.
 
     The files live in ``job_workdir_files``, keyed by job id, so the JSON column stays
     small. An entrypoint rebuilt from this JSON therefore has no inline files until
     they are re-attached from that table.
     """
-    d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
-    d.pop("workdir_files", None)
-    return json.dumps(d)
+    value: dict[str, object] = {}
+    if entrypoint.setup_commands:
+        value["setup_commands"] = list(entrypoint.setup_commands)
+    value["run_command"] = {}
+    if entrypoint.run_command.argv:
+        value["run_command"] = {"argv": list(entrypoint.run_command.argv)}
+    if entrypoint.workdir_file_refs:
+        value["workdir_file_refs"] = dict(sorted(entrypoint.workdir_file_refs.items()))
+    return json.dumps(value)
+
+
+def environment_to_json(environment: Environment) -> str:
+    value: dict[str, object] = {}
+    if environment.env_vars:
+        value["env_vars"] = dict(sorted(environment.env_vars.items()))
+    if environment.setup_scripts:
+        value["setup_scripts"] = list(environment.setup_scripts)
+    return json.dumps(value)
+
+
+def runtime_entrypoint_from_json(value: str, workdir_files: Mapping[str, bytes]) -> RuntimeEntrypoint:
+    """Decode a persisted runtime entrypoint and attach its separately stored files."""
+    item = json.loads(value)
+    return RuntimeEntrypoint(
+        setup_commands=tuple(item.get("setup_commands", ())),
+        run_command=CommandEntrypoint(tuple(item.get("run_command", {}).get("argv", ()))),
+        workdir_files=workdir_files,
+        workdir_file_refs=dict(item.get("workdir_file_refs", {})),
+    )
+
+
+def environment_from_json(value: str) -> Environment:
+    """Decode a persisted native execution environment."""
+    item = json.loads(value)
+    return Environment(
+        env_vars=dict(item.get("env_vars", {})),
+        setup_scripts=tuple(item.get("setup_scripts", ())),
+    )
+
+
+def device_to_json(device: CpuDevice | GpuDevice | TpuDevice) -> str:
+    if isinstance(device, CpuDevice):
+        return json.dumps({"cpu": {"variant": device.variant}})
+    if isinstance(device, GpuDevice):
+        return json.dumps({"gpu": {"variant": device.variant, "count": device.count}})
+    return json.dumps({"tpu": {"variant": device.variant, "topology": device.topology, "count": device.count}})
+
+
+def _device_from_json(value: str) -> CpuDevice | GpuDevice | TpuDevice:
+    item = json.loads(value)
+    if "cpu" in item:
+        return CpuDevice(variant=str(item["cpu"].get("variant", "")))
+    if "gpu" in item:
+        return GpuDevice(
+            variant=str(item["gpu"].get("variant", "")),
+            count=int(item["gpu"].get("count", 0)) or 1,
+        )
+    if "tpu" in item:
+        return TpuDevice(
+            variant=str(item["tpu"].get("variant", "")),
+            topology=str(item["tpu"].get("topology", "")),
+            count=int(item["tpu"].get("count", 0)),
+        )
+    raise ValueError("device JSON has no selected kind")
 
 
 class DeviceCounts(NamedTuple):
@@ -122,8 +274,11 @@ def device_counts_from_json(device_json: str | None) -> DeviceCounts:
     """
     if not device_json:
         return DeviceCounts(gpu=0, tpu=0)
-    device = proto_from_json(device_json, job_pb2.DeviceConfig)
-    return DeviceCounts(gpu=get_gpu_count(device), tpu=get_tpu_count(device))
+    device = _device_from_json(device_json)
+    return DeviceCounts(
+        gpu=device.count if isinstance(device, GpuDevice) else 0,
+        tpu=device.count if isinstance(device, TpuDevice) else 0,
+    )
 
 
 @functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
@@ -136,50 +291,35 @@ def device_variant_from_json(device_json: str | None) -> str | None:
     """
     if not device_json:
         return None
-    device = proto_from_json(device_json, job_pb2.DeviceConfig)
-    return get_device_variant(device)
+    device = _device_from_json(device_json)
+    if isinstance(device, (GpuDevice, TpuDevice)):
+        return device.variant or None
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Row -> proto reconstructors (build protos from already-fetched DB columns)
+# Row reconstructors
 # ---------------------------------------------------------------------------
 
 
 def resource_spec_from_job_row(job: Any) -> ResourceSpec:
     """Reconstruct a typed resource specification from native Job columns."""
-    wire = resource_spec_from_scalars(
-        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-    )
-    return ResourceSpec(
-        cpu=wire.cpu_millicores / 1_000,
-        memory=wire.memory_bytes,
-        disk=wire.disk_bytes,
-        device=wire.device if wire.HasField("device") else None,
-    )
-
-
-def reconstruct_job_spec(job, *, workdir_files: dict[str, bytes]) -> JobSpec:
-    """Reconstruct the typed Job specification persisted for ``job``."""
-    resources = resource_spec_from_scalars(
+    return resource_spec_from_scalars(
         job.res_cpu_millicores,
         job.res_memory_bytes,
         job.res_disk_bytes,
         job.res_device_json,
     )
-    entrypoint = job_pb2.RuntimeEntrypoint()
-    entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
-    entrypoint.workdir_files.update(workdir_files)
+
+
+def reconstruct_job_spec(job, *, workdir_files: dict[str, bytes]) -> JobSpec:
+    """Reconstruct the typed Job specification persisted for ``job``."""
     return JobSpec(
         version=1,
         name=job.job_id.to_wire(),
-        entrypoint=entrypoint,
-        resources=ResourceSpec(
-            cpu=resources.cpu_millicores / 1_000,
-            memory=resources.memory_bytes,
-            disk=resources.disk_bytes,
-            device=resources.device if resources.HasField("device") else None,
-        ),
-        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
+        entrypoint=runtime_entrypoint_from_json(job.entrypoint_json, workdir_files),
+        resources=resource_spec_from_job_row(job),
+        environment=environment_from_json(job.environment_json),
         bundle_id=job.bundle_id,
         scheduling_timeout=(
             Duration.from_ms(job.scheduling_timeout_ms) if job.scheduling_timeout_ms is not None else None
@@ -193,19 +333,19 @@ def reconstruct_job_spec(job, *, workdir_files: dict[str, bytes]) -> JobSpec:
         replicas=job.num_tasks,
         timeout=Duration.from_ms(job.timeout_ms) if job.timeout_ms is not None else None,
         fail_if_exists=job.fail_if_exists,
-        preemption_policy=job.preemption_policy,
-        existing_job_policy=job.existing_job_policy,
-        priority_band=job.priority_band,
+        preemption_policy=JobPreemptionPolicy(job.preemption_policy),
+        existing_job_policy=ExistingJobPolicy(job.existing_job_policy),
+        priority_band=PriorityBand(job.priority_band),
         task_image=job.task_image,
         submit_argv=tuple(job.submit_argv_json),
         client_revision_date="",
-        container_profile=job.container_profile,
+        container_profile=ContainerProfile(job.container_profile),
     )
 
 
-def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata:
-    """Reconstruct a WorkerMetadata proto from scalar columns and decoded attributes dict."""
-    md = job_pb2.WorkerMetadata(
+def worker_metadata_from_row(worker: WorkerMetadataRow, attributes: Mapping[str, str | int | float]) -> WorkerMetadata:
+    """Reconstruct native worker metadata from scalar columns and attributes."""
+    return WorkerMetadata(
         hostname=worker.md_hostname,
         ip_address=worker.md_ip_address,
         cpu_count=worker.md_cpu_count,
@@ -220,31 +360,16 @@ def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata
         gpu_memory_mb=worker.md_gpu_memory_mb,
         gce_instance_name=worker.md_gce_instance_name,
         gce_zone=worker.md_gce_zone,
+        device=(
+            _device_from_json(worker.md_device_json) if worker.md_device_json and worker.md_device_json != "{}" else None
+        ),
+        provenance=(
+            provenance_from_json(worker.md_provenance_json)
+            if worker.md_provenance_json and worker.md_provenance_json != "{}"
+            else None
+        ),
+        attributes={key: AttributeValue(value) for key, value in attributes.items()},
     )
-    if worker.md_device_json and worker.md_device_json != "{}":
-        md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
-    if worker.md_provenance_json and worker.md_provenance_json != "{}":
-        md.provenance.CopyFrom(proto_from_json(worker.md_provenance_json, job_pb2.Provenance))
-    for key, value in attributes.items():
-        md.attributes[key].CopyFrom(python_value_to_attribute_value(value))
-    return md
-
-
-def python_value_to_attribute_value(value: str | int | float) -> job_pb2.AttributeValue:
-    """Wrap a Python attribute value in its ``AttributeValue`` proto oneof.
-
-    Unlike :meth:`constraints.AttributeValue.to_proto`, this does not normalize
-    string values — it stores them verbatim, matching the worker_attributes
-    round-trip.
-    """
-    av = job_pb2.AttributeValue()
-    if isinstance(value, str):
-        av.string_value = value
-    elif isinstance(value, int):
-        av.int_value = value
-    elif isinstance(value, float):
-        av.float_value = value
-    return av
 
 
 def attribute_value_from_row(row: WorkerAttributeRow) -> str | int | float:

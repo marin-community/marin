@@ -28,6 +28,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from rigging.timing import Timestamp
@@ -125,14 +126,14 @@ class ScriptedTaskBackend:
         if self._reconcile_failures:
             self._reconcile_failures -= 1
             raise ConnectionError("scripted backend is unavailable")
-        desired = {(run.task_id, run.attempt_id) for run in request.tasks_to_run} | {
+        desired = {(run.task_id.to_wire(), run.attempt_id) for run in request.tasks_to_run} | {
             (entry.task_id.to_wire(), entry.attempt_id) for entry in request.running_tasks
         }
         for task_id, attempt_id in sorted(self._desired - desired):
             self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.backend_id))
 
         updates: list[TaskUpdate] = []
-        newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
+        newly_launched = {(run.task_id.to_wire(), run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired):
             self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.backend_id))
             queued = self._pop_observation(task_id)
@@ -191,11 +192,7 @@ class ScriptedTaskBackend:
     def seed_liveness(self) -> None:
         return None
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         raise ProviderUnsupportedError("journey backend has no process runtime")
 
     def profile_task(

@@ -588,7 +588,7 @@ def test_constraints_to_node_selector_region():
     add_eq_constraint(req, "region", "US-WEST-04A")
 
     manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["nodeSelector"] == {"iris.region": "US-WEST-04A"}
+    assert manifest["spec"]["nodeSelector"] == {"iris.region": "us-west-04a"}
 
 
 def test_constraints_to_node_selector_multiple():
@@ -599,7 +599,7 @@ def test_constraints_to_node_selector_multiple():
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["nodeSelector"] == {
         "iris.pool": "h100-8x",
-        "iris.region": "US-WEST-04A",
+        "iris.region": "us-west-04a",
     }
 
 
@@ -668,7 +668,7 @@ def test_coreweave_constraints_end_to_end():
     spec = manifest["spec"]
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
-    assert spec["nodeSelector"]["iris.region"] == "US-WEST-04A"
+    assert spec["nodeSelector"]["iris.region"] == "us-west-04a"
     assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
 
 

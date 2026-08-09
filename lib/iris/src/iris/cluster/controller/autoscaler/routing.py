@@ -38,8 +38,8 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.types import AcceleratorType, CapacityType, gpu_device, tpu_device
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import ResourceSpec, gpu_device, tpu_device
+from iris.cluster.types import AcceleratorType, CapacityType
 
 # Synthetic task id stem for an availability probe (see availability_probe_entries).
 _AVAILABILITY_PROBE_TASK = "__availability_probe__"
@@ -142,7 +142,7 @@ def _availability_probe_entry(variant: str, group: ScalingGroup) -> DemandEntry:
         coschedule_group_id=None,
         normalized=extract_placement_requirements(constraints),
         constraints=constraints,
-        resources=job_pb2.ResourceSpecProto(device=device),
+        resources=ResourceSpec(device=device),
     )
 
 
@@ -151,8 +151,8 @@ def additive_req(entry: DemandEntry) -> AdditiveReq:
 
     return AdditiveReq(
         cpu_millicores=entry.resources.cpu_millicores,
-        memory_bytes=entry.resources.memory_bytes,
-        disk_bytes=entry.resources.disk_bytes,
+        memory_bytes=entry.resources.memory,
+        disk_bytes=entry.resources.disk,
     )
 
 
@@ -525,7 +525,7 @@ def job_feasibility(
     groups: Sequence[ScalingGroup],
     constraints: Sequence[Constraint],
     replicas: int | None = None,
-    resources: job_pb2.ResourceSpecProto | None = None,
+    resources: ResourceSpec | None = None,
 ) -> GroupFeasibility:
     """Answer: can any scaling group ever host this job shape?
 

@@ -4,11 +4,13 @@
 from iris.client.resolver import ClusterResolver
 from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.resources.action import ActionResult, ActionState
+from iris.cluster.resources.endpoint import ThreadsProfileConfiguration
+from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import AttemptIdentity, AttemptLocator, JobIdentity, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobSpec
+from iris.cluster.resources.job import ContainerProfile, ExistingJobPolicy, JobPreemptionPolicy, JobSpec, PriorityBand
 from iris.cluster.resources.node import NodeQuery
 from iris.cluster.resources.task import TaskQuery
-from iris.cluster.types import Namespace, ResourceSpec
+from iris.cluster.types import Namespace
 from iris.rpc import job_pb2, resource_pb2, time_pb2
 from rigging.timing import Duration
 
@@ -241,9 +243,9 @@ def _job_spec() -> JobSpec:
     return JobSpec(
         version=1,
         name="/alice/train",
-        entrypoint=job_pb2.RuntimeEntrypoint(),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(()), {}, {}),
         resources=ResourceSpec(cpu=1),
-        environment=job_pb2.EnvironmentConfig(),
+        environment=Environment({}, ()),
         bundle_id="",
         scheduling_timeout=None,
         ports=(),
@@ -255,13 +257,13 @@ def _job_spec() -> JobSpec:
         replicas=1,
         timeout=None,
         fail_if_exists=False,
-        preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy=job_pb2.EXISTING_JOB_POLICY_RECREATE,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+        existing_job_policy=ExistingJobPolicy.RECREATE,
+        priority_band=PriorityBand.INHERIT,
         task_image="",
         submit_argv=(),
         client_revision_date="",
-        container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        container_profile=ContainerProfile.UNSPECIFIED,
     )
 
 
@@ -393,7 +395,7 @@ def test_profile_attempt_rpc_deadline_outlasts_requested_capture_duration(monkey
 
     result = client.profile_attempt(
         AttemptIdentity(task, 2, "attempt-uid"),
-        profile=job_pb2.ProfileType(threads=job_pb2.ThreadsProfile()),
+        profile=ThreadsProfileConfiguration(include_locals=False),
         duration=requested_duration,
     )
 

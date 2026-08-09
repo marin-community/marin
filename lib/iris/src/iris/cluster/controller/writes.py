@@ -28,7 +28,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
-from iris.cluster.controller.codec import proto_to_json
+from iris.cluster.controller.codec import device_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -51,8 +51,9 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState, SyncedAttempt
+from iris.cluster.resources.execution import ResourceSpec
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
-from iris.rpc import job_pb2
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
 
@@ -503,7 +504,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
             .where(jobs_table.c.job_id == job_id)
             .values(
                 state=case(
-                    (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
+                    (jobs_table.c.state == JobState.PENDING, JobState.RUNNING),
                     else_=jobs_table.c.state,
                 ),
                 started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
@@ -655,11 +656,11 @@ def assign_to_worker(
         task_id=task_id,
         attempt_id=attempt_id,
         worker_id=worker_id,
-        state=job_pb2.TASK_STATE_ASSIGNED,
+        state=TaskState.ASSIGNED,
         created_at_ms=now_ms,
     )
     values: dict = {
-        "state": job_pb2.TASK_STATE_ASSIGNED,
+        "state": TaskState.ASSIGNED,
         "current_attempt_id": attempt_id,
         "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, now_ms),
         "current_worker_id": worker_id,
@@ -694,7 +695,7 @@ def promote_for_dispatch(
         task_id=task_id,
         attempt_id=attempt_id,
         worker_id=None,
-        state=job_pb2.TASK_STATE_ASSIGNED,
+        state=TaskState.ASSIGNED,
         created_at_ms=now_ms,
         backend_id=backend_id,
     )
@@ -702,7 +703,7 @@ def promote_for_dispatch(
         update(tasks_table)
         .where(tasks_table.c.task_id == task_id)
         .values(
-            state=job_pb2.TASK_STATE_ASSIGNED,
+            state=TaskState.ASSIGNED,
             current_attempt_id=attempt_id,
             started_at_ms=func.coalesce(tasks_table.c.started_at_ms, now_ms),
             priority_band=priority_band,
@@ -879,7 +880,7 @@ def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: st
     tx.execute(
         update(jobs_table)
         .where(jobs_table.c.job_id == job_id)
-        .values(state=job_pb2.JOB_STATE_KILLED, finished_at_ms=now_ms, error=error)
+        .values(state=JobState.KILLED, finished_at_ms=now_ms, error=error)
     )
 
 
@@ -893,7 +894,7 @@ def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, er
     tx.execute(
         update(jobs_table)
         .where(jobs_table.c.job_id == job_id)
-        .values(state=job_pb2.JOB_STATE_UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
+        .values(state=JobState.UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
     )
 
 
@@ -903,7 +904,7 @@ def insert_mirrored_job_config(
     *,
     job_id: JobName,
     name: str,
-    resources: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     priority_band: int,
 ) -> None:
     """Insert the ``job_config`` companion for a job mirrored from a peer.
@@ -921,10 +922,10 @@ def insert_mirrored_job_config(
         insert(job_config_table).values(
             job_id=job_id,
             name=name,
-            res_cpu_millicores=int(resources.cpu_millicores),
-            res_memory_bytes=int(resources.memory_bytes),
-            res_disk_bytes=int(resources.disk_bytes),
-            res_device_json=proto_to_json(resources.device),
+            res_cpu_millicores=resources.cpu_millicores,
+            res_memory_bytes=resources.memory,
+            res_disk_bytes=resources.disk,
+            res_device_json=device_to_json(resources.device) if resources.device is not None else None,
             priority_band=priority_band,
         )
     )

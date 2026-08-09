@@ -32,6 +32,8 @@ from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
+from iris.cluster.resources.execution import parse_memory_string
+from iris.cluster.resources.job import PriorityBand
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -41,10 +43,8 @@ from iris.cluster.types import (
     CapacityType,
     GcpSliceMode,
     WellKnownAttribute,
-    parse_memory_string,
 )
 from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,8 @@ def _coerce_priority_band(value: Any) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        name = value if value.startswith("PRIORITY_BAND_") else f"PRIORITY_BAND_{value.upper()}"
-        return job_pb2.PriorityBand.Value(name)
+        name = value.removeprefix("PRIORITY_BAND_").upper()
+        return int(PriorityBand[name])
     raise ValueError(f"cannot parse priority band from {value!r}")
 
 

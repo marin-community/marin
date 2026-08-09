@@ -27,9 +27,10 @@ from iris.cluster.resources.action import ActionReceipt
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.cluster.resources.job import JobDetail
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.resources.task import TaskSummary
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc import controller_pb2, resource_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.time_proto import duration_to_proto
@@ -164,7 +165,7 @@ class InProcessPeerConnection:
             response = self._resources.exec_attempt(wire, None)
         return exec_result_from_proto(response)
 
-    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: str) -> ProcessInfo:
         raise NotImplementedError("federation journey does not provide a process runtime")
 
     def shutdown(self) -> None:

@@ -28,7 +28,6 @@ from iris.cluster.client.resource_conversion import (
     job_identity_to_proto,
     job_page_from_proto,
     job_query_to_proto,
-    job_spec_to_proto,
     log_page_from_proto,
     log_query_to_proto,
     node_detail_from_proto,
@@ -56,6 +55,7 @@ from iris.cluster.resources.endpoint import (
     EndpointSummary,
     EndpointToken,
     ExecResult,
+    ProfileConfiguration,
     ProfileResult,
 )
 from iris.cluster.resources.identity import (
@@ -73,9 +73,10 @@ from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.rpc import job_pb2, resource_pb2
+from iris.rpc import resource_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.errors import call_with_retry
+from iris.rpc.resource_codec import job_spec_to_proto, profile_configuration_to_proto
 from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.time_proto import duration_to_proto
 
@@ -340,12 +341,12 @@ class ResourceClient:
         self,
         identity: AttemptIdentity,
         *,
-        profile: job_pb2.ProfileType,
+        profile: ProfileConfiguration,
         duration: Duration,
     ) -> ProfileResult:
         request = resource_pb2.ProfileAttemptRequest(
             attempt=attempt_identity_to_proto(identity),
-            profile=profile,
+            profile=profile_configuration_to_proto(profile),
             duration=duration_to_proto(duration),
         )
         rpc_timeout_ms = duration.to_ms() + _LONG_RUNNING_RPC_MARGIN_MS

@@ -20,8 +20,8 @@ from iris.cluster.controller.scheduling.scheduler import (
     Scheduler,
     SchedulingContext,
 )
+from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
 
 
 def apply_preemptions(
@@ -38,7 +38,7 @@ def apply_preemptions(
         PreemptionCandidate(
             job_name=tid,
             requirements=jobs[tid.parent],
-            band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            band=order.task_band_map.get(tid, PriorityBand.INTERACTIVE),
         )
         for tid in order.ordered_task_ids
         if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs

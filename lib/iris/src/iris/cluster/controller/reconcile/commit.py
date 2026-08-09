@@ -31,8 +31,8 @@ from iris.cluster.controller.reconcile.effects import (
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.writes import record_federation_change
+from iris.cluster.resources.state import JobState
 from iris.cluster.stats.tables import TaskEventRow
-from iris.rpc import job_pb2
 
 _CONTROLLER_EVENT_SOURCE = "iris/controller"
 
@@ -218,7 +218,7 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
             sa_update(jobs_table)
             .where(c.job_id == bindparam("b_job_id"))
             .values(
-                state=job_pb2.JOB_STATE_KILLED,
+                state=JobState.KILLED,
                 error=bindparam("b_error"),
                 # Preserve a started_at stamp carried over from a same-batch
                 # recompute->RUNNING that this kill replaced (first-wins).

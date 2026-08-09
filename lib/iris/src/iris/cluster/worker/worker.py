@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
@@ -21,6 +21,23 @@ from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptObservation
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    ExecResult,
+    ProfileConfiguration,
+)
+from iris.cluster.resources.state import TaskState
+from iris.cluster.resources.worker import (
+    AttemptStatus,
+    ResourceUsage,
+    WorkerHealth,
+    WorkerMetadata,
+    WorkerReconcileRequest,
+    WorkerReconcileResponse,
+    WorkerResourceSnapshot,
+)
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
     build_profile_row,
@@ -38,7 +55,7 @@ from iris.cluster.stats.tables import (
     WorkerStatus,
     build_worker_stat,
 )
-from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
+from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -57,10 +74,10 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.time_proto import timestamp_to_proto
+from iris.rpc.worker_codec import worker_metadata_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +160,7 @@ class Worker:
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
-        worker_metadata: job_pb2.WorkerMetadata | None = None,
+        worker_metadata: WorkerMetadata | None = None,
         log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = 10,
@@ -506,7 +523,7 @@ class Worker:
                 response = self._controller_client.register(
                     controller_pb2.Controller.RegisterRequest(
                         address=address,
-                        metadata=metadata,
+                        metadata=worker_metadata_to_proto(metadata),
                         worker_id=self._worker_id or "",
                         slice_id=self._config.slice_id or "",
                         scale_group=self._config.worker_attributes.get("scale-group", ""),
@@ -615,10 +632,10 @@ class Worker:
 
     _TERMINAL_STATES = frozenset(
         {
-            job_pb2.TASK_STATE_SUCCEEDED,
-            job_pb2.TASK_STATE_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_WORKER_FAILED,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.KILLED,
+            TaskState.WORKER_FAILED,
         }
     )
 
@@ -659,7 +676,7 @@ class Worker:
             [t for t in self._tasks if t.task_id.to_wire() == task_id and t.attempt_id == attempt_id]
         )
 
-    def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
+    def submit_task(self, request: AttemptLaunch) -> str:
         """Submit a new task for execution.
 
         Identity is the controller-minted ``attempt_uid``: a request whose UID
@@ -677,10 +694,10 @@ class Worker:
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
-        task_id_wire = request.task_id
-        task_id = JobName.from_wire(task_id_wire)
+        task_id = request.task_id
+        task_id_wire = task_id.to_wire()
         attempt_id = request.attempt_id
-        attempt_uid = AttemptUid(request.attempt_uid)
+        attempt_uid = request.attempt_uid
         if not attempt_uid:
             raise ValueError("attempt_uid is required")
 
@@ -730,8 +747,7 @@ class Worker:
         # the heartbeat RPC returns quickly.
         config = TaskAttemptConfig(
             task_attempt=TaskAttemptId(task_id=task_id, attempt_id=attempt_id),
-            num_tasks=request.num_tasks,
-            request=request,
+            launch=request,
             cache_dir=self._cache_dir,
             attempt_uid=attempt_uid,
         )
@@ -793,21 +809,19 @@ class Worker:
         """
         return list(self._tasks)
 
-    def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
+    def _collect_resource_metrics(self) -> WorkerResourceSnapshot:
         """Collect host metrics with running-task and process aggregates filled in."""
         snapshot = self._host_metrics.collect()
         running_count = 0
         total_processes = 0
         with self._lock:
             for task in self._tasks:
-                if task.status == job_pb2.TASK_STATE_RUNNING:
+                if task.status == TaskState.RUNNING:
                     running_count += 1
                     total_processes += task.process_count
-        snapshot.running_task_count = running_count
-        snapshot.total_process_count = total_processes
-        return snapshot
+        return replace(snapshot, running_task_count=running_count, total_process_count=total_processes)
 
-    def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
+    def _emit_worker_stat(self, snapshot: WorkerResourceSnapshot) -> None:
         """Append one heartbeat row to the ``iris.worker`` stats namespace.
 
         Non-blocking: ``Table.write`` queues for the bg flush thread, so the
@@ -827,7 +841,7 @@ class Worker:
         )
         table.write([stat])
 
-    def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
+    def handle_reconcile(self, request: WorkerReconcileRequest) -> WorkerReconcileResponse:
         """Process desired state from the controller and return observed state.
 
         Reconcile is the sole controller→worker channel, so it is also the
@@ -855,18 +869,18 @@ class Worker:
                 request.worker_id,
                 self._worker_id,
             )
-            return worker_pb2.Worker.ReconcileResponse(
+            return WorkerReconcileResponse(
                 worker_id=self._worker_id,
-                observed=[],
-                health=worker_pb2.Worker.WorkerHealth(healthy=True),
+                observed=(),
+                health=WorkerHealth(healthy=True),
             )
 
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
 
         for desired in request.desired:
-            attempt_uid = AttemptUid(desired.attempt_uid)
-            if desired.HasField("run"):
-                self._process_run_intent(attempt_uid, desired.run)
+            attempt_uid = desired.attempt_uid
+            if desired.is_run:
+                self._process_run_intent(attempt_uid, desired.launch)
             else:
                 self._process_stop_intent(attempt_uid)
 
@@ -874,7 +888,7 @@ class Worker:
         with self._lock:
             desired_attempts: set[int] = set()
             for desired in request.desired:
-                match = self.task_by_uid(AttemptUid(desired.attempt_uid))
+                match = self.task_by_uid(desired.attempt_uid)
                 if match is not None:
                     desired_attempts.add(id(match))
             snapshot = list(self._tasks)
@@ -897,7 +911,7 @@ class Worker:
         #   - attempts that resolve to a DesiredAttempt, and
         #   - zombies we are killing this tick, so the controller can confirm
         #     the kill it implicitly requested by omitting the attempt.
-        observations: list[worker_pb2.Worker.AttemptObservation] = []
+        observations: list[AttemptStatus] = []
         with self._lock:
             snapshot = list(self._tasks)
             for task in snapshot:
@@ -913,11 +927,13 @@ class Worker:
             # lets the controller finalize it (stamp finished_at_ms) instead of
             # re-polling forever.
             for desired in request.desired:
-                if self.task_by_uid(AttemptUid(desired.attempt_uid)) is None:
+                if self.task_by_uid(desired.attempt_uid) is None:
                     observations.append(
-                        worker_pb2.Worker.AttemptObservation(
-                            attempt_uid=desired.attempt_uid,
-                            state=job_pb2.TASK_STATE_MISSING,
+                        AttemptStatus(
+                            AttemptObservation(
+                                attempt_uid=desired.attempt_uid,
+                                state=TaskState.MISSING,
+                            )
                         )
                     )
 
@@ -927,22 +943,22 @@ class Worker:
         if not health.healthy:
             logger.warning("Reconcile: worker health check failed: %s", health.error)
 
-        worker_health = worker_pb2.Worker.WorkerHealth(
+        worker_health = WorkerHealth(
             healthy=health.healthy,
             health_error=health.error,
             resources=resource_snapshot,
         )
 
-        return worker_pb2.Worker.ReconcileResponse(
+        return WorkerReconcileResponse(
             worker_id=self._worker_id or "",
-            observed=observations,
+            observed=tuple(observations),
             health=worker_health,
         )
 
     def _process_run_intent(
         self,
         attempt_uid: AttemptUid,
-        attempt_spec: worker_pb2.Worker.AttemptSpec,
+        launch: AttemptLaunch | None,
     ) -> None:
         """Handle a single DesiredAttempt with intent=run.
 
@@ -957,15 +973,14 @@ class Worker:
         if task is not None:
             return
 
-        if attempt_spec.HasField("request"):
-            request = attempt_spec.request
+        if launch is not None:
             logger.info(
                 "Reconcile: enqueuing attempt uid=%s task=%s attempt=%d (spec inline)",
                 attempt_uid,
-                request.task_id,
-                request.attempt_id,
+                launch.task_id,
+                launch.attempt_id,
             )
-            self.submit_task(request)
+            self.submit_task(launch)
         else:
             logger.info("Reconcile: attempt uid=%s unknown and no spec; will report MISSING", attempt_uid)
 
@@ -986,26 +1001,34 @@ class Worker:
     def _build_observation(
         self,
         task: TaskAttempt,
-    ) -> worker_pb2.Worker.AttemptObservation:
+    ) -> AttemptStatus:
         """Build an AttemptObservation from a local TaskAttempt.
 
         The observation is keyed by ``attempt_uid``.
         """
         state = task.status
         # Workers never report PENDING to the controller; map it to BUILDING.
-        if state == job_pb2.TASK_STATE_PENDING:
-            state = job_pb2.TASK_STATE_BUILDING
+        if state == TaskState.PENDING:
+            state = TaskState.BUILDING
 
-        obs = worker_pb2.Worker.AttemptObservation(
+        observation = AttemptObservation(
             attempt_uid=task.attempt_uid,
             state=state,
-            exit_code=task.exit_code or 0,
-            error=task.error or "",
-            container_id=task.platform_container_id or "",
+            exit_code=task.exit_code,
+            error=task.error,
+            container_id=task.platform_container_id,
         )
-        if task.status in self._TERMINAL_STATES and task.finished_at is not None:
-            obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
-        return obs
+        return AttemptStatus(
+            observation=observation,
+            finished_at=task.finished_at if task.status in self._TERMINAL_STATES else None,
+            resource_usage=ResourceUsage(
+                memory_mb=task.current_memory_mb,
+                disk_mb=task.disk_mb,
+                cpu_millicores=task.current_cpu_millicores,
+                memory_peak_mb=task.peak_memory_mb,
+                process_count=task.process_count,
+            ),
+        )
 
     def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int = 5000) -> None:
         """Kill ``attempt`` in a daemon thread so an RPC handler does not block on it.
@@ -1035,9 +1058,10 @@ class Worker:
         parallel automatically. Per-attempt exceptions are logged and dropped.
         """
         limiter = RateLimiter(interval_seconds=self._profile_interval.to_seconds())
-        cpu_request = job_pb2.ProfileTaskRequest(
-            duration_seconds=self._profile_duration_seconds,
-            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)),
+        cpu_profile = CpuProfileConfiguration(
+            format=CpuProfileFormat.SPEEDSCOPE,
+            rate_hz=0,
+            native=None,
         )
         while not stop_event.is_set():
             remaining = limiter.time_until_next()
@@ -1047,7 +1071,7 @@ class Worker:
                 break
             limiter.mark_run()
             with self._lock:
-                running = [a for a in self._tasks if a.status == job_pb2.TASK_STATE_RUNNING]
+                running = [a for a in self._tasks if a.status == TaskState.RUNNING]
             for attempt in running:
                 if stop_event.is_set():
                     break
@@ -1055,7 +1079,8 @@ class Worker:
                 try:
                     self.capture_and_log_profile(
                         target=target,
-                        request=cpu_request,
+                        duration=self._profile_duration_seconds,
+                        profile=cpu_profile,
                         trigger=ProfileTrigger.PERIODIC,
                     )
                 except Exception:
@@ -1069,7 +1094,8 @@ class Worker:
         self,
         *,
         target: str,
-        request: job_pb2.ProfileTaskRequest,
+        duration: int,
+        profile: ProfileConfiguration,
         trigger: ProfileTrigger,
     ) -> bytes:
         """Profile ``target`` and write one ``IrisProfile`` row; returns the captured bytes.
@@ -1083,11 +1109,11 @@ class Worker:
 
         For task targets the resolved attempt must be ``RUNNING``.
         """
-        duration = request.duration_seconds or self._profile_duration_seconds
+        duration = duration or self._profile_duration_seconds
         assert self._worker_id, "worker_id required before capturing profiles"
 
         if target == "/system/process":
-            data = profile_local_process(duration, request.profile_type)
+            data = profile_local_process(duration, profile)
             row_source = f"/system/worker/{self._worker_id}"
             row_attempt_id: int | None = None
         else:
@@ -1100,9 +1126,9 @@ class Worker:
                     raise RuntimeError(f"no attempts for task {task_id_wire}")
                 resolved_attempt_id = current.attempt_id
             attempt = self.task_by_attempt(task_id_wire, resolved_attempt_id)
-            if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
+            if attempt is None or attempt.status != TaskState.RUNNING:
                 raise RuntimeError("attempt no longer running")
-            data = attempt.profile(duration, request.profile_type)
+            data = attempt.profile(duration, profile)
             row_source = task_id_wire
             row_attempt_id = resolved_attempt_id
 
@@ -1118,7 +1144,7 @@ class Worker:
                     attempt_id=row_attempt_id,
                     vm_id=self._worker_id,
                     duration_seconds=duration,
-                    profile_type=request.profile_type,
+                    profile=profile,
                     profile_data=data,
                     trigger=trigger,
                 )
@@ -1126,23 +1152,19 @@ class Worker:
         )
         return data
 
-    def exec_in_container(
-        self, task_id: str, command: list[str], timeout_seconds: int = 60
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+    def exec_in_container(self, task_id: str, command: list[str], timeout_seconds: int = 60) -> ExecResult:
         """Execute a command in a running task's container.
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
         """
         attempt = self.current_attempt(task_id)
         if not attempt:
-            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
-        if attempt.status != job_pb2.TASK_STATE_RUNNING:
-            return worker_pb2.Worker.ExecInContainerResponse(
-                error=f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})"
-            )
+            return ExecResult(0, "", "", f"Task {task_id} not found")
+        if attempt.status != TaskState.RUNNING:
+            return ExecResult(0, "", "", f"Task {task_id} is not running (state=TASK_STATE_{attempt.status.name})")
         container_id = attempt.container_id
         if not container_id:
-            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+            return ExecResult(0, "", "", f"Task {task_id} has no container")
         return attempt.exec_in_container(command, timeout_seconds)
 
     @property

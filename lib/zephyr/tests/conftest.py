@@ -21,7 +21,7 @@ from fray.types import ResourceConfig
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.cluster.resources.execution import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
 from zephyr.execution import ZephyrContext

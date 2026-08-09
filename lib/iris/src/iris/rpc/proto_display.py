@@ -8,7 +8,9 @@ import signal
 import humanfriendly
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
-from iris.rpc import job_pb2, vm_pb2
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
+from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+from iris.rpc import vm_pb2
 
 
 def signal_name(signum: int) -> str:
@@ -39,7 +41,10 @@ def vm_state_name(state: int) -> str:
 
 def job_state_name(state: int) -> str:
     """Return enum name like 'JOB_STATE_RUNNING'."""
-    return _enum_name(job_pb2.JobState, state)
+    try:
+        return f"JOB_STATE_{JobState(state).name}"
+    except ValueError:
+        return f"UNKNOWN({state})"
 
 
 def job_state_friendly(state: int) -> str:
@@ -49,7 +54,10 @@ def job_state_friendly(state: int) -> str:
 
 def task_state_name(state: int) -> str:
     """Return enum name like 'TASK_STATE_RUNNING'."""
-    return _enum_name(job_pb2.TaskState, state)
+    try:
+        return f"TASK_STATE_{TaskState(state).name}"
+    except ValueError:
+        return f"UNKNOWN({state})"
 
 
 def task_state_friendly(state: int) -> str:
@@ -57,8 +65,8 @@ def task_state_friendly(state: int) -> str:
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
 
 
-def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    """Format a ResourceSpec proto as a compact comma-separated summary.
+def format_resources(resources: ResourceSpec | None) -> str:
+    """Format a native resource specification as a compact summary.
 
     Examples:
         format_resources(...) -> "0.5 cpu, 8 GiB, 5 GiB disk, v5litepod-16"
@@ -68,19 +76,17 @@ def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     if not resources:
         return "-"
     parts: list[str] = []
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
-    if resources.memory_bytes:
-        parts.append(humanfriendly.format_size(resources.memory_bytes, binary=True))
-    if resources.disk_bytes:
-        parts.append(f"{humanfriendly.format_size(resources.disk_bytes, binary=True)} disk")
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            parts.append(f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu")
+    if resources.cpu:
+        parts.append(f"{resources.cpu:g} cpu")
+    if resources.memory:
+        parts.append(humanfriendly.format_size(resources.memory, binary=True))
+    if resources.disk:
+        parts.append(f"{humanfriendly.format_size(resources.disk, binary=True)} disk")
+    if isinstance(resources.device, TpuDevice):
+        parts.append(resources.device.variant)
+    elif isinstance(resources.device, GpuDevice):
+        gpu = resources.device
+        parts.append(f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu")
     return ", ".join(parts) if parts else "-"
 
 
@@ -104,43 +110,19 @@ def format_accelerator_display(device_type: str, variant: str = "") -> str:
 
 
 def priority_band_name(band: int) -> str:
-    """Human-friendly lowercase name for a PriorityBand proto value."""
-    return job_pb2.PriorityBand.Name(band).removeprefix("PRIORITY_BAND_").lower()
+    """Human-friendly lowercase name for a priority band value."""
+    return PriorityBand(band).name.lower()
 
 
 def priority_band_value(name: str) -> int:
-    """Proto int value from a human-friendly band name like 'interactive'."""
-    return job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{name.upper()}")
+    """Integer value from a human-friendly band name like 'interactive'."""
+    return int(PriorityBand[name.upper()])
 
 
 PRIORITY_BAND_VALUES: list[int] = [
-    job_pb2.PRIORITY_BAND_PRODUCTION,
-    job_pb2.PRIORITY_BAND_INTERACTIVE,
-    job_pb2.PRIORITY_BAND_BATCH,
+    int(PriorityBand.PRODUCTION),
+    int(PriorityBand.INTERACTIVE),
+    int(PriorityBand.BATCH),
 ]
 
 PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
-
-
-# ---------------------------------------------------------------------------
-# ContainerProfile helpers
-# ---------------------------------------------------------------------------
-
-
-# User-selectable profiles, ordered ascending by privilege.
-CONTAINER_PROFILE_VALUES: list[int] = [
-    job_pb2.CONTAINER_PROFILE_RESTRICTED,
-    job_pb2.CONTAINER_PROFILE_DEFAULT,
-    job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
-    job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-    job_pb2.CONTAINER_PROFILE_GVISOR,
-]
-
-CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
-
-
-def resolve_container_profile(profile: int) -> int:
-    """Resolve UNSPECIFIED to the DEFAULT profile; pass others through."""
-    if profile == job_pb2.CONTAINER_PROFILE_UNSPECIFIED:
-        return job_pb2.CONTAINER_PROFILE_DEFAULT
-    return profile

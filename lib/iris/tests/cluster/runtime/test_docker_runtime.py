@@ -8,9 +8,10 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
+from iris.cluster.resources.execution import CommandEntrypoint, ResourceSpec, RuntimeEntrypoint, TpuDevice
+from iris.cluster.resources.job import ContainerProfile
 from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-from iris.rpc import job_pb2
 
 
 @pytest.fixture
@@ -106,14 +107,13 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    resources = job_pb2.ResourceSpecProto(memory_bytes=memory_bytes)
-    if device == "tpu":
-        resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5p", count=4))
+    resources = ResourceSpec(
+        memory=memory_bytes,
+        device=TpuDevice(variant="v5p", count=4) if device == "tpu" else None,
+    )
     config = ContainerConfig(
         image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
-        ),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("echo", "hello")), {}, {}),
         env={},
         resources=resources,
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
@@ -157,33 +157,33 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
 
 def test_security_flags_default_cpu():
     """UNSPECIFIED resolves to DEFAULT: hardened CPU defaults with SYS_PTRACE."""
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, is_tpu_run=False)
+    flags = _security_flags(ContainerProfile.UNSPECIFIED, is_tpu_run=False)
     assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "SYS_PTRACE"]
 
 
 def test_security_flags_default_tpu_is_privileged():
     """A TPU run is privileged for device access even under DEFAULT."""
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DEFAULT, is_tpu_run=True)
+    flags = _security_flags(ContainerProfile.DEFAULT, is_tpu_run=True)
     assert "--privileged" in flags
     assert "no-new-privileges" not in flags
     assert "SYS_PTRACE" in flags
 
 
 def test_security_flags_restricted_omits_ptrace():
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_RESTRICTED, is_tpu_run=False)
+    flags = _security_flags(ContainerProfile.RESTRICTED, is_tpu_run=False)
     assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
     assert "SYS_PTRACE" not in flags
 
 
 def test_security_flags_privileged_cpu():
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_PRIVILEGED, is_tpu_run=False)
+    flags = _security_flags(ContainerProfile.PRIVILEGED, is_tpu_run=False)
     assert "--privileged" in flags
     assert "--cap-drop" not in flags
     assert "SYS_PTRACE" in flags
 
 
 def test_security_flags_docker_access_mounts_socket():
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS, is_tpu_run=False)
+    flags = _security_flags(ContainerProfile.DOCKER_ACCESS, is_tpu_run=False)
     assert "-v" in flags
     assert "/var/run/docker.sock:/var/run/docker.sock" in flags
     # Still hardened like DEFAULT otherwise.
@@ -192,7 +192,7 @@ def test_security_flags_docker_access_mounts_socket():
 
 def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
     """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
-    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+    flags = _security_flags(ContainerProfile.GVISOR, is_tpu_run=False)
     assert flags == ["--runtime", "runsc"]
     # in-guest root needs the default cap set, so the container is NOT cap-dropped
     # or privileged — gVisor provides the host isolation instead.

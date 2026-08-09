@@ -34,7 +34,8 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
-from iris.cluster.resources.job import JobSpec
+from iris.cluster.resources.execution import GpuDevice, TpuDevice
+from iris.cluster.resources.job import ContainerProfile, ExistingJobPolicy, JobSpec, PriorityBand
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -42,9 +43,7 @@ from iris.cluster.types import (
     UserBudgetDefaults,
     is_job_finished,
 )
-from iris.rpc import job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
-from iris.rpc.proto_display import priority_band_name, resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +53,10 @@ CLIENT_FRESHNESS_WINDOW = timedelta(days=14)
 _FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
 _SUBMITTABLE_PRIORITY_BANDS = frozenset(
     {
-        job_pb2.PRIORITY_BAND_INHERIT,
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
+        PriorityBand.INHERIT,
+        PriorityBand.PRODUCTION,
+        PriorityBand.INTERACTIVE,
+        PriorityBand.BATCH,
     }
 )
 _LOCAL_ADMIN_FEDERATION_DENIED = (
@@ -158,11 +157,9 @@ class JobResources:
         spec = self._store_payloads(spec, bundle_blob)
         spec = replace(
             spec,
-            constraints=tuple(
-                merge_constraints(constraints_from_resources(spec.resources.to_exact_proto()), list(spec.constraints))
-            ),
+            constraints=tuple(merge_constraints(constraints_from_resources(spec.resources), list(spec.constraints))),
         )
-        tpu_error = validate_tpu_request(spec.resources.to_exact_proto(), list(spec.constraints))
+        tpu_error = validate_tpu_request(spec.resources, list(spec.constraints))
         if tpu_error:
             raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
 
@@ -187,7 +184,7 @@ class JobResources:
             if reads.get_job_state(tx, job_id) is not None:
                 if federation is not None and self._federated_replay(tx, job_id, federation):
                     return job_id
-                if spec.existing_job_policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+                if spec.existing_job_policy is ExistingJobPolicy.KEEP:
                     return job_id
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists (concurrent submission)")
             ops.job.submit(
@@ -222,13 +219,14 @@ class JobResources:
         if spec.priority_band not in _SUBMITTABLE_PRIORITY_BANDS:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Unknown priority_band {int(spec.priority_band)}")
         inherited_band = None
-        if spec.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
+        if spec.priority_band is PriorityBand.INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as tx:
                 inherited_band = reads.get_priority_bands(tx, [job_id.parent])[job_id.parent]
         band = ops.job.resolve_priority_band(int(spec.priority_band), inherited_band)
-        spec = replace(spec, priority_band=band)
+        resolved_band = PriorityBand(int(band))
+        spec = replace(spec, priority_band=resolved_band)
         if federation is None:
-            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            if resolved_band is PriorityBand.PRODUCTION and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as tx:
@@ -237,28 +235,28 @@ class JobResources:
                 if band < max_band:
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
-                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                        f"(max band: {priority_band_name(max_band)})",
+                        f"User {job_id.user} cannot submit {resolved_band.name.lower()} jobs "
+                        f"(max band: {PriorityBand(int(max_band)).name.lower()})",
                     )
 
-        profile = resolve_container_profile(spec.container_profile)
+        profile = (
+            ContainerProfile.DEFAULT
+            if spec.container_profile is ContainerProfile.UNSPECIFIED
+            else spec.container_profile
+        )
         if profile in (
-            job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
-            job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+            ContainerProfile.DOCKER_ACCESS,
+            ContainerProfile.PRIVILEGED,
         ):
             if self._auth.provider and federation is None:
                 authorize(AuthzAction.SET_CONTAINER_PROFILE)
         if (
-            profile == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+            profile is ContainerProfile.DOCKER_ACCESS
             and BackendCapability.WORKER_DAEMON not in self._runtime.capabilities
         ):
             raise ConnectError(Code.INVALID_ARGUMENT, "docker_access requires a worker-daemon backend")
         device = spec.resources.device
-        if (
-            profile == job_pb2.CONTAINER_PROFILE_GVISOR
-            and device is not None
-            and device.WhichOneof("device") in ("gpu", "tpu")
-        ):
+        if profile is ContainerProfile.GVISOR and isinstance(device, (GpuDevice, TpuDevice)):
             raise ConnectError(Code.INVALID_ARGUMENT, "gvisor is CPU-only")
 
         if spec.replicas > 0:
@@ -292,13 +290,13 @@ class JobResources:
             if federation is not None and self._federated_replay(tx, job_id, federation):
                 return _SubmissionPreparation.REUSE_EXISTING
             policy = spec.existing_job_policy
-            if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
+            if policy is ExistingJobPolicy.ERROR:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
-            if policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+            if policy is ExistingJobPolicy.KEEP:
                 if not is_job_finished(state):
                     return _SubmissionPreparation.REUSE_EXISTING
                 return self._replace_finished(tx, job_id, record_tombstone)
-            elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
+            elif policy is ExistingJobPolicy.RECREATE:
                 if is_job_finished(state):
                     return self._replace_finished(tx, job_id, record_tombstone)
                 else:
@@ -342,12 +340,15 @@ class JobResources:
         }
         if not large_files:
             return spec
-        entrypoint = job_pb2.RuntimeEntrypoint()
-        entrypoint.CopyFrom(spec.entrypoint)
+        files = dict(spec.entrypoint.workdir_files)
+        refs = dict(spec.entrypoint.workdir_file_refs)
         for name, data in large_files.items():
-            del entrypoint.workdir_files[name]
-            entrypoint.workdir_file_refs[name] = self._bundle_store.write(data)
-        return replace(spec, entrypoint=entrypoint)
+            del files[name]
+            refs[name] = self._bundle_store.write(data)
+        return replace(
+            spec,
+            entrypoint=replace(spec.entrypoint, workdir_files=files, workdir_file_refs=refs),
+        )
 
     def _submission_plan(
         self,
@@ -375,7 +376,7 @@ class JobResources:
             error = backend.autoscaler.job_feasibility(
                 constraints=list(spec.constraints),
                 replicas=spec.replicas if spec.coscheduling is not None else None,
-                resources=spec.resources.to_exact_proto(),
+                resources=spec.resources,
             )
             if error is None:
                 feasible = True

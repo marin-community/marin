@@ -25,7 +25,8 @@ from pathlib import Path
 import pulumi
 import pulumi_command as command
 from google.protobuf import json_format
-from iris.cluster.types import ResourceSpec
+from iris.cluster.resources.execution import ResourceSpec
+from iris.rpc.resource_codec import resource_spec_to_proto
 
 from iac.iris.spec import ALWAYS_ON_RETRIES, DEFAULT_READY_WAIT, SPEC_ENV_VAR, ServiceSpec
 
@@ -106,7 +107,7 @@ def wire_spec(args: IrisServiceArgs) -> ServiceSpec:
         name=args.name,
         user=args.user,
         entrypoint=args.entrypoint,
-        resources=json_format.MessageToDict(args.resources.to_proto()),
+        resources=json_format.MessageToDict(resource_spec_to_proto(args.resources)),
         regions=args.regions,
         port=args.port,
         endpoint=args.endpoint,

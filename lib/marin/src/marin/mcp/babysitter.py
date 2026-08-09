@@ -17,15 +17,25 @@ from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.resources.attempt import AttemptSummary
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
+from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSummary
 from iris.cluster.resources.node import NodeHealth, NodeQuery, NodeSummary
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.types import JobName, ResourceSpec, TaskAttempt
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
@@ -88,32 +98,30 @@ def _duration_ms(start, end) -> int | None:
 
 
 def _resource_spec_to_json(resources: ResourceSpec) -> dict[str, Any]:
-    exact = resources.to_exact_proto()
     return {
-        "cpu_millicores": int(exact.cpu_millicores),
-        "memory_bytes": int(exact.memory_bytes),
-        "disk_bytes": int(exact.disk_bytes),
-        "device": _device_config_to_json(exact.device) if exact.HasField("device") else _cpu_device_json(),
+        "cpu_millicores": resources.cpu_millicores,
+        "memory_bytes": resources.memory,
+        "disk_bytes": resources.disk,
+        "device": _device_to_json(resources.device),
     }
 
 
-def _device_config_to_json(device_config: job_pb2.DeviceConfig) -> dict[str, Any]:
-    kind = device_config.WhichOneof("device")
-    if kind == "gpu":
+def _device_to_json(device: CpuDevice | GpuDevice | TpuDevice | None) -> dict[str, Any]:
+    if isinstance(device, GpuDevice):
         return {
             "type": "gpu",
-            "variant": device_config.gpu.variant,
-            "count": int(device_config.gpu.count),
+            "variant": device.variant,
+            "count": device.count,
         }
-    if kind == "tpu":
+    if isinstance(device, TpuDevice):
         return {
             "type": "tpu",
-            "variant": device_config.tpu.variant,
-            "topology": device_config.tpu.topology,
-            "count": int(device_config.tpu.count),
+            "variant": device.variant,
+            "topology": device.topology,
+            "count": device.count,
         }
-    if kind == "cpu":
-        return {"type": "cpu", "variant": device_config.cpu.variant}
+    if isinstance(device, CpuDevice):
+        return {"type": "cpu", "variant": device.variant}
     return _cpu_device_json()
 
 
@@ -612,7 +620,7 @@ class IrisBabysitter:
                 job_pb2.ProfileTaskRequest(
                     target=target,
                     duration_seconds=duration_seconds,
-                    profile_type=profile,
+                    profile_type=profile_configuration_to_proto(profile),
                 )
             )
             profile_data = response.profile_data
@@ -770,13 +778,13 @@ def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchSc
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 
-def _profile_type(profile_type: str, *, include_locals: bool) -> job_pb2.ProfileType:
+def _profile_type(profile_type: str, *, include_locals: bool) -> ProfileConfiguration:
     if profile_type == "threads":
-        return job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals))
+        return ThreadsProfileConfiguration(include_locals=include_locals)
     if profile_type == "cpu":
-        return job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
+        return CpuProfileConfiguration(format=CpuProfileFormat.SPEEDSCOPE, rate_hz=0, native=None)
     if profile_type == "mem":
-        return job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
+        return MemoryProfileConfiguration(format=MemoryProfileFormat.FLAMEGRAPH, leaks=False)
     raise ValueError(f"Unknown profile_type: {profile_type}")
 
 

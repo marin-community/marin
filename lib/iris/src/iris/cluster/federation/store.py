@@ -18,8 +18,9 @@ from typing import Protocol
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.resources.endpoint import EndpointAccess
+from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.resources.job import JobSpec
-from iris.cluster.types import JobName, ResourceSpec
+from iris.cluster.types import JobName
 
 
 class FederationDirection(IntEnum):

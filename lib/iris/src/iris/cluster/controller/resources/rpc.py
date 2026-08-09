@@ -9,11 +9,11 @@ from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, get_verified_identity
 
 from iris.cluster.authorization import authorize_resource_owner
-from iris.cluster.constraints import Constraint
 from iris.cluster.controller.resources.facade import ResourceController
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
-from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.endpoint import EndpointAccess, EndpointQuery
+from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
+from iris.cluster.resources.attempt import AttemptSummary
+from iris.cluster.resources.endpoint import EndpointAccess, EndpointDetail, EndpointQuery, EndpointSummary
 from iris.cluster.resources.errors import (
     ActionIdempotencyConflict,
     ActionPolicyRejected,
@@ -27,24 +27,30 @@ from iris.cluster.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
     JobIdentity,
+    NodeIdentity,
     NodeLocator,
     ResourceKey,
     ResourceKind,
+    SliceIdentity,
     SliceLocator,
     TaskIdentity,
 )
-from iris.cluster.resources.job import JobQuery, JobSpec
+from iris.cluster.resources.job import JobQuery, JobSummary
 from iris.cluster.resources.log import LogEntry, LogLevel, LogQuery
-from iris.cluster.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
-from iris.cluster.resources.slice import MembershipState, SliceLifecycle, SliceQuery
+from iris.cluster.resources.node import NodeAttribute, NodeAttributeKind, NodeHealth, NodeQuery, NodeSummary
+from iris.cluster.resources.slice import MembershipState, SliceLifecycle, SliceMember, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.cluster.resources.state import JobState, TaskState
-from iris.cluster.resources.task import TaskQuery
-from iris.cluster.types import CoschedulingConfig, JobName, ResourceSpec
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.cluster.types import JobName
 from iris.rpc import iris_logging_pb2, resource_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE
-from iris.rpc.profile_codec import profile_configuration_from_proto
-from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
+from iris.rpc.resource_codec import (
+    job_spec_from_proto,
+    job_spec_to_proto,
+    profile_configuration_from_proto,
+)
+from iris.time_proto import duration_from_proto, timestamp_from_proto, timestamp_to_proto
 
 _RESOURCE_KIND_FROM_PROTO = {
     resource_pb2.RESOURCE_KIND_JOB: ResourceKind.JOB,
@@ -129,11 +135,11 @@ def _job_identity_to_proto(value: JobIdentity) -> resource_pb2.JobIdentity:
     return resource_pb2.JobIdentity(key=_resource_key_to_proto(value.key), job_uid=value.job_uid)
 
 
-def _task_identity_to_proto(value) -> resource_pb2.TaskIdentity:
+def _task_identity_to_proto(value: TaskIdentity) -> resource_pb2.TaskIdentity:
     return resource_pb2.TaskIdentity(key=_resource_key_to_proto(value.key), task_uid=value.task_uid)
 
 
-def _attempt_identity_to_proto(value) -> resource_pb2.AttemptIdentity:
+def _attempt_identity_to_proto(value: AttemptIdentity) -> resource_pb2.AttemptIdentity:
     return resource_pb2.AttemptIdentity(
         task=_resource_key_to_proto(value.task),
         attempt_number=value.attempt_number,
@@ -157,7 +163,7 @@ def _attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> Attempt
     )
 
 
-def _node_identity_to_proto(value) -> resource_pb2.NodeIdentity:
+def _node_identity_to_proto(value: NodeIdentity) -> resource_pb2.NodeIdentity:
     return resource_pb2.NodeIdentity(
         key=_resource_key_to_proto(value.key),
         backend_id=value.backend_id,
@@ -165,7 +171,7 @@ def _node_identity_to_proto(value) -> resource_pb2.NodeIdentity:
     )
 
 
-def _slice_identity_to_proto(value) -> resource_pb2.SliceIdentity:
+def _slice_identity_to_proto(value: SliceIdentity) -> resource_pb2.SliceIdentity:
     return resource_pb2.SliceIdentity(
         key=_resource_key_to_proto(value.key),
         backend_id=value.backend_id,
@@ -173,7 +179,7 @@ def _slice_identity_to_proto(value) -> resource_pb2.SliceIdentity:
     )
 
 
-def _node_summary_to_proto(value) -> resource_pb2.NodeSummary:
+def _node_summary_to_proto(value: NodeSummary) -> resource_pb2.NodeSummary:
     result = resource_pb2.NodeSummary(
         identity=_node_identity_to_proto(value.identity),
         health=_NODE_HEALTH_TO_PROTO[value.health],
@@ -196,7 +202,7 @@ def _node_summary_to_proto(value) -> resource_pb2.NodeSummary:
     return result
 
 
-def _node_attribute_to_proto(value) -> resource_pb2.NodeAttribute:
+def _node_attribute_to_proto(value: NodeAttribute) -> resource_pb2.NodeAttribute:
     result = resource_pb2.NodeAttribute(key=value.key)
     if value.kind is NodeAttributeKind.STRING:
         result.string_value = value.string_value or ""
@@ -207,7 +213,7 @@ def _node_attribute_to_proto(value) -> resource_pb2.NodeAttribute:
     return result
 
 
-def _slice_summary_to_proto(value) -> resource_pb2.SliceSummary:
+def _slice_summary_to_proto(value: SliceSummary) -> resource_pb2.SliceSummary:
     result = resource_pb2.SliceSummary(
         identity=_slice_identity_to_proto(value.identity),
         scaling_group_id=value.scaling_group_id,
@@ -221,7 +227,7 @@ def _slice_summary_to_proto(value) -> resource_pb2.SliceSummary:
     return result
 
 
-def _slice_member_to_proto(value) -> resource_pb2.SliceMember:
+def _slice_member_to_proto(value: SliceMember) -> resource_pb2.SliceMember:
     result = resource_pb2.SliceMember(
         provider_node_id=value.provider_node_id,
         observed_at=timestamp_to_proto(value.observed_at),
@@ -266,7 +272,7 @@ def _log_entry_to_proto(value: LogEntry) -> iris_logging_pb2.LogEntry:
     return result
 
 
-def _job_summary_to_proto(value) -> resource_pb2.JobSummary:
+def _job_summary_to_proto(value: JobSummary) -> resource_pb2.JobSummary:
     result = resource_pb2.JobSummary(
         identity=_job_identity_to_proto(value.identity),
         owner_id=value.owner_id,
@@ -287,7 +293,7 @@ def _job_summary_to_proto(value) -> resource_pb2.JobSummary:
     return result
 
 
-def _task_summary_to_proto(value) -> resource_pb2.TaskSummary:
+def _task_summary_to_proto(value: TaskSummary) -> resource_pb2.TaskSummary:
     result = resource_pb2.TaskSummary(
         identity=_task_identity_to_proto(value.identity),
         job=_job_identity_to_proto(value.job),
@@ -312,7 +318,7 @@ def _task_summary_to_proto(value) -> resource_pb2.TaskSummary:
     return result
 
 
-def _attempt_summary_to_proto(value) -> resource_pb2.AttemptSummary:
+def _attempt_summary_to_proto(value: AttemptSummary) -> resource_pb2.AttemptSummary:
     result = resource_pb2.AttemptSummary(
         identity=_attempt_identity_to_proto(value.identity),
         state=value.state,
@@ -333,7 +339,7 @@ def _attempt_summary_to_proto(value) -> resource_pb2.AttemptSummary:
     return result
 
 
-def _task_detail_to_proto(value) -> resource_pb2.TaskDetail:
+def _task_detail_to_proto(value: TaskDetail) -> resource_pb2.TaskDetail:
     return resource_pb2.TaskDetail(
         summary=_task_summary_to_proto(value.summary),
         attempts=[_attempt_summary_to_proto(item) for item in value.attempts],
@@ -360,7 +366,7 @@ def _action_receipt_to_proto(value: ActionReceipt) -> resource_pb2.ActionReceipt
     return result
 
 
-def _activity_entry_to_proto(value) -> resource_pb2.ActivityEntry:
+def _activity_entry_to_proto(value: ActivityEntry) -> resource_pb2.ActivityEntry:
     return resource_pb2.ActivityEntry(
         entry_id=value.entry_id,
         occurred_at=timestamp_to_proto(value.occurred_at),
@@ -375,7 +381,7 @@ def _activity_entry_to_proto(value) -> resource_pb2.ActivityEntry:
     )
 
 
-def _endpoint_summary_to_proto(value) -> resource_pb2.EndpointSummary:
+def _endpoint_summary_to_proto(value: EndpointSummary) -> resource_pb2.EndpointSummary:
     result = resource_pb2.EndpointSummary(
         key=_resource_key_to_proto(value.key),
         endpoint_id=value.endpoint_id,
@@ -390,7 +396,7 @@ def _endpoint_summary_to_proto(value) -> resource_pb2.EndpointSummary:
     return result
 
 
-def _endpoint_detail_to_proto(value) -> resource_pb2.EndpointDetail:
+def _endpoint_detail_to_proto(value: EndpointDetail) -> resource_pb2.EndpointDetail:
     return resource_pb2.EndpointDetail(
         summary=_endpoint_summary_to_proto(value.summary),
         address=value.address,
@@ -433,75 +439,6 @@ def _authorize_key_owner(key: ResourceKey) -> None:
     authorize_resource_owner(owner)
 
 
-def _job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
-    return JobSpec(
-        version=value.version,
-        name=value.name,
-        entrypoint=value.entrypoint,
-        resources=ResourceSpec(
-            cpu=value.resources.cpu_millicores / 1_000,
-            memory=value.resources.memory_bytes,
-            disk=value.resources.disk_bytes,
-            device=value.resources.device if value.resources.HasField("device") else None,
-        ),
-        environment=value.environment,
-        bundle_id=value.bundle_id,
-        scheduling_timeout=(
-            duration_from_proto(value.scheduling_timeout) if value.HasField("scheduling_timeout") else None
-        ),
-        ports=tuple(value.ports),
-        max_task_failures=value.max_task_failures,
-        max_retries_failure=value.max_retries_failure,
-        max_retries_preemption=value.max_retries_preemption,
-        constraints=tuple(Constraint.from_proto(candidate) for candidate in value.constraints),
-        coscheduling=(
-            CoschedulingConfig(group_by=value.coscheduling.group_by) if value.HasField("coscheduling") else None
-        ),
-        replicas=value.replicas,
-        timeout=duration_from_proto(value.timeout) if value.HasField("timeout") else None,
-        fail_if_exists=value.fail_if_exists,
-        preemption_policy=value.preemption_policy,
-        existing_job_policy=value.existing_job_policy,
-        priority_band=value.priority_band,
-        task_image=value.task_image,
-        submit_argv=tuple(value.submit_argv),
-        client_revision_date=value.client_revision_date,
-        container_profile=value.container_profile,
-    )
-
-
-def _job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
-    result = resource_pb2.JobSpec(
-        version=value.version,
-        name=value.name,
-        entrypoint=value.entrypoint,
-        resources=value.resources.to_exact_proto(),
-        environment=value.environment,
-        bundle_id=value.bundle_id,
-        ports=value.ports,
-        max_task_failures=value.max_task_failures,
-        max_retries_failure=value.max_retries_failure,
-        max_retries_preemption=value.max_retries_preemption,
-        constraints=[constraint.to_proto() for constraint in value.constraints],
-        replicas=value.replicas,
-        fail_if_exists=value.fail_if_exists,
-        preemption_policy=value.preemption_policy,
-        existing_job_policy=value.existing_job_policy,
-        priority_band=value.priority_band,
-        task_image=value.task_image,
-        submit_argv=value.submit_argv,
-        client_revision_date=value.client_revision_date,
-        container_profile=value.container_profile,
-    )
-    if value.scheduling_timeout is not None:
-        result.scheduling_timeout.CopyFrom(duration_to_proto(value.scheduling_timeout))
-    if value.coscheduling is not None:
-        result.coscheduling.CopyFrom(value.coscheduling.to_proto())
-    if value.timeout is not None:
-        result.timeout.CopyFrom(duration_to_proto(value.timeout))
-    return result
-
-
 class ResourceServiceImpl:
     """Expose the public ResourceService RPC contract."""
 
@@ -510,7 +447,7 @@ class ResourceServiceImpl:
 
     def submit_job(self, request: resource_pb2.SubmitJobRequest, _ctx: RequestContext) -> resource_pb2.SubmitJobResponse:
         try:
-            identity = self._resources.submit_job(_job_spec_from_proto(request.spec), request.bundle_blob)
+            identity = self._resources.submit_job(job_spec_from_proto(request.spec), request.bundle_blob)
         except (InvalidResourceKey, ValueError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         return resource_pb2.SubmitJobResponse(job=_job_identity_to_proto(identity))
@@ -551,7 +488,7 @@ class ResourceServiceImpl:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         return resource_pb2.DescribeJobResponse(
             job=resource_pb2.JobDetail(
-                summary=_job_summary_to_proto(detail.summary), spec=_job_spec_to_proto(detail.spec)
+                summary=_job_summary_to_proto(detail.summary), spec=job_spec_to_proto(detail.spec)
             )
         )
 

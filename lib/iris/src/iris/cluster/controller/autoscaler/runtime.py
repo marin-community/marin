@@ -71,9 +71,10 @@ from iris.cluster.platforms.types import (
     SliceHandle,
     SliceStatus,
 )
+from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
-from iris.rpc import job_pb2, vm_pb2
+from iris.rpc import vm_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -916,7 +917,7 @@ class Autoscaler:
         constraints: list[Constraint],
         *,
         replicas: int | None = None,
-        resources: job_pb2.ResourceSpecProto | None = None,
+        resources: ResourceSpec | None = None,
     ) -> str | None:
         """Gate LaunchJob: can this job shape ever be scheduled?
 

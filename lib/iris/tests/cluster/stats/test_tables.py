@@ -5,6 +5,8 @@
 
 from datetime import datetime
 
+from iris.cluster.constraints import AttributeValue
+from iris.cluster.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
 from iris.cluster.stats.tables import (
     IrisTaskStat,
     IrisWorkerStat,
@@ -12,11 +14,10 @@ from iris.cluster.stats.tables import (
     build_task_stat,
     build_worker_stat,
 )
-from iris.rpc import job_pb2
 
 
 def test_build_worker_stat_shape():
-    snapshot = job_pb2.WorkerResourceSnapshot(
+    snapshot = WorkerResourceSnapshot(
         host_cpu_percent=42,
         memory_used_bytes=1_000_000,
         memory_total_bytes=8_000_000,
@@ -27,15 +28,17 @@ def test_build_worker_stat_shape():
         net_recv_bytes=1234,
         net_sent_bytes=5678,
     )
-    metadata = job_pb2.WorkerMetadata(
+    metadata = WorkerMetadata(
         cpu_count=8,
         memory_bytes=16_000_000_000,
         tpu_name="tpu-x",
         gce_instance_name="vm-1",
         gce_zone="us-central1-a",
+        attributes={
+            "device-type": AttributeValue("tpu"),
+            "device-variant": AttributeValue("v6e-8"),
+        },
     )
-    metadata.attributes["device-type"].string_value = "tpu"
-    metadata.attributes["device-variant"].string_value = "v6e-8"
 
     ts = datetime(2026, 5, 1, 12, 0, 0)
     stat = build_worker_stat(
@@ -75,9 +78,8 @@ def test_build_worker_stat_shape():
 
 def test_build_worker_stat_zone_falls_back_to_attribute():
     """When gce_zone is empty, fall back to the ``zone`` worker attribute."""
-    snapshot = job_pb2.WorkerResourceSnapshot()
-    metadata = job_pb2.WorkerMetadata()
-    metadata.attributes["zone"].string_value = "fallback-zone"
+    snapshot = WorkerResourceSnapshot()
+    metadata = WorkerMetadata(attributes={"zone": AttributeValue("fallback-zone")})
 
     stat = build_worker_stat(
         worker_id="w-1",
@@ -91,7 +93,7 @@ def test_build_worker_stat_zone_falls_back_to_attribute():
 
 
 def test_build_task_stat_shape():
-    usage = job_pb2.ResourceUsage(
+    usage = ResourceUsage(
         memory_mb=512,
         memory_peak_mb=600,
         disk_mb=128,
@@ -121,7 +123,7 @@ def test_build_task_stat_shape():
 
 
 def test_build_task_stat_with_accelerator():
-    usage = job_pb2.ResourceUsage(memory_mb=1, memory_peak_mb=2, disk_mb=3, cpu_millicores=4, process_count=1)
+    usage = ResourceUsage(memory_mb=1, memory_peak_mb=2, disk_mb=3, cpu_millicores=4, process_count=1)
     stat = build_task_stat(
         task_id="t",
         attempt_id=0,

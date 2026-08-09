@@ -7,7 +7,7 @@ The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for a
 worker-daemon backend): this reads and writes the DB inside a controller
 transaction to produce the :class:`DispatchBatch` a cluster backend (Kueue
 today) reconciles against. It promotes PENDING tasks, builds per-attempt
-``RunTaskRequest``s, and snapshots the running set. Because it owns DB I/O it
+native Attempt launches, and snapshots the running set. Because it owns DB I/O it
 lives controller-side, not in the DB-less backend; the controller rides its
 output on the reconcile ``ControlSnapshot``.
 """
@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
@@ -26,8 +26,8 @@ from iris.cluster.controller.budget import (
     compute_user_spend,
     interleave_by_user,
 )
+from iris.cluster.controller.codec import constraints_from_json, environment_from_json, runtime_entrypoint_from_json
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
     PendingDispatchRow,
@@ -36,8 +36,10 @@ from iris.cluster.controller.reads import (
 )
 from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.types import JobName, UserBudgetDefaults
-from iris.rpc import job_pb2
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.job import CoschedulingConfig
+from iris.cluster.resources.state import TaskState
+from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ class DispatchBatch:
     ASSIGNED this tick plus the active null-worker roster to poll.
     """
 
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    tasks_to_run: list[AttemptLaunch] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
@@ -62,42 +64,38 @@ scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
 
 
-def build_run_request(
+def build_attempt_launch(
     cur: Tx,
     row: PendingDispatchRow,
     attempt_id: int,
-) -> job_pb2.RunTaskRequest:
-    """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-    run_req = build_run_request_fields(
+) -> AttemptLaunch:
+    """Assemble a native Attempt launch for a direct-provider dispatch row."""
+    uid = reads.attempt_uid_for(cur, row.task_id, attempt_id)
+    if uid is None:
+        raise ValueError(f"Attempt {row.task_id.to_wire()}:{attempt_id} has no attempt_uid")
+    template = AttemptLaunchTemplate(
         num_tasks=row.num_tasks,
-        entrypoint_json=row.entrypoint_json,
-        workdir_files=reads.get_workdir_files(cur, row.job_id),
-        environment_json=row.environment_json,
+        entrypoint=runtime_entrypoint_from_json(
+            row.entrypoint_json,
+            reads.get_workdir_files(cur, row.job_id),
+        ),
+        environment=environment_from_json(row.environment_json),
         bundle_id=row.bundle_id,
         resources=row.resources,
-        ports_json=row.ports_json,
-        constraints_json=row.constraints_json,
+        timeout=Duration.from_ms(row.timeout_ms) if row.timeout_ms is not None and row.timeout_ms > 0 else None,
+        ports=tuple(row.ports_json),
+        constraints=tuple(constraints_from_json(row.constraints_json)),
         task_image=row.task_image,
-        task_id=row.task_id.to_wire(),
-        attempt_id=attempt_id,
-        # Priority selects the Kueue WorkloadPriorityClass on the direct path.
-        priority=row.priority_band,
+        coscheduling=(CoschedulingConfig(row.coscheduling_group_by) if row.has_coscheduling else None),
+        priority_band=row.priority_band,
         container_profile=row.container_profile,
     )
-    # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
-    if row.timeout_ms is not None and row.timeout_ms > 0:
-        run_req.timeout.milliseconds = row.timeout_ms
-    # Coscheduling drives Kueue gang admission on the direct path.
-    if row.has_coscheduling:
-        run_req.coscheduling.group_by = row.coscheduling_group_by
-    # Stamp the attempt's uid so the K8s backend can label the pod with it and
-    # tell this attempt's own pod apart from a stale pod a previous job left at
-    # the same (task_hash, attempt_id) name. Visible in this tx for both paths:
-    # promote inserted the attempt row above, redrive reads the current one.
-    uid = reads.attempt_uid_for(cur, row.task_id, attempt_id)
-    if uid is not None:
-        run_req.attempt_uid = uid
-    return run_req
+    return AttemptLaunch(
+        task_id=row.task_id,
+        attempt_id=attempt_id,
+        attempt_uid=AttemptUid(uid),
+        template=template,
+    )
 
 
 def _dispatch_query(cur: Tx, *predicates) -> list[PendingDispatchRow]:
@@ -267,7 +265,7 @@ def drain_for_dispatch(
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
-    Builds RunTaskRequest for two row classes:
+    Builds native Attempt launches for two row classes:
     - Up to ``max_promotions`` PENDING rows, each promoted to ASSIGNED
       with a fresh attempt_id.
     - All ASSIGNED+null_worker rows whose pod creation may not have landed
@@ -296,7 +294,7 @@ def drain_for_dispatch(
     """
     defaults = defaults or UserBudgetDefaults()
     now_ms = Timestamp.now().epoch_ms()
-    tasks_to_run: list[job_pb2.RunTaskRequest] = []
+    tasks_to_run: list[AttemptLaunch] = []
 
     # In a multi-backend cluster, scope the drain to this backend's tasks; a
     # single backend (``backend_id is None``) drains every pending task.
@@ -307,7 +305,7 @@ def drain_for_dispatch(
     # don't get dispatched twice.
     redrive_rows = _dispatch_query(
         cur,
-        local_tasks.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
+        local_tasks.c.state == int(TaskState.ASSIGNED),
         local_tasks.c.current_worker_id.is_(None),
         *backend_pred,
     )
@@ -315,7 +313,7 @@ def drain_for_dispatch(
     effective_bands: dict[JobName, int] = {}
     promote_units: list[list[_RankRow]] = []
     if max_promotions > 0:
-        candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING), *backend_pred)
+        candidates = _ranking_rows(cur, local_tasks.c.state == int(TaskState.PENDING), *backend_pred)
         if candidates:
             job_ids = {row.job_id for row in candidates}
             resolved_bands = reads.get_priority_bands(cur, job_ids)
@@ -347,14 +345,14 @@ def drain_for_dispatch(
                 priority_band=band,
                 backend_id=attempt_backend_id,
             )
-            tasks_to_run.append(build_run_request(cur, row, attempt_id))
+            tasks_to_run.append(build_attempt_launch(cur, row, attempt_id))
 
     # Redrive: pods for these rows may not exist yet (crash between
     # assign-commit and apply, or apply errored last cycle). `kubectl
     # apply` is idempotent so re-issuing for a row whose pod is already
     # there is a no-op.
     for row in redrive_rows:
-        tasks_to_run.append(build_run_request(cur, row, row.current_attempt_id))
+        tasks_to_run.append(build_attempt_launch(cur, row, row.current_attempt_id))
 
     # Poll every active row (including ASSIGNED) so a pod that just got
     # applied this cycle can transition out of ASSIGNED on the same sync.

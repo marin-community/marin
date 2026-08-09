@@ -22,8 +22,14 @@ from iris.cli.resource_commands import (
     task_state_name,
 )
 from iris.cluster.resources.activity import ActivityQuery
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ThreadsProfileConfiguration,
+)
 from iris.cluster.resources.log import LogQuery
-from iris.rpc import job_pb2
 
 
 class ProfileName(StrEnum):
@@ -133,9 +139,9 @@ def attempt_exec(ctx: click.Context, attempt_ref: str, command: tuple[str, ...],
 def attempt_profile(ctx: click.Context, attempt_ref: str, profile_name: ProfileName, duration: int) -> None:
     """Capture and write a diagnostic profile for one exact Attempt."""
     profile_by_name = {
-        ProfileName.CPU: job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)),
-        ProfileName.MEMORY: job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH)),
-        ProfileName.THREAD: job_pb2.ProfileType(threads=job_pb2.ThreadsProfile()),
+        ProfileName.CPU: CpuProfileConfiguration(format=CpuProfileFormat.SPEEDSCOPE, rate_hz=0, native=None),
+        ProfileName.MEMORY: MemoryProfileConfiguration(format=MemoryProfileFormat.FLAMEGRAPH, leaks=False),
+        ProfileName.THREAD: ThreadsProfileConfiguration(include_locals=False),
     }
     with resource_client_for_ctx(ctx) as client:
         attempt = client.describe_attempt(attempt_locator(ctx, attempt_ref)).summary.identity

@@ -4,24 +4,50 @@
 """Typed Job specifications, queries, and read records."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.resources.execution import Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import JobIdentity, ResourceKey
-from iris.cluster.resources.state import JobState, TaskState
-from iris.cluster.types import CoschedulingConfig, ResourceSpec
-from iris.rpc import job_pb2
+from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+
+
+class JobPreemptionPolicy(IntEnum):
+    UNSPECIFIED = 0
+    TERMINATE_CHILDREN = 1
+    PRESERVE_CHILDREN = 2
+
+
+class ExistingJobPolicy(IntEnum):
+    UNSPECIFIED = 0
+    ERROR = 1
+    KEEP = 2
+    RECREATE = 3
+
+
+class ContainerProfile(IntEnum):
+    UNSPECIFIED = 0
+    RESTRICTED = 1
+    DEFAULT = 2
+    DOCKER_ACCESS = 3
+    PRIVILEGED = 4
+    GVISOR = 5
+
+
+@dataclass(frozen=True, slots=True)
+class CoschedulingConfig:
+    group_by: str
 
 
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     version: int
     name: str
-    entrypoint: job_pb2.RuntimeEntrypoint
+    entrypoint: RuntimeEntrypoint
     resources: ResourceSpec
-    environment: job_pb2.EnvironmentConfig
+    environment: Environment
     bundle_id: str
     scheduling_timeout: Duration | None
     ports: tuple[str, ...]
@@ -33,13 +59,18 @@ class JobSpec:
     replicas: int
     timeout: Duration | None
     fail_if_exists: bool
-    preemption_policy: job_pb2.JobPreemptionPolicy
-    existing_job_policy: job_pb2.ExistingJobPolicy
-    priority_band: job_pb2.PriorityBand
+    preemption_policy: JobPreemptionPolicy
+    existing_job_policy: ExistingJobPolicy
+    priority_band: PriorityBand
     task_image: str
     submit_argv: tuple[str, ...]
     client_revision_date: str
-    container_profile: job_pb2.ContainerProfile
+    container_profile: ContainerProfile
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ports", tuple(self.ports))
+        object.__setattr__(self, "constraints", tuple(self.constraints))
+        object.__setattr__(self, "submit_argv", tuple(self.submit_argv))
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,8 +6,8 @@
 The live controller lands worker-reported task states through the reconcile
 loop (``ops.worker.apply_reconcile``). To keep tests exercising
 the same code the controller runs, ``apply_task_observations`` rebuilds a
-per-worker batch of :class:`WorkerTaskUpdates` into reconcile
-``AttemptObservation`` protos and applies them through that production verb.
+per-worker batch of :class:`WorkerTaskUpdates` into native reconcile
+``AttemptObservation`` records and applies them through that production verb.
 """
 
 from collections.abc import Iterable
@@ -20,15 +20,21 @@ from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import (
+    KeepAttempt,
+    WorkerReconcilePlan,
+    WorkerReconcileRequest,
+    WorkerReconcileResult,
+)
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
+from iris.cluster.resources.attempt import AttemptObservation
+from iris.cluster.resources.state import TaskState
 from iris.cluster.types import AttemptUid, JobName, WorkerId
-from iris.rpc import worker_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
@@ -118,13 +124,13 @@ def _attempt_uid(cur: Tx, task_id: JobName, attempt_id: int) -> str:
     return row.attempt_uid
 
 
-def _observation(uid: str, update: TaskUpdate) -> worker_pb2.Worker.AttemptObservation:
-    return worker_pb2.Worker.AttemptObservation(
-        attempt_uid=uid,
-        state=update.new_state,
-        exit_code=update.exit_code if update.exit_code is not None else 0,
-        error=update.error or "",
-        container_id=update.container_id or "",
+def _observation(uid: str, update: TaskUpdate) -> AttemptObservation:
+    return AttemptObservation(
+        attempt_uid=AttemptUid(uid),
+        state=TaskState(update.new_state),
+        exit_code=update.exit_code,
+        error=update.error,
+        container_id=update.container_id,
     )
 
 
@@ -145,15 +151,15 @@ def apply_task_observations(
     """
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for req in requests:
-        observations: list[worker_pb2.Worker.AttemptObservation] = []
-        desired: list[worker_pb2.Worker.DesiredAttempt] = []
+        observations: list[AttemptObservation] = []
+        desired: list[KeepAttempt] = []
         for update in req.updates:
             uid = _attempt_uid(cur, update.task_id, update.attempt_id)
             observations.append(_observation(uid, update))
-            desired.append(worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()))
+            desired.append(KeepAttempt(AttemptUid(uid)))
         plan = WorkerReconcilePlan(
             worker_id=req.worker_id,
-            request=worker_pb2.Worker.ReconcileRequest(worker_id=str(req.worker_id), desired=desired),
+            request=WorkerReconcileRequest(worker_id=req.worker_id, desired=tuple(desired)),
         )
         result = WorkerReconcileResult(worker_id=req.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))

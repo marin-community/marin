@@ -46,16 +46,16 @@ from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundl
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.cluster.resources.state import PriorityBand
 
 logger = logging.getLogger(__name__)
 
 # Maps the band names used as keys in KueueConfig.priority_classes (and
 # kubernetes_provider.priority_classes) to the PriorityBand enum stamped on pods.
 _KUEUE_PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
+    "production": PriorityBand.PRODUCTION,
+    "interactive": PriorityBand.INTERACTIVE,
+    "batch": PriorityBand.BATCH,
 }
 
 

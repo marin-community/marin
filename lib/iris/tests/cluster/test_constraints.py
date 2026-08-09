@@ -9,6 +9,7 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintIndex,
+    ConstraintMode,
     ConstraintOp,
     DeviceType,
     PlacementRequirements,
@@ -26,7 +27,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
 
 from .conftest import eq_constraint, in_constraint
 
@@ -80,7 +81,7 @@ def test_evaluate_constraint_in():
     assert not evaluate_constraint(AttributeValue("eu-west1"), c)
 
 
-# --- Normalization: proto constraints → PlacementRequirements ---
+# --- Normalization: constraints → PlacementRequirements ---
 
 
 @pytest.mark.parametrize(
@@ -176,16 +177,15 @@ def _make_resources(
     cpu_millicores: int = 500,
     memory_bytes: int = 1 * 1024**3,
     device: str | None = None,
-) -> job_pb2.ResourceSpecProto:
-    r = job_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes)
+) -> ResourceSpec:
+    native_device = None
     if device == "cpu":
-        r.device.cpu.variant = "cpu"
+        native_device = CpuDevice(variant="cpu")
     elif device == "tpu":
-        r.device.tpu.variant = "v5litepod-16"
+        native_device = TpuDevice(variant="v5litepod-16")
     elif device == "gpu":
-        r.device.gpu.variant = "h100"
-        r.device.gpu.count = 8
-    return r
+        native_device = GpuDevice(variant="h100", count=8)
+    return ResourceSpec(cpu=cpu_millicores / 1000, memory=memory_bytes, device=native_device)
 
 
 def test_looks_like_executor_small_cpu_job():
@@ -250,21 +250,21 @@ def test_infer_preemptible_constraint_noop_for_gpu():
 def test_preemptible_constraint_soft_default_logic():
     """preemptible=True defaults to soft, preemptible=False defaults to hard."""
     c_true = preemptible_constraint(True)
-    assert c_true.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c_true.mode == ConstraintMode.PREFERRED
     assert c_true.values[0].value == "true"
 
     c_false = preemptible_constraint(False)
-    assert c_false.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c_false.mode == ConstraintMode.REQUIRED
     assert c_false.values[0].value == "false"
 
 
 def test_preemptible_constraint_soft_override():
     """Explicit soft= overrides the default logic."""
     c = preemptible_constraint(True, soft=False)
-    assert c.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c.mode == ConstraintMode.REQUIRED
 
     c2 = preemptible_constraint(False, soft=True)
-    assert c2.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c2.mode == ConstraintMode.PREFERRED
 
 
 def test_split_hard_soft():
@@ -273,7 +273,7 @@ def test_split_hard_soft():
         key="preemptible",
         op=ConstraintOp.EQ,
         value="true",
-        mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        mode=ConstraintMode.PREFERRED,
     )
     hard_list, soft_list = split_hard_soft([hard, soft])
     assert len(hard_list) == 1
@@ -291,7 +291,7 @@ def test_split_hard_soft_all_required():
 
 
 def _soft_eq(key: str, value: str) -> Constraint:
-    return Constraint.create(key=key, op=ConstraintOp.EQ, value=value, mode=job_pb2.CONSTRAINT_MODE_PREFERRED)
+    return Constraint.create(key=key, op=ConstraintOp.EQ, value=value, mode=ConstraintMode.PREFERRED)
 
 
 def test_soft_constraint_score_counts_matches():
@@ -323,18 +323,14 @@ def test_soft_constraint_score_zero_when_no_match():
 
 def test_custom_attribute_case_insensitive_match_evaluator():
     attrs = {"team": AttributeValue("NLP")}
-    proto = job_pb2.Constraint(key="team", op=job_pb2.CONSTRAINT_OP_EQ)
-    proto.value.string_value = "NLP"
-    c = Constraint.from_proto(proto)
+    c = Constraint.create(key="team", op=ConstraintOp.EQ, value="NLP")
     assert evaluate_constraint(attrs["team"], c)
 
 
 def test_custom_attribute_case_insensitive_match_index():
     entities = {"w1": {"team": AttributeValue("NLP")}}
     index = ConstraintIndex.build(entities)
-    proto = job_pb2.Constraint(key="team", op=job_pb2.CONSTRAINT_OP_EQ)
-    proto.value.string_value = "NLP"
-    c = Constraint.from_proto(proto)
+    c = Constraint.create(key="team", op=ConstraintOp.EQ, value="NLP")
     assert index.matching_entities([c]) == {"w1"}
 
 

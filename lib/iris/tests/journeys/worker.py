@@ -11,11 +11,19 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
-from iris.cluster.resources.job import JobSpec
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    ExistingJobPolicy,
+    JobPreemptionPolicy,
+    JobSpec,
+    PriorityBand,
+)
 from iris.cluster.resources.node import NodeDetail, NodeQuery
+from iris.cluster.resources.state import TaskState
 from iris.cluster.resources.task import TaskDetail
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, ResourceSpec
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
@@ -208,18 +216,17 @@ class WorkerJourney:
         name: str,
         *,
         cpu_millicores: int = 1000,
-        priority_band: int = job_pb2.PRIORITY_BAND_BATCH,
+        priority_band: int = PriorityBand.BATCH,
         preemption_retries: int = 1,
     ) -> WorkerJob:
-        entrypoint = job_pb2.RuntimeEntrypoint()
-        entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+        entrypoint = RuntimeEntrypoint((), CommandEntrypoint(("python", "-c", "pass")), {}, {})
         identity = self.controller.resources.submit_job(
             JobSpec(
                 version=1,
                 name=JobName.root("journey", name).to_wire(),
                 entrypoint=entrypoint,
                 resources=ResourceSpec(cpu=cpu_millicores / 1_000, memory=1024**3),
-                environment=job_pb2.EnvironmentConfig(),
+                environment=Environment({}, ()),
                 bundle_id="",
                 scheduling_timeout=None,
                 ports=(),
@@ -231,13 +238,13 @@ class WorkerJourney:
                 replicas=1,
                 timeout=None,
                 fail_if_exists=False,
-                preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-                existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-                priority_band=priority_band,
+                preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+                existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
+                priority_band=PriorityBand(priority_band),
                 task_image="",
                 submit_argv=(),
                 client_revision_date="",
-                container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+                container_profile=ContainerProfile.UNSPECIFIED,
             ),
             enforce_client_freshness=False,
         )
@@ -266,13 +273,12 @@ class WorkerJourney:
                 return
             self.step()
         raise AssertionError(
-            f"{job.task_id} did not reach {job_pb2.TaskState.Name(state)}; "
-            f"last={job_pb2.TaskState.Name(self.task(job).summary.state)}"
+            f"{job.task_id} did not reach {TaskState(state).name}; " f"last={self.task(job).summary.state.name}"
         )
 
     def run_until_worker_releases_task(self, worker_id: str, job: WorkerJob, *, max_ticks: int = 6) -> None:
         for _ in range(max_ticks):
-            if self.task(job).summary.state == job_pb2.TASK_STATE_PENDING and worker_id not in self.worker_ids():
+            if self.task(job).summary.state is TaskState.PENDING and worker_id not in self.worker_ids():
                 return
             self.step()
         raise AssertionError(f"{worker_id} still owns {job.task_id} after {max_ticks} control ticks")

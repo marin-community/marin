@@ -14,9 +14,9 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
 )
+from iris.cluster.resources.state import TaskState
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
 
 
 def find_coscheduled_siblings(
@@ -59,7 +59,7 @@ def terminate_coscheduled_siblings(
             state,
             sib.task_id.to_wire(),
             sib.current_attempt_id,
-            job_pb2.TASK_STATE_COSCHED_FAILED,
+            TaskState.COSCHED_FAILED,
             error,
             now_ms,
             stamp_attempt_finished=False,
@@ -98,11 +98,11 @@ def requeue_coscheduled_siblings(
             state,
             sib.task_id.to_wire(),
             sib.current_attempt_id,
-            job_pb2.TASK_STATE_PENDING,
+            TaskState.PENDING,
             error,
             now_ms,
             stamp_attempt_finished=False,
-            attempt_state=job_pb2.TASK_STATE_COSCHED_FAILED,
+            attempt_state=TaskState.COSCHED_FAILED,
         )
         state.emit_task_event(
             TaskActionEvent(

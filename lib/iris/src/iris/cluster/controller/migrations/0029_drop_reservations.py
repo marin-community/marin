@@ -159,7 +159,7 @@ def _merged_constraints_json(reservation_json: str, constraints_json: str | None
     ]
     if not fresh:
         return None
-    return constraints_to_json([c.to_proto() for c in existing] + [c.to_proto() for c in fresh])
+    return constraints_to_json([*existing, *fresh])
 
 
 def _convert_reservations_to_availability(raw_conn) -> None:

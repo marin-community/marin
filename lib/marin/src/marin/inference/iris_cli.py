@@ -57,15 +57,9 @@ from iris.cluster.constraints import (
     region_constraint,
 )
 from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, tpu_device
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import (
-    Entrypoint,
-    EnvironmentSpec,
-    ResourceSpec,
-    gpu_device,
-    is_job_finished,
-    tpu_device,
-)
+from iris.cluster.types import is_job_finished
 from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path

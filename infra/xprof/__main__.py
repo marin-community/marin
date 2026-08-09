@@ -4,7 +4,7 @@
 import pulumi
 from config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME, XPROF_PACKAGE
 from iac.iris.service import IrisService, IrisServiceArgs
-from iris.cluster.types import ResourceSpec
+from iris.cluster.resources.execution import ResourceSpec
 
 
 def main() -> None:

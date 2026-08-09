@@ -23,6 +23,7 @@ from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import set_user_budget, stamp_backend
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import RateLimiter, Timestamp
@@ -86,7 +87,7 @@ class FakeDirectProvider:
     def seed_liveness(self) -> None:
         """No-op: a cluster-view backend tracks no Iris worker liveness."""
 
-    def get_process_status(self, target: TaskTarget, request):
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         raise ProviderUnsupportedError("fake k8s")
 
     def fetch_live_logs(
@@ -118,7 +119,7 @@ def test_drain_pending_creates_attempt_rows(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].task_id == task_id
     assert batch.tasks_to_run[0].attempt_id == 0
 
     task_after = query_task(state, task_id)
@@ -131,7 +132,7 @@ def test_drain_pending_creates_attempt_rows(state):
 
 
 def test_drain_stamps_attempt_uid(state):
-    """The dispatched RunTaskRequest carries the attempt's minted uid, and a
+    """The dispatched AttemptLaunch carries the attempt's minted uid, and a
     redrive of the same attempt keeps it — so the K8s backend can label the pod
     and tell this attempt's pod apart from a stale resubmit pod."""
     [task_id] = submit_direct_job(state, "drain-uid")
@@ -149,26 +150,26 @@ def test_drain_stamps_attempt_uid(state):
 
 
 def test_drain_propagates_task_image(state):
-    """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
+    """task_image set on the LaunchJobRequest is copied into AttemptLaunch."""
     [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
-    assert batch.tasks_to_run[0].task_image == "custom/swetrace:dev"
+    assert batch.tasks_to_run[0].task_id == task_id
+    assert batch.tasks_to_run[0].template.task_image == "custom/swetrace:dev"
 
 
 def test_drain_default_task_image_is_empty(state):
-    """When the LaunchJobRequest omits task_image, the dispatched RunTaskRequest is empty."""
+    """When the LaunchJobRequest omits task_image, the dispatched AttemptLaunch is empty."""
     submit_direct_job(state, "drain-default-image")
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_image == ""
+    assert batch.tasks_to_run[0].template.task_image == ""
 
 
 @pytest.mark.parametrize(
@@ -213,8 +214,8 @@ def test_drain_child_priority_uses_explicit_or_inherited_band(state, parent_band
         batch = dispatch.drain_for_dispatch(cur)
 
     child_task_id = child_id.task(0)
-    [child_run_request] = [request for request in batch.tasks_to_run if request.task_id == child_task_id.to_wire()]
-    assert child_run_request.priority == expected_band
+    [child_run_request] = [request for request in batch.tasks_to_run if request.task_id == child_task_id]
+    assert child_run_request.template.priority_band == expected_band
     assert query_task(state, child_task_id).priority_band == expected_band
 
 
@@ -245,8 +246,8 @@ def test_drain_demotes_over_budget_user_to_batch(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
 
-    [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
-    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+    [req] = [r for r in batch.tasks_to_run if r.task_id == over]
+    assert req.template.priority_band == job_pb2.PRIORITY_BAND_BATCH
     assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
 
 
@@ -261,8 +262,8 @@ def test_drain_demotes_via_default_budget_for_unlisted_user(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, defaults=UserBudgetDefaults(budget_limit=1))
 
-    [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
-    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+    [req] = [r for r in batch.tasks_to_run if r.task_id == over]
+    assert req.template.priority_band == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_drain_production_immune_to_budget_demotion(state):
@@ -273,8 +274,8 @@ def test_drain_production_immune_to_budget_demotion(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
 
-    [req] = [r for r in batch.tasks_to_run if r.task_id == prod.to_wire()]
-    assert req.priority == job_pb2.PRIORITY_BAND_PRODUCTION
+    [req] = [r for r in batch.tasks_to_run if r.task_id == prod]
+    assert req.template.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
     assert query_task(state, prod).priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -287,7 +288,7 @@ def test_drain_ranks_effective_band_before_cap(state):
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=1)
 
-    assert [r.task_id for r in drained.tasks_to_run] == [prod_task.to_wire()]
+    assert [r.task_id for r in drained.tasks_to_run] == [prod_task]
     assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
 
 
@@ -304,8 +305,8 @@ def test_drain_redrive_reuses_demoted_band(state):
     with state._db.transaction() as cur:
         redriven = dispatch.drain_for_dispatch(cur)
 
-    [req] = [r for r in redriven.tasks_to_run if r.task_id == over.to_wire()]
-    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+    [req] = [r for r in redriven.tasks_to_run if r.task_id == over]
+    assert req.template.priority_band == job_pb2.PRIORITY_BAND_BATCH
     assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
 
 
@@ -322,7 +323,7 @@ def test_drain_deferred_gang_does_not_invert_lower_band(state):
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
 
-    assert [r.task_id for r in drained.tasks_to_run] == [prod.to_wire()]
+    assert [r.task_id for r in drained.tasks_to_run] == [prod]
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
     assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
 
@@ -339,7 +340,7 @@ def test_drain_deferred_gang_still_fills_same_band(state):
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
 
-    assert {r.task_id for r in drained.tasks_to_run} == {prod.to_wire(), single.to_wire()}
+    assert {r.task_id for r in drained.tasks_to_run} == {prod, single}
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
 
 
@@ -364,7 +365,7 @@ def test_drain_interleaves_users_within_band(state):
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=2)
 
-    assert {r.task_id for r in drained.tasks_to_run} == {a1.to_wire(), b1.to_wire()}
+    assert {r.task_id for r in drained.tasks_to_run} == {a1, b1}
 
 
 def test_drain_orders_same_band_by_submission(state):
@@ -376,11 +377,11 @@ def test_drain_orders_same_band_by_submission(state):
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=1)
 
-    assert [r.task_id for r in drained.tasks_to_run] == [first.to_wire()]
+    assert [r.task_id for r in drained.tasks_to_run] == [first]
 
 
 def test_drain_includes_workdir_files(state):
-    """Workdir files stored in job_workdir_files are included in the RunTaskRequest."""
+    """Workdir files stored in job_workdir_files are included in the AttemptLaunch."""
 
     job_name = JobName.from_wire("/test-user/drain-workdir")
     entrypoint = job_pb2.RuntimeEntrypoint()
@@ -401,8 +402,8 @@ def test_drain_includes_workdir_files(state):
 
     assert len(batch.tasks_to_run) == 1
     run_req = batch.tasks_to_run[0]
-    assert "_callable_runner.py" in run_req.entrypoint.workdir_files
-    assert run_req.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
+    assert "_callable_runner.py" in run_req.template.entrypoint.workdir_files
+    assert run_req.template.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
 
 
 def test_drain_redrives_assigned_null_worker(state):
@@ -413,13 +414,13 @@ def test_drain_redrives_assigned_null_worker(state):
     pod's phase and transitions the row out of ASSIGNED."""
     [task_id] = submit_direct_job(state, "drain-redrive")
 
-    # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest, and
+    # First drain promotes PENDING -> ASSIGNED, builds an AttemptLaunch, and
     # also includes the row in running_tasks so the post-apply poll picks up
     # the new pod's phase on the same cycle.
     with state._db.transaction() as cur:
         batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
-    assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch1.tasks_to_run[0].task_id == task_id
     assert batch1.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
@@ -430,7 +431,7 @@ def test_drain_redrives_assigned_null_worker(state):
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
-    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].task_id == task_id
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
 
@@ -453,7 +454,7 @@ def test_drain_scopes_running_tasks_to_backend(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur, backend_id="a")
 
-    assert [r.task_id for r in batch.tasks_to_run] == [task_a.to_wire()]
+    assert [r.task_id for r in batch.tasks_to_run] == [task_a]
     assert [e.task_id for e in batch.running_tasks] == [task_a]
 
 
@@ -583,7 +584,7 @@ def test_drain_multiple_tasks(state):
     assert len(batch.tasks_to_run) == 3
 
     promoted_ids = {req.task_id for req in batch.tasks_to_run}
-    expected_ids = {tid.to_wire() for tid in task_ids}
+    expected_ids = set(task_ids)
     assert promoted_ids == expected_ids
 
 
@@ -631,7 +632,7 @@ def _states(state, task_ids):
 
 
 def test_drain_promotes_coscheduled_gang_atomically(state):
-    """A coscheduled gang is promoted whole in one drain; every RunTaskRequest carries
+    """A coscheduled gang is promoted whole in one drain; every AttemptLaunch carries
     the same attempt_id (the pod-group generation) and the coscheduling + priority fields."""
     _jid, task_ids = _submit_cosched(state, "gang", replicas=4, band=job_pb2.PRIORITY_BAND_BATCH)
 
@@ -639,12 +640,12 @@ def test_drain_promotes_coscheduled_gang_atomically(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 4
-    assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}
+    assert {r.task_id for r in batch.tasks_to_run} == set(task_ids)
     assert {r.attempt_id for r in batch.tasks_to_run} == {0}, "siblings must share the generation"
     for r in batch.tasks_to_run:
-        assert r.HasField("coscheduling")
-        assert r.coscheduling.group_by == _GROUP
-        assert r.priority == job_pb2.PRIORITY_BAND_BATCH
+        assert r.template.coscheduling is not None
+        assert r.template.coscheduling.group_by == _GROUP
+        assert r.template.priority_band == job_pb2.PRIORITY_BAND_BATCH
     assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
 
 
@@ -659,7 +660,7 @@ def test_drain_unprioritized_gang_defaults_to_interactive(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 3
-    assert {r.priority for r in batch.tasks_to_run} == {job_pb2.PRIORITY_BAND_INTERACTIVE}
+    assert {r.template.priority_band for r in batch.tasks_to_run} == {job_pb2.PRIORITY_BAND_INTERACTIVE}
 
 
 def test_drain_oversized_gang_promoted_whole_despite_cap(state):
@@ -761,7 +762,7 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
     # attempt 0 (which would mean a split pod-group generation).
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
-    assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}
+    assert {r.task_id for r in batch.tasks_to_run} == set(task_ids)
     assert {r.attempt_id for r in batch.tasks_to_run} == {1}, "no sibling left on the old pod-group generation"
 
 
@@ -774,8 +775,8 @@ def test_drain_gang_and_noncoscheduled_coexist(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     promoted = {r.task_id for r in batch.tasks_to_run}
-    assert {t.to_wire() for t in gang_tasks} <= promoted
-    assert single[0].to_wire() in promoted
+    assert set(gang_tasks) <= promoted
+    assert single[0] in promoted
 
 
 def test_apply_ignores_finished_task(state):

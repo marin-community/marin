@@ -26,6 +26,7 @@ from iris.cluster.resources.endpoint import (
     EndpointSummary,
     EndpointToken,
     ExecResult,
+    ProfileConfiguration,
     ProfileResult,
 )
 from iris.cluster.resources.identity import (
@@ -45,7 +46,6 @@ from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
-from iris.rpc import job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
@@ -219,7 +219,7 @@ class RemoteClusterClient:
         self,
         identity: AttemptIdentity,
         *,
-        profile: job_pb2.ProfileType,
+        profile: ProfileConfiguration,
         duration: Duration,
     ) -> ProfileResult:
         return self._resources.profile_attempt(identity, profile=profile, duration=duration)

@@ -21,6 +21,7 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.resources.action import ActionReceipt, ActionState
 from iris.cluster.resources.attempt import AttemptDetail
 from iris.cluster.resources.endpoint import EndpointDetail, EndpointQuery
+from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
@@ -29,10 +30,21 @@ from iris.cluster.resources.identity import (
     ResourceKind,
     TaskIdentity,
 )
-from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    CoschedulingConfig,
+    ExistingJobPolicy,
+    JobDetail,
+    JobPreemptionPolicy,
+    JobQuery,
+    JobSpec,
+    JobSummary,
+    PriorityBand,
+)
 from iris.cluster.resources.source import Page
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.types import DEFAULT_BACKEND_ID, CoschedulingConfig, JobName, ResourceSpec, TaskAttempt
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -40,11 +52,11 @@ from rigging.timing import Duration, Timestamp
 from tests.journeys.backend import BackendEvent, ScriptedObservation, ScriptedTaskBackend, UnavailableTaskBackend
 
 _JOB_STATE_BY_NAME = {
-    "pending": job_pb2.JOB_STATE_PENDING,
-    "succeeded": job_pb2.JOB_STATE_SUCCEEDED,
-    "failed": job_pb2.JOB_STATE_FAILED,
-    "killed": job_pb2.JOB_STATE_KILLED,
-    "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
+    "pending": JobState.PENDING,
+    "succeeded": JobState.SUCCEEDED,
+    "failed": JobState.FAILED,
+    "killed": JobState.KILLED,
+    "unschedulable": JobState.UNSCHEDULABLE,
 }
 
 
@@ -277,8 +289,7 @@ class JourneyWorld:
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
-        entrypoint = job_pb2.RuntimeEntrypoint()
-        entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+        entrypoint = RuntimeEntrypoint((), CommandEntrypoint(("python", "-c", "pass")), {}, {})
         constraints = tuple(
             Constraint.create(key=key, op=ConstraintOp.EQ, value=value)
             for key, value in (required_attributes or {}).items()
@@ -288,7 +299,7 @@ class JourneyWorld:
             name=job_name.to_wire(),
             entrypoint=entrypoint,
             resources=ResourceSpec(cpu=1, memory=1024**3) if include_resources else ResourceSpec(),
-            environment=job_pb2.EnvironmentConfig(),
+            environment=Environment({}, ()),
             bundle_id="",
             scheduling_timeout=Duration.from_seconds(scheduling_timeout) if scheduling_timeout is not None else None,
             ports=(),
@@ -300,13 +311,13 @@ class JourneyWorld:
             replicas=tasks,
             timeout=Duration.from_seconds(execution_timeout) if execution_timeout is not None else None,
             fail_if_exists=False,
-            preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-            priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+            preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+            existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
+            priority_band=PriorityBand.INHERIT,
             task_image="",
             submit_argv=(),
             client_revision_date="",
-            container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+            container_profile=ContainerProfile.UNSPECIFIED,
         )
         identity = self.controller.resources.submit_job(spec, enforce_client_freshness=False)
         ref = JobRef(identity.key.resource_id, tasks, identity.key.cluster_id, coscheduled)
@@ -316,7 +327,7 @@ class JourneyWorld:
         return ref
 
     def succeed(self, task: TaskRef, *, attempt_id: int | None = None) -> None:
-        self._observe(task, job_pb2.TASK_STATE_SUCCEEDED, attempt_id=attempt_id)
+        self._observe(task, TaskState.SUCCEEDED, attempt_id=attempt_id)
 
     def succeed_all(self, job: JobRef) -> None:
         for task_index in range(job.tasks):
@@ -330,18 +341,18 @@ class JourneyWorld:
         exit_code: int = 1,
         attempt_id: int | None = None,
     ) -> None:
-        self._observe(task, job_pb2.TASK_STATE_FAILED, error=error, exit_code=exit_code, attempt_id=attempt_id)
+        self._observe(task, TaskState.FAILED, error=error, exit_code=exit_code, attempt_id=attempt_id)
 
     def lose_runtime(self, task: TaskRef, *, error: str = "runtime disappeared") -> None:
-        self._observe(task, job_pb2.TASK_STATE_WORKER_FAILED, error=error)
+        self._observe(task, TaskState.WORKER_FAILED, error=error)
 
     def preempt(self, task: TaskRef, *, error: str = "preempted") -> None:
-        self._observe(task, job_pb2.TASK_STATE_PREEMPTED, error=error)
+        self._observe(task, TaskState.PREEMPTED, error=error)
 
     def _observe(
         self,
         task: TaskRef,
-        state: int,
+        state: TaskState,
         *,
         error: str = "",
         exit_code: int | None = None,
@@ -352,7 +363,7 @@ class JourneyWorld:
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )
-        self.trace.append(f"observe {task.wire_id} {job_pb2.TaskState.Name(state)}")
+        self.trace.append(f"observe {task.wire_id} {state.name}")
 
     def cancel(self, job: JobRef) -> None:
         self.controller.resources.cancel_job(
@@ -635,21 +646,21 @@ class JourneyWorld:
 
     def _check_invariants(self) -> None:
         active_states = {
-            job_pb2.TASK_STATE_ASSIGNED,
-            job_pb2.TASK_STATE_BUILDING,
-            job_pb2.TASK_STATE_RUNNING,
+            TaskState.ASSIGNED,
+            TaskState.BUILDING,
+            TaskState.RUNNING,
         }
         terminal_states = {
-            job_pb2.TASK_STATE_SUCCEEDED,
-            job_pb2.TASK_STATE_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_UNSCHEDULABLE,
-            job_pb2.TASK_STATE_COSCHED_FAILED,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.KILLED,
+            TaskState.UNSCHEDULABLE,
+            TaskState.COSCHED_FAILED,
         }
         for job in self._jobs.values():
             listed = self.tasks(job)
             listed_states = {task.state for task in listed}
-            if job.coscheduled and listed_states & active_states and job_pb2.TASK_STATE_PENDING in listed_states:
+            if job.coscheduled and listed_states & active_states and TaskState.PENDING in listed_states:
                 raise AssertionError(f"coscheduled Job split between active and pending Tasks: {self.timeline}")
             for task in listed:
                 task_id = task.identity.key.resource_id
@@ -666,13 +677,13 @@ class JourneyWorld:
                 ):
                     raise AssertionError(f"Attempt history was rewritten for {task_id}: {self.timeline}")
                 terminal_attempt_states = {
-                    job_pb2.TASK_STATE_SUCCEEDED,
-                    job_pb2.TASK_STATE_FAILED,
-                    job_pb2.TASK_STATE_KILLED,
-                    job_pb2.TASK_STATE_PREEMPTED,
-                    job_pb2.TASK_STATE_WORKER_FAILED,
-                    job_pb2.TASK_STATE_UNSCHEDULABLE,
-                    job_pb2.TASK_STATE_COSCHED_FAILED,
+                    TaskState.SUCCEEDED,
+                    TaskState.FAILED,
+                    TaskState.KILLED,
+                    TaskState.PREEMPTED,
+                    TaskState.WORKER_FAILED,
+                    TaskState.UNSCHEDULABLE,
+                    TaskState.COSCHED_FAILED,
                 }
                 for (_, previous_state), (_, current_state) in zip(previous, attempts, strict=False):
                     if previous_state in terminal_attempt_states and current_state != previous_state:

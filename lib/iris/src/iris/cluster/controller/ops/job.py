@@ -12,8 +12,9 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import (
     constraints_to_json,
+    device_to_json,
     entrypoint_to_json,
-    proto_to_json,
+    environment_to_json,
 )
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -29,9 +30,10 @@ from iris.cluster.controller.schema import (
     jobs_table,
     meta_table,
 )
+from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.resources.job import JobSpec
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName, ResourceSpec
-from iris.rpc import job_pb2
+from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 
 _JOB_SUBMISSION_EPOCH_KEY = "job_submission_epoch_ms"
 
@@ -41,12 +43,11 @@ def _extract_resource_cols(resources: ResourceSpec) -> tuple[int, int, int, str 
 
     Missing resources map to zeros and a NULL device json.
     """
-    proto = resources.to_exact_proto()
     return (
-        int(proto.cpu_millicores),
-        int(proto.memory_bytes),
-        int(proto.disk_bytes),
-        proto_to_json(proto.device) if proto.HasField("device") else None,
+        resources.cpu_millicores,
+        resources.memory,
+        resources.disk,
+        device_to_json(resources.device) if resources.device is not None else None,
     )
 
 
@@ -71,7 +72,7 @@ def _materialize_tasks(
             task_id=job_id.task(idx),
             job_id=job_id,
             task_index=idx,
-            state=job_pb2.TASK_STATE_PENDING,
+            state=TaskState.PENDING,
             submitted_at_ms=submitted_at_ms,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -85,18 +86,18 @@ def _materialize_tasks(
     writes.bulk_insert_tasks(cur, rows)
 
 
-def resolve_priority_band(requested_band: int, inherited_band: int | None) -> job_pb2.PriorityBand:
+def resolve_priority_band(requested_band: int, inherited_band: int | None) -> PriorityBand:
     """Resolve ``PRIORITY_BAND_INHERIT`` to a real band. Call at ingestion only.
 
     Args:
         requested_band: The band on the launch request; INHERIT means the client asked for none.
         inherited_band: The parent job's stored band, or ``None`` for a root job.
     """
-    if requested_band != job_pb2.PRIORITY_BAND_INHERIT:
-        return job_pb2.PriorityBand.ValueType(requested_band)
+    if requested_band != PriorityBand.INHERIT:
+        return PriorityBand(requested_band)
     if inherited_band:
-        return job_pb2.PriorityBand.ValueType(inherited_band)
-    return job_pb2.PRIORITY_BAND_INTERACTIVE
+        return PriorityBand(inherited_band)
+    return PriorityBand.INTERACTIVE
 
 
 @dataclass(frozen=True)
@@ -187,7 +188,7 @@ def insert_job_and_config(
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
     assert (
-        priority_band != job_pb2.PRIORITY_BAND_INHERIT
+        priority_band != PriorityBand.INHERIT
     ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
 
     submitted_ms = ts.epoch_ms()
@@ -238,11 +239,11 @@ def insert_job_and_config(
         validation_error = f"Job {job_id} replicas={replicas} exceeds max {MAX_REPLICAS_PER_JOB}"
         replicas = 0
 
-    state = job_pb2.JOB_STATE_PENDING if validation_error is None else job_pb2.JOB_STATE_FAILED
+    state = JobState.PENDING if validation_error is None else JobState.FAILED
     finished_ms = None if validation_error is None else effective_submission_ms
 
     res_cpu, res_mem, res_disk, res_device = _extract_resource_cols(spec.resources)
-    constraints_json = constraints_to_json(constraint.to_proto() for constraint in spec.constraints)
+    constraints_json = constraints_to_json(spec.constraints)
     has_cosched = spec.coscheduling is not None
     cosched_group = spec.coscheduling.group_by if spec.coscheduling is not None else ""
     sched_timeout: int | None = (
@@ -251,7 +252,7 @@ def insert_job_and_config(
         else None
     )
     entrypoint_json = entrypoint_to_json(spec.entrypoint)
-    environment_json = proto_to_json(spec.environment)
+    environment_json = environment_to_json(spec.environment)
     timeout_ms = spec.timeout.to_ms() if spec.timeout is not None else None
 
     job_name_lower = spec.name.lower()

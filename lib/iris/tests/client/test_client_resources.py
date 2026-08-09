@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 from iris.client import IrisClient
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, GpuDevice, ResourceSpec
 from iris.cluster.resources.identity import JobIdentity, ResourceKey, ResourceKind
 from iris.cluster.resources.job import JobSummary
 from iris.cluster.resources.source import Page
+from iris.cluster.resources.state import JobState
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 
@@ -17,7 +19,7 @@ def _job(job_id: str, uid: str) -> JobSummary:
         identity=JobIdentity(ResourceKey("test", ResourceKind.JOB, job_id), uid),
         owner_id="alice",
         parent=None,
-        state=job_pb2.JOB_STATE_RUNNING,
+        state=JobState.RUNNING,
         execution_cluster_id="test",
         backend_id="default",
         num_tasks=1,
@@ -41,3 +43,38 @@ def test_current_job_finds_exact_job_beyond_first_prefix_page() -> None:
     job = client.current_job(JobName.from_wire("/alice/train"))
 
     assert job.identity == exact.identity
+
+
+def test_high_level_submit_applies_accelerator_cpu_floor_without_changing_direct_specs() -> None:
+    cluster = MagicMock()
+    cluster.submit_job.return_value = JobIdentity(
+        ResourceKey("test", ResourceKind.JOB, "/alice/train"),
+        "job-uid",
+    )
+    client = IrisClient(cluster)
+    requested = ResourceSpec(cpu=0.5, device=GpuDevice("H100"))
+
+    client.submit(
+        Entrypoint.from_command("python", "train.py"),
+        "train",
+        requested,
+        environment=EnvironmentSpec(setup_scripts=()),
+        user="alice",
+    )
+
+    submitted = cluster.submit_job.call_args.args[0]
+    assert submitted.resources.cpu == 4
+    assert requested.cpu == 0.5
+
+    client.submit(
+        Entrypoint.from_command("python", "train.py"),
+        "large-train",
+        ResourceSpec(cpu=6, device=GpuDevice("H100")),
+        environment=EnvironmentSpec(setup_scripts=()),
+        user="alice",
+    )
+    assert cluster.submit_job.call_args.args[0].resources.cpu == 6
+
+    direct = replace(submitted, resources=requested)
+    client.submit_job(direct)
+    assert cluster.submit_job.call_args.args[0].resources.cpu == 0.5

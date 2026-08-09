@@ -30,8 +30,8 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_c
 from iris.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.provenance import provenance_from_proto
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.resources.job import JobQuery, JobSummary
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config

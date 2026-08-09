@@ -3,11 +3,8 @@
 
 """Core types for the iris cluster layer.
 
-This module provides Python types for the Iris cluster API:
-- ResourceSpec: Dataclass for specifying job resources with human-readable values
-- EnvironmentSpec: Dataclass for specifying job environment configuration
-- Entrypoint: Callable wrapper for job execution
-- Namespace: Type-safe namespace identifier
+This module contains controller and worker identifiers plus legacy runtime
+records that have not yet moved into the resource model.
 
 Generated messages in :mod:`iris.rpc` are serialization types, not the public
 Job and Task model. Public resource records live in :mod:`iris.cluster.resources`.
@@ -15,28 +12,15 @@ Job and Task model. Public resource records live in :mod:`iris.cluster.resources
 
 import functools
 import hashlib
-import os
-import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from pathlib import Path
-from typing import Any, NewType
+from typing import NewType
 
-import cloudpickle
-import humanfriendly
-from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
-from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
-from iris.cluster.setup_scripts import (
-    cuda_toolchain_setup_script,
-    default_setup_script,
-    wants_gpu_extra,
-)
-from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import controller_pb2, job_pb2
+from iris.cluster.resources.state import JobState, PriorityBand, TaskState
+from iris.rpc import controller_pb2
 
 
 class AcceleratorType(StrEnum):
@@ -411,20 +395,6 @@ class TaskAttempt:
         return f"TaskAttempt({self.to_wire()!r})"
 
 
-def get_gpu_count(device: job_pb2.DeviceConfig) -> int:
-    """Extract GPU count from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
-
-
-def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
-    """Extract TPU count from DeviceConfig."""
-    if device.HasField("tpu"):
-        return device.tpu.count or 0
-    return 0
-
-
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 AttemptUid = NewType("AttemptUid", str)
@@ -467,7 +437,7 @@ class UserBudgetDefaults:
     """
 
     budget_limit: int = 1000
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
+    max_band: int = PriorityBand.INTERACTIVE
 
 
 class WorkerUsability(StrEnum):
@@ -523,283 +493,6 @@ class WorkerStatus:
 WorkerStatusMap = dict[str, WorkerStatus]
 
 
-@dataclass(frozen=True)
-class CoschedulingConfig:
-    """Configuration for coscheduling job tasks together.
-
-    Coscheduling ensures that all tasks of a job are scheduled on workers
-    that share a common attribute value. This is essential for multi-host
-    TPU jobs where all workers must belong to the same TPU pod.
-
-    Example:
-        >>> # Schedule all tasks on workers from the same TPU pod
-        >>> CoschedulingConfig(group_by="tpu-name")
-    """
-
-    group_by: str
-
-    def to_proto(self) -> job_pb2.CoschedulingConfig:
-        """Convert to protobuf representation."""
-        return job_pb2.CoschedulingConfig(group_by=self.group_by)
-
-
-def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
-    """Create a DeviceConfig for a TPU device.
-
-    Args:
-        variant: TPU variant string (e.g., "v5litepod-16", "v4-8", "v6e-256").
-        count: Number of TPU chips. If None, inferred from topology.
-
-    Returns:
-        DeviceConfig with the tpu field set to the specified variant and chip count.
-
-    Example:
-        >>> config = tpu_device("v5litepod-16")
-        >>> config.tpu.variant
-        'v5litepod-16'
-        >>> config.tpu.count
-        4
-    """
-    chip_count = count
-    if chip_count is None:
-        try:
-            topo = get_tpu_topology(variant)
-            chip_count = topo.chips_per_vm
-        except ValueError:
-            chip_count = 0
-    return job_pb2.DeviceConfig(
-        tpu=job_pb2.TpuDevice(
-            variant=variant,
-            count=chip_count,
-        )
-    )
-
-
-def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
-    """Create a DeviceConfig for a GPU device.
-
-    Args:
-        variant: GPU variant string (e.g., "H100", "A100").
-        count: Number of GPUs per node.
-
-    Returns:
-        DeviceConfig with the gpu field set.
-
-    Raises:
-        ValueError: if count is not a positive integer.
-    """
-    if count < 1:
-        raise ValueError(f"GPU count must be a positive integer, got {count}")
-    return job_pb2.DeviceConfig(
-        gpu=job_pb2.GpuDevice(
-            variant=variant,
-            count=count,
-        )
-    )
-
-
-def parse_memory_string(memory_str: str) -> int:
-    """Parse human-readable memory string to bytes.
-
-    Supports various formats:
-    - "8G", "8GB", "8 GB", "8 gigabytes"
-    - "512M", "512MB", "512 megabytes"
-    - "1024K", "1024KB", "1024 kilobytes"
-    - Plain numbers treated as bytes
-
-    Args:
-        memory_str: Memory string (e.g., "8g", "16gb", "512m")
-
-    Returns:
-        Memory in bytes
-
-    Raises:
-        ValueError: If format is invalid
-    """
-    if not memory_str:
-        return 0
-
-    memory_str = memory_str.strip()
-    if not memory_str or memory_str == "0":
-        return 0
-
-    try:
-        return humanfriendly.parse_size(memory_str, binary=True)
-    except humanfriendly.InvalidSize as e:
-        raise ValueError(str(e)) from e
-
-
-@dataclass
-class ResourceSpec:
-    """Resource specification for jobs.
-
-    Accepts human-readable memory/disk values (e.g., "8g", "512m").
-    Memory is the container limit for anonymous memory and ``/dev/shm`` combined.
-    """
-
-    cpu: float = 0.0
-    memory: str | int = 0  # "8g" or bytes
-    disk: str | int = 0
-    device: job_pb2.DeviceConfig | None = None
-
-    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
-    # loading, but explicit CPU requests are preserved for quota-constrained
-    # queues and diagnostic runs.
-    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
-
-    def to_proto(self) -> job_pb2.ResourceSpecProto:
-        """Convert to wire format."""
-        spec = self.to_exact_proto()
-        if self.device is not None and spec.cpu_millicores < self.MIN_ACCELERATOR_CPU_MILLICORES:
-            spec.cpu_millicores = self.MIN_ACCELERATOR_CPU_MILLICORES
-        return spec
-
-    def to_exact_proto(self) -> job_pb2.ResourceSpecProto:
-        """Convert without applying client-side resource defaults."""
-        memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
-        disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
-        cpu_mc = int(self.cpu * 1000)
-        spec = job_pb2.ResourceSpecProto(
-            cpu_millicores=cpu_mc,
-            memory_bytes=memory_bytes,
-            disk_bytes=disk_bytes,
-        )
-        if self.device is not None:
-            spec.device.CopyFrom(self.device)
-        return spec
-
-
-CALLABLE_RUNNER = """\
-import cloudpickle
-import os
-import sys
-import traceback
-import logging
-
-# Reinitialize logging with the unified Iris format.
-# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
-# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from rigging.log_setup
-# because CALLABLE_RUNNER executes inside an isolated task container that may not
-# have the rigging package installed (e.g. user-provided Docker images).
-_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
-
-class _LevelPrefixFormatter(logging.Formatter):
-    def format(self, record):
-        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
-        return super().format(record)
-
-_root = logging.getLogger()
-_root.handlers.clear()
-_handler = logging.StreamHandler(sys.stderr)
-_handler.setFormatter(_LevelPrefixFormatter(
-    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
-    datefmt="%Y%m%d %H:%M:%S",
-))
-_root.addHandler(_handler)
-_root.setLevel(logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
-# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
-logging.getLogger("botocore").setLevel(logging.WARNING)
-logging.getLogger("aiobotocore").setLevel(logging.WARNING)
-
-workdir = os.environ["IRIS_WORKDIR"]
-
-try:
-    with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
-        fn, args, kwargs = cloudpickle.loads(f.read())
-    fn(*args, **kwargs)
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
-"""
-
-
-@dataclass
-class EnvironmentSpec:
-    """Environment specification for jobs.
-
-    Default environment variables (automatically set if not overridden):
-    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
-    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
-    - HF_TOKEN: from os.environ (if set)
-    - WANDB_API_KEY: from os.environ (if set)
-    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
-      at submission (or forwarded from this process's own env when re-submitting inside
-      a task), so tasks stamp artifacts with the submitter's git identity
-
-    Setup:
-    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
-      scopes that sync to specific workspace members (default: all members).
-    - ``setup_scripts`` set to a list runs those scripts verbatim before the
-      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
-      image is used as-is). Build the default and tweak it via
-      ``iris.cluster.setup_scripts.default_setup_script``.
-
-    Whenever any setup runs (default or custom), iris appends its own
-    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
-    present; it is skipped only for the no-setup (``[]``) case.
-
-    Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
-    """
-
-    pip_packages: Sequence[str] | None = None
-    env_vars: dict[str, str] | None = None
-    extras: Sequence[str] | None = None
-    setup_scripts: Sequence[str] | None = None
-    sync_packages: Sequence[str] | None = None
-
-    def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format, resolving the user setup scripts.
-
-        ``setup_scripts=None`` builds the default uv-sync script from
-        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
-        wire carries only this user list.
-        """
-        default_env_vars = {
-            "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-            "TOKENIZERS_PARALLELISM": "false",
-            "HF_TOKEN": os.getenv("HF_TOKEN"),
-            "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-            # Launch provenance: a task running from a git-less bundle inherits the
-            # submitter's identity via Provenance.capture(); transitive, since a task
-            # re-submitting captures this same env value.
-            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
-        }
-        if wants_gpu_extra(self.extras or ()):
-            default_env_vars.update(
-                {
-                    NCCL_RAS_ENABLE_ENV: "1",
-                    "NCCL_DEBUG": "INFO",
-                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
-                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
-                }
-            )
-
-        merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
-
-        if self.setup_scripts is None:
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            extras = list(self.extras or [])
-            setup_scripts = [
-                default_setup_script(
-                    extras=extras,
-                    pip_packages=list(self.pip_packages or []),
-                    python_version=py_version,
-                    packages=list(self.sync_packages or []) or None,
-                )
-            ]
-            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
-            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
-            if wants_gpu_extra(extras):
-                setup_scripts.append(cuda_toolchain_setup_script())
-        else:
-            setup_scripts = [s for s in self.setup_scripts if s.strip()]
-
-        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
-
-
 class Namespace(str):
     """Namespace for actor isolation.
 
@@ -836,23 +529,23 @@ class Namespace(str):
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
+        JobState.SUCCEEDED,
+        JobState.FAILED,
+        JobState.KILLED,
+        JobState.WORKER_FAILED,
+        JobState.UNSCHEDULABLE,
     }
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-        job_pb2.TASK_STATE_COSCHED_FAILED,
+        TaskState.SUCCEEDED,
+        TaskState.FAILED,
+        TaskState.KILLED,
+        TaskState.UNSCHEDULABLE,
+        TaskState.WORKER_FAILED,
+        TaskState.PREEMPTED,
+        TaskState.COSCHED_FAILED,
     }
 )
 
@@ -870,8 +563,6 @@ def is_task_finished(state: int) -> bool:
     return state in TERMINAL_TASK_STATES
 
 
-JobState = job_pb2.JobState
-TaskState = job_pb2.TaskState
 EndpointAccess = controller_pb2.Controller.EndpointAccess
 
 # Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
@@ -880,141 +571,3 @@ EndpointAccess = controller_pb2.Controller.EndpointAccess
 # module so registry client and controller proxy agree on the key with no client
 # dependency on controller code.
 PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
-
-
-# TPU topology table and lookup helpers live in iris.cluster.tpu_topology so
-# both this module and iris.cluster.constraints can reference them without an
-# import cycle. Re-exported via the top-level import above.
-
-
-def adjust_tpu_replicas(device: "job_pb2.DeviceConfig | None", replicas: int) -> int:
-    """Adjust replicas for multi-host TPU topologies.
-
-    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
-    per VM. When ``replicas`` is 1 (the default), this auto-scales to
-    ``vm_count`` so callers don't need to know the topology. For explicitly
-    set replicas (>1) that don't align, raises ``ValueError``.
-
-    Returns:
-        The (possibly adjusted) replica count.
-    """
-    if device is None or not device.HasField("tpu"):
-        return replicas
-
-    variant = device.tpu.variant
-    if not variant:
-        return replicas
-
-    try:
-        topo = get_tpu_topology(variant)
-    except ValueError:
-        return replicas
-
-    if topo.vm_count <= 1:
-        return replicas
-
-    if replicas == 1:
-        return topo.vm_count
-
-    if replicas % topo.vm_count != 0:
-        raise ValueError(
-            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
-            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
-            f"For a single slice, use replicas={topo.vm_count}. "
-            f"For N slices, use replicas=N*{topo.vm_count}."
-        )
-
-    return replicas
-
-
-class Entrypoint:
-    """Job entrypoint specification.
-
-    Every entrypoint has a command (what to run) and optional workdir_files
-    that the worker writes to $IRIS_WORKDIR/{name} before executing the command.
-
-    Examples:
-        entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
-        entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
-    """
-
-    def __init__(
-        self,
-        *,
-        command: list[str],
-        workdir_files: dict[str, bytes] | None = None,
-        workdir_file_refs: dict[str, str] | None = None,
-    ):
-        if not command:
-            raise ValueError("Command must have at least one argument")
-        self.command = command
-        self.workdir_files: dict[str, bytes] = workdir_files or {}
-        self.workdir_file_refs: dict[str, str] = workdir_file_refs or {}
-
-    def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
-        """Deserialize the callable, args, kwargs from pickle bytes.
-
-        Only call this when you need to actually invoke the function locally
-        (e.g. local_client). Avoid on the worker — use workdir_files directly
-        to pass through to the task container without version-sensitive unpickling.
-        """
-        payload = self.workdir_files.get("_callable.pkl")
-        if payload is None:
-            raise ValueError("Not a callable entrypoint")
-
-        return cloudpickle.loads(payload)
-
-    @classmethod
-    def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        # mark any testing code as pickle_by_value so we can use it with cloudpickle
-        module = sys.modules.get(fn.__module__)
-        module_path = Path(module.__file__).parts if module and getattr(module, "__file__", None) else ()
-        if module and (module.__package__ is None or module.__spec__ is None or "tests" in module_path):
-            cloudpickle.register_pickle_by_value(module)
-
-        # We use bash -c so that $IRIS_WORKDIR and $IRIS_PYTHON are expanded
-        # at runtime from the container's environment.  ProcessContainerHandle
-        # remaps IRIS_WORKDIR to the host workdir and IRIS_PYTHON to
-        # sys.executable for local execution; in Docker containers these are
-        # set to "/app" and "python" respectively by task_attempt env setup.
-        # `exec` replaces bash with python to avoid an extra parent process.
-        return cls(
-            command=["bash", "-c", "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"],
-            workdir_files={
-                "_callable.pkl": cloudpickle.dumps((fn, args, kwargs)),
-                "_callable_runner.py": CALLABLE_RUNNER.encode(),
-            },
-        )
-
-    @classmethod
-    def from_command(cls, *argv: str) -> "Entrypoint":
-        """Create a command-line entrypoint.
-
-        Args:
-            *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
-        """
-        if not argv:
-            raise ValueError("Command must have at least one argument")
-        return cls(command=list(argv), workdir_files={})
-
-    def to_proto(self) -> job_pb2.RuntimeEntrypoint:
-        """Convert to protobuf representation.
-
-        Produces a RuntimeEntrypoint with no setup_commands (those are added
-        by build_runtime_entrypoint when submitting to the cluster).
-        """
-        proto = job_pb2.RuntimeEntrypoint()
-        proto.run_command.argv[:] = self.command
-        for name, data in self.workdir_files.items():
-            proto.workdir_files[name] = data
-        for name, blob_id in self.workdir_file_refs.items():
-            proto.workdir_file_refs[name] = blob_id
-        return proto
-
-    @classmethod
-    def from_proto(cls, proto: job_pb2.RuntimeEntrypoint) -> "Entrypoint":
-        """Create from protobuf representation."""
-        command = list(proto.run_command.argv)
-        workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
-        workdir_file_refs = dict(proto.workdir_file_refs) if proto.workdir_file_refs else None
-        return cls(command=command, workdir_files=workdir_files, workdir_file_refs=workdir_file_refs)

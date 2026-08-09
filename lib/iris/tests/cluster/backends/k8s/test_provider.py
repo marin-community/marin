@@ -51,7 +51,15 @@ from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration
 
-from .conftest import make_batch, make_kueue_provider, make_run_req, pod_config, populate_node, populate_pod
+from .conftest import (
+    launch_from_request,
+    make_batch,
+    make_kueue_provider,
+    make_run_req,
+    pod_config,
+    populate_node,
+    populate_pod,
+)
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -753,14 +761,13 @@ def test_get_process_status_reads_pod_proc_via_kubectl_exec(provider, k8s):
     )
     k8s.set_exec_response(pod_name, _success_cp(stdout=stdout))
 
-    resp = provider.get_process_status(
+    info = provider.get_process_status(
         TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
-        job_pb2.GetProcessStatusRequest(target="/job/0"),
     )
 
-    assert resp.process_info.thread_count == 5
-    assert resp.process_info.open_fd_count == 9
-    assert resp.process_info.cpu_count == 4
+    assert info.thread_count == 5
+    assert info.open_fd_count == 9
+    assert info.cpu_count == 4
 
 
 def test_get_process_status_raises_on_exec_failure(provider, k8s):
@@ -772,7 +779,6 @@ def test_get_process_status_raises_on_exec_failure(provider, k8s):
     with pytest.raises(ProviderError, match="process status exec"):
         provider.get_process_status(
             TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
-            job_pb2.GetProcessStatusRequest(target="/job/0"),
         )
 
 
@@ -990,7 +996,7 @@ def test_configmap_created_for_workdir_files(provider, k8s):
     req = make_run_req("/my-job/task-0")
     req.entrypoint.workdir_files["script.py"] = b"print('hello')"
 
-    provider._apply_pod(req)
+    provider._apply_pod(launch_from_request(req))
 
     configmaps = k8s.list_json(K8sResource.CONFIGMAPS)
     pods = k8s.list_json(K8sResource.PODS)
@@ -1009,7 +1015,7 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
     """_apply_pod does not create a ConfigMap when no workdir_files are set."""
     req = make_run_req("/my-job/task-0")
 
-    provider._apply_pod(req)
+    provider._apply_pod(launch_from_request(req))
 
     configmaps = k8s.list_json(K8sResource.CONFIGMAPS)
     pods = k8s.list_json(K8sResource.PODS)

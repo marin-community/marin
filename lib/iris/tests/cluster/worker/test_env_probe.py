@@ -8,6 +8,7 @@ import sys
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.resources.execution import CpuDevice, GpuDevice, TpuDevice
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
@@ -59,13 +60,13 @@ def test_environment_provider_basic_probe(monkeypatch):
     assert metadata.cpu_count > 0
     assert metadata.memory_bytes > 0
     assert metadata.disk_bytes > 0
-    assert metadata.device.HasField("cpu")
+    assert isinstance(metadata.device, CpuDevice)
 
     # Attributes come from config defaults (no config = CPU, not preemptible)
     assert WellKnownAttribute.PREEMPTIBLE in metadata.attributes
-    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].value == "false"
     assert WellKnownAttribute.DEVICE_TYPE in metadata.attributes
-    assert metadata.attributes[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
+    assert metadata.attributes[WellKnownAttribute.DEVICE_TYPE].value == "cpu"
 
 
 def test_environment_provider_probes_tpu_metadata(monkeypatch):
@@ -95,8 +96,8 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     assert metadata.tpu_worker_id == "3"
     assert metadata.tpu_worker_hostnames == "10.0.0.11,10.0.0.12"
     assert metadata.tpu_chips_per_host_bounds == "2,2,1"
-    assert metadata.device.HasField("tpu")
-    assert metadata.device.tpu.variant == "v5litepod-16"
+    assert isinstance(metadata.device, TpuDevice)
+    assert metadata.device.variant == "v5litepod-16"
 
 
 def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch):
@@ -115,7 +116,7 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     assert metadata.tpu_worker_id == ""
     assert metadata.tpu_worker_hostnames == ""
     assert metadata.tpu_chips_per_host_bounds == ""
-    assert metadata.device.HasField("cpu")
+    assert isinstance(metadata.device, CpuDevice)
 
 
 # --- Scheduling attributes from config ---
@@ -134,15 +135,15 @@ def test_gpu_worker_attributes_from_config():
     )
 
     # Device config for capacity accounting
-    assert metadata.device.HasField("gpu")
-    assert metadata.device.gpu.variant == "H100"
-    assert metadata.device.gpu.count == 8
+    assert isinstance(metadata.device, GpuDevice)
+    assert metadata.device.variant == "H100"
+    assert metadata.device.count == 8
 
     # Scheduling attributes from config
     attrs = metadata.attributes
-    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "gpu"
-    assert attrs[WellKnownAttribute.DEVICE_VARIANT].string_value == "h100"
-    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "true"
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].value == "gpu"
+    assert attrs[WellKnownAttribute.DEVICE_VARIANT].value == "h100"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].value == "true"
 
 
 def test_tpu_worker_attributes_from_config():
@@ -165,16 +166,16 @@ def test_tpu_worker_attributes_from_config():
     attrs = metadata.attributes
 
     # Scheduling attributes from config
-    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "tpu"
-    assert attrs[WellKnownAttribute.DEVICE_VARIANT].string_value == "v5litepod-16"
-    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "true"
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].value == "tpu"
+    assert attrs[WellKnownAttribute.DEVICE_VARIANT].value == "v5litepod-16"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].value == "true"
 
     # TPU multi-host identity from probes (not config)
-    assert attrs[WellKnownAttribute.TPU_NAME].string_value == "my-tpu-slice"
-    assert attrs[WellKnownAttribute.TPU_WORKER_ID].int_value == 2
+    assert attrs[WellKnownAttribute.TPU_NAME].value == "my-tpu-slice"
+    assert attrs[WellKnownAttribute.TPU_WORKER_ID].value == 2
 
     # TPU topology derived from config variant
-    assert attrs[WellKnownAttribute.TPU_TOPOLOGY].string_value == "v5litepod-16"
+    assert attrs[WellKnownAttribute.TPU_TOPOLOGY].value == "v5litepod-16"
 
     # Diagnostic fields on WorkerMetadata from probes
     assert metadata.tpu_name == "my-tpu-slice"
@@ -193,9 +194,9 @@ def test_cpu_worker_attributes_from_config():
     )
 
     attrs = metadata.attributes
-    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].value == "cpu"
     assert WellKnownAttribute.DEVICE_VARIANT not in attrs
-    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].value == "false"
 
 
 def test_cpu_fallback_when_no_config():
@@ -203,10 +204,10 @@ def test_cpu_fallback_when_no_config():
     hardware = _make_hardware()
     metadata = build_worker_metadata(hardware=hardware)
 
-    assert metadata.device.HasField("cpu")
+    assert isinstance(metadata.device, CpuDevice)
     attrs = metadata.attributes
-    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
-    assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].value == "cpu"
+    assert attrs[WellKnownAttribute.PREEMPTIBLE].value == "false"
 
 
 def test_advertised_cpu_count_from_scale_group_overrides_probe():
@@ -240,10 +241,10 @@ def test_custom_worker_attributes_merged():
     )
 
     attrs = metadata.attributes
-    assert attrs["pool"].string_value == "large-jobs"
-    assert attrs["custom-key"].string_value == "custom-value"
+    assert attrs["pool"].value == "large-jobs"
+    assert attrs["custom-key"].value == "custom-value"
     # Config-derived attributes still present
-    assert attrs[WellKnownAttribute.DEVICE_TYPE].string_value == "gpu"
+    assert attrs[WellKnownAttribute.DEVICE_TYPE].value == "gpu"
 
 
 def test_preemptible_not_from_gcp_metadata():
@@ -260,7 +261,7 @@ def test_preemptible_not_from_gcp_metadata():
         capacity_type=CapacityType.ON_DEMAND,
     )
 
-    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
+    assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].value == "false"
 
 
 def test_build_worker_metadata_gpu_diagnostic_fields():

@@ -8,7 +8,7 @@ from iris.client.worker_pool import (
     WorkerPool,
     WorkerPoolConfig,
 )
-from iris.cluster.types import ResourceSpec
+from iris.cluster.resources.execution import ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster
 

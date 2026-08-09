@@ -8,20 +8,20 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 
-from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.codec import proto_to_json
+from iris.cluster.controller.codec import device_to_json, provenance_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import LaunchAttempt, WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import GpuDevice, TpuDevice
+from iris.cluster.resources.worker import WorkerMetadata
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 
 FAIL_WORKERS_CHUNK_SIZE = 10
 
@@ -44,25 +44,22 @@ def register(
     *,
     worker_id: WorkerId,
     address: str,
-    metadata: job_pb2.WorkerMetadata,
+    metadata: WorkerMetadata,
     ts: Timestamp,
     health: WorkerHealthTracker,
     slice_id: str = "",
     scale_group: str = "",
 ) -> None:
     """Register a new worker or refresh an existing one. Caller owns the transaction."""
-    attr_dict: dict[str, AttributeValue] = {}
-    for key, proto in metadata.attributes.items():
-        attr_dict[key] = AttributeValue.from_proto(proto)
     now_ms = ts.epoch_ms()
-    gpu_count = get_gpu_count(metadata.device)
-    tpu_count = get_tpu_count(metadata.device)
-    if metadata.device.HasField("gpu"):
+    gpu_count = metadata.device.count if isinstance(metadata.device, GpuDevice) else 0
+    tpu_count = metadata.device.count if isinstance(metadata.device, TpuDevice) else 0
+    if isinstance(metadata.device, GpuDevice):
         device_type = "gpu"
-        device_variant = metadata.device.gpu.variant
-    elif metadata.device.HasField("tpu"):
+        device_variant = metadata.device.variant
+    elif isinstance(metadata.device, TpuDevice):
         device_type = "tpu"
-        device_variant = metadata.device.tpu.variant
+        device_variant = metadata.device.variant
     else:
         device_type = ""
         device_variant = ""
@@ -93,12 +90,12 @@ def register(
             "md_gpu_memory_mb": metadata.gpu_memory_mb,
             "md_gce_instance_name": metadata.gce_instance_name,
             "md_gce_zone": metadata.gce_zone,
-            "md_device_json": proto_to_json(metadata.device),
-            "md_provenance_json": proto_to_json(metadata.provenance),
+            "md_device_json": device_to_json(metadata.device) if metadata.device is not None else "{}",
+            "md_provenance_json": provenance_to_json(metadata.provenance),
         },
     )
     cur.register(lambda: health.register(worker_id, now_ms=now_ms))
-    cur.caches[WorkerAttrsProjection].set(cur, worker_id, attr_dict)
+    cur.caches[WorkerAttrsProjection].set(cur, worker_id, dict(metadata.attributes))
     cur.register(
         lambda: log_event(
             "worker_registered",
@@ -230,12 +227,12 @@ def apply_reconcile(
 
         if result.error is not None:
             for desired in plan.request.desired:
-                if not desired.HasField("run") or not desired.run.HasField("request"):
+                if not isinstance(desired, LaunchAttempt):
                     continue
-                req_proto = desired.run.request
-                tid = JobName.from_wire(req_proto.task_id)
+                launch = desired.launch
+                tid = launch.task_id
                 all_task_ids.append(tid)
-                all_attempt_keys.append((tid, req_proto.attempt_id))
+                all_attempt_keys.append((tid, launch.attempt_id))
         else:
             # Extract only plan-scoped UIDs for snapshot preloading (no logging here;
             # worker.filter_observations_to_plan logs dropped observations inline).

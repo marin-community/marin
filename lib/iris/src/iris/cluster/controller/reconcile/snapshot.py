@@ -15,8 +15,8 @@ from typing import Any
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
+from iris.cluster.resources.state import TaskState
 from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
-from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,7 @@ _DERIVED_ERROR_PATTERNS = (re.compile(r"^Coscheduled sibling\b"),)
 # COSCHED_FAILED is the cascade by construction: the task was torn down or
 # bounced because a sibling failed, not on its own merits. Caught by state even
 # if the recorded error text drifts from the pattern above.
-_DERIVED_ERROR_STATES = frozenset({job_pb2.TASK_STATE_COSCHED_FAILED})
+_DERIVED_ERROR_STATES = frozenset({TaskState.COSCHED_FAILED})
 
 
 def is_derived_task_error(state: int, error: str) -> bool:
@@ -142,7 +142,7 @@ def pick_earliest_task_error(candidates: Iterable[tuple[int, int, Timestamp | No
         if error is not None
         and finished_at is not None
         and state in TERMINAL_TASK_STATES
-        and state != job_pb2.TASK_STATE_SUCCEEDED
+        and state != TaskState.SUCCEEDED
     ]
     if not failed:
         return None

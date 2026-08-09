@@ -13,9 +13,9 @@ import uuid
 from pathlib import Path
 
 import pytest
-from iris.cluster.types import AcceleratorType, Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
+from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-from iris.rpc import job_pb2
 from tests.e2e._docker_cluster import E2ECluster
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]
@@ -163,12 +163,9 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
             "num_processes": num_procs,
         }
 
-    tpu_device = job_pb2.DeviceConfig()
-    tpu_device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4-8-sim", count=4))
-
     entrypoint = Entrypoint.from_callable(validate_jax_env_format)
     environment = EnvironmentSpec()
-    resources = ResourceSpec(cpu=1, memory="1g", device=tpu_device)
+    resources = ResourceSpec(cpu=1, memory="1g", device=tpu_device("v4-8-sim", count=4))
 
     job = tpu_sim_cluster.get_client().submit(
         entrypoint=entrypoint,

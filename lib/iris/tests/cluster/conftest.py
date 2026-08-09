@@ -29,6 +29,7 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.timing import Timestamp
 from sqlalchemy import select
 from tests.cluster.controller._test_support import ControllerTestState
@@ -279,7 +280,7 @@ class ServiceTestHarness:
                 cur,
                 worker_id=wid,
                 address=f"{worker_id}:8080",
-                metadata=metadata,
+                metadata=worker_metadata_from_proto(metadata),
                 ts=Timestamp.now(),
                 health=self.state._health,
             )

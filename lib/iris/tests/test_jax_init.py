@@ -20,7 +20,7 @@ import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.env_resources import _read_iris_resource_proto
+from iris.env_resources import _read_iris_resources
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
@@ -529,10 +529,10 @@ def _isolated_jax_cache_config():
             # Off a real launch by default, so the autotune cache stays node-local
             # and never reaches for object storage.
             os.environ.pop("MARIN_PROVENANCE", None)
-            _read_iris_resource_proto.cache_clear()
+            _read_iris_resources.cache_clear()
             yield
     finally:
-        _read_iris_resource_proto.cache_clear()
+        _read_iris_resources.cache_clear()
         jax.config.update("jax_compilation_cache_dir", original_cache_dir)
         jax.config.update("jax_persistent_cache_enable_xla_caches", original_enable_xla_caches)
 
@@ -543,7 +543,7 @@ def _gpu_task(tmp_path):
     scratch_cache_dir = tmp_path / "scratch-cache"
     scratch_cache_dir.mkdir()
     os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"gpu": {"count": 4, "variant": "GB200"}}}'
-    _read_iris_resource_proto.cache_clear()
+    _read_iris_resources.cache_clear()
     with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", str(scratch_cache_dir)):
         yield scratch_cache_dir
 
@@ -640,7 +640,7 @@ def test_remote_cache_leaves_xla_flags_alone_without_gpus(tmp_path) -> None:
     """A TPU or CPU jaxlib aborts on an unknown --xla_gpu flag, so never set one there."""
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
         os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"tpu": {"count": 4, "variant": "v5p-8"}}}'
-        _read_iris_resource_proto.cache_clear()
+        _read_iris_resources.cache_clear()
         with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
             configure_jax_compilation_cache()
 

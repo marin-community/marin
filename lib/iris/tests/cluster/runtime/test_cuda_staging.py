@@ -15,8 +15,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from iris.cluster.resources.execution import EnvironmentSpec
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, wants_gpu_extra
-from iris.cluster.types import EnvironmentSpec
 
 _CUDA_13_TEST_PACKAGES = (
     ("nvidia-cudnn-cu13", "9.19.0.56", "nvidia/cudnn/lib/libcudnn.so.9"),
@@ -219,8 +219,8 @@ def test_wants_gpu_extra():
 def test_gpu_extra_appends_a_real_staging_step(tmp_path):
     """A GPU job appends exactly one setup step over the CPU baseline, and that
     step actually stages the toolchain — verified by effect, not string identity."""
-    cpu_scripts = list(EnvironmentSpec(extras=["cpu"]).to_proto().setup_scripts)
-    gpu_scripts = list(EnvironmentSpec(extras=["gpu"]).to_proto().setup_scripts)
+    cpu_scripts = list(EnvironmentSpec(extras=["cpu"]).resolve().setup_scripts)
+    gpu_scripts = list(EnvironmentSpec(extras=["gpu"]).resolve().setup_scripts)
 
     appended = gpu_scripts[len(cpu_scripts) :]
     assert len(appended) == 1
@@ -235,5 +235,5 @@ def test_gpu_extra_appends_a_real_staging_step(tmp_path):
 def test_custom_setup_scripts_skip_cuda_staging():
     # An explicit setup_scripts list is used verbatim even with the gpu extra:
     # no staging step is appended, so a bring-your-own setup must stage itself.
-    scripts = list(EnvironmentSpec(extras=["gpu"], setup_scripts=["echo hi\n"]).to_proto().setup_scripts)
+    scripts = list(EnvironmentSpec(extras=["gpu"], setup_scripts=["echo hi\n"]).resolve().setup_scripts)
     assert scripts == ["echo hi\n"]

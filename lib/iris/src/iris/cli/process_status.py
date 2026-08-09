@@ -23,8 +23,18 @@ from rigging.timing import Duration
 from iris.cli.connect import require_controller_url, resource_client_for_ctx, rpc_client_for_ctx
 from iris.cli.resource_commands import attempt_locator
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ThreadsProfileConfiguration,
+)
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
+from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.worker_codec import process_info_from_proto
 
 _CONTROLLER_LOG_TARGET = "/system/controller"
 
@@ -34,9 +44,8 @@ def _format_cpu_millicores(millicores: int) -> str:
     return f"{millicores / 1000:g} cores ({millicores}m)"
 
 
-def _print_status(resp: job_pb2.GetProcessStatusResponse, label: str) -> None:
+def _print_status(info: ProcessInfo, label: str) -> None:
     """Print process status to stdout in human-readable form."""
-    info = resp.process_info
     click.echo(f"=== {label} Process Status ===")
     click.echo(f"Hostname:        {info.hostname}")
     click.echo(f"PID:             {info.pid}")
@@ -70,7 +79,7 @@ def status(ctx, target: str | None):
     with rpc_client_for_ctx(ctx, url=url) as client:
         # GetProcessStatus uses empty string for controller
         resp = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
-    _print_status(resp, label)
+    _print_status(process_info_from_proto(resp.process_info), label)
 
 
 @process_group.command()
@@ -154,11 +163,11 @@ def profile(
     label = target or "Controller"
 
     if profiler == "threads":
-        profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals))
+        profile_configuration = ThreadsProfileConfiguration(include_locals=include_locals)
     elif profiler == "cpu":
-        profile_type = job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
+        profile_configuration = CpuProfileConfiguration(format=CpuProfileFormat.SPEEDSCOPE, rate_hz=0, native=None)
     elif profiler == "mem":
-        profile_type = job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
+        profile_configuration = MemoryProfileConfiguration(format=MemoryProfileFormat.FLAMEGRAPH, leaks=False)
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
@@ -169,7 +178,7 @@ def profile(
                 job_pb2.ProfileTaskRequest(
                     target=rpc_target,
                     duration_seconds=duration,
-                    profile_type=profile_type,
+                    profile_type=profile_configuration_to_proto(profile_configuration),
                 )
             )
         profile_data = resp.profile_data
@@ -179,7 +188,7 @@ def profile(
             attempt = client.describe_attempt(attempt_locator(ctx, rpc_target)).summary.identity
             result = client.profile_attempt(
                 attempt,
-                profile=profile_type,
+                profile=profile_configuration,
                 duration=Duration.from_seconds(duration),
             )
         profile_data = result.profile_data

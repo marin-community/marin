@@ -12,7 +12,7 @@ from iris.cluster.resources.activity import ActivityQuery
 from iris.cluster.resources.endpoint import ExecResult, ProfileResult
 from iris.cluster.resources.identity import ResourceKey, ResourceKind
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2, resource_pb2
+from iris.rpc import resource_pb2
 from sqlalchemy import update
 
 
@@ -312,7 +312,7 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
         service.profile_attempt(
             resource_pb2.ProfileAttemptRequest(
                 attempt=stale,
-                profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+                profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
             ),
             None,
         )
@@ -326,7 +326,7 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
     profile_response = service.profile_attempt(
         resource_pb2.ProfileAttemptRequest(
             attempt=current_identity,
-            profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+            profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
         ),
         None,
     )
@@ -380,7 +380,7 @@ def test_debug_action_rechecks_attempt_after_target_resolution(journey, monkeypa
             service.profile_attempt(
                 resource_pb2.ProfileAttemptRequest(
                     attempt=_attempt_identity(stale),
-                    profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+                    profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
                 ),
                 None,
             )
@@ -425,7 +425,7 @@ def test_exec_and_profile_refuse_an_attempt_from_a_replaced_task_incarnation(jou
         service.profile_attempt(
             resource_pb2.ProfileAttemptRequest(
                 attempt=stale_proto,
-                profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+                profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
             ),
             None,
         )

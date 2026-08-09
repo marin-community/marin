@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared process status collection for controller and worker.
-
-Collects local process info (PID, memory, CPU, threads, etc.)
-into a GetProcessStatusResponse. Used identically by both services.
-"""
+"""Shared native process-status collection for controller and worker."""
 
 import os
 import platform
@@ -15,9 +11,9 @@ import threading
 
 from rigging.timing import Timer
 
-from iris.cluster.provenance import provenance_from_env, provenance_to_proto
+from iris.cluster.provenance import provenance_from_env
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.runtime.process import _read_proc_cpu_millicores
-from iris.rpc import job_pb2
 
 # Persistent CPU sampling state so delta-based measurement works across requests.
 _prev_cpu_total: float = 0.0
@@ -68,7 +64,7 @@ def _open_fd_count() -> int:
     return 0
 
 
-def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
+def collect_process_info(timer: Timer) -> ProcessInfo:
     """Collect information about the current process and host."""
     global _prev_cpu_total, _prev_cpu_utime
 
@@ -77,8 +73,7 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
         os.getpid(), _prev_cpu_total, _prev_cpu_utime
     )
 
-    provenance = provenance_from_env()
-    return job_pb2.ProcessInfo(
+    return ProcessInfo(
         hostname=platform.node(),
         pid=os.getpid(),
         python_version=sys.version.split()[0],
@@ -90,18 +85,12 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
         open_fd_count=_open_fd_count(),
         memory_total_bytes=_total_memory_bytes(),
         cpu_count=os.cpu_count() or 0,
-        provenance=provenance_to_proto(provenance),
+        provenance=provenance_from_env(),
     )
 
 
 def get_process_status(
     timer: Timer,
-) -> job_pb2.GetProcessStatusResponse:
-    """Build a GetProcessStatusResponse with local process info.
-
-    This is the shared implementation used by both controller and worker services.
-    Log fetching is handled separately via FetchLogs.
-    """
-    return job_pb2.GetProcessStatusResponse(
-        process_info=collect_process_info(timer),
-    )
+) -> ProcessInfo:
+    """Collect local process info; transport adapters encode it for their wire."""
+    return collect_process_info(timer)

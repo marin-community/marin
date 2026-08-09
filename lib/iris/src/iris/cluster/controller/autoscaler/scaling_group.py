@@ -48,8 +48,9 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2, time_pb2, vm_pb2
+from iris.cluster.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
+from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap
+from iris.rpc import time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -796,7 +797,7 @@ class ScalingGroup:
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
 
-    def check_resource_fit(self, resources: job_pb2.ResourceSpecProto) -> str | None:
+    def check_resource_fit(self, resources: ResourceSpec) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
 
         Unconfigured group resource values (0 in the proto) are passed as None
@@ -808,7 +809,7 @@ class ScalingGroup:
         if sg_resources is None:
             return f"group '{self.name}' has no resources configured"
 
-        device_count = get_gpu_count(resources.device) + get_tpu_count(resources.device)
+        device_count = get_gpu_count(resources.device) + get_tpu_count(resources.device) if resources.device else 0
         available = ResourceCapacity(
             cpu_millicores=sg_resources.cpu_millicores or None,
             memory_bytes=sg_resources.memory_bytes or None,
@@ -817,8 +818,8 @@ class ScalingGroup:
         )
         required = ResourceCapacity(
             cpu_millicores=resources.cpu_millicores,
-            memory_bytes=resources.memory_bytes,
-            disk_bytes=resources.disk_bytes,
+            memory_bytes=resources.memory,
+            disk_bytes=resources.disk,
             gpu_count=device_count,
         )
         return check_resource_fit(available, required)

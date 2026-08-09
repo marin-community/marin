@@ -13,7 +13,7 @@ import sys
 import textwrap
 
 import pytest
-from iris.cluster.types import ResourceSpec, gpu_device
+from iris.cluster.resources.execution import ResourceSpec, gpu_device
 from iris.hooks import multigpu_main as multigpu
 from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
 from iris.hooks.multigpu_main import main, run

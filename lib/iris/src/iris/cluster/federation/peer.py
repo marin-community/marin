@@ -32,11 +32,19 @@ from iris.cluster.resources.action import ActionReceipt
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
 from iris.cluster.resources.job import JobSpec
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.legacy_job_codec import (
+    constraint_to_proto,
+    environment_to_proto,
+    resource_spec_to_proto,
+    runtime_entrypoint_to_proto,
+)
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.resource_connect import ResourceServiceClientSync
+from iris.rpc.worker_codec import process_info_from_proto
 from iris.time_proto import duration_to_proto
 
 # A handoff carries a full request and a peer's cold boot can outrun the default
@@ -96,7 +104,7 @@ class PeerConnection(Protocol):
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult: ...
 
-    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse: ...
+    def get_process_status(self, target: str) -> ProcessInfo: ...
 
     def shutdown(self) -> None: ...
 
@@ -135,16 +143,16 @@ def legacy_handoff_request(delivery: HandoffDelivery) -> controller_pb2.Controll
     spec = delivery.spec
     request = controller_pb2.Controller.LaunchJobRequest(
         name=spec.name,
-        entrypoint=spec.entrypoint,
-        resources=spec.resources.to_exact_proto(),
-        environment=spec.environment,
+        entrypoint=runtime_entrypoint_to_proto(spec.entrypoint),
+        resources=resource_spec_to_proto(spec.resources),
+        environment=environment_to_proto(spec.environment),
         bundle_id=spec.bundle_id,
         bundle_blob=delivery.bundle_blob,
         ports=spec.ports,
         max_task_failures=spec.max_task_failures,
         max_retries_failure=spec.max_retries_failure,
         max_retries_preemption=spec.max_retries_preemption,
-        constraints=[constraint.to_proto() for constraint in spec.constraints],
+        constraints=[constraint_to_proto(constraint) for constraint in spec.constraints],
         replicas=spec.replicas,
         fail_if_exists=spec.fail_if_exists,
         preemption_policy=spec.preemption_policy,
@@ -164,7 +172,7 @@ def legacy_handoff_request(delivery: HandoffDelivery) -> controller_pb2.Controll
     if spec.scheduling_timeout is not None:
         request.scheduling_timeout.CopyFrom(duration_to_proto(spec.scheduling_timeout))
     if spec.coscheduling is not None:
-        request.coscheduling.CopyFrom(spec.coscheduling.to_proto())
+        request.coscheduling.group_by = spec.coscheduling.group_by
     if spec.timeout is not None:
         request.timeout.CopyFrom(duration_to_proto(spec.timeout))
     return request
@@ -267,8 +275,12 @@ class _PeerRpcConnection:
             self._resources.exec_attempt(wire_request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
         )
 
-    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
-        return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
+    def get_process_status(self, target: str) -> ProcessInfo:
+        response = self._client.get_process_status(
+            job_pb2.GetProcessStatusRequest(target=target),
+            timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS,
+        )
+        return process_info_from_proto(response.process_info)
 
     def shutdown(self) -> None:
         self._client.close()
@@ -366,9 +378,9 @@ class FederationPeer:
         """Execute a command in an Attempt running on the peer."""
         return self._connection.exec_in_container(request)
 
-    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: str) -> ProcessInfo:
         """Read process status for an Attempt running on the peer."""
-        return self._connection.get_process_status(request)
+        return self._connection.get_process_status(target)
 
     def close(self) -> None:
         """Release the peer connection."""

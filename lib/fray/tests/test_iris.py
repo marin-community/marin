@@ -19,6 +19,7 @@ from fray.iris_backend import (
     IrisActorHandle,
     IrisJobHandle,
     convert_constraints,
+    convert_resources,
     resolve_coscheduling,
     wrap_multiprocess,
 )
@@ -32,8 +33,9 @@ from fray.types import (
 )
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.resources.endpoint import EndpointQuery
-from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import JobName, ResourceSpec, gpu_device
+from iris.cluster.resources.execution import Entrypoint as IrisEntrypoint
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice, gpu_device
+from iris.cluster.types import JobName
 
 
 class TestConvertConstraints:
@@ -108,6 +110,17 @@ class TestConvertConstraints:
         assert len(cluster_constraints) == 1
         assert cluster_constraints[0].op == ConstraintOp.EQ
         assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
+
+@pytest.mark.parametrize(
+    ("device", "expected"),
+    [
+        (GpuConfig(variant="H100", count=8), GpuDevice(variant="H100", count=8)),
+        (TpuConfig(variant="v5litepod-16"), TpuDevice(variant="v5litepod-16", topology="", count=4)),
+    ],
+)
+def test_convert_resources_uses_native_iris_devices(device, expected) -> None:
+    assert convert_resources(ResourceConfig(device=device)).device == expected
 
 
 class TestConvertConstraintsDeviceAlternatives:
@@ -497,7 +510,7 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
     )
-    assert wrapped.command == [
+    assert wrapped.command == (
         "python",
         "-m",
         "iris.hooks.multigpu_main",
@@ -510,14 +523,14 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
         "train.py",
         "--steps",
         "10",
-    ]
+    )
 
 
 def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
     )
-    assert wrapped.command[:8] == [
+    assert wrapped.command[:8] == (
         "python",
         "-m",
         "iris.hooks.multigpu_main",
@@ -526,7 +539,7 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
         "--devices-per-proc",
         "2",
         "--",
-    ]
+    )
 
 
 def test_wrap_multiprocess_requires_gpu() -> None:
@@ -556,11 +569,11 @@ def test_wrap_nsys_composes_the_hook_into_a_shell_entrypoint(monkeypatch):
 
     wrapped = iris_backend.wrap_nsys(entrypoint)
 
-    assert wrapped.command == [
+    assert wrapped.command == (
         "bash",
         "-c",
         "exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks first -- $IRIS_PYTHON -u run.py",
-    ]
+    )
     assert wrapped.workdir_files == entrypoint.workdir_files
 
 
@@ -570,7 +583,7 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
 
     wrapped = iris_backend.wrap_nsys(entrypoint)
 
-    assert wrapped.command == [
+    assert wrapped.command == (
         "$IRIS_PYTHON",
         "-m",
         "iris.hooks.nsys_main",
@@ -581,4 +594,4 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
         "train.py",
         "--steps",
         "5",
-    ]
+    )

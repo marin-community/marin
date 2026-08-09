@@ -26,8 +26,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
 from iris.cluster.stats.tables import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +42,17 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROCESS_TARGET = "/system/process"
 
 
-CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
-    job_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
-    job_pb2.CpuProfile.RAW: ("raw", "txt"),
+CPU_FORMAT_MAP: dict[CpuProfileFormat, tuple[str, str]] = {
+    CpuProfileFormat.FLAMEGRAPH: ("flamegraph", "svg"),
+    CpuProfileFormat.SPEEDSCOPE: ("speedscope", "json"),
+    CpuProfileFormat.RAW: ("raw", "txt"),
 }
 
-MEMORY_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    job_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
-    job_pb2.MemoryProfile.TABLE: ("table", "txt"),
-    job_pb2.MemoryProfile.STATS: ("stats", "json"),
-    job_pb2.MemoryProfile.RAW: ("raw", "bin"),
+MEMORY_FORMAT_MAP: dict[MemoryProfileFormat, tuple[str, str]] = {
+    MemoryProfileFormat.FLAMEGRAPH: ("flamegraph", "html"),
+    MemoryProfileFormat.TABLE: ("table", "txt"),
+    MemoryProfileFormat.STATS: ("stats", "json"),
+    MemoryProfileFormat.RAW: ("raw", "bin"),
 }
 
 
@@ -78,10 +85,10 @@ class MemoryProfileSpec:
         return self.reporter in ("flamegraph", "stats")
 
 
-def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
+def resolve_cpu_spec(cpu_config: CpuProfileConfiguration, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
-    native = cpu_config.native if cpu_config.HasField("native") else True
+    native = cpu_config.native if cpu_config.native is not None else True
     return CpuProfileSpec(
         py_spy_format=py_spy_format,
         ext=ext,
@@ -92,7 +99,7 @@ def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid:
     )
 
 
-def resolve_memory_spec(memory_config: job_pb2.MemoryProfile, duration_seconds: int, pid: str) -> MemoryProfileSpec:
+def resolve_memory_spec(memory_config: MemoryProfileConfiguration, duration_seconds: int, pid: str) -> MemoryProfileSpec:
     reporter, ext = MEMORY_FORMAT_MAP.get(memory_config.format, ("flamegraph", "html"))
     return MemoryProfileSpec(
         reporter=reporter,
@@ -261,7 +268,7 @@ class ProfileDispatch(Protocol):
 
 def capture_cpu(
     dispatch: ProfileDispatch,
-    cpu_config: job_pb2.CpuProfile,
+    cpu_config: CpuProfileConfiguration,
     duration_seconds: int,
     *,
     pid: str,
@@ -291,7 +298,7 @@ def capture_threads(
 
 
 def capture_memory_attach(
-    dispatch: ProfileDispatch, memory_config: job_pb2.MemoryProfile, duration_seconds: int, *, pid: str
+    dispatch: ProfileDispatch, memory_config: MemoryProfileConfiguration, duration_seconds: int, *, pid: str
 ) -> bytes:
     """Profile memory by attaching memray to a running process, then transforming the trace."""
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
@@ -362,7 +369,7 @@ class LocalProfileDispatch:
             pass
 
 
-def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+def profile_local_process(duration_seconds: int, profile: ProfileConfiguration) -> bytes:
     """Profile the current interpreter process using py-spy or memray.
 
     Used by the controller and worker to handle /system/process targets.
@@ -373,20 +380,19 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
     # itself, so resume_pid stays None and --subprocesses is off.
     dispatch = LocalProfileDispatch()
 
-    if profile_type.HasField("threads"):
+    if isinstance(profile, ThreadsProfileConfiguration):
         _check_tool("py-spy")
-        return capture_threads(dispatch, pid=pid, include_locals=profile_type.threads.locals, subprocesses=False)
-    elif profile_type.HasField("cpu"):
+        return capture_threads(dispatch, pid=pid, include_locals=profile.include_locals, subprocesses=False)
+    if isinstance(profile, CpuProfileConfiguration):
         _check_tool("py-spy")
-        return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid=pid, subprocesses=False)
-    elif profile_type.HasField("memory"):
+        return capture_cpu(dispatch, profile, duration_seconds, pid=pid, subprocesses=False)
+    if isinstance(profile, MemoryProfileConfiguration):
         _check_tool("memray")
-        return _run_memray_profile(pid, duration_seconds, profile_type.memory)
-    else:
-        raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+        return _run_memray_profile(pid, duration_seconds, profile)
+    raise RuntimeError("profile must specify cpu, memory, or threads profiler")
 
 
-def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
+def _run_memray_profile(pid: str, duration_seconds: int, memory_config: MemoryProfileConfiguration) -> bytes:
     """Profile memory of the current process using memray's in-process Tracker.
 
     Uses the programmatic Tracker API instead of ``memray attach``, avoiding
@@ -460,7 +466,7 @@ def build_profile_row(
     attempt_id: int | None,
     vm_id: str,
     duration_seconds: int,
-    profile_type: job_pb2.ProfileType,
+    profile: ProfileConfiguration,
     profile_data: bytes,
     trigger: ProfileTrigger = ProfileTrigger.ON_DEMAND,
 ) -> IrisProfile:
@@ -469,13 +475,12 @@ def build_profile_row(
     Single source of truth for the worker, ``K8sTaskProvider``, and the
     controller's ``/system/controller`` self-capture path. ``type``,
     ``format``, and the type-specific metadata fields are derived from the
-    proto oneof — callers only supply identity (``source`` / ``attempt_id``
+    native variant — callers only supply identity (``source`` / ``attempt_id``
     / ``vm_id``), the captured bytes, and the trigger.
     """
     captured_at = datetime.now(UTC).replace(tzinfo=None)
-    which = profile_type.WhichOneof("profiler")
-    if which == "cpu":
-        cpu_spec = resolve_cpu_spec(profile_type.cpu, duration_seconds, pid="")
+    if isinstance(profile, CpuProfileConfiguration):
+        cpu_spec = resolve_cpu_spec(profile, duration_seconds, pid="")
         return IrisProfile(
             source=source,
             attempt_id=attempt_id,
@@ -489,8 +494,8 @@ def build_profile_row(
             native=cpu_spec.native,
             profile_data=profile_data,
         )
-    if which == "memory":
-        memory_spec = resolve_memory_spec(profile_type.memory, duration_seconds, pid="")
+    if isinstance(profile, MemoryProfileConfiguration):
+        memory_spec = resolve_memory_spec(profile, duration_seconds, pid="")
         fmt = _MEMORY_REPORTER_TO_FORMAT.get(memory_spec.reporter, ProfileFormat.HTML)
         return IrisProfile(
             source=source,
@@ -504,7 +509,7 @@ def build_profile_row(
             leaks=memory_spec.leaks,
             profile_data=profile_data,
         )
-    if which == "threads":
+    if isinstance(profile, ThreadsProfileConfiguration):
         return IrisProfile(
             source=source,
             attempt_id=attempt_id,
@@ -514,7 +519,7 @@ def build_profile_row(
             type=ProfileType.THREAD.value,
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
-            locals_dump=bool(profile_type.threads.locals),
+            locals_dump=profile.include_locals,
             profile_data=profile_data,
         )
-    raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")
+    raise ValueError(f"Unknown profile configuration: {profile!r}")

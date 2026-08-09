@@ -39,7 +39,7 @@ from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client import iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.cluster.resources.execution import Entrypoint, ResourceSpec
 from rigging.filesystem import StoragePath
 
 from scripts.ops.storage.constants import (

@@ -4,8 +4,8 @@
 """Constants and predicate sets shared across the reconcile kernel."""
 
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.types import TERMINAL_JOB_STATES
-from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # Limits and well-known names
@@ -31,9 +31,9 @@ finish and free budget. Raise as controller capacity improves (#6411)."""
 # tears the gang down, a non-member (PENDING) requeues it.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
+        TaskState.FAILED,
+        TaskState.WORKER_FAILED,
+        TaskState.PREEMPTED,
     }
 )
 
@@ -44,30 +44,30 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
 # exactly like WORKER_FAILED. This gates *whether* to cascade; the resolved task
 # state (via FAILURE_TASK_STATES) still decides requeue-vs-terminate downstream,
 # so KILLED is deliberately kept out of FAILURE_TASK_STATES itself.
-PEER_CASCADE_TRIGGER_STATES: frozenset[int] = FAILURE_TASK_STATES | {job_pb2.TASK_STATE_KILLED}
+PEER_CASCADE_TRIGGER_STATES: frozenset[int] = FAILURE_TASK_STATES | {TaskState.KILLED}
 
 # Non-terminal task states (ACTIVE plus PENDING). Used as the snapshot's
 # per-job ``active_tasks_by_job`` state filter so a single read covers both
 # ACTIVE-only and NON_TERMINAL readers.
-NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
+NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {TaskState.PENDING}
 
 # Cancel intentionally overwrites the transient WORKER_FAILED terminal so
 # operator intent is recorded; other real terminals are still protected.
-CANCEL_GUARD_STATES: frozenset[int] = frozenset(TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED})
+CANCEL_GUARD_STATES: frozenset[int] = frozenset(TERMINAL_JOB_STATES - {JobState.WORKER_FAILED})
 
 # Job states that warrant recording an error message on finished_at_ms.
 ERROR_STATES: frozenset[int] = frozenset(
     [
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-        job_pb2.JOB_STATE_WORKER_FAILED,
+        JobState.FAILED,
+        JobState.KILLED,
+        JobState.UNSCHEDULABLE,
+        JobState.WORKER_FAILED,
     ]
 )
 
 TERMINAL_STATE_REASONS: dict[int, str] = {
-    job_pb2.JOB_STATE_FAILED: "Job exceeded max_task_failures",
-    job_pb2.JOB_STATE_KILLED: "Job was terminated.",
-    job_pb2.JOB_STATE_UNSCHEDULABLE: "Job could not be scheduled.",
-    job_pb2.JOB_STATE_WORKER_FAILED: "Worker failed",
+    JobState.FAILED: "Job exceeded max_task_failures",
+    JobState.KILLED: "Job was terminated.",
+    JobState.UNSCHEDULABLE: "Job could not be scheduled.",
+    JobState.WORKER_FAILED: "Worker failed",
 }

@@ -14,13 +14,24 @@ import json
 import pytest
 from google.protobuf import json_format as jf
 from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.cluster.runtime.env import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
     build_common_iris_env,
     with_slice_topology_env,
 )
+from iris.cluster.types import AttemptUid, JobName
 from iris.rpc import job_pb2
+from iris.rpc.legacy_job_codec import (
+    constraint_from_proto,
+    environment_from_proto,
+    resource_spec_from_proto,
+    resource_spec_to_proto,
+    runtime_entrypoint_from_proto,
+)
+from iris.time_proto import duration_from_proto
 
 
 def _make_req(
@@ -59,16 +70,40 @@ def _make_req(
 
 
 def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
+    launch = _launch(req)
+    template = launch.template
     return build_common_iris_env(
         task_id=req.task_id,
         attempt_id=req.attempt_id,
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
-        environment=req.environment,
-        constraints=req.constraints,
-        ports=req.ports,
-        resources=req.resources if req.HasField("resources") else None,
+        environment=template.environment,
+        constraints=template.constraints,
+        ports=template.ports,
+        resources=template.resources,
+    )
+
+
+def _launch(req: job_pb2.RunTaskRequest) -> AttemptLaunch:
+    return AttemptLaunch(
+        JobName.from_wire(req.task_id),
+        req.attempt_id,
+        AttemptUid(req.attempt_uid),
+        AttemptLaunchTemplate(
+            num_tasks=req.num_tasks,
+            entrypoint=runtime_entrypoint_from_proto(req.entrypoint),
+            environment=environment_from_proto(req.environment),
+            bundle_id=req.bundle_id,
+            resources=resource_spec_from_proto(req.resources),
+            timeout=duration_from_proto(req.timeout) if req.HasField("timeout") else None,
+            ports=tuple(req.ports),
+            constraints=tuple(constraint_from_proto(value) for value in req.constraints),
+            task_image=req.task_image,
+            coscheduling=CoschedulingConfig(req.coscheduling.group_by) if req.HasField("coscheduling") else None,
+            priority_band=PriorityBand(req.priority),
+            container_profile=ContainerProfile(req.container_profile),
+        ),
     )
 
 
@@ -78,7 +113,7 @@ def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None)
     config = PodConfig(
         namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
     )
-    manifest = _build_pod_manifest(req, config)
+    manifest = _build_pod_manifest(_launch(req), config)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}
 
@@ -175,6 +210,28 @@ def test_controller_address_set_when_provided():
     assert env["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
 
 
+def test_native_environment_preserves_legacy_constraint_json() -> None:
+    req = _make_req()
+    req.constraints.add(
+        key="region",
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        value=job_pb2.AttributeValue(string_value="us-east1"),
+        mode=job_pb2.CONSTRAINT_MODE_REQUIRED,
+    )
+
+    assert json.loads(_common_env(req)["IRIS_JOB_CONSTRAINTS"]) == [
+        jf.MessageToDict(req.constraints[0], preserving_proto_field_name=True)
+    ]
+
+
+@pytest.mark.parametrize("req", [_make_req(), _make_req(gpu_count=8), _make_req(tpu=True)])
+def test_native_environment_matches_canonical_worker_resource_json(req) -> None:
+    assert _common_env(req)["IRIS_TASK_RESOURCES"] == jf.MessageToJson(
+        resource_spec_to_proto(_launch(req).template.resources),
+        preserving_proto_field_name=True,
+    )
+
+
 def test_tpu_device_vars():
     env = _common_env(_make_req(tpu=True))
     assert env["JAX_PLATFORMS"] == "tpu,cpu"
@@ -206,7 +263,8 @@ def test_tpu_multislice_sets_slice_topology_for_multi_vm_slices():
 def test_with_slice_topology_env_publishes_tpu_slice_topology():
     req = _make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2)
 
-    environment = with_slice_topology_env(req.environment, req.resources, req.num_tasks)
+    launch = _launch(req)
+    environment = with_slice_topology_env(launch.template.environment, launch.template.resources, req.num_tasks)
 
     assert environment.env_vars[IRIS_SLICE_COUNT] == "2"
     assert environment.env_vars[IRIS_TASKS_PER_SLICE] == "1"
@@ -217,7 +275,8 @@ def test_with_slice_topology_env_overwrites_stale_topology():
     req.environment.env_vars[IRIS_SLICE_COUNT] = "99"
     req.environment.env_vars[IRIS_TASKS_PER_SLICE] = "99"
 
-    environment = with_slice_topology_env(req.environment, req.resources, req.num_tasks)
+    launch = _launch(req)
+    environment = with_slice_topology_env(launch.template.environment, launch.template.resources, req.num_tasks)
 
     assert environment.env_vars[IRIS_SLICE_COUNT] == "2"
     assert environment.env_vars[IRIS_TASKS_PER_SLICE] == "1"

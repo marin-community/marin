@@ -15,7 +15,7 @@ stamps on each child; :mod:`iris.runtime.jax_init` and
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from iris.cluster.types import ResourceSpec, get_gpu_count
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec
 
 # Rank env the supervisor stamps on each child.
 IRIS_MULTIGPU_PROCESS_COUNT_ENV = "IRIS_MULTIGPU_PROCESS_COUNT"
@@ -68,7 +68,7 @@ def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> Mul
     child then gets ``gpu_count // processes_per_task`` devices.
     """
     device = resources.device
-    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
+    gpu_count = device.count if isinstance(device, GpuDevice) else 0
     if gpu_count <= 0:
         raise ValueError("processes_per_task > 1 requires a GPU device")
     if gpu_count % processes_per_task != 0:

@@ -11,6 +11,7 @@ import pytest
 from iris.cluster.config import GcpSliceConfig, ScaleGroupConfig, ScaleGroupResources, SliceConfig
 from iris.cluster.constraints import (
     Constraint,
+    ConstraintMode,
     ConstraintOp,
     DeviceType,
     PlacementRequirements,
@@ -27,8 +28,8 @@ from iris.cluster.controller.autoscaler.routing import (
     route_demand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.types import AcceleratorType, CapacityType
-from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.backends.conftest import (
     make_mock_platform,
@@ -989,7 +990,7 @@ class TestRoutingBinPacking:
         return ScalingGroup(config, make_mock_platform())
 
     def _make_entries(self, count: int, memory_bytes: int = 32 * 1024**3) -> list[DemandEntry]:
-        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
+        resources = ResourceSpec(cpu=1, memory=memory_bytes)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1073,7 +1074,7 @@ class TestRoutingBinPacking:
         )
         group = ScalingGroup(config, make_mock_platform())
 
-        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = ResourceSpec(cpu=1, memory=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1115,7 +1116,7 @@ class TestRoutingBinPacking:
         )
         group = ScalingGroup(config, make_mock_platform())
 
-        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = ResourceSpec(cpu=1, memory=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1157,12 +1158,12 @@ class TestRoutingBinPacking:
             (
                 DeviceType.GPU,
                 "h100",
-                lambda: job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=1)),
+                lambda: GpuDevice("h100"),
             ),
             (
                 DeviceType.TPU,
                 "v5p-8",
-                lambda: job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8")),
+                lambda: TpuDevice("v5p-8"),
             ),
         ],
         ids=["gpu", "tpu"],
@@ -1171,7 +1172,7 @@ class TestRoutingBinPacking:
         """Accelerator entries (GPU/TPU) must each get their own VM, not share a bin."""
         group = self._make_group(max_slices=2, memory_bytes=128 * 1024**3)
 
-        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=32 * 1024**3, device=make_device())
+        resources = ResourceSpec(cpu=1, memory=32 * 1024**3, device=make_device())
         normalized = PlacementRequirements(
             device_type=device_type,
             device_variants=frozenset({device_variant}),
@@ -1283,8 +1284,7 @@ class TestCheckRoutingFeasibility:
         """
         config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1)
         autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
-        resources = job_pb2.ResourceSpecProto(disk_bytes=300 * 1024**3)
-        resources.device.tpu.variant = "v5p-8"
+        resources = ResourceSpec(disk=300 * 1024**3, device=TpuDevice("v5p-8"))
         result = autoscaler.job_feasibility(self._tpu_constraints(), resources=resources)
         assert result is not None
         assert "disk" in result
@@ -1293,8 +1293,7 @@ class TestCheckRoutingFeasibility:
         """Disk within the group's advertised per-VM capacity stays feasible."""
         config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1)
         autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
-        resources = job_pb2.ResourceSpecProto(disk_bytes=50 * 1024**3)
-        resources.device.tpu.variant = "v5p-8"
+        resources = ResourceSpec(disk=50 * 1024**3, device=TpuDevice("v5p-8"))
         assert autoscaler.job_feasibility(self._tpu_constraints(), resources=resources) is None
 
     def test_infeasible_wrong_device_type(self):
@@ -1374,7 +1373,7 @@ class TestCheckRoutingFeasibility:
             key=WellKnownAttribute.REGION,
             op=ConstraintOp.EQ,
             value="europe-west4",
-            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+            mode=ConstraintMode.PREFERRED,
         )
         constraints.append(soft)
         autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})

@@ -28,9 +28,10 @@ from iris.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
+from iris.cluster.resources.execution import Entrypoint, ResourceSpec, tpu_device
 from iris.cluster.resources.identity import NodeLocator
 from iris.cluster.resources.node import NodeDetail
-from iris.cluster.types import Entrypoint, JobName, ResourceSpec, WellKnownAttribute, tpu_device
+from iris.cluster.types import JobName, WellKnownAttribute
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp

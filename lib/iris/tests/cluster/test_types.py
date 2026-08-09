@@ -5,6 +5,7 @@
 
 import hashlib
 
+import cloudpickle
 import pytest
 from iris.cluster.constraints import (
     Constraint,
@@ -17,18 +18,28 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import (
-    LOCAL_CLUSTER,
+from iris.cluster.resources.execution import (
+    CpuDevice,
     Entrypoint,
     EnvironmentSpec,
-    JobName,
-    TaskAttempt,
+    ResourceSpec,
     adjust_tpu_replicas,
+    build_runtime_entrypoint,
     gpu_device,
-    is_federated,
     tpu_device,
 )
-from iris.rpc import job_pb2
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    JobName,
+    TaskAttempt,
+    is_federated,
+)
+from iris.rpc.resource_codec import (
+    constraint_from_proto,
+    constraint_to_proto,
+    runtime_entrypoint_from_proto,
+    runtime_entrypoint_to_proto,
+)
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 
 
@@ -44,25 +55,25 @@ def fresh_launch_provenance():
     _capture_once.cache_clear()
 
 
-def test_environment_to_proto_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
+def test_environment_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
     """Every submission's env carries the launch provenance so a git-less task can stamp
     records with the submitter's identity. Re-submitting from inside a task forwards the
     inherited value verbatim; an explicit caller value wins over the default."""
     submitted = Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch="rav/pipeline", built_by="rav")
     monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
 
-    stamped = EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV]
+    stamped = EnvironmentSpec().resolve().env_vars[LAUNCH_PROVENANCE_ENV]
     assert Provenance.from_json(stamped) == submitted
 
-    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).to_proto()
+    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).resolve()
     assert explicit.env_vars[LAUNCH_PROVENANCE_ENV] == "caller-value"
 
 
-def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_provenance):
+def test_environment_captures_local_checkout(monkeypatch, fresh_launch_provenance):
     """A local submission (no env var) stamps provenance captured from the checkout."""
     monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
 
-    stamped = Provenance.from_json(EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV])
+    stamped = Provenance.from_json(EnvironmentSpec().resolve().env_vars[LAUNCH_PROVENANCE_ENV])
     assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
@@ -72,30 +83,31 @@ def test_entrypoint_from_callable_resolve_roundtrip():
     assert fn(*args, **kwargs) == 7
 
 
-def test_entrypoint_proto_roundtrip_preserves_bytes():
-    """Bytes survive to_proto -> from_proto without deserialization."""
+def test_entrypoint_resource_wire_roundtrip_preserves_bytes():
+    """Bytes survive the ResourceService wire without deserialization."""
     ep = Entrypoint.from_callable(_add, 1, 2)
     original_files = ep.workdir_files
 
-    proto = ep.to_proto()
-    ep2 = Entrypoint.from_proto(proto)
+    runtime = runtime_entrypoint_from_proto(
+        runtime_entrypoint_to_proto(build_runtime_entrypoint(ep, EnvironmentSpec(setup_scripts=[]).resolve()))
+    )
 
-    assert ep2.workdir_files == original_files
-    fn, args, kwargs = ep2.resolve()
+    assert runtime.workdir_files == original_files
+    fn, args, kwargs = cloudpickle.loads(runtime.workdir_files["_callable.pkl"])
     assert fn(*args, **kwargs) == 3
 
 
-def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
-    """workdir_file_refs survive to_proto -> from_proto."""
+def test_entrypoint_resource_wire_roundtrip_preserves_workdir_file_refs():
+    """workdir_file_refs survive the ResourceService wire."""
     refs = {"_callable.pkl": "abc123", "model.bin": "def456"}
-    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+    ep = Entrypoint(command=("python", "run.py"), workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
 
-    proto = ep.to_proto()
-    ep2 = Entrypoint.from_proto(proto)
+    runtime = build_runtime_entrypoint(ep, EnvironmentSpec(setup_scripts=[]).resolve())
+    restored = runtime_entrypoint_from_proto(runtime_entrypoint_to_proto(runtime))
 
-    assert ep2.workdir_file_refs == refs
-    assert ep2.workdir_files == {"small.txt": b"hi"}
-    assert ep2.command == ["python", "run.py"]
+    assert restored.workdir_file_refs == refs
+    assert restored.workdir_files == {"small.txt": b"hi"}
+    assert restored.run_command.argv == ("python", "run.py")
 
 
 def test_entrypoint_callable_has_workdir_files():
@@ -256,9 +268,9 @@ def test_task_name_attempt_zero():
 # ---------------------------------------------------------------------------
 
 
-def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> Constraint:
+def _proto_constraint(key: str, string_value: str, op: ConstraintOp = ConstraintOp.EQ) -> Constraint:
     """Build a native Constraint with a string value (normalized at construction)."""
-    return Constraint.create(key=key, op=ConstraintOp(op), value=string_value)
+    return Constraint.create(key=key, op=op, value=string_value)
 
 
 # ---------------------------------------------------------------------------
@@ -483,17 +495,17 @@ def test_region_constraint_empty_string_in_multi_raises():
 
 
 # ---------------------------------------------------------------------------
-# Constraint.to_proto / from_proto round-trip for IN operator
+# Constraint resource-wire round-trip for IN operator
 # ---------------------------------------------------------------------------
 
 
-def test_constraint_in_proto_roundtrip():
-    """IN constraint survives a proto round-trip."""
+def test_constraint_in_resource_wire_roundtrip():
+    """IN constraint survives a ResourceService wire round-trip."""
     original = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=["us-central1", "eu-west4"])
-    proto = original.to_proto()
-    assert proto.op == job_pb2.CONSTRAINT_OP_IN
+    proto = constraint_to_proto(original)
+    assert proto.op == int(ConstraintOp.IN)
     assert len(proto.values) == 2
-    restored = Constraint.from_proto(proto)
+    restored = constraint_from_proto(proto)
     assert restored == original
 
 
@@ -545,8 +557,7 @@ def test_extract_placement_requirements_with_in_region():
 
 def test_constraints_from_resources_tpu():
     """TPU resource spec produces device-type and device-variant constraints."""
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
-    resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    resources = ResourceSpec(cpu=2, device=tpu_device("v5litepod-16"))
     result = constraints_from_resources(resources)
     keys = {c.key for c in result}
     assert WellKnownAttribute.DEVICE_TYPE in keys
@@ -558,8 +569,7 @@ def test_constraints_from_resources_tpu():
 
 
 def test_constraints_from_resources_gpu():
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
-    resources.device.CopyFrom(gpu_device("H100", count=8))
+    resources = ResourceSpec(cpu=2, device=gpu_device("H100", count=8))
     result = constraints_from_resources(resources)
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
     assert type_c.values[0].value == "gpu"
@@ -569,23 +579,21 @@ def test_constraints_from_resources_gpu():
 
 def test_constraints_from_resources_cpu_produces_nothing():
     """CPU-only resource spec produces no device constraints."""
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
-    resources.device.CopyFrom(job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()))
+    resources = ResourceSpec(cpu=2, device=CpuDevice())
     result = constraints_from_resources(resources)
     assert result == []
 
 
 def test_constraints_from_resources_no_device():
     """Resource spec with no device field produces no constraints."""
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources = ResourceSpec(cpu=2)
     result = constraints_from_resources(resources)
     assert result == []
 
 
 def test_constraints_from_resources_auto_variant_skipped():
     """Variant 'auto' is not emitted as a constraint."""
-    resources = job_pb2.ResourceSpecProto()
-    resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="auto", count=1)))
+    resources = ResourceSpec(device=gpu_device("auto"))
     result = constraints_from_resources(resources)
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.DEVICE_TYPE
@@ -645,12 +653,7 @@ def test_gpu_device_rejects_non_positive_count(bad_count):
 
 def test_merge_auto_constraints_with_user_variant_override():
     """User multi-variant IN constraint replaces auto-generated single-variant EQ."""
-    auto = constraints_from_resources(
-        job_pb2.ResourceSpecProto(
-            cpu_millicores=2000,
-            device=tpu_device("v5litepod-16"),
-        )
-    )
+    auto = constraints_from_resources(ResourceSpec(cpu=2, device=tpu_device("v5litepod-16")))
     user = [device_variant_constraint(["v5litepod-16", "v6e-16"])]
     merged = merge_constraints(auto, user)
 

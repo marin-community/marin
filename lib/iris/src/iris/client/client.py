@@ -56,7 +56,17 @@ from iris.cluster.resources.endpoint import (
     EndpointSummary,
     EndpointToken,
     ExecResult,
+    ProfileConfiguration,
     ProfileResult,
+)
+from iris.cluster.resources.execution import (
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    adjust_tpu_replicas,
+    build_runtime_entrypoint,
+    with_accelerator_cpu_default,
+    with_slice_topology_environment,
 )
 from iris.cluster.resources.identity import (
     AttemptIdentity,
@@ -67,31 +77,34 @@ from iris.cluster.resources.identity import (
     SliceLocator,
     TaskIdentity,
 )
-from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    CoschedulingConfig,
+    ExistingJobPolicy,
+    JobDetail,
+    JobPreemptionPolicy,
+    JobQuery,
+    JobSpec,
+    JobSummary,
+    PriorityBand,
+)
 from iris.cluster.resources.log import LogEntry, LogLevel, LogPage, LogQuery
 from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
 from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import (
-    CoschedulingConfig,
     EndpointAccess,
-    Entrypoint,
-    EnvironmentSpec,
     JobName,
     Namespace,
-    ResourceSpec,
     TaskAttempt,
-    adjust_tpu_replicas,
-    is_job_finished,
 )
-from iris.rpc import job_pb2
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
+
+_RESOURCE_PAGE_SIZE = 500
 
 
 class _ClusterLifecycle(Protocol):
@@ -106,7 +119,7 @@ class JobFailedError(Exception):
     def __init__(self, job_id: JobName, status: JobSummary):
         self.job_id = job_id
         self.status = status
-        state_name = job_pb2.JobState.Name(status.state)
+        state_name = f"JOB_STATE_{status.state.name}"
         msg = f"Job {job_id} {state_name}"
         if status.error_message:
             msg += f": {status.error_message}"
@@ -300,12 +313,18 @@ class Job:
                 for entry in page.entries:
                     logger.info("task=%s | %s", entry.key, entry.data)
                 cursor = max(cursor, page.next_cursor)
-            if is_job_finished(status.state):
+            if status.state in {
+                JobState.SUCCEEDED,
+                JobState.FAILED,
+                JobState.KILLED,
+                JobState.WORKER_FAILED,
+                JobState.UNSCHEDULABLE,
+            }:
                 break
             deadline.raise_if_expired(f"Job {self.job_id} did not complete in {timeout}s")
             time.sleep(min(backoff.next_interval(), deadline.remaining_seconds()))
 
-        if raise_on_failure and status.state != job_pb2.JOB_STATE_SUCCEEDED:
+        if raise_on_failure and status.state is not JobState.SUCCEEDED:
             raise JobFailedError(self.job_id, status)
         return status
 
@@ -668,11 +687,11 @@ class IrisClient:
         max_task_failures: int = 0,
         timeout: Duration | None = None,
         user: str | None = None,
-        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        preemption_policy: JobPreemptionPolicy = JobPreemptionPolicy.UNSPECIFIED,
+        existing_job_policy: ExistingJobPolicy = ExistingJobPolicy.UNSPECIFIED,
         task_image: str | None = None,
-        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
-        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        priority_band: PriorityBand = PriorityBand.INHERIT,
+        container_profile: ContainerProfile = ContainerProfile.UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -791,16 +810,16 @@ class IrisClient:
             constraints = [c for c in constraints if not is_any_region_marker(c)]
 
         # Lower the ergonomic submission inputs into the resource contract.
-        resources_proto = resources.to_proto()
-        environment_proto = (environment or EnvironmentSpec()).to_proto()
-        environment_proto = with_slice_topology_env(environment_proto, resources_proto, replicas)
-        runtime_entrypoint = build_runtime_entrypoint(entrypoint, environment_proto)
+        resources = with_accelerator_cpu_default(resources)
+        resolved_environment = (environment or EnvironmentSpec()).resolve()
+        resolved_environment = with_slice_topology_environment(resolved_environment, resources, replicas)
+        runtime_entrypoint = build_runtime_entrypoint(entrypoint, resolved_environment)
         spec = JobSpec(
             version=1,
             name=job_id.to_wire(),
             entrypoint=runtime_entrypoint,
             resources=resources,
-            environment=environment_proto,
+            environment=resolved_environment,
             bundle_id="",
             scheduling_timeout=scheduling_timeout,
             ports=tuple(ports or ()),
@@ -949,14 +968,14 @@ class IrisClient:
         self,
         identity: AttemptIdentity,
         *,
-        profile: job_pb2.ProfileType,
+        profile: ProfileConfiguration,
         duration: Duration,
     ) -> ProfileResult:
         return self._cluster_client.profile_attempt(identity, profile=profile, duration=duration)
 
     def current_job(self, job_id: JobName) -> Job:
         """Resolve the current Job incarnation for a wire ID."""
-        query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=500)
+        query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=_RESOURCE_PAGE_SIZE)
         while True:
             page = self.list_jobs(query)
             match = next(
@@ -967,7 +986,11 @@ class IrisClient:
                 return Job(self, match.identity)
             if page.next_page_token is None:
                 raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
-            query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=500, page_token=page.next_page_token)
+            query = JobQuery(
+                job_id_prefix=job_id.to_wire(),
+                page_size=_RESOURCE_PAGE_SIZE,
+                page_token=page.next_page_token,
+            )
 
     def report_task_status_text(
         self,

@@ -389,7 +389,7 @@ class ControllerFederationStore:
             cur,
             job_id=local_job_id,
             name=local_job_id.name,
-            resources=summary.resources.to_exact_proto(),
+            resources=summary.resources,
             priority_band=int(seed.priority_band),
         )
         # job_config backs RunTemplatesProjection; invalidate post-commit per its

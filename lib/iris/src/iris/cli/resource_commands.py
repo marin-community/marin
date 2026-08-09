@@ -12,7 +12,7 @@ from iris.cluster.resources.activity import ActivityEntry
 from iris.cluster.resources.identity import AttemptLocator, ResourceKey, ResourceKind
 from iris.cluster.resources.log import LogEntry
 from iris.cluster.resources.source import ResourceSourceStatus, SourceState
-from iris.rpc import job_pb2
+from iris.cluster.resources.state import JobState, TaskState
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 
 DEFAULT_RESOURCE_LIST_LIMIT = 100
@@ -80,9 +80,9 @@ def echo_logs(entries: tuple[LogEntry, ...]) -> None:
         click.echo(f"{prefix}{source}{entry.data}")
 
 
-def job_state_name(state: job_pb2.JobState) -> str:
+def job_state_name(state: JobState) -> str:
     return job_state_friendly(state)
 
 
-def task_state_name(state: job_pb2.TaskState) -> str:
+def task_state_name(state: TaskState) -> str:
     return task_state_friendly(state)

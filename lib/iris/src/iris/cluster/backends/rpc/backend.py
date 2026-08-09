@@ -46,7 +46,15 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.ops.worker import apply_reconcile
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import (
+    AttemptStopReason,
+    KeepAttempt,
+    LaunchAttempt,
+    StopAttempt,
+    WorkerReconcilePlan,
+    WorkerReconcileRequest,
+    WorkerReconcileResult,
+)
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
     DEFAULT_UNREACHABLE_GRACE,
@@ -54,12 +62,23 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptObservation
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
-from iris.cluster.types import WellKnownAttribute, WorkerId
+from iris.cluster.resources.state import TaskState
+from iris.cluster.resources.system import ProcessInfo
+from iris.cluster.types import AttemptUid, WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
+from iris.rpc.legacy_job_codec import (
+    constraint_to_proto,
+    environment_to_proto,
+    resource_spec_to_proto,
+    runtime_entrypoint_to_proto,
+)
 from iris.rpc.profile_codec import profile_configuration_to_proto
+from iris.rpc.worker_codec import process_info_from_proto
 from iris.rpc.worker_connect import WorkerServiceClient
+from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +100,86 @@ RECONCILE_FANOUT_PARALLELISM = 512
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
 EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
+_DEFAULT_PROFILE_DURATION_SECONDS = 10
+_PROFILE_RPC_TIMEOUT_MARGIN_MS = 30_000
+
 # Failure reason stamped on a worker the reconcile fold reaped (drained by
 # ``run_teardown``).
 WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
+
+_STOP_REASON_TO_WIRE = {
+    AttemptStopReason.CANCELLED: worker_pb2.Worker.STOP_REASON_CANCELLED,
+    AttemptStopReason.PREEMPTED: worker_pb2.Worker.STOP_REASON_PREEMPTED,
+    AttemptStopReason.SUPERSEDED: worker_pb2.Worker.STOP_REASON_SUPERSEDED,
+    AttemptStopReason.JOB_TERMINATED: worker_pb2.Worker.STOP_REASON_JOB_TERMINATED,
+    AttemptStopReason.TASK_TIMEOUT: worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT,
+    AttemptStopReason.WORKER_DRAIN: worker_pb2.Worker.STOP_REASON_WORKER_DRAIN,
+}
+
+
+def _attempt_launch_to_proto(launch: AttemptLaunch) -> job_pb2.RunTaskRequest:
+    template = launch.template
+    result = job_pb2.RunTaskRequest(
+        task_id=launch.task_id.to_wire(),
+        attempt_id=launch.attempt_id,
+        attempt_uid=launch.attempt_uid,
+        num_tasks=template.num_tasks,
+        entrypoint=runtime_entrypoint_to_proto(template.entrypoint),
+        environment=environment_to_proto(template.environment),
+        bundle_id=template.bundle_id,
+        resources=resource_spec_to_proto(template.resources),
+        ports=template.ports,
+        constraints=[constraint_to_proto(constraint) for constraint in template.constraints],
+        task_image=template.task_image,
+        priority=int(template.priority_band),
+        container_profile=int(template.container_profile),
+    )
+    if template.timeout is not None:
+        result.timeout.CopyFrom(duration_to_proto(template.timeout))
+    if template.coscheduling is not None:
+        result.coscheduling.group_by = template.coscheduling.group_by
+    return result
+
+
+def _reconcile_request_to_proto(request: WorkerReconcileRequest) -> worker_pb2.Worker.ReconcileRequest:
+    desired = []
+    for item in request.desired:
+        if isinstance(item, LaunchAttempt):
+            desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=item.attempt_uid,
+                    run=worker_pb2.Worker.AttemptSpec(request=_attempt_launch_to_proto(item.launch)),
+                )
+            )
+        elif isinstance(item, KeepAttempt):
+            desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=item.attempt_uid,
+                    run=worker_pb2.Worker.AttemptSpec(),
+                )
+            )
+        else:
+            assert isinstance(item, StopAttempt)
+            desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=item.attempt_uid,
+                    stop=_STOP_REASON_TO_WIRE[item.reason],
+                )
+            )
+    return worker_pb2.Worker.ReconcileRequest(worker_id=request.worker_id, desired=desired)
+
+
+def _attempt_observation_from_proto(value: worker_pb2.Worker.AttemptObservation) -> AttemptObservation:
+    return AttemptObservation(
+        attempt_uid=AttemptUid(value.attempt_uid),
+        state=TaskState(value.state),
+        exit_code=value.exit_code or None,
+        error=value.error or None,
+        container_id=value.container_id or None,
+    )
 
 
 def _fan_out(
@@ -453,21 +546,13 @@ class RpcTaskBackend:
         self.autoscaler.update(request.residual_demand)
         return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)
         # Forward with target cleared — the worker serves its own process status.
-        forwarded = job_pb2.GetProcessStatusRequest(
-            max_log_lines=request.max_log_lines,
-            log_substring=request.log_substring,
-            min_log_level=request.min_log_level,
-        )
-        return asyncio.run(stub.get_process_status(forwarded, timeout_ms=10000))
+        response = asyncio.run(stub.get_process_status(job_pb2.GetProcessStatusRequest(), timeout_ms=10000))
+        return process_info_from_proto(response.process_info)
 
     def profile_task(
         self,
@@ -487,7 +572,7 @@ class RpcTaskBackend:
             duration_seconds=duration_seconds,
             profile_type=profile_configuration_to_proto(request.profile),
         )
-        timeout_ms = (duration_seconds or 10) * 1_000 + 30_000
+        timeout_ms = (duration_seconds or _DEFAULT_PROFILE_DURATION_SECONDS) * 1_000 + _PROFILE_RPC_TIMEOUT_MARGIN_MS
         response = asyncio.run(stub.profile_task(wire_request, timeout_ms=timeout_ms))
         return ProfileResult(response.profile_data, response.error)
 
@@ -528,11 +613,12 @@ class RpcTaskBackend:
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
                 response = await asyncio.wait_for(
-                    stub.reconcile(plan.request), timeout=RECONCILE_RPC_TIMEOUT.to_seconds()
+                    stub.reconcile(_reconcile_request_to_proto(plan.request)),
+                    timeout=RECONCILE_RPC_TIMEOUT.to_seconds(),
                 )
                 return WorkerReconcileResult(
                     worker_id=plan.worker_id,
-                    observations=list(response.observed),
+                    observations=[_attempt_observation_from_proto(value) for value in response.observed],
                     error=None,
                     self_healthy=response.health.healthy,
                     responder_worker_id=response.worker_id or None,

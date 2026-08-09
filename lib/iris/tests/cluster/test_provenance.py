@@ -6,10 +6,9 @@ from dataclasses import replace
 from iris.cluster.provenance import (
     is_same_image_provenance,
     provenance_from_env,
-    provenance_from_proto,
     provenance_to_env,
-    provenance_to_proto,
 )
+from iris.rpc.worker_codec import provenance_from_proto, provenance_to_proto
 from rigging.provenance import Provenance
 
 _PROV = Provenance(tree_hash="abcd", base_commit="9d2edea", dirty=True, branch="feat", built_by="power")

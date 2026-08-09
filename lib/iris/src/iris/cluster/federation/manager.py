@@ -473,9 +473,8 @@ class FederationManager:
         content ids on the way in.
         """
         spec = handoff.spec
-        entrypoint = type(spec.entrypoint)()
-        entrypoint.CopyFrom(spec.entrypoint)
-        refs = dict(entrypoint.workdir_file_refs)
+        refs = dict(spec.entrypoint.workdir_file_refs)
+        workdir_files = dict(spec.entrypoint.workdir_files)
         bundle_blob = b""
         if spec.bundle_id or refs:
             assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
@@ -483,8 +482,8 @@ class FederationManager:
             bundle_blob = self._bundles.get(spec.bundle_id)
         for name, blob_id in refs.items():
             assert self._bundles is not None
-            entrypoint.workdir_files[name] = self._bundles.get(blob_id)
-        entrypoint.ClearField("workdir_file_refs")
+            workdir_files[name] = self._bundles.get(blob_id)
+        entrypoint = replace(spec.entrypoint, workdir_files=workdir_files, workdir_file_refs={})
         stripped = replace(
             spec,
             name=handoff.local_job_id.to_wire(),

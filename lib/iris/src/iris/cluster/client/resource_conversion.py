@@ -8,7 +8,6 @@ Generated protobuf messages stay at the RPC boundary because their mutable,
 presence-sensitive semantics are transport concerns rather than resource behavior.
 """
 
-from iris.cluster.constraints import Constraint
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.activity import ActivityEntry, ActivityQuery
 from iris.cluster.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
@@ -33,7 +32,7 @@ from iris.cluster.resources.identity import (
     SliceLocator,
     TaskIdentity,
 )
-from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
+from iris.cluster.resources.job import JobDetail, JobQuery, JobSummary
 from iris.cluster.resources.log import LogEntry, LogLevel, LogPage, LogQuery
 from iris.cluster.resources.node import (
     NodeAttribute,
@@ -55,9 +54,9 @@ from iris.cluster.resources.slice import (
 from iris.cluster.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
 from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.cluster.types import CoschedulingConfig, ResourceSpec
 from iris.rpc import resource_pb2
-from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
+from iris.rpc.resource_codec import job_spec_from_proto
+from iris.time_proto import timestamp_from_proto, timestamp_to_proto
 
 _RESOURCE_KIND_TO_PROTO = {
     ResourceKind.JOB: resource_pb2.RESOURCE_KIND_JOB,
@@ -252,77 +251,8 @@ def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
     )
 
 
-def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
-    result = resource_pb2.JobSpec(
-        version=value.version,
-        name=value.name,
-        entrypoint=value.entrypoint,
-        resources=value.resources.to_exact_proto(),
-        environment=value.environment,
-        bundle_id=value.bundle_id,
-        ports=value.ports,
-        max_task_failures=value.max_task_failures,
-        max_retries_failure=value.max_retries_failure,
-        max_retries_preemption=value.max_retries_preemption,
-        constraints=[constraint.to_proto() for constraint in value.constraints],
-        replicas=value.replicas,
-        fail_if_exists=value.fail_if_exists,
-        preemption_policy=value.preemption_policy,
-        existing_job_policy=value.existing_job_policy,
-        priority_band=value.priority_band,
-        task_image=value.task_image,
-        submit_argv=value.submit_argv,
-        client_revision_date=value.client_revision_date,
-        container_profile=value.container_profile,
-    )
-    if value.scheduling_timeout is not None:
-        result.scheduling_timeout.CopyFrom(duration_to_proto(value.scheduling_timeout))
-    if value.coscheduling is not None:
-        result.coscheduling.CopyFrom(value.coscheduling.to_proto())
-    if value.timeout is not None:
-        result.timeout.CopyFrom(duration_to_proto(value.timeout))
-    return result
-
-
-def _job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
-    return JobSpec(
-        version=value.version,
-        name=value.name,
-        entrypoint=value.entrypoint,
-        resources=ResourceSpec(
-            cpu=value.resources.cpu_millicores / 1_000,
-            memory=value.resources.memory_bytes,
-            disk=value.resources.disk_bytes,
-            device=value.resources.device if value.resources.HasField("device") else None,
-        ),
-        environment=value.environment,
-        bundle_id=value.bundle_id,
-        scheduling_timeout=(
-            duration_from_proto(value.scheduling_timeout) if value.HasField("scheduling_timeout") else None
-        ),
-        ports=tuple(value.ports),
-        max_task_failures=value.max_task_failures,
-        max_retries_failure=value.max_retries_failure,
-        max_retries_preemption=value.max_retries_preemption,
-        constraints=tuple(Constraint.from_proto(candidate) for candidate in value.constraints),
-        coscheduling=(
-            CoschedulingConfig(group_by=value.coscheduling.group_by) if value.HasField("coscheduling") else None
-        ),
-        replicas=value.replicas,
-        timeout=duration_from_proto(value.timeout) if value.HasField("timeout") else None,
-        fail_if_exists=value.fail_if_exists,
-        preemption_policy=value.preemption_policy,
-        existing_job_policy=value.existing_job_policy,
-        priority_band=value.priority_band,
-        task_image=value.task_image,
-        submit_argv=tuple(value.submit_argv),
-        client_revision_date=value.client_revision_date,
-        container_profile=value.container_profile,
-    )
-
-
 def job_detail_from_proto(value: resource_pb2.JobDetail) -> JobDetail:
-    return JobDetail(_job_summary_from_proto(value.summary), _job_spec_from_proto(value.spec))
+    return JobDetail(_job_summary_from_proto(value.summary), job_spec_from_proto(value.spec))
 
 
 def job_page_from_proto(value: resource_pb2.ListJobsResponse) -> Page[JobSummary]:

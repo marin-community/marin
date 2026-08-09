@@ -17,7 +17,7 @@ from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.types import CloudSliceState
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import ResourceSpec
 from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (
     advance_all_tpus,
@@ -192,7 +192,7 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
+        big_resources = ResourceSpec(cpu=128, memory=128 * 1024**3)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),

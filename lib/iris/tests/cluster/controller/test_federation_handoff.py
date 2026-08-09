@@ -48,18 +48,19 @@ from iris.cluster.federation.store import (
     SyncedJob,
     SyncedTask,
 )
+from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     AttemptUid,
     JobName,
-    ResourceSpec,
     WellKnownAttribute,
 )
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.legacy_job_codec import constraint_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
 
@@ -235,7 +236,9 @@ def _cluster_pinned_request(
     name: str, peer: str = "cw", replicas: int = 1
 ) -> controller_pb2.Controller.LaunchJobRequest:
     request = make_direct_job_request(name, replicas=replicas)
-    request.constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=peer).to_proto())
+    request.constraints.append(
+        constraint_to_proto(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=peer))
+    )
     return request
 
 

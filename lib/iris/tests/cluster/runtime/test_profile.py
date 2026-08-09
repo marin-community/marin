@@ -14,6 +14,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pytest
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+)
 from iris.cluster.runtime.profile import (
     ExecResult,
     _run_memray_profile,
@@ -26,7 +32,15 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.rpc import job_pb2
+
+
+def _cpu(profile_format: CpuProfileFormat, rate_hz: int = 0, native: bool | None = None) -> CpuProfileConfiguration:
+    return CpuProfileConfiguration(format=profile_format, rate_hz=rate_hz, native=native)
+
+
+def _memory(profile_format: MemoryProfileFormat, leaks: bool = False) -> MemoryProfileConfiguration:
+    return MemoryProfileConfiguration(format=profile_format, leaks=leaks)
+
 
 # ---------------------------------------------------------------------------
 # resolve_cpu_spec: enum → (py_spy_format, ext) mapping and defaults
@@ -36,26 +50,26 @@ from iris.rpc import job_pb2
 @pytest.mark.parametrize(
     "proto_format, expected_format, expected_ext",
     [
-        (job_pb2.CpuProfile.FLAMEGRAPH, "flamegraph", "svg"),
-        (job_pb2.CpuProfile.SPEEDSCOPE, "speedscope", "json"),
-        (job_pb2.CpuProfile.RAW, "raw", "txt"),
+        (CpuProfileFormat.FLAMEGRAPH, "flamegraph", "svg"),
+        (CpuProfileFormat.SPEEDSCOPE, "speedscope", "json"),
+        (CpuProfileFormat.RAW, "raw", "txt"),
     ],
 )
 def test_resolve_cpu_spec_maps_format_to_pyspy_format_and_extension(proto_format, expected_format, expected_ext):
-    cfg = job_pb2.CpuProfile(format=proto_format, rate_hz=100)
+    cfg = _cpu(profile_format=proto_format, rate_hz=100)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     assert spec.py_spy_format == expected_format
     assert spec.ext == expected_ext
 
 
 def test_resolve_cpu_spec_defaults_rate_hz_when_zero():
-    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=0)
+    cfg = _cpu(profile_format=CpuProfileFormat.FLAMEGRAPH, rate_hz=0)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     assert spec.rate_hz == 20
 
 
 def test_resolve_cpu_spec_preserves_nonzero_rate_hz():
-    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=250)
+    cfg = _cpu(profile_format=CpuProfileFormat.FLAMEGRAPH, rate_hz=250)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     assert spec.rate_hz == 250
 
@@ -68,14 +82,14 @@ def test_resolve_cpu_spec_preserves_nonzero_rate_hz():
 @pytest.mark.parametrize(
     "proto_format, expected_reporter, expected_ext, expected_is_file",
     [
-        (job_pb2.MemoryProfile.FLAMEGRAPH, "flamegraph", "html", True),
-        (job_pb2.MemoryProfile.TABLE, "table", "txt", False),
-        (job_pb2.MemoryProfile.STATS, "stats", "json", True),
-        (job_pb2.MemoryProfile.RAW, "raw", "bin", False),
+        (MemoryProfileFormat.FLAMEGRAPH, "flamegraph", "html", True),
+        (MemoryProfileFormat.TABLE, "table", "txt", False),
+        (MemoryProfileFormat.STATS, "stats", "json", True),
+        (MemoryProfileFormat.RAW, "raw", "bin", False),
     ],
 )
 def test_resolve_memory_spec_maps_format(proto_format, expected_reporter, expected_ext, expected_is_file):
-    cfg = job_pb2.MemoryProfile(format=proto_format)
+    cfg = _memory(profile_format=proto_format)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     assert spec.reporter == expected_reporter
     assert spec.ext == expected_ext
@@ -88,7 +102,7 @@ def test_resolve_memory_spec_maps_format(proto_format, expected_reporter, expect
 
 
 def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
-    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100)
+    cfg = _cpu(profile_format=CpuProfileFormat.FLAMEGRAPH, rate_hz=100)
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--subprocesses" in cmd
@@ -100,7 +114,7 @@ def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
 
 
 def test_memray_attach_includes_aggregate_when_leaks_enabled():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH, leaks=True)
+    cfg = _memory(profile_format=MemoryProfileFormat.FLAMEGRAPH, leaks=True)
     spec = resolve_memory_spec(cfg, duration_seconds=10, pid="5")
     cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path="/tmp/trace.bin")
     assert "--aggregate" in cmd
@@ -108,7 +122,7 @@ def test_memray_attach_includes_aggregate_when_leaks_enabled():
 
 
 def test_memray_attach_excludes_aggregate_when_leaks_disabled():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.TABLE, leaks=False)
+    cfg = _memory(profile_format=MemoryProfileFormat.TABLE, leaks=False)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path="/tmp/trace.bin")
     assert "--aggregate" not in cmd
@@ -121,7 +135,7 @@ def test_memray_attach_excludes_aggregate_when_leaks_disabled():
 
 
 def test_memray_transform_flamegraph_writes_to_file_with_leaks():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH, leaks=True)
+    cfg = _memory(profile_format=MemoryProfileFormat.FLAMEGRAPH, leaks=True)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="/tmp/o.html")
 
@@ -132,7 +146,7 @@ def test_memray_transform_flamegraph_writes_to_file_with_leaks():
 
 
 def test_memray_transform_table_does_not_write_to_file():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.TABLE)
+    cfg = _memory(profile_format=MemoryProfileFormat.TABLE)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="")
 
@@ -140,7 +154,7 @@ def test_memray_transform_table_does_not_write_to_file():
 
 
 def test_memray_transform_stats_includes_json_flag_and_output():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS)
+    cfg = _memory(profile_format=MemoryProfileFormat.STATS)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="/tmp/o.json")
 
@@ -177,13 +191,13 @@ def _allocations_during_profile():
 
 
 def test_resolve_memory_spec_raw_is_raw():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.RAW)
+    cfg = _memory(profile_format=MemoryProfileFormat.RAW)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     assert spec.is_raw is True
 
 
 def test_resolve_memory_spec_flamegraph_is_not_raw():
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH)
+    cfg = _memory(profile_format=MemoryProfileFormat.FLAMEGRAPH)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     assert spec.is_raw is False
 
@@ -191,16 +205,16 @@ def test_resolve_memory_spec_flamegraph_is_not_raw():
 @pytest.mark.parametrize(
     "proto_format",
     [
-        job_pb2.MemoryProfile.FLAMEGRAPH,
-        job_pb2.MemoryProfile.TABLE,
-        job_pb2.MemoryProfile.STATS,
-        job_pb2.MemoryProfile.RAW,
+        MemoryProfileFormat.FLAMEGRAPH,
+        MemoryProfileFormat.TABLE,
+        MemoryProfileFormat.STATS,
+        MemoryProfileFormat.RAW,
     ],
 )
 def test_run_memray_profile_returns_nonempty_output(proto_format):
     """In-process memray Tracker produces non-empty output for flamegraph/table/stats."""
     pytest.importorskip("memray")
-    cfg = job_pb2.MemoryProfile(format=proto_format, leaks=False)
+    cfg = _memory(profile_format=proto_format, leaks=False)
     pid = str(os.getpid())
     with _allocations_during_profile():
         result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
@@ -210,7 +224,7 @@ def test_run_memray_profile_returns_nonempty_output(proto_format):
 def test_run_memray_profile_stats_returns_valid_json():
     """Stats reporter returns parseable JSON, not a file-path string."""
     pytest.importorskip("memray")
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS, leaks=False)
+    cfg = _memory(profile_format=MemoryProfileFormat.STATS, leaks=False)
     pid = str(os.getpid())
     with _allocations_during_profile():
         result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
@@ -260,7 +274,7 @@ def test_capture_cpu_records_reads_and_cleans_up():
     dispatch = FakeDispatch()
     # py-spy writes to the dispatch-chosen output path; serve its bytes back.
     dispatch.files["/tmp/fake-1.json"] = b"speedscope-bytes"
-    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)
+    cfg = _cpu(profile_format=CpuProfileFormat.SPEEDSCOPE)
 
     data = capture_cpu(dispatch, cfg, duration_seconds=5, pid="1")
 
@@ -270,7 +284,7 @@ def test_capture_cpu_records_reads_and_cleans_up():
 
 def test_capture_cpu_raises_on_nonzero_exit():
     dispatch = FakeDispatch(profiler_result=ExecResult(137, b"", "killed"))
-    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)
+    cfg = _cpu(profile_format=CpuProfileFormat.SPEEDSCOPE)
 
     with pytest.raises(RuntimeError, match="py-spy record failed"):
         capture_cpu(dispatch, cfg, duration_seconds=5, pid="1")
@@ -302,7 +316,7 @@ def test_capture_threads_raises_on_real_failure():
 def test_capture_memory_flamegraph_attaches_transforms_reads_file():
     dispatch = FakeDispatch()
     dispatch.files["/tmp/fake-2.html"] = b"<html>flamegraph</html>"  # fake-1 is the .bin trace
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH)
+    cfg = _memory(profile_format=MemoryProfileFormat.FLAMEGRAPH)
 
     data = capture_memory_attach(dispatch, cfg, duration_seconds=5, pid="1")
 
@@ -312,7 +326,7 @@ def test_capture_memory_flamegraph_attaches_transforms_reads_file():
 
 def test_capture_memory_table_returns_transform_stdout():
     dispatch = FakeDispatch(transform_result=ExecResult(0, b"ALLOC SIZE FILE", ""))
-    cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.TABLE)
+    cfg = _memory(profile_format=MemoryProfileFormat.TABLE)
 
     data = capture_memory_attach(dispatch, cfg, duration_seconds=5, pid="1")
 

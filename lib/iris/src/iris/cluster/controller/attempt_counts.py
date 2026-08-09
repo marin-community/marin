@@ -37,7 +37,7 @@ from sqlalchemy import case, func
 from sqlalchemy.sql.elements import ColumnElement
 
 from iris.cluster.controller.schema import task_attempts_table
-from iris.rpc import job_pb2
+from iris.cluster.resources.state import TaskState
 
 # An attempt in one of these terminal states charges the preemption budget when
 # it reached the executing phase. KILLED shares the budget with WORKER_FAILED: an
@@ -45,9 +45,9 @@ from iris.rpc import job_pb2
 # spot reclaim) is a preemption, not an application failure.
 PREEMPTION_ATTEMPT_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_PREEMPTED,
+        TaskState.WORKER_FAILED,
+        TaskState.KILLED,
+        TaskState.PREEMPTED,
     }
 )
 
@@ -79,7 +79,7 @@ def counts_from_attempts(attempts: Iterable[AttemptCountRow]) -> AttemptCounts:
     preemption = 0
     for attempt in attempts:
         state = int(attempt.state)
-        if state == job_pb2.TASK_STATE_FAILED:
+        if state == TaskState.FAILED:
             failure += 1
         elif _is_executing_preemption(state, attempt.started_at_ms):
             preemption += 1
@@ -89,7 +89,7 @@ def counts_from_attempts(attempts: Iterable[AttemptCountRow]) -> AttemptCounts:
 def failure_count_expr() -> ColumnElement[int]:
     """SQL sum of an attempt group's FAILED attempts (mirrors the failure branch)."""
     return func.coalesce(
-        func.sum(case((task_attempts_table.c.state == job_pb2.TASK_STATE_FAILED, 1), else_=0)),
+        func.sum(case((task_attempts_table.c.state == TaskState.FAILED, 1), else_=0)),
         0,
     )
 

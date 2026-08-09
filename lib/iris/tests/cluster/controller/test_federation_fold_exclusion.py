@@ -82,8 +82,8 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     dispatched = {r.task_id for r in batch.tasks_to_run}
-    assert local_task.to_wire() in dispatched
-    assert dispatched.isdisjoint({t.to_wire() for t in fed_tasks})
+    assert local_task in dispatched
+    assert dispatched.isdisjoint(fed_tasks)
     # The RUNNING federated task must not enter the poll/redrive set either.
     running_ids = {e.task_id for e in batch.running_tasks}
     assert running_ids.isdisjoint(fed_tasks)

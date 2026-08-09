@@ -30,6 +30,8 @@ from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
 from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.attempt import AttemptLaunchTemplate
+from iris.cluster.resources.state import TaskState
 from iris.cluster.types import (
     AttemptUid,
     JobName,
@@ -39,7 +41,6 @@ from iris.cluster.types import (
     WorkerStatusMap,
     WorkerUsability,
 )
-from iris.rpc import job_pb2
 
 # Failure reason stamped on a healthy slice sibling reaped alongside a dead worker.
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
@@ -157,12 +158,12 @@ class DbBackendWorkerStore:
             owned = self._owned_worker_ids(snap)
             worker_addresses = {wid: addr for wid, addr in control.worker_addresses.items() if wid in owned}
             reconcile_rows = [r for r in control.reconcile_rows if r.worker_id in owned]
-            job_specs = self._run_templates(snap, reconcile_rows)
+            launch_templates = self._run_templates(snap, reconcile_rows)
         return ControlSnapshot(
             worker_addresses=worker_addresses,
             reconcile_rows=reconcile_rows,
             timeout_rows=[],
-            job_specs=job_specs,
+            launch_templates=launch_templates,
         )
 
     def worker_status(self) -> WorkerStatusMap:
@@ -256,11 +257,15 @@ class DbBackendWorkerStore:
         """The workers this backend owns, by scale group, in the read ``snap``."""
         return reads.owned_worker_ids(snap, self.owns_scale_group)
 
-    def _run_templates(self, snap: Tx, reconcile_rows: Sequence[ReconcileRow]) -> dict[JobName, job_pb2.RunTaskRequest]:
-        """Per-job ``RunTaskRequest`` templates for the ASSIGNED rows."""
-        templates: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+    def _run_templates(
+        self,
+        snap: Tx,
+        reconcile_rows: Sequence[ReconcileRow],
+    ) -> dict[JobName, AttemptLaunchTemplate]:
+        """Per-Job native launch templates for the ASSIGNED rows."""
+        templates: dict[JobName, AttemptLaunchTemplate | None] = {}
         for row in reconcile_rows:
-            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+            if row.task_state is not TaskState.ASSIGNED:
                 continue
             if row.job_id not in templates:
                 templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)

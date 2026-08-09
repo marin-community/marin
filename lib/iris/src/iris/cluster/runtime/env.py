@@ -11,19 +11,29 @@ import json
 import logging
 import posixpath
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
-from google.protobuf import json_format
-
-from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
+from iris.cluster.constraints import (
+    INHERITED_CONSTRAINT_KEYS,
+    AttributeValue,
+    Constraint,
+    ConstraintOp,
+)
+from iris.cluster.resources.execution import (
+    IRIS_SLICE_COUNT,
+    IRIS_TASKS_PER_SLICE,
+    CpuDevice,
+    Environment,
+    GpuDevice,
+    ResourceSpec,
+    TpuDevice,
+)
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
-IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 
@@ -118,11 +128,11 @@ def write_workdir_files(dest: Path, files: dict[str, bytes]) -> None:
         path.write_bytes(data)
 
 
-def slice_topology_env(resources: job_pb2.ResourceSpecProto | None, num_tasks: int) -> dict[str, str]:
-    if num_tasks <= 1 or resources is None or not resources.HasField("device") or not resources.device.HasField("tpu"):
+def slice_topology_env(resources: ResourceSpec | None, num_tasks: int) -> dict[str, str]:
+    if num_tasks <= 1 or resources is None or not isinstance(resources.device, TpuDevice):
         return {}
 
-    tpu = resources.device.tpu
+    tpu = resources.device
     if not tpu.variant:
         return {}
 
@@ -147,17 +157,58 @@ def slice_topology_env(resources: job_pb2.ResourceSpecProto | None, num_tasks: i
 
 
 def with_slice_topology_env(
-    environment: job_pb2.EnvironmentConfig,
-    resources: job_pb2.ResourceSpecProto | None,
+    environment: Environment,
+    resources: ResourceSpec | None,
     num_tasks: int,
-) -> job_pb2.EnvironmentConfig:
+) -> Environment:
     """Return ``environment`` with Iris TPU slice topology vars derived from resources."""
-    result = job_pb2.EnvironmentConfig()
-    result.CopyFrom(environment)
-    result.env_vars.pop(IRIS_SLICE_COUNT, None)
-    result.env_vars.pop(IRIS_TASKS_PER_SLICE, None)
-    result.env_vars.update(slice_topology_env(resources, num_tasks))
+    env_vars = dict(environment.env_vars)
+    env_vars.pop(IRIS_SLICE_COUNT, None)
+    env_vars.pop(IRIS_TASKS_PER_SLICE, None)
+    env_vars.update(slice_topology_env(resources, num_tasks))
+    return replace(environment, env_vars=env_vars)
+
+
+def _attribute_value_proto_json(value: AttributeValue) -> dict[str, object]:
+    if isinstance(value.value, str):
+        return {"string_value": value.value}
+    if isinstance(value.value, int):
+        return {"int_value": str(value.value)}
+    return {"float_value": value.value}
+
+
+def _constraint_proto_json(value: Constraint) -> dict[str, object]:
+    result: dict[str, object] = {"key": value.key, "op": f"CONSTRAINT_OP_{value.op.name}"}
+    if value.op is ConstraintOp.IN:
+        result["values"] = [_attribute_value_proto_json(item) for item in value.values]
+    elif value.values:
+        result["value"] = _attribute_value_proto_json(value.values[0])
+    result["mode"] = f"CONSTRAINT_MODE_{value.mode.name}"
     return result
+
+
+def _resource_proto_json(value: ResourceSpec) -> str:
+    """Serialize native resources in the established ResourceSpecProto JSON shape."""
+    result: dict[str, object] = {}
+    if value.cpu_millicores:
+        result["cpu_millicores"] = value.cpu_millicores
+    if value.memory:
+        result["memory_bytes"] = str(value.memory)
+    device = value.device
+    if isinstance(device, CpuDevice):
+        result["device"] = {"cpu": {"variant": device.variant}}
+    elif isinstance(device, GpuDevice):
+        result["device"] = {"gpu": {"variant": device.variant, "count": device.count}}
+    elif isinstance(device, TpuDevice):
+        tpu: dict[str, object] = {"variant": device.variant}
+        if device.topology:
+            tpu["topology"] = device.topology
+        if device.count:
+            tpu["count"] = device.count
+        result["device"] = {"tpu": tpu}
+    if value.disk:
+        result["disk_bytes"] = str(value.disk)
+    return json.dumps(result, indent=2)
 
 
 def build_common_iris_env(
@@ -167,10 +218,10 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
-    environment: job_pb2.EnvironmentConfig,
-    constraints: Sequence[job_pb2.Constraint],
+    environment: Environment,
+    constraints: Sequence[Constraint],
     ports: Sequence[str],
-    resources: job_pb2.ResourceSpecProto | None,
+    resources: ResourceSpec | None,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
@@ -178,8 +229,8 @@ def build_common_iris_env(
     RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST)
     are layered on by each caller.
 
-    All arguments are keyword-only primitives extracted from the proto so that
-    callers from both paths can supply them without importing the full request.
+    All arguments are keyword-only native values so runtimes share one launch
+    contract without importing the retired ControllerService messages.
     """
     env: dict[str, str] = {}
 
@@ -225,7 +276,7 @@ def build_common_iris_env(
     env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
     # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
-    user_env_vars = dict(environment.env_vars)
+    user_env_vars = dict(sorted(environment.env_vars.items()))
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
 
@@ -233,9 +284,7 @@ def build_common_iris_env(
     # are re-derived from each child's own resource spec.
     inheritable = [c for c in constraints if c.key in INHERITED_CONSTRAINT_KEYS]
     if inheritable:
-        env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
-        )
+        env["IRIS_JOB_CONSTRAINTS"] = json.dumps([_constraint_proto_json(c) for c in inheritable])
 
     # Ports: k8s sets "0" (kernel-assigned at runtime), worker path overrides
     # with real allocated ports after calling this function.
@@ -243,13 +292,11 @@ def build_common_iris_env(
         env[f"IRIS_PORT_{port_name.upper()}"] = "0"
 
     # Device env vars (TPU/GPU platform selection)
-    if resources is not None and resources.HasField("device"):
-        dev = resources.device
-        if dev.HasField("tpu"):
-            env["JAX_PLATFORMS"] = "tpu,cpu"
-            env["PJRT_DEVICE"] = "TPU"
-            env["JAX_FORCE_TPU_INIT"] = "1"
-            env.update(slice_topology_env(resources, num_tasks))
+    if resources is not None and isinstance(resources.device, TpuDevice):
+        env["JAX_PLATFORMS"] = "tpu,cpu"
+        env["PJRT_DEVICE"] = "TPU"
+        env["JAX_FORCE_TPU_INIT"] = "1"
+        env.update(slice_topology_env(resources, num_tasks))
 
     # Expose the task's resource limits so user code can query them via
     # iris.env_resources.TaskResources.from_environment() without relying
@@ -258,9 +305,6 @@ def build_common_iris_env(
     # Zero-valued fields are omitted by proto3 JSON so env_resources falls
     # back to cgroups / host values for unspecified dimensions.
     if resources is not None:
-        resource_json = json_format.MessageToJson(resources, preserving_proto_field_name=True)
-        # proto3 JSON omits zero-valued fields, so an empty proto yields "{}".
-        if resource_json != "{}":
-            env["IRIS_TASK_RESOURCES"] = resource_json
+        env["IRIS_TASK_RESOURCES"] = _resource_proto_json(resources)
 
     return env

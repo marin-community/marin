@@ -31,6 +31,14 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
+    MemoryProfileConfiguration,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
+from iris.cluster.resources.execution import CommandEntrypoint, RuntimeEntrypoint, TpuDevice
+from iris.cluster.resources.job import ContainerProfile
 from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -56,8 +64,6 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import job_pb2
-from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +219,7 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
     """Return True when config requests TPU resources."""
     if not config.resources:
         return False
-    has_device = config.resources.HasField("device")
-    return has_device and config.resources.device.HasField("tpu")
+    return isinstance(config.resources.device, TpuDevice)
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -231,7 +236,7 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
         logger.debug("No resources on container config; skipping device flags")
         return flags
 
-    has_device = config.resources.HasField("device")
+    has_device = config.resources.device is not None
     has_tpu = _has_tpu_device(config)
     logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
 
@@ -248,13 +253,13 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     return flags
 
 
-def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
+def _security_flags(profile: ContainerProfile, is_tpu_run: bool) -> list[str]:
     """Docker security flags (privilege, capabilities, docker-socket mount).
 
     A TPU run requires ``--privileged`` for device access regardless of profile,
     so on TPU even RESTRICTED/DEFAULT run privileged.
     """
-    resolved = resolve_container_profile(profile)
+    resolved = ContainerProfile.DEFAULT if profile is ContainerProfile.UNSPECIFIED else profile
 
     # gVisor runs the whole container under the runsc runtime: the host worker's
     # dockerd (root) builds the sandbox, and the intercepted guest kernel gives
@@ -262,10 +267,10 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
     # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
     # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
-    if resolved == job_pb2.CONTAINER_PROFILE_GVISOR and not is_tpu_run:
+    if resolved is ContainerProfile.GVISOR and not is_tpu_run:
         return ["--runtime", "runsc"]
 
-    privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
+    privileged = resolved is ContainerProfile.PRIVILEGED or is_tpu_run
 
     flags: list[str] = []
     if privileged:
@@ -276,10 +281,10 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # SYS_PTRACE lets py-spy attach via `docker exec`. RESTRICTED deliberately
     # omits it; every other profile adds it back (a privileged container nominally
     # has it, but exec'd processes don't reliably inherit it).
-    if resolved != job_pb2.CONTAINER_PROFILE_RESTRICTED:
+    if resolved is not ContainerProfile.RESTRICTED:
         flags.extend(["--cap-add", "SYS_PTRACE"])
 
-    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+    if resolved is ContainerProfile.DOCKER_ACCESS:
         flags.extend(["-v", "/var/run/docker.sock:/var/run/docker.sock"])
 
     return flags
@@ -430,7 +435,7 @@ class DockerContainerHandle:
         # which don't reference config fields.
         config = ContainerConfig(
             image="",
-            entrypoint=job_pb2.RuntimeEntrypoint(),
+            entrypoint=RuntimeEntrypoint((), CommandEntrypoint(()), {}, {}),
             env={},
         )
         handle = cls(config=config, runtime=runtime, _run_container_id=container_id)
@@ -471,7 +476,7 @@ class DockerContainerHandle:
 
         # Build containers get max(32 GB, task request) memory — uv sync on a large
         # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
-        task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
+        task_memory_bytes = self.config.resources.memory if self.config.resources else 0
         build_memory_bytes = (
             max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
             if task_memory_bytes
@@ -609,7 +614,7 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
+    def profile(self, duration_seconds: int, profile: ProfileConfiguration) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
@@ -620,14 +625,13 @@ exec {quoted_cmd}
             pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
             memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
         )
-        if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
-        elif profile_type.HasField("cpu"):
-            return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
-        elif profile_type.HasField("memory"):
-            return capture_memory_attach(dispatch, profile_type.memory, duration_seconds, pid="1")
-        else:
-            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+        if isinstance(profile, ThreadsProfileConfiguration):
+            return capture_threads(dispatch, pid="1", include_locals=profile.include_locals)
+        if isinstance(profile, CpuProfileConfiguration):
+            return capture_cpu(dispatch, profile, duration_seconds, pid="1")
+        if isinstance(profile, MemoryProfileConfiguration):
+            return capture_memory_attach(dispatch, profile, duration_seconds, pid="1")
+        raise RuntimeError("profile must specify cpu, memory, or threads profiler")
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
@@ -679,7 +683,11 @@ exec {quoted_cmd}
         cmd.extend(_security_flags(config.container_profile, is_tpu_run))
         logger.info(
             "Container security profile %s (tpu_run=%s) for task %s",
-            job_pb2.ContainerProfile.Name(resolve_container_profile(config.container_profile)),
+            (
+                ContainerProfile.DEFAULT
+                if config.container_profile is ContainerProfile.UNSPECIFIED
+                else config.container_profile
+            ).name,
             is_tpu_run,
             config.task_id,
         )

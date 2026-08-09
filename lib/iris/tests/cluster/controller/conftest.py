@@ -94,6 +94,8 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
 from iris.cluster.resources.endpoint import ProfileRequest, ProfileResult
+from iris.cluster.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.cluster.resources.system import ProcessInfo
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -107,6 +109,8 @@ from iris.cluster.types import (
 )
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, resource_spec_from_proto
+from iris.rpc.worker_codec import worker_metadata_from_proto
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
@@ -274,11 +278,7 @@ class FakeProvider:
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         raise ProviderUnsupportedError("fake")
 
     def profile_task(
@@ -804,7 +804,7 @@ def register_worker(
             cur,
             worker_id=wid,
             address=address,
-            metadata=metadata,
+            metadata=worker_metadata_from_proto(metadata),
             ts=Timestamp.now(),
             health=state._health,
             slice_id=slice_id,
@@ -840,7 +840,7 @@ def register_worker_into_backend(
             cur,
             worker_id=wid,
             address=address,
-            metadata=metadata,
+            metadata=worker_metadata_from_proto(metadata),
             ts=Timestamp.now(),
             health=backend.health,
             slice_id=slice_id,
@@ -858,14 +858,14 @@ def inject_device_constraints(request: controller_pb2.Controller.LaunchJobReques
     into the request before storing the job. Tests bypass the service layer,
     so we replicate that logic here.
     """
-    auto = constraints_from_resources(request.resources)
+    auto = constraints_from_resources(resource_spec_from_proto(request.resources))
     if not auto:
         return
-    user = [Constraint.from_proto(c) for c in request.constraints]
+    user = [constraint_from_proto(constraint) for constraint in request.constraints]
     merged = merge_constraints(auto, user)
     del request.constraints[:]
     for c in merged:
-        request.constraints.append(c.to_proto())
+        request.constraints.append(constraint_to_proto(c))
 
 
 def submit_job(
@@ -1294,13 +1294,14 @@ def make_demand_entries(
 ) -> list[DemandEntry]:
     if count <= 0:
         return []
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+    device = None
     if device_type == DeviceType.TPU:
-        resources.device.tpu.variant = device_variant or ""
+        device = TpuDevice(device_variant or "")
     elif device_type == DeviceType.GPU:
-        resources.device.gpu.variant = device_variant or ""
+        device = GpuDevice(device_variant or "")
     elif device_type == DeviceType.CPU:
-        resources.device.cpu.variant = ""
+        device = CpuDevice()
+    resources = ResourceSpec(cpu=1, memory=1024, device=device)
     effective_variants = device_variants
     if effective_variants is None and device_variant is not None:
         effective_variants = frozenset({device_variant})
@@ -1351,10 +1352,10 @@ def make_big_demand_entries(
     coschedule_group_id: str | None = None,
 ) -> list[DemandEntry]:
     """Create demand entries with explicit resource sizes for packing tests."""
-    resources = job_pb2.ResourceSpecProto(
-        cpu_millicores=cpu_millicores,
-        memory_bytes=memory_bytes,
-        disk_bytes=disk_bytes,
+    resources = ResourceSpec(
+        cpu=cpu_millicores / 1_000,
+        memory=memory_bytes,
+        disk=disk_bytes,
     )
     normalized = PlacementRequirements(
         device_type=device_type,

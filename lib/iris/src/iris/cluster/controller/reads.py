@@ -67,6 +67,10 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.execution import ResourceSpec
+from iris.cluster.resources.job import ContainerProfile
+from iris.cluster.resources.state import PriorityBand, TaskState
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
@@ -77,7 +81,6 @@ from iris.cluster.types import (
     WorkerId,
     WorkerUsability,
 )
-from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
@@ -91,7 +94,7 @@ class PendingDispatchRow:
     Unlike :class:`ActiveTaskRow`, this row carries the full serialized
     runtime configuration (entrypoint / environment / ports / constraints
     / task_image / timeout) so the caller can assemble a
-    ``RunTaskRequest``. Kept separate so other active-task queries don't
+    native Attempt launch. Kept separate so other active-task queries don't
     pay for loading these JSON blobs. Used for both PENDING-promotion and
     ASSIGNED-redrive paths (see ``dispatch.drain_for_dispatch``).
     """
@@ -100,7 +103,7 @@ class PendingDispatchRow:
     job_id: JobName
     current_attempt_id: int
     num_tasks: int
-    resources: "job_pb2.ResourceSpecProto"
+    resources: ResourceSpec
     entrypoint_json: str
     environment_json: str
     bundle_id: str
@@ -114,10 +117,10 @@ class PendingDispatchRow:
     # Current tasks.priority_band. Before first direct dispatch, the drain
     # resolves parent inheritance from job_config and stamps the result; a
     # redrive reads that fixed band back from the task row.
-    priority_band: int  # job_pb2.PriorityBand
+    priority_band: PriorityBand
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
-    container_profile: int  # job_pb2.ContainerProfile
+    container_profile: ContainerProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +214,7 @@ def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
 
 
 # Task states considered "completed" for dashboard task-summary counts.
-_COMPLETED_TASK_STATES = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
+_COMPLETED_TASK_STATES = (TaskState.SUCCEEDED, TaskState.KILLED)
 
 
 # Task-count / completed / state-histogram come from the ``tasks`` table; the
@@ -285,11 +288,11 @@ class ActiveTaskRollupRow:
 
 # Every state the task-state rollup counts: PENDING plus ASSIGNED/BUILDING/RUNNING.
 # PENDING and dispatched rows also carry a wait anchor; RUNNING rows are counted only.
-_ROLLUP_ACTIVE_STATES = (job_pb2.TASK_STATE_PENDING, *sorted(ACTIVE_TASK_STATES))
+_ROLLUP_ACTIVE_STATES = (TaskState.PENDING, *sorted(ACTIVE_TASK_STATES))
 
 _ROLLUP_ANCHOR_MS = case(
     (
-        local_tasks.c.state == job_pb2.TASK_STATE_PENDING,
+        local_tasks.c.state == TaskState.PENDING,
         func.coalesce(task_attempts_table.c.finished_at_ms, local_tasks.c.submitted_at_ms),
     ),
     (
@@ -498,7 +501,7 @@ def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]
     rows = tx.execute(_PRIORITY_BANDS_STMT, {"job_ids": ids}).all()
     resolved = {row.job_id: int(row.priority_band) for row in rows}
     for jid in ids:
-        resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
+        resolved.setdefault(jid, int(PriorityBand.INTERACTIVE))
     return resolved
 
 
@@ -587,9 +590,9 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
 
 
 _SCHEDULER_ACTIVE_TASK_STATES = (
-    int(job_pb2.TASK_STATE_ASSIGNED),
-    int(job_pb2.TASK_STATE_BUILDING),
-    int(job_pb2.TASK_STATE_RUNNING),
+    int(TaskState.ASSIGNED),
+    int(TaskState.BUILDING),
+    int(TaskState.RUNNING),
 )
 
 
@@ -599,7 +602,7 @@ _RUNNING_TASKS_BY_WORKER_STMT = select(tasks_table.c.current_worker_id.label("wo
 )
 
 
-_BUILDING_COUNTS_STATES = (job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED)
+_BUILDING_COUNTS_STATES = (TaskState.BUILDING, TaskState.ASSIGNED)
 
 
 _BUILDING_COUNTS_STMT = (
@@ -730,7 +733,7 @@ def pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
     Rows that cannot currently be scheduled (per :func:`task_row_can_be_scheduled`)
     are filtered out, so callers receive only actionable pending work.
     """
-    rows = tx.execute(_PENDING_TASKS_STMT, {"state": job_pb2.TASK_STATE_PENDING}).all()
+    rows = tx.execute(_PENDING_TASKS_STMT, {"state": TaskState.PENDING}).all()
     pending_tasks = [_row_to_pending_task(row) for row in rows]
     return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
 
@@ -760,7 +763,7 @@ def running_task_band_rows(tx: Tx) -> Sequence[Row]:
     The band is ``tasks.priority_band`` (stamped at assignment time), not the
     immutable requested band in ``job_config``.
     """
-    return tx.execute(_RUNNING_TASK_BAND_STMT, {"state": job_pb2.TASK_STATE_RUNNING}).all()
+    return tx.execute(_RUNNING_TASK_BAND_STMT, {"state": TaskState.RUNNING}).all()
 
 
 _USER_SPEND_STMT = (
@@ -773,7 +776,7 @@ _USER_SPEND_STMT = (
     )
     .select_from(local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id))
     .where(hint_rare_state(local_tasks.c.state.in_(bindparam("states", expanding=True))))
-    .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
+    .where(job_config_table.c.priority_band != PriorityBand.BATCH)
     .group_by(local_tasks.c.job_id)
 )
 
@@ -1562,7 +1565,7 @@ def healthy_active_workers_with_attributes(
 # ---------------------------------------------------------------------------
 
 # Columns selected for every pending-dispatch / redrive query.  Covers all
-# fields required to build a RunTaskRequest without a second DB round-trip.
+# fields required to build an AttemptLaunch without a second DB round-trip.
 PENDING_DISPATCH_COLS = (
     local_tasks.c.task_id,
     local_tasks.c.job_id,
@@ -1610,8 +1613,8 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         timeout_ms=int(_tms) if _tms is not None else None,
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
-        priority_band=int(r.priority_band),
-        container_profile=int(r.container_profile),
+        priority_band=PriorityBand(int(r.priority_band)),
+        container_profile=ContainerProfile(int(r.container_profile)),
     )
 
 
@@ -1653,7 +1656,7 @@ def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[Wor
     return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
 
 
-_EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
+_EXECUTING_TASK_STATES = (int(TaskState.BUILDING), int(TaskState.RUNNING))
 
 _EXECUTION_TIMEOUT_STMT = (
     select(
@@ -1733,8 +1736,8 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
             worker_id=row.worker_id,
             task_id=row.task_id,
             attempt_id=int(row.attempt_id),
-            task_state=int(row.task_state),
-            attempt_state=int(row.attempt_state),
+            task_state=TaskState(int(row.task_state)),
+            attempt_state=TaskState(int(row.attempt_state)),
             job_id=row.job_id,
             attempt_uid=AttemptUid(str(row.attempt_uid)),
         )
@@ -1757,7 +1760,7 @@ class ControlSnapshot:
       workers (see :func:`load_reconcile_rows`).
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
-    * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
+    * ``launch_templates`` — per-Job native launch templates for ASSIGNED reconcile
       rows, so a worker-daemon backend can build its per-worker reconcile plans.
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
@@ -1771,8 +1774,8 @@ class ControlSnapshot:
     worker_addresses: dict[WorkerId, str]
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
-    job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    launch_templates: dict[JobName, AttemptLaunchTemplate] = field(default_factory=dict)
+    tasks_to_run: list[AttemptLaunch] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 

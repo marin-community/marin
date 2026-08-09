@@ -34,8 +34,8 @@ from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.state import TaskState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True)
@@ -132,9 +132,7 @@ def apply_dispatch_updates(
     the snapshot, which ``record_updates`` reads for its transition timestamps.
     """
     relevant_task_ids = [
-        update.task_id
-        for update in updates
-        if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+        update.task_id for update in updates if update.new_state not in (TaskState.UNSPECIFIED, TaskState.PENDING)
     ]
     attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
     snapshot = source.transition_snapshot(

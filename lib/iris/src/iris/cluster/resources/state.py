@@ -34,6 +34,15 @@ class TaskState(IntEnum):
     MISSING = 12
 
 
+class PriorityBand(IntEnum):
+    """Scheduling priority shared by Job records and controller defaults."""
+
+    INHERIT = 0
+    PRODUCTION = 1
+    INTERACTIVE = 2
+    BATCH = 3
+
+
 class EndpointAccess(StrEnum):
     PRIVATE = "private"
     LINK = "link"

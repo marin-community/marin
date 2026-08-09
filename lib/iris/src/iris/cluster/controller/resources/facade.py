@@ -158,6 +158,7 @@ _MAX_JOB_PAGE = 500
 _MAX_JOB_STATE_BATCH = 32_767
 _MAX_TASK_PAGE = 500
 _MAX_ENDPOINT_PAGE = 500
+_MAX_ACTIVITY_PAGE = 500
 _MAX_NODE_RECENT_ATTEMPTS = 50
 _NODE_WORKER_SCAN_BATCH = _MAX_TASK_PAGE + 1
 _BACKEND_UNAVAILABLE = "backend_unavailable"
@@ -595,6 +596,7 @@ class ResourceController:
         with self._db.read_snapshot() as tx:
             row = reads.get_job_detail(tx, job_id)
             coordinates = self._job_rows(tx, {job_id}).get(job_id)
+            workdir_files = reads.get_workdir_files(tx, job_id) if row is not None else {}
             parent_coordinates = self._job_coordinates_in_snapshot(
                 tx,
                 {row.parent_job_id} if row is not None and row.parent_job_id is not None else set(),
@@ -608,10 +610,10 @@ class ResourceController:
         )
         if summary.identity.key.cluster_id != key.cluster_id:
             raise ResourceNotFound(key.resource_id)
-        return JobDetail(summary=summary, spec=reconstruct_job_spec(row, workdir_files={}))
+        return JobDetail(summary=summary, spec=reconstruct_job_spec(row, workdir_files=workdir_files))
 
     def job_states(self, resource_ids: Sequence[str]) -> dict[str, JobState]:
-        """Return one bounded exact state snapshot using one SQLite bind."""
+        """Return exact current states for a bounded set of Job IDs."""
         if len(resource_ids) > _MAX_JOB_STATE_BATCH:
             raise ValueError(f"Job state batch cannot exceed {_MAX_JOB_STATE_BATCH} items")
         if not resource_ids:
@@ -1090,7 +1092,7 @@ class ResourceController:
         return self.describe_endpoints((key,))[0]
 
     def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
-        """Describe one bounded endpoint page without per-endpoint reads."""
+        """Return details for a bounded sequence of Endpoint keys."""
         if len(keys) > _MAX_ENDPOINT_PAGE:
             raise ValueError(f"Endpoint detail batch cannot exceed {_MAX_ENDPOINT_PAGE} items")
         for key in keys:
@@ -1186,7 +1188,7 @@ class ResourceController:
         )
 
     def list_activity(self, query: ActivityQuery) -> Page[ActivityEntry]:
-        page_size = _page_size(query.page_size, 500)
+        page_size = _page_size(query.page_size, _MAX_ACTIVITY_PAGE)
         fingerprint = _query_fingerprint(
             "activity",
             {
@@ -2334,7 +2336,7 @@ class ResourceController:
             )
         return coordinates
 
-    def _job_rows(self, tx, job_ids: set[JobName]) -> dict[JobName, object]:
+    def _job_rows(self, tx, job_ids: set[JobName]) -> dict[JobName, _JobCoordinates]:
         if not job_ids:
             return {}
         rows = tx.execute(

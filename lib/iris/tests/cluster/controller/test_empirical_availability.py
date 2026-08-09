@@ -24,8 +24,8 @@ from iris.cluster.controller.autoscaler.routing import (
     empirical_zone_capabilities,
 )
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.types import AcceleratorType
-from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
@@ -74,7 +74,7 @@ def _demand(constraints: list) -> DemandEntry:
         coschedule_group_id=None,
         normalized=extract_placement_requirements(constraints),
         constraints=constraints,
-        resources=job_pb2.ResourceSpecProto(),
+        resources=ResourceSpec(),
     )
 
 
@@ -133,8 +133,8 @@ class TestAvailabilityProbeEntries:
         constraint = probe.constraints[0]
         assert (constraint.key, constraint.op) == (WellKnownAttribute.DEVICE_VARIANT, ConstraintOp.EQ)
         assert [v.value for v in constraint.values] == ["v5p-8"]
-        assert probe.resources.device.HasField("tpu")
-        assert probe.resources.device.tpu.variant == "v5p-8"
+        assert isinstance(probe.resources.device, TpuDevice)
+        assert probe.resources.device.variant == "v5p-8"
 
     def test_no_probe_when_variant_already_available(self):
         groups = [_group("g", "us-central1-a", variant="v5p-8")]
@@ -164,5 +164,4 @@ class TestAvailabilityProbeEntries:
         probes = availability_probe_entries(groups, demand, available_variants=frozenset())
 
         assert len(probes) == 1
-        assert probes[0].resources.device.HasField("gpu")
-        assert probes[0].resources.device.gpu.variant == "h100"
+        assert probes[0].resources.device == GpuDevice(variant="h100", count=8)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.constraints import Constraint, PlacementRequirements
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import ResourceSpec
 
 
 class ScalingAction(Enum):
@@ -33,7 +33,7 @@ class DemandEntry:
     coschedule_group_id: str | None
     normalized: PlacementRequirements
     constraints: list[Constraint]
-    resources: job_pb2.ResourceSpecProto
+    resources: ResourceSpec
     invalid_reason: str | None = None
 
 

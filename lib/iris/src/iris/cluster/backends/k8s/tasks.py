@@ -24,8 +24,10 @@ from pathlib import Path
 from typing import ClassVar, NamedTuple
 
 from finelog.client.log_client import Table
+from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -70,14 +72,23 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.resources.attempt import AttemptLaunch
 from iris.cluster.resources.endpoint import (
+    CpuProfileConfiguration,
     ExecRequest,
+    MemoryProfileConfiguration,
     ProfileRequest,
     ProfileResult,
+    ThreadsProfileConfiguration,
 )
 from iris.cluster.resources.endpoint import (
     ExecResult as AttemptExecResult,
 )
+from iris.cluster.resources.execution import GpuDevice, TpuDevice, get_gpu_count
+from iris.cluster.resources.job import ContainerProfile, PriorityBand
+from iris.cluster.resources.state import TaskState
+from iris.cluster.resources.system import ProcessInfo
+from iris.cluster.resources.worker import ResourceUsage
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     STANDARD_MOUNTS,
@@ -109,17 +120,15 @@ from iris.cluster.stats.tables import (
     build_task_stat,
     stats_timestamp,
 )
-from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
-from iris.rpc.profile_codec import profile_configuration_to_proto
-from iris.rpc.proto_display import resolve_container_profile
+from iris.cluster.types import JobName, WellKnownAttribute, WorkerId
+from iris.rpc import controller_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
 
 class PodManifestError(ValueError):
-    """A RunTaskRequest cannot produce a valid Pod manifest.
+    """An Attempt launch cannot produce a valid Pod manifest.
 
     Raised for request-level validation failures in manifest construction: an
     unsupported container profile, a coscheduling group_by with no topology
@@ -281,9 +290,9 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 _KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
-    job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
-    job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
-    job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
+    PriorityBand.PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
+    PriorityBand.INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
+    PriorityBand.BATCH: IRIS_PRIORITY_CLASS_BATCH,
 }
 
 
@@ -312,7 +321,7 @@ def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
 
 
 def _constraints_to_node_selector(
-    constraints: Sequence[job_pb2.Constraint],
+    constraints: Sequence[Constraint],
 ) -> dict[str, str]:
     """Map Iris constraints to k8s nodeSelector entries.
 
@@ -323,8 +332,8 @@ def _constraints_to_node_selector(
         label_key = _CONSTRAINT_KEY_TO_NODE_LABEL.get(c.key)
         if label_key is None:
             continue
-        if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
-            node_selector[label_key] = c.value.string_value
+        if c.op is ConstraintOp.EQ and c.values:
+            node_selector[label_key] = str(c.values[0].value)
         else:
             raise PodManifestError(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
@@ -480,7 +489,7 @@ class PodConfig:
     """Non-request parameters for pod manifest construction.
 
     Bundles the cluster-level settings that _build_pod_manifest needs beyond
-    the RunTaskRequest itself, avoiding a long positional parameter list.
+    the Attempt launch itself, avoiding a long positional parameter list.
     """
 
     namespace: str
@@ -515,20 +524,21 @@ class PodConfig:
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
 
 
-def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
+def _build_task_script(launch: AttemptLaunch) -> str:
     """Build a shell script that runs the setup steps then the run_command."""
+    entrypoint = launch.template.entrypoint
     lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
-    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
+    lines.extend(render_setup_steps(entrypoint.setup_commands))
     # Activate the venv the setup script populated. Conditional on it existing so
     # a custom or no-setup script that brings its own environment runs as-is.
     lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.entrypoint.run_command.argv:
-        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
+    if entrypoint.run_command.argv:
+        lines.append("exec " + shlex.join(entrypoint.run_command.argv))
     return "\n".join(lines)
 
 
 def _build_init_container_spec(
-    run_req: job_pb2.RunTaskRequest,
+    launch: AttemptLaunch,
     pod_name: str,
     default_image: str,
     controller_address: str | None,
@@ -539,9 +549,10 @@ def _build_init_container_spec(
     The init container runs a standalone Python script that downloads the
     bundle zip from the controller and copies workdir files from a ConfigMap.
     """
-    has_bundle = bool(run_req.bundle_id) and bool(controller_address)
-    workdir_files = dict(run_req.entrypoint.workdir_files)
-    workdir_file_refs = dict(run_req.entrypoint.workdir_file_refs)
+    template = launch.template
+    has_bundle = bool(template.bundle_id) and bool(controller_address)
+    workdir_files = dict(template.entrypoint.workdir_files)
+    workdir_file_refs = dict(template.entrypoint.workdir_file_refs)
     has_blob_refs = bool(workdir_file_refs) and bool(controller_address)
     if not has_bundle and not workdir_files and not has_blob_refs:
         return [], [], None
@@ -560,7 +571,7 @@ def _build_init_container_spec(
         init_env.append({"name": "IRIS_CONTROLLER_URL", "value": controller_address})
 
     if has_bundle:
-        init_env.append({"name": "IRIS_BUNDLE_ID", "value": run_req.bundle_id})
+        init_env.append({"name": "IRIS_BUNDLE_ID", "value": template.bundle_id})
 
     if has_blob_refs:
         init_env.append({"name": "IRIS_WORKDIR_BLOB_REFS", "value": json.dumps(workdir_file_refs)})
@@ -649,15 +660,12 @@ def _build_logship_sidecar(
     }
 
 
-def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
+def _is_coordinator_task(launch: AttemptLaunch) -> bool:
     """Return whether a request is a single-task CPU coordinator."""
-    if run_req.num_tasks > 1:
+    template = launch.template
+    if template.num_tasks > 1:
         return False
-    if run_req.HasField("resources") and run_req.resources.HasField("device"):
-        device = run_req.resources.device
-        if device.HasField("gpu") or device.HasField("tpu"):
-            return False
-    return True
+    return not isinstance(template.resources.device, (GpuDevice, TpuDevice))
 
 
 def _pdb_name(pod_name: str) -> str:
@@ -680,7 +688,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
+    availability = {"minAvailable": 1} if priority_band == PriorityBand.PRODUCTION else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
@@ -696,23 +704,23 @@ def _build_pdb_manifest(
     }
 
 
-def _security_context(profile: int, has_tpu: bool) -> dict:
+def _security_context(profile: ContainerProfile, has_tpu: bool) -> dict:
     """Build the container ``securityContext`` for a container security profile.
 
     DOCKER_ACCESS is rejected: k8s nodes run containerd, so there is no host
     docker socket to mount, and a weaker context would fake isolation the pod
     does not have.
     """
-    resolved = resolve_container_profile(profile)
+    resolved = ContainerProfile.DEFAULT if profile is ContainerProfile.UNSPECIFIED else profile
 
-    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+    if resolved is ContainerProfile.DOCKER_ACCESS:
         raise PodManifestError(
             "container profile DOCKER_ACCESS is not supported on the Kubernetes backend "
             "(nodes run containerd, not dockerd, so there is no host docker socket); use "
             "the docker worker backend, or PRIVILEGED with an in-pod runtime"
         )
 
-    if resolved == job_pb2.CONTAINER_PROFILE_RESTRICTED:
+    if resolved is ContainerProfile.RESTRICTED:
         return {
             "capabilities": {"drop": ["ALL"], "add": []},
             "allowPrivilegeEscalation": False,
@@ -724,7 +732,7 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
     if has_tpu:
         capabilities.append("SYS_RESOURCE")
     ctx: dict = {"capabilities": {"add": capabilities}}
-    if resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED:
+    if resolved is ContainerProfile.PRIVILEGED:
         ctx["privileged"] = True
         ctx["allowPrivilegeEscalation"] = True
     return ctx
@@ -771,19 +779,21 @@ def _topology_request_annotations(
 
 
 def _build_pod_manifest(
-    run_req: job_pb2.RunTaskRequest,
+    launch: AttemptLaunch,
     config: PodConfig,
 ) -> dict:
-    """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
-    task_id = JobName.from_wire(run_req.task_id)
-    attempt_id = run_req.attempt_id
-    pod_name = _pod_name(task_id, attempt_id, run_req.attempt_uid)
+    """Build a Pod manifest dict from a native Attempt launch and cluster config."""
+    template = launch.template
+    task_id = launch.task_id
+    task_id_wire = task_id.to_wire()
+    attempt_id = launch.attempt_id
+    pod_name = _pod_name(task_id, attempt_id, launch.attempt_uid)
 
     namespace = config.namespace
-    # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
+    # Per-task image override wins; otherwise the
     # cluster default. GPU tooling (nsys) is baked into the task image, so a GPU
     # job needs no special image and iris does not inspect the resource request.
-    task_image = run_req.task_image or config.default_image
+    task_image = template.task_image or config.default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -791,17 +801,17 @@ def _build_pod_manifest(
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
-        task_id=run_req.task_id,
-        attempt_id=run_req.attempt_id,
-        num_tasks=run_req.num_tasks,
-        bundle_id=run_req.bundle_id,
+        task_id=task_id_wire,
+        attempt_id=launch.attempt_id,
+        num_tasks=template.num_tasks,
+        bundle_id=template.bundle_id,
         controller_address=config.controller_address,
-        environment=run_req.environment,
-        constraints=run_req.constraints,
-        ports=run_req.ports,
-        resources=run_req.resources if run_req.HasField("resources") else None,
+        environment=template.environment,
+        constraints=template.constraints,
+        ports=template.ports,
+        resources=template.resources,
     )
-    combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
+    combined = {**config.task_env, **dict(template.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -822,42 +832,41 @@ def _build_pod_manifest(
     gpu_count = 0
     has_tpu = False
     memory_limit_bytes = 0
-    if run_req.HasField("resources"):
-        res = run_req.resources
-        limits: dict[str, str] = {}
-        requests: dict[str, str] = {}
-        if res.cpu_millicores:
-            # CPU as a request only (no limits.cpu) so containers can burst onto
-            # idle node CPU. The scheduler still places by cpu_millicores, and
-            # under contention CFS shares CPU proportionally to requests. This
-            # matches the soft-cap behavior the docker runtime uses for
-            # CAPACITY_TYPE_ON_DEMAND workers.
-            requests["cpu"] = f"{res.cpu_millicores}m"
-        if res.memory_bytes:
-            # Memory stays a hard cap — overshoot is fatal, not just slow.
-            # Memory-backed emptyDir usage is charged to this same cgroup.
-            memory_limit_bytes = res.memory_bytes
-            limits["memory"] = str(res.memory_bytes)
-            requests["memory"] = str(res.memory_bytes)
-        if res.HasField("device"):
-            gpu_count = get_gpu_count(res.device)
-            has_tpu = res.device.HasField("tpu")
-            if gpu_count > 0:
-                # K8s treats accelerator limits as implicit requests.
-                limits[_GPU_RESOURCE] = str(gpu_count)
-                if host_network:
-                    # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
-                    limits["rdma/ib"] = str(gpu_count)
-        if limits:
-            resources["limits"] = limits
-        if requests:
-            resources.setdefault("requests", {}).update(requests)
-        if res.disk_bytes:
-            disk_gi = max(1, res.disk_bytes // (1024**3))
-            resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
-            resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+    res = template.resources
+    limits: dict[str, str] = {}
+    requests: dict[str, str] = {}
+    if res.cpu_millicores:
+        # CPU as a request only (no limits.cpu) so containers can burst onto
+        # idle node CPU. The scheduler still places by cpu_millicores, and
+        # under contention CFS shares CPU proportionally to requests. This
+        # matches the soft-cap behavior the docker runtime uses for
+        # CAPACITY_TYPE_ON_DEMAND workers.
+        requests["cpu"] = f"{res.cpu_millicores}m"
+    if res.memory:
+        # Memory stays a hard cap — overshoot is fatal, not just slow.
+        # Memory-backed emptyDir usage is charged to this same cgroup.
+        memory_limit_bytes = res.memory
+        limits["memory"] = str(res.memory)
+        requests["memory"] = str(res.memory)
+    if res.device is not None:
+        gpu_count = get_gpu_count(res.device)
+        has_tpu = isinstance(res.device, TpuDevice)
+        if gpu_count > 0:
+            # K8s treats accelerator limits as implicit requests.
+            limits[_GPU_RESOURCE] = str(gpu_count)
+            if host_network:
+                # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
+                limits["rdma/ib"] = str(gpu_count)
+    if limits:
+        resources["limits"] = limits
+    if requests:
+        resources.setdefault("requests", {}).update(requests)
+    if res.disk:
+        disk_gi = max(1, res.disk // (1024**3))
+        resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+        resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
 
-    is_gang = bool(run_req.coscheduling.group_by)
+    is_gang = template.coscheduling is not None
     has_accelerator = gpu_count > 0 or has_tpu
     shm_limit_bytes = memory_limit_bytes
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
@@ -872,7 +881,7 @@ def _build_pod_manifest(
         "env": env_list,
         "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
-        "command": ["bash", "-lc", _build_task_script(run_req)],
+        "command": ["bash", "-lc", _build_task_script(launch)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated
         # with an empty message and a bare "Error" reason, burying the actual
         # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the
@@ -886,7 +895,7 @@ def _build_pod_manifest(
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
-    container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    container["securityContext"] = _security_context(template.container_profile, has_tpu)
 
     if resources:
         container["resources"] = resources
@@ -895,12 +904,12 @@ def _build_pod_manifest(
     labels = {
         _LABEL_MANAGED: "true",
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-        _LABEL_TASK_ID: _sanitize_label_value(run_req.task_id),
+        _LABEL_TASK_ID: _sanitize_label_value(task_id_wire),
         _LABEL_ATTEMPT_ID: str(attempt_id),
-        _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+        _LABEL_TASK_HASH: _task_hash(task_id_wire),
         _LABEL_JOB_ID: job_id,
     }
-    node_selector = _constraints_to_node_selector(run_req.constraints)
+    node_selector = _constraints_to_node_selector(template.constraints)
     if managed_label:
         labels[managed_label] = "true"
     metadata: dict = {
@@ -920,11 +929,12 @@ def _build_pod_manifest(
     # from the pod's own PriorityClass (spec.priorityClassName), so the
     # iris-{production,interactive,batch} bands already order the queue. Iris never
     # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(run_req.priority)
+    wpc = config.kueue_priority_classes.get(template.priority_band)
     if wpc:
         labels[_KUEUE_PRIORITY_CLASS] = wpc
     if is_gang:
-        group_by = run_req.coscheduling.group_by
+        assert template.coscheduling is not None
+        group_by = template.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
         # unmapped value is a misconfiguration: it would gang atomically but
         # land unconstrained, which is exactly the silent-placement bug the
@@ -932,7 +942,7 @@ def _build_pod_manifest(
         topo = config.kueue_topologies.get(group_by)
         if topo is None:
             raise PodManifestError(
-                f"Coscheduled task {run_req.task_id!r} has group_by={group_by!r}, which has no "
+                f"Coscheduled task {task_id_wire!r} has group_by={group_by!r}, which has no "
                 f"topology mapping on this cluster (known: {sorted(config.kueue_topologies)}). "
                 "group_by must name a topology level the cluster provisioned; configure "
                 "kubernetes_provider.kueue.topologies or use a known level."
@@ -942,9 +952,13 @@ def _build_pod_manifest(
         # rank from it; for the sliced level it makes slice membership rank-contiguous.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
         metadata["annotations"] = {
-            _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
+            _KUEUE_POD_GROUP_TOTAL: str(template.num_tasks),
             **_topology_request_annotations(
-                topo, group_by=group_by, num_tasks=run_req.num_tasks, gpu_count=gpu_count, task_ref=run_req.task_id
+                topo,
+                group_by=group_by,
+                num_tasks=template.num_tasks,
+                gpu_count=gpu_count,
+                task_ref=task_id_wire,
             ),
         }
     elif gpu_count > 0:
@@ -983,7 +997,12 @@ def _build_pod_manifest(
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+    resolved_profile = (
+        ContainerProfile.DEFAULT
+        if template.container_profile is ContainerProfile.UNSPECIFIED
+        else template.container_profile
+    )
+    if resolved_profile is ContainerProfile.GVISOR:
         spec["runtimeClassName"] = "gvisor"
 
     if managed_label:
@@ -1009,8 +1028,8 @@ def _build_pod_manifest(
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs
     # from execution start; single pods keep the earlier native deadline.
-    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
-        spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+    if template.timeout is not None and template.timeout.to_ms() > 0 and not is_gang:
+        spec["activeDeadlineSeconds"] = max(1, template.timeout.to_ms() // 1000)
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -1018,7 +1037,9 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    effective_band = (
+        PriorityBand.INTERACTIVE if template.priority_band is PriorityBand.INHERIT else template.priority_band
+    )
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name
@@ -1075,7 +1096,7 @@ def _format_disruption_reason(condition: dict) -> str:
     return reason[:_TERMINAL_REASON_MAX_CHARS]
 
 
-def _pod_failure_state(pod: dict) -> int:
+def _pod_failure_state(pod: dict) -> TaskState:
     """Classify a failed pod as PREEMPTED, WORKER_FAILED, or FAILED.
 
     PREEMPTED and WORKER_FAILED both charge the preemption budget; the split
@@ -1089,7 +1110,7 @@ def _pod_failure_state(pod: dict) -> int:
     # that OOMs on its own cgroup limit carries no such condition and correctly
     # falls through to an application failure.
     if _disruption_condition(pod) is not None:
-        return job_pb2.TASK_STATE_PREEMPTED
+        return TaskState.PREEMPTED
     status = _task_container_status(pod)
     if status is None:
         # Pod-level eviction: the pod status reason indicates infrastructure.
@@ -1097,8 +1118,8 @@ def _pod_failure_state(pod: dict) -> int:
     else:
         reason = status.get("state", {}).get("terminated", {}).get("reason", "")
     if reason in _INFRASTRUCTURE_FAILURE_REASONS:
-        return job_pb2.TASK_STATE_WORKER_FAILED
-    return job_pb2.TASK_STATE_FAILED
+        return TaskState.WORKER_FAILED
+    return TaskState.FAILED
 
 
 def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
@@ -1132,7 +1153,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=job_pb2.TASK_STATE_BUILDING,
+            new_state=TaskState.BUILDING,
             status_message=_pod_status_message(pod, workload),
             **identity,
         )
@@ -1141,7 +1162,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=job_pb2.TASK_STATE_RUNNING,
+            new_state=TaskState.RUNNING,
             status_message="",
             **identity,
         )
@@ -1150,7 +1171,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=job_pb2.TASK_STATE_SUCCEEDED,
+            new_state=TaskState.SUCCEEDED,
             status_message="",
             **identity,
         )
@@ -1286,11 +1307,12 @@ def _has_gated_gpu_pods(pods: list[dict]) -> bool:
     return False
 
 
-def _run_req_gpu_count(run_req: job_pb2.RunTaskRequest) -> int:
+def _launch_gpu_count(launch: AttemptLaunch) -> int:
     """GPU count a task requests (0 for CPU-only), used to gate blocker eviction."""
-    if not run_req.HasField("resources") or not run_req.resources.HasField("device"):
+    device = launch.template.resources.device
+    if device is None:
         return 0
-    return get_gpu_count(run_req.resources.device)
+    return get_gpu_count(device)
 
 
 def _pod_gpu_request(pod: dict) -> int:
@@ -1899,7 +1921,7 @@ class ResourceCollector:
                     # Pod name is the per-attempt platform identity on k8s,
                     # mirroring worker_id on the GCE/TPU path.
                     worker_id=pod_name,
-                    usage=job_pb2.ResourceUsage(
+                    usage=ResourceUsage(
                         cpu_millicores=top.cpu_millicores,
                         memory_mb=top.memory_bytes // (1024 * 1024),
                     ),
@@ -1998,7 +2020,7 @@ class PeriodicProfiler:
             attempt_id=target.attempt_id,
             vm_id=f"k8s/{target.node_name or target.pod_name}",
             duration_seconds=0,
-            profile_type=job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=False)),
+            profile=ThreadsProfileConfiguration(include_locals=False),
             profile_data=data,
             trigger=ProfileTrigger.PERIODIC,
         )
@@ -2157,7 +2179,7 @@ def _stat_fields_after_comm(raw: str) -> list[str]:
     return raw[rclose + 2 :].split() if rclose != -1 else []
 
 
-def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
+def _parse_pod_proc_status(output: str) -> ProcessInfo:
     """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
 
     Reports the OS-level vitals of the pod's main process (the task command).
@@ -2216,9 +2238,10 @@ def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
     mem_parts = sections.get("memtotal", "").split()  # "MemTotal:  N kB"
     mem_total = _proc_int(mem_parts[1]) * 1024 if len(mem_parts) >= 2 else 0
 
-    return job_pb2.ProcessInfo(
+    return ProcessInfo(
         hostname=sections.get("hostname", ""),
         pid=1,
+        python_version="",
         uptime_ms=uptime_ms,
         memory_rss_bytes=rss,
         memory_vms_bytes=vms,
@@ -2227,6 +2250,13 @@ def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
         open_fd_count=_proc_int(sections.get("fds", "")),
         memory_total_bytes=mem_total,
         cpu_count=_proc_int(sections.get("nproc", "")),
+        provenance=Provenance(
+            tree_hash="",
+            base_commit="",
+            dirty=False,
+            branch=None,
+            built_by=None,
+        ),
     )
 
 
@@ -2431,15 +2461,15 @@ class K8sTaskProvider:
         # member or single-pod GPU job — both route through Kueue): Kueue TAS
         # computes node capacity at admission, so blockers must be gone (or
         # terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
+        if self.preempt_namespaces and any(_launch_gpu_count(launch) > 0 for launch in request.tasks_to_run):
             self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
 
         apply_failures: list[TaskUpdate] = []
-        for run_req in request.tasks_to_run:
+        for launch in request.tasks_to_run:
             try:
-                self._apply_pod(run_req)
+                self._apply_pod(launch)
             except PodManifestError as exc:
-                logger.error("Task %s has an invalid manifest and cannot be scheduled: %s", run_req.task_id, exc)
+                logger.error("Task %s has an invalid manifest and cannot be scheduled: %s", launch.task_id, exc)
                 # The request itself is invalid, so it can never produce a pod: every
                 # retry rebuilds the same broken manifest, wedging this backend's
                 # reconcile tick (the error would otherwise escape sync and abort the
@@ -2447,14 +2477,14 @@ class K8sTaskProvider:
                 # instead of the retryable WORKER_FAILED used for transient apply loss.
                 apply_failures.append(
                     TaskUpdate(
-                        task_id=JobName.from_wire(run_req.task_id),
-                        attempt_id=run_req.attempt_id,
-                        new_state=job_pb2.TASK_STATE_FAILED,
+                        task_id=launch.task_id,
+                        attempt_id=launch.attempt_id,
+                        new_state=TaskState.FAILED,
                         error=str(exc),
                     )
                 )
             except KubectlError as exc:
-                logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
+                logger.error("Failed to apply pod for task %s: %s", launch.task_id, exc)
                 # The pod was never created, so there is no k8s verdict to track
                 # and nothing ran. Treat any apply failure as worker loss so the
                 # task retries (ASSIGNED -> WORKER_FAILED rolls back to PENDING
@@ -2462,9 +2492,9 @@ class K8sTaskProvider:
                 # re-applies. The raw k8s error is logged above.
                 apply_failures.append(
                     TaskUpdate(
-                        task_id=JobName.from_wire(run_req.task_id),
-                        attempt_id=run_req.attempt_id,
-                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                        task_id=launch.task_id,
+                        attempt_id=launch.attempt_id,
+                        new_state=TaskState.WORKER_FAILED,
                         error=str(exc),
                     )
                 )
@@ -2488,8 +2518,8 @@ class K8sTaskProvider:
             self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
-        for run_req in request.tasks_to_run:
-            desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
+        for launch in request.tasks_to_run:
+            desired_keys.add((_task_hash(launch.task_id.to_wire()), launch.attempt_id))
         for entry in request.running_tasks:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
@@ -2561,16 +2591,16 @@ class K8sTaskProvider:
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
         duration = int(request.duration.to_seconds()) if request.duration is not None else 10
-        profile_type = profile_configuration_to_proto(request.profile)
+        profile = request.profile
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
 
         try:
-            if profile_type.HasField("threads"):
-                data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
-            elif profile_type.HasField("cpu"):
-                data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
-            elif profile_type.HasField("memory"):
-                data = capture_memory_attach(dispatch, profile_type.memory, duration, pid="1")
+            if isinstance(profile, ThreadsProfileConfiguration):
+                data = capture_threads(dispatch, pid="1", include_locals=profile.include_locals)
+            elif isinstance(profile, CpuProfileConfiguration):
+                data = capture_cpu(dispatch, profile, duration, pid="1")
+            elif isinstance(profile, MemoryProfileConfiguration):
+                data = capture_memory_attach(dispatch, profile, duration, pid="1")
             else:
                 return ProfileResult(b"", "Unknown profile type")
         except Exception as e:
@@ -2587,7 +2617,7 @@ class K8sTaskProvider:
                 attempt_id=attempt_id,
                 vm_id=f"k8s/{pod_node_name or pod_name}",
                 duration_seconds=duration,
-                profile_type=profile_type,
+                profile=profile,
                 profile_data=data,
             )
             self.profile_table.write([row])
@@ -2610,11 +2640,7 @@ class K8sTaskProvider:
         except Exception as e:
             return AttemptExecResult(0, "", "", str(e))
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         """Report the task pod's PID-1 vitals, collected via ``kubectl exec``.
 
         There is no worker daemon in the pod, so — like profiling — this reaches
@@ -2628,7 +2654,7 @@ class K8sTaskProvider:
         )
         if result.returncode != 0:
             raise ProviderError(f"process status exec in pod {pod_name} failed: {result.stderr.strip() or 'no output'}")
-        return job_pb2.GetProcessStatusResponse(process_info=_parse_pod_proc_status(result.stdout or ""))
+        return _parse_pod_proc_status(result.stdout or "")
 
     def close(self) -> None:
         if self._gc_emitter is not None:
@@ -2654,23 +2680,25 @@ class K8sTaskProvider:
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
+    def _apply_pod(self, launch: AttemptLaunch) -> None:
         """Create or update the Pod for a task attempt."""
-        manifest = _build_pod_manifest(run_req, self.pods)
+        manifest = _build_pod_manifest(launch, self.pods)
 
-        task_id_name = JobName.from_wire(run_req.task_id)
-        pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
-        self._dispatched_attempts.add((run_req.task_id, run_req.attempt_id))
+        task_id = launch.task_id
+        task_id_wire = task_id.to_wire()
+        template = launch.template
+        pod_name = _pod_name(task_id, launch.attempt_id, launch.attempt_uid)
+        self._dispatched_attempts.add((task_id_wire, launch.attempt_id))
 
         init_containers, extra_volumes, configmap_name = _build_init_container_spec(
-            run_req,
+            launch,
             pod_name,
             self.pods.default_image,
             self.pods.controller_address,
         )
 
         if configmap_name:
-            workdir_files = dict(run_req.entrypoint.workdir_files)
+            workdir_files = dict(template.entrypoint.workdir_files)
             cm = {
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
@@ -2680,7 +2708,7 @@ class K8sTaskProvider:
                     "labels": {
                         _LABEL_MANAGED: "true",
                         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-                        _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+                        _LABEL_TASK_HASH: _task_hash(task_id_wire),
                         **(({self.pods.managed_label: "true"}) if self.pods.managed_label else {}),
                     },
                 },
@@ -2700,20 +2728,19 @@ class K8sTaskProvider:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
         self.kubectl.apply_json(manifest)
-        task_id = run_req.task_id
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
-            run_req.attempt_id,
+            launch.attempt_id,
         )
 
-        if _is_coordinator_task(run_req):
+        if _is_coordinator_task(launch):
             pdb = _build_pdb_manifest(
                 pod_name,
                 self.pods.namespace,
-                _task_hash(run_req.task_id),
-                run_req.priority,
+                _task_hash(task_id_wire),
+                template.priority_band,
                 managed_label=self.pods.managed_label,
             )
             self.kubectl.apply_json(pdb)
@@ -3104,7 +3131,7 @@ class K8sTaskProvider:
                         TaskUpdate(
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            new_state=TaskState.RUNNING,
                         )
                     )
                     continue
@@ -3120,11 +3147,7 @@ class K8sTaskProvider:
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=(
-                            job_pb2.TASK_STATE_PREEMPTED
-                            if disruption_reason is not None
-                            else job_pb2.TASK_STATE_WORKER_FAILED
-                        ),
+                        new_state=(TaskState.PREEMPTED if disruption_reason is not None else TaskState.WORKER_FAILED),
                         error="Pod not found",
                         terminal_reason=disruption_reason or _POD_DELETED_TERMINAL_REASON,
                         status_message="",

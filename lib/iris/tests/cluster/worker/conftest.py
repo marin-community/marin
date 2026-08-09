@@ -10,13 +10,16 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.endpoint import ProfileConfiguration
+from iris.cluster.resources.execution import Entrypoint, Environment, ResourceSpec
+from iris.cluster.resources.job import ContainerProfile, PriorityBand
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.rpc import job_pb2
-from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
 
@@ -117,7 +120,7 @@ class FakeContainerHandle:
     def disk_usage_mb(self) -> int:
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: ProfileConfiguration) -> bytes:
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:
@@ -170,7 +173,7 @@ def mock_worker(mock_bundle_store, mock_runtime, tmp_path):
     )
 
 
-def create_run_task_request(
+def create_attempt_launch(
     task_id: str = JobName.root("test-user", "test-task").task(0).to_wire(),
     num_tasks: int = 1,
     ports: list[str] | None = None,
@@ -188,9 +191,7 @@ def create_run_task_request(
     def test_fn():
         print("Hello from test")
 
-    entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
-
-    env_config = job_pb2.EnvironmentConfig(
+    environment = Environment(
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
@@ -198,19 +199,22 @@ def create_run_task_request(
         setup_scripts=["uv sync\n"],
     )
 
-    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
-
-    request = job_pb2.RunTaskRequest(
-        task_id=task_id,
-        num_tasks=num_tasks,
+    return AttemptLaunch(
+        task_id=JobName.from_wire(task_id),
         attempt_id=attempt_id,
-        attempt_uid=attempt_uid,
-        entrypoint=entrypoint_proto,
-        environment=env_config,
-        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        resources=resources,
-        ports=ports or [],
-        task_image=task_image,
+        attempt_uid=AttemptUid(attempt_uid),
+        template=AttemptLaunchTemplate(
+            num_tasks=num_tasks,
+            entrypoint=build_runtime_entrypoint(Entrypoint.from_callable(test_fn), Environment({}, ())),
+            environment=environment,
+            bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            resources=ResourceSpec(cpu=2, memory=4 * 1024**3),
+            timeout=Duration.from_seconds(300),
+            ports=tuple(ports or ()),
+            constraints=(),
+            task_image=task_image,
+            coscheduling=None,
+            priority_band=PriorityBand.INHERIT,
+            container_profile=ContainerProfile.UNSPECIFIED,
+        ),
     )
-    request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
-    return request

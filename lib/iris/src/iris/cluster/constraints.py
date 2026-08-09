@@ -10,7 +10,7 @@ This module is the canonical home for all constraint-related types:
 - DeviceType and device-config helpers (get_device_type, get_device_variant, etc.)
 - PlacementRequirements and extraction functions for demand routing
 - Constraint factory functions (preemptible_constraint, region_constraint, etc.)
-- constraints_from_resources: auto-generates device constraints from ResourceSpecProto
+- constraints_from_resources: auto-generates device constraints from ResourceSpec
 
 All production code should reference WellKnownAttribute enum members instead of
 raw string literals so that typos are caught at import time.
@@ -36,15 +36,14 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
-from iris.cluster.config import ScaleGroupResources
+from iris.cluster.resources.execution import Device, GpuDevice, ResourceSpec, TpuDevice
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
 from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
-from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
-# Step 1 types: core constraint primitives (depend only on job_pb2)
+# Step 1 types: core constraint primitives
 # ---------------------------------------------------------------------------
 
 
@@ -56,29 +55,33 @@ class DeviceType(Enum):
     TPU = "tpu"
 
 
-def get_device_type_enum(device: job_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig."""
-    if device.HasField("gpu"):
+class ScaleGroupResourceAttributes(Protocol):
+    device_type: AcceleratorType | None
+    device_variant: str
+    capacity_type: CapacityType | None
+
+
+def get_device_type_enum(device: Device | None) -> DeviceType:
+    """Extract the device type as an enum."""
+    if isinstance(device, GpuDevice):
         return DeviceType.GPU
-    if device.HasField("tpu"):
+    if isinstance(device, TpuDevice):
         return DeviceType.TPU
     return DeviceType.CPU
 
 
-def get_device_type(device: job_pb2.DeviceConfig) -> str:
-    """Extract device type string from DeviceConfig.
+def get_device_type(device: Device | None) -> str:
+    """Extract the device type as a string.
 
     Delegates to get_device_type_enum() to avoid duplicating the dispatch logic.
     """
     return get_device_type_enum(device).value
 
 
-def get_device_variant(device: job_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    if device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
+def get_device_variant(device: Device | None) -> str | None:
+    """Extract a device variant such as a GPU model."""
+    if isinstance(device, (GpuDevice, TpuDevice)):
+        return device.variant or None
     return None
 
 
@@ -101,29 +104,6 @@ class AttributeValue:
     def __post_init__(self) -> None:
         if isinstance(self.value, str):
             object.__setattr__(self, "value", self.value.strip().lower())
-
-    def to_proto(self) -> job_pb2.AttributeValue:
-        """Convert to protobuf representation."""
-        proto = job_pb2.AttributeValue()
-        if isinstance(self.value, str):
-            proto.string_value = self.value
-        elif isinstance(self.value, int):
-            proto.int_value = self.value
-        elif isinstance(self.value, float):
-            proto.float_value = self.value
-        return proto
-
-    @staticmethod
-    def from_proto(proto: job_pb2.AttributeValue) -> "AttributeValue":
-        """Convert from protobuf representation."""
-        if proto.HasField("string_value"):
-            return AttributeValue(proto.string_value)
-        elif proto.HasField("int_value"):
-            return AttributeValue(proto.int_value)
-        elif proto.HasField("float_value"):
-            return AttributeValue(proto.float_value)
-        # Default to empty string if no value set
-        return AttributeValue("")
 
 
 class ConstraintOp(IntEnum):
@@ -151,20 +131,10 @@ class ConstraintOp(IntEnum):
     LE = 7
     IN = 8
 
-    def to_proto(self) -> job_pb2.ConstraintOp:
-        """Convert to protobuf ConstraintOp enum value."""
-        mapping = {
-            ConstraintOp.EQ: job_pb2.CONSTRAINT_OP_EQ,
-            ConstraintOp.NE: job_pb2.CONSTRAINT_OP_NE,
-            ConstraintOp.EXISTS: job_pb2.CONSTRAINT_OP_EXISTS,
-            ConstraintOp.NOT_EXISTS: job_pb2.CONSTRAINT_OP_NOT_EXISTS,
-            ConstraintOp.GT: job_pb2.CONSTRAINT_OP_GT,
-            ConstraintOp.GE: job_pb2.CONSTRAINT_OP_GE,
-            ConstraintOp.LT: job_pb2.CONSTRAINT_OP_LT,
-            ConstraintOp.LE: job_pb2.CONSTRAINT_OP_LE,
-            ConstraintOp.IN: job_pb2.CONSTRAINT_OP_IN,
-        }
-        return mapping[self]
+
+class ConstraintMode(IntEnum):
+    REQUIRED = 0
+    PREFERRED = 1
 
 
 # Per-op arity bounds (lo, hi) for Constraint.values. hi=None means unbounded.
@@ -196,8 +166,8 @@ class Constraint:
 
     Prefer ``Constraint.create(...)`` in call sites — it accepts raw
     ``value=``/``values=`` scalars and wraps them in ``AttributeValue``
-    automatically. The primary constructor is used by ``from_proto`` and
-    tests of the invariant itself.
+    automatically. The primary constructor remains useful when the values are
+    already normalized and for tests of the invariant itself.
 
     Example:
         >>> # Require a specific TPU pod
@@ -214,9 +184,12 @@ class Constraint:
     key: str
     op: ConstraintOp
     values: tuple[AttributeValue, ...] = ()
-    mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED
+    mode: ConstraintMode = ConstraintMode.REQUIRED
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "op", ConstraintOp(self.op))
+        object.__setattr__(self, "mode", ConstraintMode(self.mode))
+        object.__setattr__(self, "values", tuple(self.values))
         lo, hi = _CONSTRAINT_ARITY[self.op]
         n = len(self.values)
         if n < lo or (hi is not None and n > hi):
@@ -225,38 +198,7 @@ class Constraint:
 
     @property
     def is_soft(self) -> bool:
-        return self.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
-
-    def to_proto(self) -> job_pb2.Constraint:
-        """Convert to protobuf representation.
-
-        Singular ops (EQ/NE/GT/GE/LT/LE) write `proto.value`; IN writes
-        `proto.values`; EXISTS/NOT_EXISTS write neither.
-        """
-        proto = job_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
-        if self.op == ConstraintOp.IN:
-            for v in self.values:
-                proto.values.append(v.to_proto())
-        elif self.values:
-            proto.value.CopyFrom(self.values[0].to_proto())
-        return proto
-
-    @staticmethod
-    def from_proto(proto: job_pb2.Constraint) -> "Constraint":
-        """Convert from protobuf representation.
-
-        Normalization (strip/lowercase for strings) happens inside
-        AttributeValue.__post_init__, so constraint evaluation never needs
-        to re-normalize.
-        """
-        op = ConstraintOp(proto.op)
-        if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
-            values: tuple[AttributeValue, ...] = ()
-        elif op == ConstraintOp.IN:
-            values = tuple(AttributeValue.from_proto(v) for v in proto.values)
-        else:
-            values = (AttributeValue.from_proto(proto.value),)
-        return Constraint(key=proto.key, op=op, values=values, mode=proto.mode)
+        return self.mode == ConstraintMode.PREFERRED
 
     @classmethod
     def create(
@@ -266,7 +208,7 @@ class Constraint:
         *,
         value: str | int | float | None = None,
         values: Sequence[str | int | float] | None = None,
-        mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED,
+        mode: ConstraintMode = ConstraintMode.REQUIRED,
     ) -> "Constraint":
         """Ergonomic factory: wraps raw scalars in AttributeValue automatically.
 
@@ -314,7 +256,7 @@ def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -
     if soft is None:
         # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
         soft = preemptible
-    mode = job_pb2.CONSTRAINT_MODE_PREFERRED if soft else job_pb2.CONSTRAINT_MODE_REQUIRED
+    mode = ConstraintMode.PREFERRED if soft else ConstraintMode.REQUIRED
     return Constraint.create(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible), mode=mode)
 
 
@@ -349,9 +291,7 @@ def availability_constraint(variant: str) -> Constraint:
     Emitted as an ``availability:<variant>`` EXISTS marker (zone-level, not
     per-worker). Accelerators only — CPU/RAM/disk never produce availability markers.
     """
-    return Constraint.create(
-        key=availability_key(variant), op=ConstraintOp.EXISTS, mode=job_pb2.CONSTRAINT_MODE_REQUIRED
-    )
+    return Constraint.create(key=availability_key(variant), op=ConstraintOp.EXISTS, mode=ConstraintMode.REQUIRED)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +318,7 @@ def available_key(token: str) -> str:
     return f"{AVAILABLE_PREFIX}{token.strip().lower()}"
 
 
-def required_resource_amounts(device: job_pb2.DeviceConfig | None, replicas: int) -> dict[str, int]:
+def required_resource_amounts(device: Device | None, replicas: int) -> dict[str, int]:
     """Free-capacity amounts a whole job needs from a single peer backend, per token.
 
     A federated root job runs entirely on one peer, so its requirement is the sum
@@ -395,11 +335,12 @@ def required_resource_amounts(device: job_pb2.DeviceConfig | None, replicas: int
         return {}
     if get_device_type_enum(device) != DeviceType.GPU:
         return {}
-    per_replica = device.gpu.count or 1
+    assert isinstance(device, GpuDevice)
+    per_replica = device.count
     return {variant.strip().lower(): max(1, replicas) * per_replica}
 
 
-def peer_availability_gate(device: job_pb2.DeviceConfig | None, replicas: int) -> list[Constraint]:
+def peer_availability_gate(device: Device | None, replicas: int) -> list[Constraint]:
     """The ``ge(available:<token>, amount)`` constraints a peer backend must satisfy to host the job.
 
     One ``GE`` constraint per gated resource token, its threshold the whole job's
@@ -665,21 +606,21 @@ class ConstraintDescriptor:
     routing: bool
 
 
-_EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
+_EQ_IN = frozenset({ConstraintOp.EQ, ConstraintOp.IN})
 # Region additionally allows EXISTS as the explicit ANY-region marker (any_region_constraint).
-_EQ_IN_EXISTS = _EQ_IN | frozenset({job_pb2.CONSTRAINT_OP_EXISTS})
-_EQ_ONLY = frozenset({job_pb2.CONSTRAINT_OP_EQ})
+_EQ_IN_EXISTS = _EQ_IN | frozenset({ConstraintOp.EXISTS})
+_EQ_ONLY = frozenset({ConstraintOp.EQ})
 _ALL_OPS = frozenset(
     {
-        job_pb2.CONSTRAINT_OP_EQ,
-        job_pb2.CONSTRAINT_OP_NE,
-        job_pb2.CONSTRAINT_OP_EXISTS,
-        job_pb2.CONSTRAINT_OP_NOT_EXISTS,
-        job_pb2.CONSTRAINT_OP_GT,
-        job_pb2.CONSTRAINT_OP_GE,
-        job_pb2.CONSTRAINT_OP_LT,
-        job_pb2.CONSTRAINT_OP_LE,
-        job_pb2.CONSTRAINT_OP_IN,
+        ConstraintOp.EQ,
+        ConstraintOp.NE,
+        ConstraintOp.EXISTS,
+        ConstraintOp.NOT_EXISTS,
+        ConstraintOp.GT,
+        ConstraintOp.GE,
+        ConstraintOp.LT,
+        ConstraintOp.LE,
+        ConstraintOp.IN,
     }
 )
 
@@ -785,7 +726,7 @@ INHERITED_CONSTRAINT_KEYS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Constraint]:
+def constraints_from_resources(resources: ResourceSpec) -> list[Constraint]:
     """Auto-generate device constraints from a job's resource spec.
 
     Produces Constraint objects for device-type and device-variant when the
@@ -798,7 +739,7 @@ def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Con
     """
     constraints: list[Constraint] = []
 
-    if not resources.HasField("device"):
+    if resources.device is None:
         return constraints
 
     device_type = get_device_type(resources.device)
@@ -813,7 +754,7 @@ def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Con
 
 
 def validate_tpu_request(
-    resources: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     constraints: Sequence[Constraint],
 ) -> str | None:
     """Check that a TPU job's chip count matches the VM shape of every candidate variant.
@@ -837,14 +778,14 @@ def validate_tpu_request(
     Returns ``None`` if the request is valid, or a human-readable error
     message suitable for returning as ``INVALID_ARGUMENT``.
     """
-    if not resources.HasField("device") or not resources.device.HasField("tpu"):
+    if not isinstance(resources.device, TpuDevice):
         return None
 
-    primary = resources.device.tpu.variant
+    primary = resources.device.variant
     if not primary or primary == AUTO_DEVICE_VARIANT:
         return None
 
-    chips_requested = resources.device.tpu.count
+    chips_requested = resources.device.count
 
     # Effective candidates: an explicit device-variant constraint overrides
     # the primary. Fall back to the primary when no such constraint exists.
@@ -905,27 +846,27 @@ _EXECUTOR_MAX_REPLICAS = 1
 
 
 def looks_like_executor(
-    resources: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     replicas: int,
 ) -> bool:
     """Return True when a job's resource shape matches the executor heuristic.
 
     Heuristic: no accelerators, single task, CPU ≤ 1 core, RAM ≤ 4 GiB.
     """
-    has_accelerator = resources.HasField("device") and not resources.device.HasField("cpu")
+    has_accelerator = isinstance(resources.device, (GpuDevice, TpuDevice))
     if has_accelerator:
         return False
     if replicas > _EXECUTOR_MAX_REPLICAS:
         return False
     if resources.cpu_millicores > _EXECUTOR_MAX_CPU_MILLICORES:
         return False
-    if resources.memory_bytes > _EXECUTOR_MAX_MEMORY_BYTES:
+    if resources.memory > _EXECUTOR_MAX_MEMORY_BYTES:
         return False
     return True
 
 
 def infer_preemptible_constraint(
-    resources: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     replicas: int,
     existing_constraints: Sequence[Constraint],
 ) -> Constraint | None:
@@ -1290,7 +1231,7 @@ def check_resource_fit(
     return None
 
 
-def worker_attributes_from_resources(resources: ScaleGroupResources) -> dict[str, str]:
+def worker_attributes_from_resources(resources: ScaleGroupResourceAttributes) -> dict[str, str]:
     """Derive well-known worker attributes from scale group resources config.
 
     This ensures local workers advertise the same device-type, device-variant,

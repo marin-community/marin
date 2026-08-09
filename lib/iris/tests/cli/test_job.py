@@ -105,11 +105,10 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
 
 def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
-    resources_proto = resources.to_proto()
     replicas = 1
     constraints: list[Constraint] = []
 
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    preemptible = infer_preemptible_constraint(resources, replicas, constraints)
     assert preemptible is not None
     assert preemptible.key == WellKnownAttribute.PREEMPTIBLE
     assert preemptible.values[0].value == "false"
@@ -117,41 +116,37 @@ def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
 
 def test_executor_heuristic_skipped_for_gpu_job():
     resources = build_resources(tpu=None, gpu="H100", cpu=0.5, memory="1GB", disk="5GB")
-    resources_proto = resources.to_proto()
     replicas = 1
     constraints: list[Constraint] = []
 
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    preemptible = infer_preemptible_constraint(resources, replicas, constraints)
     assert preemptible is None
 
 
 def test_executor_heuristic_skipped_for_large_cpu_job():
     resources = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB")
-    resources_proto = resources.to_proto()
     replicas = 1
     constraints: list[Constraint] = []
 
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    preemptible = infer_preemptible_constraint(resources, replicas, constraints)
     assert preemptible is None
 
 
 def test_executor_heuristic_skipped_when_user_sets_preemptible():
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
-    resources_proto = resources.to_proto()
     replicas = 1
     constraints: list[Constraint] = [preemptible_constraint(True)]
 
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    preemptible = infer_preemptible_constraint(resources, replicas, constraints)
     assert preemptible is None
 
 
 def test_executor_heuristic_with_region_constraint():
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
-    resources_proto = resources.to_proto()
     replicas = 1
     constraints: list[Constraint] = [region_constraint(["us-central2"])]
 
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    preemptible = infer_preemptible_constraint(resources, replicas, constraints)
     assert preemptible is not None
     assert preemptible.values[0].value == "false"
 
@@ -167,36 +162,36 @@ def _preemptible_values(constraints: list[Constraint]) -> list[str]:
 
 def test_build_job_constraints_preemptible_true_emits_true_constraint():
     """--preemptible forces a preemptible=true constraint and bypasses the heuristic."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, preemptible=True)
 
     assert _preemptible_values(constraints) == ["true"]
 
 
 def test_build_job_constraints_preemptible_false_emits_false_constraint():
     """--no-preemptible forces a preemptible=false constraint even for non-executor jobs."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=False)
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, preemptible=False)
 
     assert _preemptible_values(constraints) == ["false"]
 
 
 def test_build_job_constraints_preemptible_none_runs_heuristic():
     """Default (None) preserves the executor heuristic on small CPU jobs."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=None)
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, preemptible=None)
 
     assert _preemptible_values(constraints) == ["false"]
 
 
 def test_build_job_constraints_preemptible_true_overrides_heuristic():
     """Small CPU jobs normally auto-tag non-preemptible; --preemptible wins."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, preemptible=True)
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
@@ -204,9 +199,9 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
 def test_build_job_constraints_target_cluster_appends_cluster_pin():
     """--target-cluster appends exactly one cluster EQ constraint naming the peer."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster="peer-cluster")
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, target_cluster="peer-cluster")
 
     cluster_constraints = [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY]
     assert len(cluster_constraints) == 1
@@ -217,9 +212,9 @@ def test_build_job_constraints_target_cluster_appends_cluster_pin():
 
 def test_build_job_constraints_no_target_cluster_omits_cluster_pin():
     """Omitting --target-cluster appends no cluster constraint."""
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+    resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
 
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster=None)
+    constraints = build_job_constraints(resources, tpu_variants=[], replicas=1, target_cluster=None)
 
     assert [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY] == []
 
@@ -259,7 +254,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
     assert result.exit_code == 0, result.output
     assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
     assert captured["controller_url"] == "http://controller.test"
-    assert captured["entrypoint"].command == ["python", "train.py"]
+    assert captured["entrypoint"].command == ("python", "train.py")
 
 
 # --tpu multi-variant parsing
@@ -272,7 +267,7 @@ def test_tpu_multi_variant_parsing(recorded_job_submissions):
     )
     assert result.exit_code == 0, result.output
     submission = recorded_job_submissions[0]
-    assert submission["resources"].device.tpu.variant == "v6e-4"
+    assert submission["resources"].device.variant == "v6e-4"
     device_constraint = next(c for c in submission["constraints"] if c.key == WellKnownAttribute.DEVICE_VARIANT)
     assert [value.value for value in device_constraint.values] == ["v6e-4", "v5litepod-4", "v5p-8"]
 

@@ -14,6 +14,7 @@ import uuid
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
+from iris.cluster.resources.endpoint import CpuProfileConfiguration, CpuProfileFormat
 from iris.rpc import iris_logging_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -199,7 +200,7 @@ def test_profile_running_task(integration_cluster):
     response = integration_cluster.client.profile_attempt(
         task.current_attempt,
         duration=Duration.from_seconds(1),
-        profile=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
+        profile=CpuProfileConfiguration(format=CpuProfileFormat.FLAMEGRAPH, rate_hz=0, native=None),
     )
     assert len(response.profile_data) > 0
     assert not response.error_message

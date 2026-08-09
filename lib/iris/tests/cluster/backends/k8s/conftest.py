@@ -10,10 +10,19 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.cluster.runtime.env import build_common_iris_env
-from iris.cluster.types import JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.rpc import job_pb2
+from iris.rpc.legacy_job_codec import (
+    constraint_from_proto,
+    environment_from_proto,
+    resource_spec_from_proto,
+    runtime_entrypoint_from_proto,
+)
 from iris.test_util import FakeStatsTable
+from iris.time_proto import duration_from_proto
 
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 LABEL_MANAGED = "iris.managed"
@@ -93,6 +102,31 @@ def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTa
     return K8sTaskProvider(kubectl=k8s, pods=pod_config(local_queue=local_queue), **kwargs)
 
 
+def launch_from_request(request: job_pb2.RunTaskRequest) -> AttemptLaunch:
+    """Decode the legacy worker launch wire used by these adapter fixtures."""
+    return AttemptLaunch(
+        task_id=JobName.from_wire(request.task_id),
+        attempt_id=request.attempt_id,
+        attempt_uid=AttemptUid(request.attempt_uid),
+        template=AttemptLaunchTemplate(
+            num_tasks=request.num_tasks,
+            entrypoint=runtime_entrypoint_from_proto(request.entrypoint),
+            environment=environment_from_proto(request.environment),
+            bundle_id=request.bundle_id,
+            resources=resource_spec_from_proto(request.resources),
+            timeout=duration_from_proto(request.timeout) if request.HasField("timeout") else None,
+            ports=tuple(request.ports),
+            constraints=tuple(constraint_from_proto(value) for value in request.constraints),
+            task_image=request.task_image,
+            coscheduling=(
+                CoschedulingConfig(request.coscheduling.group_by) if request.HasField("coscheduling") else None
+            ),
+            priority_band=PriorityBand(request.priority),
+            container_profile=ContainerProfile(request.container_profile),
+        ),
+    )
+
+
 def make_batch(
     tasks_to_run=None,
     running_tasks=None,
@@ -102,7 +136,7 @@ def make_batch(
         reconcile_rows=[],
         timeout_rows=[],
         running_tasks=running_tasks or [],
-        tasks_to_run=tasks_to_run or [],
+        tasks_to_run=[launch_from_request(task) for task in tasks_to_run or []],
     )
 
 
@@ -292,8 +326,8 @@ def common_env_from_req(
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
-        environment=req.environment,
-        constraints=req.constraints,
+        environment=environment_from_proto(req.environment),
+        constraints=tuple(constraint_from_proto(value) for value in req.constraints),
         ports=req.ports,
-        resources=req.resources if req.HasField("resources") else None,
+        resources=resource_spec_from_proto(req.resources) if req.HasField("resources") else None,
     )

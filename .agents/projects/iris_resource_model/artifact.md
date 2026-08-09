@@ -2,7 +2,7 @@
 
 The package and protobuf boundaries are mapped in
 [architecture.md](architecture.md), including the current checkpoint and the
-protobuf-free target.
+target that confines generated messages to their owning transports.
 
 ## Decision
 

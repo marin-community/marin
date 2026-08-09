@@ -23,8 +23,11 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.resources.endpoint import ProfileConfiguration
+from iris.cluster.resources.execution import ResourceSpec, RuntimeEntrypoint
+from iris.cluster.resources.job import ContainerProfile
+from iris.cluster.resources.worker import WorkerMetadata
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import job_pb2
 
 ACCELERATOR_SHM_FALLBACK_BYTES = 100 * 1024**3
 
@@ -85,11 +88,11 @@ class ContainerConfig:
     """Configuration for running a container."""
 
     image: str
-    entrypoint: job_pb2.RuntimeEntrypoint
+    entrypoint: RuntimeEntrypoint
     env: dict[str, str]
     workdir: str = "/app"
-    resources: job_pb2.ResourceSpecProto | None = None
-    container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    resources: ResourceSpec | None = None
+    container_profile: ContainerProfile = ContainerProfile.UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
@@ -99,7 +102,7 @@ class ContainerConfig:
     attempt_uid: str | None = None
     job_id: str | None = None
     worker_id: str | None = None
-    worker_metadata: job_pb2.WorkerMetadata | None = None
+    worker_metadata: WorkerMetadata | None = None
     ports: dict[str, int] = field(default_factory=dict)
 
     def get_cpu_millicores(self) -> int | None:
@@ -108,9 +111,9 @@ class ContainerConfig:
         return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
-        if not self.resources or not self.resources.memory_bytes:
+        if not self.resources or not self.resources.memory:
             return None
-        return self.resources.memory_bytes // (1024 * 1024)
+        return self.resources.memory // (1024 * 1024)
 
 
 @dataclass
@@ -245,7 +248,7 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: ProfileConfiguration) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:

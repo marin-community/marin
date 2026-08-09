@@ -33,7 +33,7 @@ from typing import ClassVar
 from finelog.client import StoragePolicy
 from rigging.timing import Timestamp
 
-from iris.rpc import job_pb2
+from iris.cluster.resources.worker import ResourceUsage, WorkerMetadata, WorkerResourceSnapshot
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
@@ -86,11 +86,11 @@ class WorkerStatus(StrEnum):
     RUNNING = "RUNNING"
 
 
-def _attr_string(metadata: job_pb2.WorkerMetadata, key: str) -> str:
+def _attr_string(metadata: WorkerMetadata, key: str) -> str:
     av = metadata.attributes.get(key)
-    if av is None:
+    if av is None or not isinstance(av.value, str):
         return ""
-    return av.string_value or ""
+    return av.value
 
 
 @dataclass
@@ -337,8 +337,8 @@ def build_worker_stat(
     worker_id: str,
     status: str,
     address: str,
-    snapshot: job_pb2.WorkerResourceSnapshot,
-    metadata: job_pb2.WorkerMetadata,
+    snapshot: WorkerResourceSnapshot,
+    metadata: WorkerMetadata,
     ts: datetime | None = None,
 ) -> IrisWorkerStat:
     """Build a heartbeat row from the per-tick snapshot and worker metadata.
@@ -374,12 +374,12 @@ def build_task_stat(
     task_id: str,
     attempt_id: int,
     worker_id: str,
-    usage: job_pb2.ResourceUsage,
+    usage: ResourceUsage,
     ts: datetime | None = None,
     accelerator_util_pct: float | None = None,
     accelerator_mem_bytes: int | None = None,
 ) -> IrisTaskStat:
-    """Build a per-attempt resource row from a ResourceUsage proto.
+    """Build a per-attempt resource row from a resource measurement.
 
     ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
     """

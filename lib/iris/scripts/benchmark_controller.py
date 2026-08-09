@@ -54,7 +54,9 @@ from iris.cluster.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
     RpcWorkerStubFactory,
+    _reconcile_request_to_proto,
 )
+from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -91,9 +93,11 @@ from iris.cluster.controller.reads import (  # noqa: F401
 )
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
+    KeepAttempt,
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileRequest,
     WorkerReconcileResult,
     build_reconcile_plans,
 )
@@ -114,12 +118,23 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.resources.job import JobSpec
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, ResourceSpec, UserBudgetDefaults, WorkerId
+from iris.cluster.resources.attempt import AttemptLaunchTemplate, AttemptObservation
+from iris.cluster.resources.execution import CommandEntrypoint, CpuDevice, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    ExistingJobPolicy,
+    JobPreemptionPolicy,
+    JobSpec,
+    PriorityBand,
+)
+from iris.cluster.resources.state import TaskState
+from iris.cluster.resources.worker import WorkerMetadata
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
+from iris.rpc.worker_codec import worker_metadata_to_proto
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
@@ -610,15 +625,11 @@ def _build_reconcile_inputs(
                 )
             ).all()
         uids = [row.attempt_uid for row in rows]
-        desired = [
-            worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()) for uid in uids
-        ]
-        observations = [
-            worker_pb2.Worker.AttemptObservation(attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING) for uid in uids
-        ]
+        desired = tuple(KeepAttempt(AttemptUid(uid)) for uid in uids)
+        observations = [AttemptObservation(AttemptUid(uid), TaskState.RUNNING) for uid in uids]
         plan = WorkerReconcilePlan(
             worker_id=w.worker_id,
-            request=worker_pb2.Worker.ReconcileRequest(worker_id=str(w.worker_id), desired=desired),
+            request=WorkerReconcileRequest(worker_id=w.worker_id, desired=desired),
         )
         result = WorkerReconcileResult(worker_id=w.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))
@@ -672,22 +683,21 @@ def _make_endpoint(task_id: JobName, _attempt_id: int = 0) -> EndpointRow:
     )
 
 
-def _build_sample_worker_metadata() -> job_pb2.WorkerMetadata:
+def _build_sample_worker_metadata() -> WorkerMetadata:
     """Minimal but representative WorkerMetadata for a CPU worker."""
-    device = job_pb2.DeviceConfig()
-    device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
-    meta = job_pb2.WorkerMetadata(
+    return WorkerMetadata(
         hostname="bench-worker",
         ip_address="127.0.0.1",
         cpu_count=64,
         memory_bytes=256 * 1024**3,
         disk_bytes=2 * 1024**4,
-        device=device,
+        device=CpuDevice(variant="cpu"),
+        attributes={
+            "device_type": AttributeValue("cpu"),
+            "device_variant": AttributeValue("cpu"),
+            "pool": AttributeValue("default"),
+        },
     )
-    meta.attributes["device_type"].string_value = "cpu"
-    meta.attributes["device_variant"].string_value = "cpu"
-    meta.attributes["pool"].string_value = "default"
-    return meta
 
 
 def _active_task_sample(db: ControllerDB, limit: int) -> list[tuple[JobName, int]]:
@@ -755,7 +765,7 @@ def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) ->
 
 
 def load_register(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    sample_meta = _build_sample_worker_metadata()
+    sample_meta = worker_metadata_to_proto(_build_sample_worker_metadata())
     lock = threading.Lock()
     counter = {"n": 0}
 
@@ -1077,7 +1087,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         _bench_load("RPC: Register (1 fresh worker, WRITE)", harness, load_register(harness, write_db, rps=0))
 
         # _register_burst_100 is bespoke: it batches 100 sequential calls into one timed unit.
-        sample_meta = _build_sample_worker_metadata()
+        sample_meta = worker_metadata_to_proto(_build_sample_worker_metadata())
         burst_client = harness.make_client()
         burst_counter = {"n": 0}
 
@@ -2415,20 +2425,19 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _reconcile_worker_metadata() -> job_pb2.WorkerMetadata:
-    device = job_pb2.DeviceConfig()
-    device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
-    meta = job_pb2.WorkerMetadata(
+def _reconcile_worker_metadata() -> WorkerMetadata:
+    return WorkerMetadata(
         hostname="bench-worker",
         ip_address="127.0.0.1",
         cpu_count=64,
         memory_bytes=256 * 1024**3,
         disk_bytes=2 * 1024**4,
-        device=device,
+        device=CpuDevice(variant="cpu"),
+        attributes={
+            "device_type": AttributeValue("cpu"),
+            "device_variant": AttributeValue("cpu"),
+        },
     )
-    meta.attributes["device_type"].string_value = "cpu"
-    meta.attributes["device_variant"].string_value = "cpu"
-    return meta
 
 
 def _reconcile_launch_request(
@@ -2445,17 +2454,22 @@ def _reconcile_launch_request(
     of that template — so ``payload_bytes`` directly multiplies into the
     wire bytes for every ASSIGNED dispatch.
     """
-    entrypoint = job_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-m", "zephyr.worker", "--task-id", "$IRIS_TASK_ID"]
+    workdir_files = {}
     if payload_bytes > 0:
-        entrypoint.workdir_files["state.pkl"] = (b"x" * 64 + b"\x00" * 8) * (payload_bytes // 72 + 1)
+        workdir_files["state.pkl"] = (b"x" * 64 + b"\x00" * 8) * (payload_bytes // 72 + 1)
+    entrypoint = RuntimeEntrypoint(
+        setup_commands=(),
+        run_command=CommandEntrypoint(("python", "-m", "zephyr.worker", "--task-id", "$IRIS_TASK_ID")),
+        workdir_files=workdir_files,
+        workdir_file_refs={},
+    )
 
     return JobSpec(
         version=1,
         name=job_id.to_wire(),
         entrypoint=entrypoint,
         resources=ResourceSpec(cpu=1, memory=1024**3),
-        environment=job_pb2.EnvironmentConfig(),
+        environment=Environment({}, ()),
         bundle_id="",
         scheduling_timeout=None,
         ports=(),
@@ -2467,13 +2481,13 @@ def _reconcile_launch_request(
         replicas=replicas,
         timeout=None,
         fail_if_exists=False,
-        preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+        existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
+        priority_band=PriorityBand.INTERACTIVE,
         task_image="bench:latest",
         submit_argv=(),
         client_revision_date="",
-        container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        container_profile=ContainerProfile.UNSPECIFIED,
     )
 
 
@@ -2692,7 +2706,7 @@ def _reconcile_percentiles(xs: list[float]) -> tuple[float, float, float, float]
 
 
 def _serialized_bytes(plans) -> int:
-    return sum(p.request.ByteSize() for p in plans)
+    return sum(_reconcile_request_to_proto(p.request).ByteSize() for p in plans)
 
 
 def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[ReconcileInputs, dict[WorkerId, str]]:
@@ -2702,7 +2716,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
         if not addresses:
-            return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
+            return ReconcileInputs(launch_templates={}, worker_ids=[], rows_by_worker={}), {}
         worker_ids = list(addresses)
         target_ids = set(worker_ids)
         raw_rows = snap.execute(
@@ -2728,7 +2742,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             ),
         ).all()
         rows = [row for row in raw_rows if row.worker_id in target_ids]
-        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+        templates_by_job: dict[JobName, AttemptLaunchTemplate | None] = {}
         for row in rows:
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
@@ -2742,14 +2756,18 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
                 worker_id=WorkerId(str(row.worker_id)),
                 task_id=row.task_id,
                 attempt_id=int(row.attempt_id),
-                task_state=int(row.task_state),
-                attempt_state=int(row.attempt_state),
+                task_state=TaskState(int(row.task_state)),
+                attempt_state=TaskState(int(row.attempt_state)),
                 job_id=row.job_id,
                 attempt_uid=AttemptUid(str(row.attempt_uid)),
             )
         )
-    job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-    inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
+    launch_templates = {jid: template for jid, template in templates_by_job.items() if template is not None}
+    inputs = ReconcileInputs(
+        launch_templates=launch_templates,
+        worker_ids=worker_ids,
+        rows_by_worker=rows_by_worker,
+    )
     return inputs, addresses
 
 
@@ -2789,7 +2807,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
         worker_addresses=addresses,
         reconcile_rows=[row for rows in inputs.rows_by_worker.values() for row in rows],
         timeout_rows=[],
-        job_specs=inputs.job_specs,
+        launch_templates=inputs.launch_templates,
     )
     t2 = time.perf_counter()
     # The backend sources its own reconcile snapshot; the benchmark prebuilds it

@@ -20,12 +20,13 @@ from iris.cluster.federation.availability import (
     ReservationLedger,
     assign_queued,
 )
+from iris.cluster.resources.execution import CpuDevice, GpuDevice, TpuDevice
+from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
 
 
-def _gpu(variant: str, count: int) -> job_pb2.DeviceConfig:
-    return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant=variant, count=count))
+def _gpu(variant: str, count: int) -> GpuDevice:
+    return GpuDevice(variant=variant, count=count)
 
 
 def _gpu_shape(variant: str = "h100") -> list:
@@ -82,9 +83,9 @@ def test_gpu_request_translates_to_a_ge_available_gate():
 
 
 def test_cpu_and_auto_and_tpu_carry_no_gate():
-    assert required_resource_amounts(job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()), 4) == {}
+    assert required_resource_amounts(CpuDevice(), 4) == {}
     assert required_resource_amounts(_gpu("auto", 1), 1) == {}  # no concrete token to match
-    assert required_resource_amounts(job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=8)), 2) == {}
+    assert required_resource_amounts(TpuDevice(variant="v5p-8", count=8), 2) == {}
 
 
 # --- reservation ledger ----------------------------------------------------
@@ -184,8 +185,8 @@ def test_unreachable_peer_hosts_nothing():
 
 # --- priority-aware placement ----------------------------------------------
 
-_INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
-_BATCH = job_pb2.PRIORITY_BAND_BATCH
+_INTERACTIVE = int(PriorityBand.INTERACTIVE)
+_BATCH = int(PriorityBand.BATCH)
 
 
 def test_interactive_job_reaches_a_peer_saturated_by_preemptible_batch_work():

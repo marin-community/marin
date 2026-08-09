@@ -3446,7 +3446,7 @@ def test_drain_pending_creates_attempt_rows(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].task_id == task_id
     assert batch.tasks_to_run[0].attempt_id == 0
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_ASSIGNED
 
@@ -3491,7 +3491,7 @@ def test_drain_redrives_assigned_until_executing(state):
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
-    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].task_id == task_id
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
 

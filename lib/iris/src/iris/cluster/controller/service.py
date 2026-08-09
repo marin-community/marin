@@ -39,7 +39,7 @@ from iris.cluster.controller.codec import (
     decode_attribute_value,
     resource_spec_from_job_row,
     resource_spec_from_scalars,
-    worker_metadata_to_proto,
+    worker_metadata_from_row,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -84,6 +84,7 @@ from iris.cluster.process_status import get_process_status
 from iris.cluster.resources.endpoint import EndpointAccess as ResourceEndpointAccess
 from iris.cluster.resources.endpoint import EndpointQuery, ProfileRequest
 from iris.cluster.resources.errors import ResourceNotFound
+from iris.cluster.resources.execution import ResourceSpec
 from iris.cluster.resources.identity import AttemptLocator, ResourceKey
 from iris.cluster.resources.job import FederationPosture, JobObservation, JobQuery, JobSummary
 from iris.cluster.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
@@ -109,11 +110,13 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
+from iris.rpc.legacy_job_codec import resource_spec_to_proto
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.rpc.proto_display import (
     job_state_friendly,
     task_state_friendly,
 )
+from iris.rpc.worker_codec import process_info_to_proto, worker_metadata_from_proto, worker_metadata_to_proto
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -628,7 +631,7 @@ def _attempts_for_worker(
         # the job_config lookup so a worker that ran many attempts across a few
         # jobs costs one extra query rather than one per attempt.
         job_ids = {row.task_id.parent for row in raw_rows if row.task_id.parent is not None}
-        resources_by_job: dict[JobName, job_pb2.ResourceSpecProto] = {}
+        resources_by_job: dict[JobName, ResourceSpec] = {}
         if job_ids:
             jc_rows = tx.execute(
                 select(
@@ -667,7 +670,11 @@ def _attempts_for_worker(
             controller_pb2.Controller.WorkerTaskAttempt(
                 task_id=row.task_id.to_wire(),
                 attempt=proto_attempt,
-                resources=resources_by_job.get(row.task_id.parent),
+                resources=(
+                    resource_spec_to_proto(resources_by_job[row.task_id.parent])
+                    if row.task_id.parent in resources_by_job
+                    else None
+                ),
             )
         )
     return out
@@ -822,7 +829,10 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Submit a Job and return its authority-selected ID."""
-        spec = job_spec_from_legacy_request(request)
+        try:
+            spec = job_spec_from_legacy_request(request)
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         if request.HasField("federation"):
             handoff = request.federation
             identity = self._resources.submit_federated_job(
@@ -1038,7 +1048,7 @@ class ControllerServiceImpl:
                 detail,
                 local_cluster_id=self._resources.cluster_id,
             ),
-            job_resources=job.spec.resources.to_exact_proto(),
+            job_resources=resource_spec_to_proto(job.spec.resources),
             root_cause_highlights=detail.root_cause_highlights,
         )
 
@@ -1097,7 +1107,7 @@ class ControllerServiceImpl:
                 cur,
                 worker_id=worker_id,
                 address=request.address,
-                metadata=request.metadata,
+                metadata=worker_metadata_from_proto(request.metadata),
                 ts=Timestamp.now(),
                 health=health,
                 slice_id=request.slice_id,
@@ -1396,7 +1406,8 @@ class ControllerServiceImpl:
         if request.target in ("/system/controller", "/system/process"):
             try:
                 duration = request.duration_seconds or 10
-                data = profile_local_process(duration, request.profile_type)
+                profile = profile_configuration_from_proto(request.profile_type)
+                data = profile_local_process(duration, profile)
                 if self._profile_table is not None:
                     self._profile_table.write(
                         [
@@ -1405,7 +1416,7 @@ class ControllerServiceImpl:
                                 attempt_id=None,
                                 vm_id="controller-self",
                                 duration_seconds=duration,
-                                profile_type=request.profile_type,
+                                profile=profile,
                                 profile_data=data,
                             )
                         ]
@@ -1517,7 +1528,7 @@ class ControllerServiceImpl:
             last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
-            metadata=worker_metadata_to_proto(worker, detail.attributes),
+            metadata=worker_metadata_to_proto(worker_metadata_from_row(worker, detail.attributes)),
             status_message=worker_status_message(liveness),
             scale_group=scale_group,
             backend_id=self._controller.backend_id_for_scale_group(scale_group),
@@ -1566,12 +1577,12 @@ class ControllerServiceImpl:
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(self._timer)
+            return job_pb2.GetProcessStatusResponse(process_info=process_info_to_proto(get_process_status(self._timer)))
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)
         if worker_id is None:
-            return self._task_process_status(target, request)
+            return self._task_process_status(target)
 
         worker = _read_worker(self._db, WorkerId(worker_id))
         if not worker:
@@ -1589,13 +1600,12 @@ class ControllerServiceImpl:
             worker_backend = self._backend_for_id(
                 self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
             )
-            return worker_backend.get_process_status(process_target, request)
+            process_info = worker_backend.get_process_status(process_target)
+            return job_pb2.GetProcessStatusResponse(process_info=process_info_to_proto(process_info))
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
-    def _task_process_status(
-        self, target: str, request: job_pb2.GetProcessStatusRequest
-    ) -> job_pb2.GetProcessStatusResponse:
+    def _task_process_status(self, target: str) -> job_pb2.GetProcessStatusResponse:
         """Process status for a ``/job/.../task/N`` target.
 
         A federated task's subtree runs on a peer, so the request is proxied through
@@ -1614,13 +1624,14 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
 
-        proxied = self._proxy_if_federated(task_id, lambda peer: peer.get_process_status(request))
+        proxied = self._proxy_if_federated(task_id, lambda peer: peer.get_process_status(target))
         if proxied is not None:
-            return proxied
+            return job_pb2.GetProcessStatusResponse(process_info=process_info_to_proto(proxied))
 
         task_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=target)
         try:
-            return self._backend_for_id(str(task.backend_id or "")).get_process_status(task_target, request)
+            process_info = self._backend_for_id(str(task.backend_id or "")).get_process_status(task_target)
+            return job_pb2.GetProcessStatusResponse(process_info=process_info_to_proto(process_info))
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 

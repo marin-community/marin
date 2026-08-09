@@ -36,8 +36,11 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import MAX_LIST_JOBS_OFFSET
 from iris.cluster.redaction import REDACTED_VALUE
 from iris.cluster.resources.endpoint import ProfileResult
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
+from iris.cluster.resources.execution import tpu_device
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, device_to_proto
+from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import event, func
@@ -73,7 +76,7 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
             cur,
             worker_id=worker_id,
             address=f"{worker_id}:8080",
-            metadata=metadata,
+            metadata=worker_metadata_from_proto(metadata),
             ts=Timestamp.now(),
             health=state._health,
         )
@@ -194,7 +197,9 @@ def test_launch_job_pinned_backend_checks_only_that_backend(service):
     service._controller.backends = {"gcp": rejecting, "cw": admitting}
 
     request = make_job_request("pinned-bad")
-    request.constraints.append(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp").to_proto())
+    request.constraints.append(
+        constraint_to_proto(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp"))
+    )
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
@@ -209,7 +214,7 @@ def test_profile_worker_routes_to_worker_backend(service, state):
             cur,
             worker_id=WorkerId("w-cw"),
             address="w-cw:8080",
-            metadata=make_worker_metadata(),
+            metadata=worker_metadata_from_proto(make_worker_metadata()),
             ts=Timestamp.now(),
             health=state._health,
             scale_group="cw-h100",
@@ -357,7 +362,7 @@ def test_launch_job_rejects_coscheduling_without_group_by(service):
 def test_launch_job_rejects_tpu_chip_count_mismatch(service):
     """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
     request = make_job_request("bad-tpu-chip-count")
-    request.resources.device.CopyFrom(tpu_device("v6e-8", count=4))
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v6e-8", count=4)))
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
@@ -369,9 +374,9 @@ def test_launch_job_rejects_tpu_chip_count_mismatch(service):
 def test_launch_job_rejects_mixed_vm_shape_alternatives(service):
     """device-variant IN constraint with mismatched chips_per_vm is rejected."""
     request = make_job_request("mixed-tpu-variants")
-    request.resources.device.CopyFrom(tpu_device("v6e-4"))
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v6e-4")))
     # User-provided IN constraint that mixes a 4-chip/VM and an 8-chip/VM variant.
-    request.constraints.append(device_variant_constraint(["v6e-4", "v6e-8"]).to_proto())
+    request.constraints.append(constraint_to_proto(device_variant_constraint(["v6e-4", "v6e-8"])))
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
@@ -393,8 +398,8 @@ def test_launch_job_rejects_variant_override_with_smaller_primary(service):
     candidate, not just the primary.
     """
     request = make_job_request("variant-override-mismatch")
-    request.resources.device.CopyFrom(tpu_device("v6e-4"))
-    request.constraints.append(device_variant_constraint(["v6e-8"]).to_proto())
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v6e-4")))
+    request.constraints.append(constraint_to_proto(device_variant_constraint(["v6e-8"])))
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, None)
@@ -406,8 +411,8 @@ def test_launch_job_rejects_variant_override_with_smaller_primary(service):
 def test_launch_job_accepts_same_shape_alternatives(service):
     """Alternatives sharing vm_count/chips_per_vm (e.g. v4-8 + v5p-8) are accepted."""
     request = make_job_request("matched-tpu-variants")
-    request.resources.device.CopyFrom(tpu_device("v4-8"))
-    request.constraints.append(device_variant_constraint(["v4-8", "v5p-8"]).to_proto())
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v4-8")))
+    request.constraints.append(constraint_to_proto(device_variant_constraint(["v4-8", "v5p-8"])))
 
     response = service.launch_job(request, None)
     assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
@@ -1367,12 +1372,12 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service):
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
     )
-    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v5litepod-16")))
 
     service.launch_job(request, None)
 
     status = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id="/test-user/tpu-job"), None)
-    stored_constraints = [Constraint.from_proto(value) for value in status.request.constraints]
+    stored_constraints = [constraint_from_proto(value) for value in status.request.constraints]
     keys = {c.key for c in stored_constraints}
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
@@ -1393,15 +1398,15 @@ def test_launch_job_user_constraints_override_auto(service):
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
     )
-    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
-    request.constraints.append(user_variant.to_proto())
+    request.resources.device.CopyFrom(device_to_proto(tpu_device("v5litepod-16")))
+    request.constraints.append(constraint_to_proto(user_variant))
 
     service.launch_job(request, None)
 
     status = service.get_job_status(
         controller_pb2.Controller.GetJobStatusRequest(job_id="/test-user/multi-variant-job"), None
     )
-    stored_constraints = [Constraint.from_proto(value) for value in status.request.constraints]
+    stored_constraints = [constraint_from_proto(value) for value in status.request.constraints]
 
     # device-variant should be the user's IN constraint, not the auto EQ
     dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
@@ -1509,12 +1514,14 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             cur,
             worker_id=w1,
             address="w1:8080",
-            metadata=job_pb2.WorkerMetadata(
-                hostname="w1",
-                ip_address="127.0.0.1",
-                cpu_count=8,
-                memory_bytes=16 * 1024**3,
-                disk_bytes=100 * 1024**3,
+            metadata=worker_metadata_from_proto(
+                job_pb2.WorkerMetadata(
+                    hostname="w1",
+                    ip_address="127.0.0.1",
+                    cpu_count=8,
+                    memory_bytes=16 * 1024**3,
+                    disk_bytes=100 * 1024**3,
+                )
             ),
             ts=Timestamp.now(),
             health=state._health,

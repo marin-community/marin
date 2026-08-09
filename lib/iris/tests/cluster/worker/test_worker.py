@@ -9,6 +9,7 @@ import socket
 import subprocess as sp
 import threading
 import zipfile
+from dataclasses import replace
 from typing import cast
 from unittest.mock import Mock
 
@@ -17,7 +18,18 @@ from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.log_keys import worker_log_key
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
+from iris.cluster.resources.execution import (
+    CommandEntrypoint,
+    Entrypoint,
+    Environment,
+    ResourceSpec,
+    RuntimeEntrypoint,
+)
+from iris.cluster.resources.job import ContainerProfile, PriorityBand
+from iris.cluster.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -30,21 +42,21 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
+    create_attempt_launch,
     create_mock_container_handle,
-    create_run_task_request,
 )
 
 pytestmark = pytest.mark.timeout(10)
@@ -101,7 +113,7 @@ def test_concurrent_allocations(allocator):
 
 def test_task_lifecycle_phases(mock_worker):
     """Test task transitions through PENDING -> BUILDING -> RUNNING -> SUCCEEDED."""
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -113,8 +125,17 @@ def test_task_lifecycle_phases(mock_worker):
 
 
 def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):
-    request = create_run_task_request()
-    request.entrypoint.workdir_files["extra.txt"] = b"extra"
+    request = create_attempt_launch()
+    request = replace(
+        request,
+        template=replace(
+            request.template,
+            entrypoint=replace(
+                request.template.entrypoint,
+                workdir_files={**request.template.entrypoint.workdir_files, "extra.txt": b"extra"},
+            ),
+        ),
+    )
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -128,7 +149,7 @@ def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):
 
 def test_task_with_ports(mock_worker):
     """Test task with port allocation."""
-    request = create_run_task_request(ports=["http", "grpc"])
+    request = create_attempt_launch(ports=["http", "grpc"])
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -153,7 +174,7 @@ def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -192,7 +213,7 @@ def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -226,7 +247,7 @@ def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -248,7 +269,7 @@ def test_task_failure_on_error(mock_worker, mock_runtime):
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -273,7 +294,7 @@ def test_task_infra_not_found_error_maps_to_worker_failed(mock_worker, mock_runt
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -293,7 +314,7 @@ def test_docker_create_infra_error_maps_to_worker_failed(mock_worker, mock_runti
     )
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -310,7 +331,7 @@ def test_docker_create_user_error_still_maps_to_failed(mock_worker, mock_runtime
     mock_handle.build_error = RuntimeError("Build failed with exit_code=1")
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -325,7 +346,7 @@ def test_task_exception_handling(mock_worker, mock_runtime):
     """Test task handles exceptions during execution."""
     mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -338,9 +359,7 @@ def test_task_exception_handling(mock_worker, mock_runtime):
 
 def test_list_tasks_with_submitted_tasks_returns_live_task_set(mock_worker):
     """Test listing all tasks."""
-    requests = [
-        create_run_task_request(task_id=JobName.root("test-user", "test-job").task(i).to_wire()) for i in range(3)
-    ]
+    requests = [create_attempt_launch(task_id=JobName.root("test-user", "test-job").task(i).to_wire()) for i in range(3)]
 
     for request in requests:
         mock_worker.submit_task(request)
@@ -357,7 +376,7 @@ def test_kill_running_task(mock_worker, mock_runtime):
     )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = mock_worker.submit_task(request)
 
     # Wait for task thread to reach RUNNING state
@@ -381,7 +400,7 @@ def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
     )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request_0 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=0)
+    request_0 = create_attempt_launch(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=0)
     mock_worker.submit_task(request_0)
 
     # Wait for attempt 0 to be running
@@ -391,7 +410,7 @@ def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
     assert old_task.attempt_id == 0
 
     # Submit attempt 1 for the same task_id — should kill attempt 0
-    request_1 = create_run_task_request(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=1)
+    request_1 = create_attempt_launch(task_id=JobName.root("test-user", "retry-task").task(0).to_wire(), attempt_id=1)
     mock_worker.submit_task(request_1)
 
     # Old attempt should have been killed
@@ -415,7 +434,7 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     )  # Stay running
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
-    request = create_run_task_request(task_id=JobName.root("test-user", "dup-task").task(0).to_wire(), attempt_id=0)
+    request = create_attempt_launch(task_id=JobName.root("test-user", "dup-task").task(0).to_wire(), attempt_id=0)
     mock_worker.submit_task(request)
 
     # Wait for it to be running
@@ -424,7 +443,7 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
     # Submit same attempt_id again — should be rejected (task unchanged)
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0))
     assert mock_worker.get_task(task_id) is task  # Same object, not replaced
 
     # Clean up
@@ -447,14 +466,14 @@ def test_resubmit_same_composite_fresh_uid_is_distinct_attempt(mock_worker, mock
     )
     task_id = JobName.root("test-user", "resubmit-task").task(0).to_wire()
 
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-first"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-first"))
     first = mock_worker.task_by_uid("uid-first")
     assert first is not None
     first.thread.join(timeout=15.0)
     assert first.status == job_pb2.TASK_STATE_SUCCEEDED
 
     # Resubmit the same (task_id, attempt_id=0) with a fresh UID.
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-second"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-second"))
 
     second = mock_worker.task_by_uid("uid-second")
     assert second is not None, "Resubmit with a fresh UID must produce a new attempt"
@@ -485,13 +504,13 @@ def _terminal_and_live_twins(mock_worker, mock_runtime):
     mock_runtime.create_container = Mock(side_effect=[terminal_handle, live_handle])
 
     task_id = JobName.root("test-user", "twin-task").task(0).to_wire()
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-terminal"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-terminal"))
     terminal = mock_worker.task_by_uid("uid-terminal")
     assert terminal is not None
     terminal.thread.join(timeout=15.0)
     assert terminal.status == job_pb2.TASK_STATE_SUCCEEDED
 
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-live"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-live"))
     live = mock_worker.task_by_uid("uid-live")
     assert live is not None and live is not terminal
     wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_RUNNING)
@@ -526,13 +545,9 @@ def test_stop_intent_by_uid_kills_live_twin(mock_worker, mock_runtime):
     _task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
 
     mock_worker.handle_reconcile(
-        worker_pb2.Worker.ReconcileRequest(
-            desired=[
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="uid-live",
-                    stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
-                )
-            ]
+        WorkerReconcileRequest(
+            worker_id="",
+            desired=(DesiredAttempt(AttemptUid("uid-live"), stop_reason=StopReason.CANCELLED),),
         )
     )
 
@@ -550,13 +565,13 @@ def test_resubmit_same_uid_is_rejected_as_duplicate(mock_worker, mock_runtime):
     )
     task_id = JobName.root("test-user", "dup-uid-task").task(0).to_wire()
 
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
     task = mock_worker.task_by_uid("uid-dup")
     assert task is not None
     wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
 
     # Resubmit with the identical UID — must be rejected, public list unchanged.
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
     assert [candidate.attempt_uid for candidate in mock_worker.list_tasks()] == ["uid-dup"]
 
     mock_worker.kill_task(task_id)
@@ -571,7 +586,7 @@ def test_task_by_uid_and_attempt_resolution(mock_worker, mock_runtime):
         )
     )
     task_id = JobName.root("test-user", "resolve-task").task(0).to_wire()
-    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-resolve"))
+    mock_worker.submit_task(create_attempt_launch(task_id=task_id, attempt_id=0, attempt_uid="uid-resolve"))
 
     task = mock_worker.task_by_uid("uid-resolve")
     assert task is not None
@@ -594,7 +609,7 @@ def test_kill_nonexistent_task(mock_worker):
 
 def test_port_env_vars_set(mock_worker, mock_runtime):
     """Test that IRIS_PORT_* environment variables are set for requested ports."""
-    request = create_run_task_request(ports=["web", "api", "metrics"])
+    request = create_attempt_launch(ports=["web", "api", "metrics"])
     task_id = mock_worker.submit_task(request)
 
     task = mock_worker.get_task(task_id)
@@ -640,17 +655,27 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     def _fn():
         pass
 
-    request = job_pb2.RunTaskRequest(
-        task_id=JobName.root("test-user", "env-test").task(0).to_wire(),
-        num_tasks=1,
+    request = AttemptLaunch(
+        task_id=JobName.root("test-user", "env-test").task(0),
         attempt_id=0,
-        attempt_uid="uid-env-test",
-        entrypoint=Entrypoint.from_callable(_fn).to_proto(),
-        environment=job_pb2.EnvironmentConfig(
-            env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
+        attempt_uid=AttemptUid("uid-env-test"),
+        template=AttemptLaunchTemplate(
+            num_tasks=1,
+            entrypoint=build_runtime_entrypoint(Entrypoint.from_callable(_fn), Environment({}, ())),
+            environment=Environment(
+                env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
+                setup_scripts=(),
+            ),
+            bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            resources=ResourceSpec(cpu=1, memory=512 * 1024**2),
+            timeout=None,
+            ports=(),
+            constraints=(),
+            task_image="",
+            coscheduling=None,
+            priority_band=PriorityBand.INHERIT,
+            container_profile=ContainerProfile.UNSPECIFIED,
         ),
-        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
     task_id = w.submit_task(request)
@@ -681,7 +706,7 @@ def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime,
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    request = create_run_task_request(task_image="custom/swetrace:dev")
+    request = create_attempt_launch(task_image="custom/swetrace:dev")
     task_id = w.submit_task(request)
     task = w.get_task(task_id)
     task.thread.join(timeout=15.0)
@@ -702,7 +727,7 @@ def test_task_image_default_used_when_override_empty(mock_bundle_store, mock_run
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
-    request = create_run_task_request()  # task_image="" by default
+    request = create_attempt_launch()  # task_image="" by default
     task_id = w.submit_task(request)
     task = w.get_task(task_id)
     task.thread.join(timeout=15.0)
@@ -739,7 +764,7 @@ def test_port_binding_failure(mock_bundle_store, tmp_path):
         container_runtime=runtime,
     )
 
-    request = create_run_task_request(ports=["actor"])
+    request = create_attempt_launch(ports=["actor"])
     task_id = worker.submit_task(request)
 
     task = worker.get_task(task_id)
@@ -876,7 +901,7 @@ def test_start_publishes_worker_logs_before_controller_registration(
 def test_handle_reconcile_publishes_worker_stat(mock_bundle_store, mock_runtime, tmp_path):
     worker, sink = _worker_with_log_sink(mock_bundle_store, mock_runtime, tmp_path)
 
-    worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
+    worker.handle_reconcile(WorkerReconcileRequest(worker_id="", desired=()))
 
     rows = sink.rows(WORKER_STATS_NAMESPACE)
     assert len(rows) == 1
@@ -897,18 +922,18 @@ def test_handle_reconcile_when_stats_sink_rejects_row_propagates_error(mock_bund
     )
 
     with pytest.raises(TypeError, match="schema mismatch"):
-        worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
+        worker.handle_reconcile(WorkerReconcileRequest(worker_id="", desired=()))
     worker.stop()
 
 
 def test_handle_reconcile_without_log_sink_returns_health(mock_worker):
-    response = mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
+    response = mock_worker.handle_reconcile(WorkerReconcileRequest(worker_id="", desired=()))
     assert response.health.healthy
 
 
 def test_task_resource_poll_publishes_task_stat(mock_bundle_store, mock_runtime, tmp_path):
     worker, sink = _worker_with_log_sink(mock_bundle_store, mock_runtime, tmp_path)
-    request = create_run_task_request()
+    request = create_attempt_launch()
     task_id = worker.submit_task(request)
     task = worker.get_task(task_id)
     assert task is not None
@@ -921,7 +946,7 @@ def test_task_resource_poll_publishes_task_stat(mock_bundle_store, mock_runtime,
     assert rows
     stat = rows[0]
     assert isinstance(stat, IrisTaskStat)
-    assert stat.task_id == request.task_id
+    assert stat.task_id == request.task_id.to_wire()
     assert stat.attempt_id == request.attempt_id
     assert stat.worker_id == "w-test"
     worker.stop()
@@ -963,16 +988,27 @@ def create_integration_entrypoint():
     return Entrypoint.from_callable(test_fn)
 
 
-def create_integration_run_task_request(bundle_id: str, task_id: str):
+def create_integration_attempt_launch(bundle_id: str, task_id: str):
     entrypoint = create_integration_entrypoint()
 
-    return job_pb2.RunTaskRequest(
-        task_id=task_id,
-        num_tasks=1,
-        entrypoint=entrypoint.to_proto(),
-        bundle_id=bundle_id,
-        environment=job_pb2.EnvironmentConfig(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
+    return AttemptLaunch(
+        task_id=JobName.from_wire(task_id),
+        attempt_id=0,
+        attempt_uid=AttemptUid("integration-task"),
+        template=AttemptLaunchTemplate(
+            num_tasks=1,
+            entrypoint=build_runtime_entrypoint(entrypoint, Environment({}, ())),
+            environment=Environment({}, ()),
+            bundle_id=bundle_id,
+            resources=ResourceSpec(cpu=1, memory=512 * 1024**2),
+            timeout=None,
+            ports=(),
+            constraints=(),
+            task_image="",
+            coscheduling=None,
+            priority_band=PriorityBand.INHERIT,
+            container_profile=ContainerProfile.UNSPECIFIED,
+        ),
     )
 
 
@@ -1020,7 +1056,7 @@ class TestWorkerIntegration:
         bundle_store_zip.write_bytes(bundle_zip_path.read_bytes())
 
         expected_task_id = JobName.root("test-user", "integration-test").task(0).to_wire()
-        request = create_integration_run_task_request(bundle_id, expected_task_id)
+        request = create_integration_attempt_launch(bundle_id, expected_task_id)
 
         task_id = real_worker.submit_task(request)
         assert task_id == expected_task_id
@@ -1297,9 +1333,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
 
     config = ContainerConfig(
         image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
-        ),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("echo", "hello")), {}, {}),
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
@@ -1343,9 +1377,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
 
     config = ContainerConfig(
         image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
-        ),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("sleep", "60")), {}, {}),
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
@@ -1385,9 +1417,7 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
 
     config = ContainerConfig(
         image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
-        ),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("sleep", "60")), {}, {}),
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
@@ -1429,9 +1459,7 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
 
     cfg = ContainerConfig(
         image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
-        ),
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("sleep", "60")), {}, {}),
         env={},
         mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,

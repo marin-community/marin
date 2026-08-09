@@ -10,9 +10,10 @@ authenticator-chain logic is unit-tested directly against ``resolve_auth``.
 
 import pytest
 from iris.cluster.local_cluster import LocalCluster
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.cluster.resources.execution import Entrypoint, Environment, ResourceSpec, build_runtime_entrypoint
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.legacy_job_codec import resource_spec_to_proto, runtime_entrypoint_to_proto
 from iris.version import client_revision_date
 from rigging.server_auth import (
     AuthRequest,
@@ -136,8 +137,10 @@ def test_loopback_admin_submits_as_named_user():
         client = ControllerServiceClientSync(address=url, timeout_ms=10000)
         launch_req = controller_pb2.Controller.LaunchJobRequest(
             name="/bob/acted-job",
-            entrypoint=Entrypoint.from_callable(_quick).to_proto(),
-            resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            entrypoint=runtime_entrypoint_to_proto(
+                build_runtime_entrypoint(Entrypoint.from_callable(_quick), Environment({}, ()))
+            ),
+            resources=resource_spec_to_proto(ResourceSpec(cpu=1, memory="1g")),
             client_revision_date=client_revision_date(),
         )
         resp = client.launch_job(launch_req)

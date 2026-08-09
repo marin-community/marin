@@ -14,8 +14,10 @@ from iris.cluster.federation.store import (
     SyncedTask,
 )
 from iris.cluster.resources.endpoint import EndpointAccess
-from iris.cluster.types import JobName, ResourceSpec
+from iris.cluster.resources.execution import ResourceSpec
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy_job_codec import device_from_proto, resource_spec_to_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
 
@@ -30,10 +32,6 @@ def federation_batch_from_legacy(response: controller_pb2.Controller.FederationS
         summary = None
         if delta.HasField("summary"):
             wire = delta.summary
-            device = None
-            if wire.resources.HasField("device"):
-                device = job_pb2.DeviceConfig()
-                device.CopyFrom(wire.resources.device)
             summary = SyncedJob(
                 job_id=JobName.from_wire(delta.job_id),
                 state=wire.state,
@@ -48,7 +46,7 @@ def federation_batch_from_legacy(response: controller_pb2.Controller.FederationS
                     cpu=wire.resources.cpu_millicores / 1_000,
                     memory=wire.resources.memory_bytes,
                     disk=wire.resources.disk_bytes,
-                    device=device,
+                    device=device_from_proto(wire.resources.device) if wire.resources.HasField("device") else None,
                 ),
             )
         tasks = []
@@ -125,7 +123,7 @@ def federation_batch_to_legacy(batch: FederationSyncBatch) -> controller_pb2.Con
                 exit_code=summary.exit_code or 0,
                 backend_id=summary.backend_id,
                 task_count=summary.task_count,
-                resources=summary.resources.to_exact_proto(),
+                resources=resource_spec_to_proto(summary.resources),
             )
             _set_timestamps(wire_summary, summary.submitted_at, summary.started_at, summary.finished_at)
             wire_delta.summary.CopyFrom(wire_summary)

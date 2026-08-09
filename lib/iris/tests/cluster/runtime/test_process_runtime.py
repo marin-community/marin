@@ -6,9 +6,9 @@
 import sys
 from pathlib import Path
 
+from iris.cluster.resources.execution import CommandEntrypoint, RuntimeEntrypoint
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
-from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 
 
@@ -21,9 +21,10 @@ def _make_config(
 ) -> ContainerConfig:
     return ContainerConfig(
         image="test:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.CommandEntrypoint(
-                argv=[
+        entrypoint=RuntimeEntrypoint(
+            setup_commands=(),
+            run_command=CommandEntrypoint(
+                argv=(
                     sys.executable,
                     "-c",
                     (
@@ -32,8 +33,10 @@ def _make_config(
                         "print(os.getenv('IRIS_TASK_ID', ''))"
                     ),
                     *args,
-                ]
-            )
+                )
+            ),
+            workdir_files={},
+            workdir_file_refs={},
         ),
         env=env or {},
         mounts=mounts,

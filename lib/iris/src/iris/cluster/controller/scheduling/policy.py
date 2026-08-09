@@ -60,6 +60,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import (
     JobName,
     PendingTask,
@@ -67,7 +68,6 @@ from iris.cluster.types import (
     WorkerId,
     is_job_finished,
 )
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +301,7 @@ def compute_demand_entries(
             continue
 
         job_constraints = constraints_from_json(job_row.constraints_json)
-        # Build the proto here — DemandEntry.resources is an autoscaler RPC field (legitimate boundary).
+        # Demand stays in the native execution model until autoscaler status is encoded.
         job_resources = resource_spec_from_scalars(
             job_row.res_cpu_millicores, job_row.res_memory_bytes, job_row.res_disk_bytes, job_row.res_device_json
         )
@@ -708,7 +708,7 @@ def run_preemption_pass(
 
     for candidate in unscheduled_tasks:
         # Batch never preempts
-        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
+        if candidate.band >= PriorityBand.BATCH:
             continue
 
         parent = candidate.job_name.parent
@@ -759,7 +759,7 @@ def _sort_pending_tasks_by_resolved_band(
     return sorted(
         pending_tasks,
         key=lambda task: (
-            requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            requested_bands.get(task.job_id, PriorityBand.INTERACTIVE),
             task.priority_neg_depth,
             task.priority_root_submitted_ms,
             task.submitted_at_ms.epoch_ms(),
@@ -917,7 +917,7 @@ def compute_scheduling_order(
     }
     tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
     for task_id in gated.schedulable_task_ids:
-        band = task_band_map.get(task_id, job_pb2.PRIORITY_BAND_INTERACTIVE)
+        band = task_band_map.get(task_id, PriorityBand.INTERACTIVE)
         tasks_by_band[band].append(task_id)
 
     interleaved: list[JobName] = []

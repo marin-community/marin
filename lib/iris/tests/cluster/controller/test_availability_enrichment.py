@@ -100,7 +100,7 @@ def test_demanded_variants_empty_without_availability_constraints():
     rows = [
         _pending(None),
         _pending("[]"),
-        _pending(constraints_to_json([region_constraint(["us-central1"]).to_proto()])),
+        _pending(constraints_to_json([region_constraint(["us-central1"])])),
     ]
     assert demanded_availability_variants(rows) == set()
 
@@ -108,10 +108,10 @@ def test_demanded_variants_empty_without_availability_constraints():
 def test_demanded_variants_collects_lowercased_keys_across_tasks():
     with_tpu = constraints_to_json(
         [
-            availability_constraint("v5p-8").to_proto(),
-            region_constraint(["us-central1"]).to_proto(),
+            availability_constraint("v5p-8"),
+            region_constraint(["us-central1"]),
         ]
     )
-    with_gpu = constraints_to_json([availability_constraint("H100").to_proto()])
+    with_gpu = constraints_to_json([availability_constraint("H100")])
     # "H100" lowercases to "h100" to match the zone_capabilities map.
     assert demanded_availability_variants([_pending(with_tpu), _pending(with_gpu)]) == {"v5p-8", "h100"}

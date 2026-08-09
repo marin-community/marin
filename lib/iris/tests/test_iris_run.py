@@ -15,7 +15,8 @@ from iris.cli.job import (
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
-from iris.rpc import job_pb2
+from iris.cluster.resources.execution import GpuDevice
+from iris.cluster.resources.state import PriorityBand
 
 
 def _invoke_run(args: list[str]):
@@ -102,19 +103,15 @@ def test_reserve_spec_to_availability_rejects_non_accelerator():
 def test_build_resources_gpu():
     """Test GPU spec parsing in build_resources."""
     spec = build_resources(tpu=None, gpu="H100x8")
-    assert spec.device.HasField("gpu")
-    assert spec.device.gpu.variant == "H100"
-    assert spec.device.gpu.count == 8
+    assert spec.device == GpuDevice(variant="H100", count=8)
 
     # Bare count defaults to empty variant
     spec = build_resources(tpu=None, gpu="4")
-    assert spec.device.gpu.variant == ""
-    assert spec.device.gpu.count == 4
+    assert spec.device == GpuDevice(variant="", count=4)
 
     # Bare variant defaults to count=1
     spec = build_resources(tpu=None, gpu="A100")
-    assert spec.device.gpu.variant == "A100"
-    assert spec.device.gpu.count == 1
+    assert spec.device == GpuDevice(variant="A100", count=1)
 
 
 def test_run_iris_job_adds_zone_constraint(recorded_job_submissions):
@@ -160,13 +157,13 @@ def test_run_iris_job_adds_region_and_zone_constraints(recorded_job_submissions)
 def test_run_iris_job_passes_priority_band(recorded_job_submissions):
     result = _invoke_run(["--priority", "batch"])
     assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+    assert recorded_job_submissions[0]["priority_band"] == PriorityBand.BATCH
 
 
 def test_run_iris_job_default_priority_inherit(recorded_job_submissions):
     result = _invoke_run([])
     assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_INHERIT
+    assert recorded_job_submissions[0]["priority_band"] == PriorityBand.INHERIT
 
 
 def test_no_wait_prints_job_id(recorded_job_submissions):

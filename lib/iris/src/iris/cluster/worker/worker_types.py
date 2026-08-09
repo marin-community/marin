@@ -10,8 +10,8 @@ from finelog.rpc import logging_pb2
 from pydantic import BaseModel
 from rigging.timing import Timestamp
 
-from iris.rpc import job_pb2
-from iris.rpc.job_pb2 import TaskState
+from iris.cluster.resources.state import TaskState
+from iris.cluster.resources.worker import WorkerTaskStatus
 
 
 class LogLine(BaseModel):
@@ -86,6 +86,6 @@ class TaskInfo(Protocol):
         """Terminal-state timestamp; ``None`` while the attempt is still active."""
         ...
 
-    def to_proto(self) -> job_pb2.TaskStatus:
-        """Convert to protobuf TaskStatus message."""
+    def status_snapshot(self) -> WorkerTaskStatus:
+        """Return the current worker-local status snapshot."""
         ...

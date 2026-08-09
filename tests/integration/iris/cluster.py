@@ -9,12 +9,12 @@ from dataclasses import dataclass
 
 from iris.client.client import IrisClient, Job, Task
 from iris.cluster.constraints import Constraint
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.resources.identity import NodeLocator
-from iris.cluster.resources.job import JobSummary
+from iris.cluster.resources.job import CoschedulingConfig, JobSummary
 from iris.cluster.resources.log import LogPage, LogQuery
 from iris.cluster.resources.node import NodeDetail, NodeHealth, NodeQuery
 from iris.cluster.resources.task import TaskSummary
-from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import iris_logging_pb2
 from rigging.timing import Duration
 

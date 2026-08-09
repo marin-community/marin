@@ -53,21 +53,20 @@ from iris.cluster.constraints import (
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.resources.activity import ActivityQuery
-from iris.cluster.resources.identity import ResourceKind
-from iris.cluster.resources.job import JobQuery
-from iris.cluster.resources.log import LogQuery
-from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import (
-    CoschedulingConfig,
+from iris.cluster.resources.execution import (
     Entrypoint,
     EnvironmentSpec,
+    GpuDevice,
     ResourceSpec,
+    TpuDevice,
     gpu_device,
-    is_job_finished,
     tpu_device,
 )
-from iris.rpc import job_pb2
-from iris.rpc.proto_display import CONTAINER_PROFILE_NAMES, PRIORITY_BAND_NAMES, priority_band_value
+from iris.cluster.resources.identity import ResourceKind
+from iris.cluster.resources.job import ContainerProfile, CoschedulingConfig, JobQuery, PriorityBand
+from iris.cluster.resources.log import LogQuery
+from iris.cluster.resources.state import JobState
+from iris.cluster.tpu_topology import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 
@@ -76,16 +75,19 @@ logger = logging.getLogger(__name__)
 # jobs table (which would hit the controller's deep-offset cap on a busy cluster).
 DEFAULT_JOB_LIST_LIMIT = 50
 
-_STATE_MAP: dict[str, job_pb2.JobState] = {
-    "pending": job_pb2.JOB_STATE_PENDING,
-    "building": job_pb2.JOB_STATE_BUILDING,
-    "running": job_pb2.JOB_STATE_RUNNING,
-    "succeeded": job_pb2.JOB_STATE_SUCCEEDED,
-    "failed": job_pb2.JOB_STATE_FAILED,
-    "killed": job_pb2.JOB_STATE_KILLED,
-    "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
-    "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
+_STATE_MAP: dict[str, JobState] = {
+    "pending": JobState.PENDING,
+    "building": JobState.BUILDING,
+    "running": JobState.RUNNING,
+    "succeeded": JobState.SUCCEEDED,
+    "failed": JobState.FAILED,
+    "killed": JobState.KILLED,
+    "worker_failed": JobState.WORKER_FAILED,
+    "unschedulable": JobState.UNSCHEDULABLE,
 }
+
+PRIORITY_BAND_NAMES = [member.name.lower() for member in PriorityBand if member is not PriorityBand.INHERIT]
+CONTAINER_PROFILE_NAMES = [member.name for member in ContainerProfile if member is not ContainerProfile.UNSPECIFIED]
 
 
 def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[str, str]:
@@ -281,16 +283,14 @@ def build_resources(
     so the caller can attach a ``device_variant_constraint`` accepting any of
     them. All variants must have the same ``vm_count``.
     """
-    spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
-
+    device = None
     if tpu:
         primary, _ = _parse_tpu_alternatives(tpu)
-        spec.device = tpu_device(primary)
+        device = tpu_device(primary)
     elif gpu:
         variant, count = parse_gpu_spec(gpu)
-        spec.device = gpu_device(variant, count)
-
-    return spec
+        device = gpu_device(variant, count)
+    return ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device)
 
 
 def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
@@ -493,7 +493,7 @@ def resolve_multinode_defaults(
 
 
 def build_job_constraints(
-    resources_proto: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     tpu_variants: list[str],
     replicas: int,
     regions: tuple[str, ...] | None = None,
@@ -527,7 +527,7 @@ def build_job_constraints(
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
     # coordinators survive spot reclamation. Skipped when the user supplied
     # --preemptible / --no-preemptible.
-    inferred = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    inferred = infer_preemptible_constraint(resources, replicas, constraints)
     if inferred is not None:
         constraints.append(inferred)
         logger.info("Executor heuristic: auto-tagging job as non-preemptible")
@@ -598,9 +598,8 @@ def run_iris_job(
 
     replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
-    resources_proto = resources.to_proto()
     constraints = build_job_constraints(
-        resources_proto=resources_proto,
+        resources=resources,
         tpu_variants=tpu_variants,
         replicas=replicas,
         regions=regions,
@@ -619,13 +618,13 @@ def run_iris_job(
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
-    if resources.device and resources.device.HasField("tpu"):
+    if isinstance(resources.device, TpuDevice):
         if len(tpu_variants) > 1:
-            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+            logger.info(f"TPU: {resources.device.variant} (alternatives: {', '.join(tpu_variants[1:])})")
         else:
-            logger.info(f"TPU: {resources.device.tpu.variant}")
-    if resources.device and resources.device.HasField("gpu"):
-        gpu_dev = resources.device.gpu
+            logger.info(f"TPU: {resources.device.variant}")
+    if isinstance(resources.device, GpuDevice):
+        gpu_dev = resources.device
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
     if replicas > 1:
         logger.info(f"Replicas: {replicas}")
@@ -645,14 +644,14 @@ def run_iris_job(
         logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
-    priority_band = job_pb2.PRIORITY_BAND_INHERIT
+    priority_band = PriorityBand.INHERIT
     if priority is not None:
-        priority_band = priority_band_value(priority)
+        priority_band = PriorityBand[priority.upper()]
         logger.info(f"Priority band: {priority}")
 
-    profile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    profile = ContainerProfile.UNSPECIFIED
     if container_profile is not None:
-        profile = job_pb2.ContainerProfile.Value(container_profile)
+        profile = ContainerProfile[container_profile]
         logger.info(f"Container profile: {container_profile}")
 
     return _submit_and_wait_job(
@@ -698,8 +697,8 @@ def _submit_and_wait_job(
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
-    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
-    container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    priority_band: PriorityBand = PriorityBand.INHERIT,
+    container_profile: ContainerProfile = ContainerProfile.UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -752,7 +751,7 @@ def _submit_and_wait_job(
         try:
             status = job.wait(stream_logs=True, timeout=float("inf"))
             logger.info(f"Job completed with state: {status.state}")
-            return 0 if status.state == job_pb2.JOB_STATE_SUCCEEDED else 1
+            return 0 if status.state is JobState.SUCCEEDED else 1
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
@@ -1151,9 +1150,15 @@ def resource_wait_for_job(ctx: click.Context, job_id: str) -> None:
             summary = client.describe_job(key).summary
             if summary.identity != identity:
                 raise click.ClickException(f"Job {job_id} was replaced while waiting")
-            if is_job_finished(summary.state):
+            if summary.state in {
+                JobState.SUCCEEDED,
+                JobState.FAILED,
+                JobState.KILLED,
+                JobState.WORKER_FAILED,
+                JobState.UNSCHEDULABLE,
+            }:
                 break
             time.sleep(backoff.next_interval())
     click.echo(job_state_name(summary.state))
-    if summary.state != job_pb2.JOB_STATE_SUCCEEDED:
+    if summary.state is not JobState.SUCCEEDED:
         raise SystemExit(1)

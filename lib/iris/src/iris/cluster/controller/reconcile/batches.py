@@ -48,6 +48,8 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
+from iris.cluster.resources.job import JobPreemptionPolicy
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -55,7 +57,6 @@ from iris.cluster.types import (
     JobName,
     WorkerId,
 )
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now
             overlay,
             row.task_id.to_wire(),
             row.current_attempt_id,
-            job_pb2.TASK_STATE_KILLED,
+            TaskState.KILLED,
             reason,
             now_ms,
             stamp_attempt_finished=False,
@@ -105,7 +106,7 @@ def _cascade_to_children(
         overlay.merge_cascade_kill(
             JobRowDelta(
                 job_id=child_job_id,
-                state=job_pb2.JOB_STATE_KILLED,
+                state=JobState.KILLED,
                 error=reason,
                 finished_at=Timestamp.from_ms(now_ms),
                 is_cascade_kill=True,
@@ -118,9 +119,9 @@ def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: in
     reason = TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
     _kill_non_terminal_tasks(overlay, job_id, reason, now_ms)
     should_cascade = True
-    if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
+    if terminal_state != JobState.SUCCEEDED:
         policy = overlay.job_preemption_policy(job_id)
-        should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+        should_cascade = policy == JobPreemptionPolicy.TERMINATE_CHILDREN
     if should_cascade:
         _cascade_to_children(overlay, job_id, now_ms, reason)
 
@@ -306,7 +307,7 @@ class ReconcileState:
             self.overlay.merge_cascade_kill(
                 JobRowDelta(
                     job_id=jid,
-                    state=job_pb2.JOB_STATE_KILLED,
+                    state=JobState.KILLED,
                     error=reason,
                     finished_at=finished_at,
                     is_cascade_kill=True,
@@ -332,18 +333,16 @@ class ReconcileState:
         now_ms: int,
     ) -> None:
         """Record a retry or terminal decision for one state-changing outcome."""
-        if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
+        if outcome.new_task_state == TaskState.PENDING:
             reason = TaskActionReason.RETRY_SCHEDULED
             message = f"{message_prefix}; controller returned the task to PENDING."
             severity = TaskEventSeverity.NORMAL
         elif outcome.new_task_state in TERMINAL_TASK_STATES:
             reason = TaskActionReason.TERMINATED
-            resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
+            resolved_state = TaskState(outcome.new_task_state).name
             message = f"{message_prefix}; controller resolved the task as {resolved_state}."
             severity = (
-                TaskEventSeverity.NORMAL
-                if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED
-                else TaskEventSeverity.WARNING
+                TaskEventSeverity.NORMAL if outcome.new_task_state == TaskState.SUCCEEDED else TaskEventSeverity.WARNING
             )
         else:
             return
@@ -371,7 +370,7 @@ class ReconcileState:
         if outcome is None:
             return
         if outcome.new_task_state != outcome.prior_state:
-            reported_state = job_pb2.TaskState.Name(update.new_state).removeprefix("TASK_STATE_")
+            reported_state = TaskState(update.new_state).name
             self._emit_task_transition_action(
                 outcome,
                 attempt_id=update.attempt_id,
@@ -434,9 +433,9 @@ class ReconcileState:
         Drained by :meth:`_recompute_and_finalize` so it runs once per job after
         every sibling in the batch has settled.
         """
-        if outcome.new_task_state != job_pb2.TASK_STATE_PENDING:
+        if outcome.new_task_state != TaskState.PENDING:
             return
-        if self.overlay.job_preemption_policy(outcome.job_id) == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+        if self.overlay.job_preemption_policy(outcome.job_id) == JobPreemptionPolicy.TERMINATE_CHILDREN:
             self.pending_child_cascades.setdefault(outcome.job_id, reason)
 
     # ------------------------------------------------------------------
@@ -461,18 +460,18 @@ class ReconcileState:
             )
             candidates: list[tuple[JobName, int]] = []
             for desired in plan.request.desired:
-                if not desired.HasField("run") or not desired.run.HasField("request"):
+                if not isinstance(desired, worker.LaunchAttempt):
                     continue
-                req_proto = desired.run.request
-                cand_task_id = JobName.from_wire(req_proto.task_id)
+                launch = desired.launch
+                cand_task_id = launch.task_id
                 # Overlay-aware gate: a sibling already requeued to PENDING earlier
                 # in this same batch is no longer ASSIGNED, so it must not be
                 # fabricated into a synthetic WORKER_FAILED (split-slice corruption).
                 # ``assigned_updates_from_plan`` re-checks the snapshot, but that
                 # read is blind to same-batch overlay mutations.
-                if self.overlay.task_state(cand_task_id) != job_pb2.TASK_STATE_ASSIGNED:
+                if self.overlay.task_state(cand_task_id) != TaskState.ASSIGNED:
                     continue
-                candidates.append((cand_task_id, req_proto.attempt_id))
+                candidates.append((cand_task_id, launch.attempt_id))
             if not candidates:
                 return []
             return worker.assigned_updates_from_plan(self._snapshot, candidates, result.error)
@@ -533,7 +532,7 @@ class ReconcileState:
             prior_state,
             task_row.preemption_count,
             task_row.max_retries_preemption,
-            job_pb2.TASK_STATE_WORKER_FAILED,
+            TaskState.WORKER_FAILED,
         )
         # The worker is gone, so the attempt is truly done: finalize it (stamp
         # finished_at) rather than leaving it for a status update that will never
@@ -546,7 +545,7 @@ class ReconcileState:
             f"Worker {worker_id} failed: {error}",
             now_ms,
             stamp_attempt_finished=True,
-            attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_state=TaskState.WORKER_FAILED,
         )
         parent_job_id, _ = task_id.require_task()
         return task.TransitionOutcome(

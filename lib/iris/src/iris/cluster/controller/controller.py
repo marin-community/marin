@@ -121,6 +121,7 @@ from iris.cluster.federation.manager import (
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
+from iris.cluster.resources.state import PriorityBand
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     JobName,
@@ -129,7 +130,6 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import job_pb2
 from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
@@ -1289,7 +1289,7 @@ class Controller:
             return
         rows_by_task = {task.task_id: task for task in routing.pending_task_rows}
         for assignment in assignments:
-            if assignment.priority_band == job_pb2.PRIORITY_BAND_BATCH:
+            if assignment.priority_band == PriorityBand.BATCH:
                 continue
             row = rows_by_task.get(assignment.task_id)
             if row is None:

@@ -18,9 +18,9 @@ from rigging.timing import Timestamp
 from iris.cluster.controller import reads
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.task_state import DISPATCHED_TASK_STATES
+from iris.cluster.resources.state import TaskState
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import CLUSTER_ROLLUP_ROOT_JOB, IrisTaskState
-from iris.rpc import job_pb2
 
 # Emission cadence. Coarser than the control tick: these rows feed fleet
 # dashboards and stuck-task alerting, where 30s resolution is plenty.
@@ -48,7 +48,7 @@ def build_task_state_rows(
         counts.setdefault(row.root_job_id, {})[row.state] = row.count
         if row.oldest_anchor_ms is None:
             continue
-        if row.state == job_pb2.TASK_STATE_PENDING:
+        if row.state == TaskState.PENDING:
             pending_anchor[row.root_job_id] = row.oldest_anchor_ms
         elif row.state in DISPATCHED_TASK_STATES:
             prev = dispatched_anchor.get(row.root_job_id)
@@ -67,10 +67,10 @@ def build_task_state_rows(
         return IrisTaskState(
             root_job_id=root_job_id,
             ts=ts,
-            pending=by_state.get(job_pb2.TASK_STATE_PENDING, 0),
-            assigned=by_state.get(job_pb2.TASK_STATE_ASSIGNED, 0),
-            building=by_state.get(job_pb2.TASK_STATE_BUILDING, 0),
-            running=by_state.get(job_pb2.TASK_STATE_RUNNING, 0),
+            pending=by_state.get(TaskState.PENDING, 0),
+            assigned=by_state.get(TaskState.ASSIGNED, 0),
+            building=by_state.get(TaskState.BUILDING, 0),
+            running=by_state.get(TaskState.RUNNING, 0),
             oldest_pending_age_ms=age_ms(pending_ms),
             oldest_building_age_ms=age_ms(dispatched_ms),
         )

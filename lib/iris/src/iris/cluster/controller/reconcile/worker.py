@@ -10,19 +10,21 @@ so they do not flow through ``ControllerEffects``.
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
 )
+from iris.cluster.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.cluster.resources.state import TaskState
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     AttemptUid,
     JobName,
     WorkerId,
 )
-from iris.rpc import job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +37,8 @@ _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES
 # failure, unschedulable, failed). KILLED and PREEMPTED are excluded: each is
 # handled by its own explicit branch above.
 _TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
-    job_pb2.TASK_STATE_KILLED,
-    job_pb2.TASK_STATE_PREEMPTED,
+    TaskState.KILLED,
+    TaskState.PREEMPTED,
 }
 
 
@@ -51,7 +53,7 @@ def _holds_preemption_victim(row: "ReconcileRow") -> bool:
     back to PENDING) — both leave the attempt in PREEMPTED. It is the one signal
     that a device is held by a process the preemptor must not race.
     """
-    return row.attempt_state == job_pb2.TASK_STATE_PREEMPTED
+    return row.attempt_state is TaskState.PREEMPTED
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +68,8 @@ class ReconcileRow:
     worker_id: WorkerId
     task_id: JobName
     attempt_id: int
-    task_state: int
-    attempt_state: int
+    task_state: TaskState
+    attempt_state: TaskState
     job_id: JobName
     attempt_uid: AttemptUid
 
@@ -76,24 +78,59 @@ class ReconcileRow:
 class ReconcileInputs:
     """Snapshot driving one reconcile tick across all active workers."""
 
-    job_specs: dict[JobName, job_pb2.RunTaskRequest]
+    launch_templates: dict[JobName, AttemptLaunchTemplate]
     worker_ids: list[WorkerId]
     rows_by_worker: dict[WorkerId, list[ReconcileRow]]
 
 
+class AttemptStopReason(StrEnum):
+    CANCELLED = "cancelled"
+    PREEMPTED = "preempted"
+    SUPERSEDED = "superseded"
+    JOB_TERMINATED = "job_terminated"
+    TASK_TIMEOUT = "task_timeout"
+    WORKER_DRAIN = "worker_drain"
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchAttempt:
+    attempt_uid: AttemptUid
+    launch: AttemptLaunch
+
+
+@dataclass(frozen=True, slots=True)
+class KeepAttempt:
+    attempt_uid: AttemptUid
+
+
+@dataclass(frozen=True, slots=True)
+class StopAttempt:
+    attempt_uid: AttemptUid
+    reason: AttemptStopReason
+
+
+type DesiredAttempt = LaunchAttempt | KeepAttempt | StopAttempt
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerReconcileRequest:
+    worker_id: WorkerId
+    desired: tuple[DesiredAttempt, ...]
+
+
 @dataclass(frozen=True)
 class WorkerReconcilePlan:
-    """Reconcile decision for one worker: the proto payload to send."""
+    """Native reconcile decision for one worker."""
 
     worker_id: WorkerId
-    request: worker_pb2.Worker.ReconcileRequest
+    request: WorkerReconcileRequest
 
 
 @dataclass(frozen=True)
 class WorkerReconcileResult:
     """Unified per-worker reconcile outcome.
 
-    ``observations`` is the (possibly empty) list of proto observations the
+    ``observations`` is the (possibly empty) list of runtime observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
     outright failed; ``observations`` is then empty. ``self_healthy`` is the
     worker's own health verdict from the Reconcile response (always ``True`` on
@@ -110,7 +147,7 @@ class WorkerReconcileResult:
     """
 
     worker_id: WorkerId
-    observations: list[worker_pb2.Worker.AttemptObservation]
+    observations: list[AttemptObservation]
     error: str | None = None
     self_healthy: bool = True
     responder_worker_id: str | None = None
@@ -123,15 +160,17 @@ class WorkerReconcileResult:
 
 def build_reconcile_plans(inputs: ReconcileInputs) -> list[WorkerReconcilePlan]:
     """Compute one reconcile plan per worker from a batch snapshot."""
-    return [_reconcile_worker(wid, inputs.rows_by_worker.get(wid, []), inputs.job_specs) for wid in inputs.worker_ids]
+    return [
+        _reconcile_worker(wid, inputs.rows_by_worker.get(wid, []), inputs.launch_templates) for wid in inputs.worker_ids
+    ]
 
 
 def _reconcile_worker(
     worker_id: WorkerId,
     rows: list[ReconcileRow],
-    job_specs: dict[JobName, job_pb2.RunTaskRequest],
+    launch_templates: dict[JobName, AttemptLaunchTemplate],
 ) -> WorkerReconcilePlan:
-    desired: list[worker_pb2.Worker.DesiredAttempt] = []
+    desired: list[DesiredAttempt] = []
 
     # A preemptor is committed ASSIGNED onto the worker its victim frees before
     # the victim's process is actually gone. While a preemption victim still
@@ -143,47 +182,31 @@ def _reconcile_worker(
     hold_assigned_dispatch = any(_holds_preemption_victim(row) for row in rows)
 
     for row in rows:
-        wire_task_id = row.task_id.to_wire()
         if row.task_state in _ASSIGNED_STATES:
             if hold_assigned_dispatch:
                 continue
-            spec = job_specs.get(row.job_id)
-            if spec is None:
+            template = launch_templates.get(row.job_id)
+            if template is None:
                 # Job disappeared mid-tick; the scheduler reissues on a
                 # subsequent tick.
                 continue
-            req = job_pb2.RunTaskRequest()
-            req.CopyFrom(spec)
-            req.task_id = wire_task_id
-            req.attempt_id = row.attempt_id
-            req.attempt_uid = row.attempt_uid
             desired.append(
-                worker_pb2.Worker.DesiredAttempt(
+                LaunchAttempt(
                     attempt_uid=row.attempt_uid,
-                    run=worker_pb2.Worker.AttemptSpec(request=req),
+                    launch=AttemptLaunch(
+                        task_id=row.task_id,
+                        attempt_id=row.attempt_id,
+                        attempt_uid=row.attempt_uid,
+                        template=template,
+                    ),
                 )
             )
         elif row.task_state in EXECUTING_TASK_STATES:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    run=worker_pb2.Worker.AttemptSpec(),
-                )
-            )
-        elif row.task_state == job_pb2.TASK_STATE_KILLED:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
-                )
-            )
-        elif row.task_state == job_pb2.TASK_STATE_PREEMPTED:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
-                )
-            )
+            desired.append(KeepAttempt(attempt_uid=row.attempt_uid))
+        elif row.task_state is TaskState.KILLED:
+            desired.append(StopAttempt(row.attempt_uid, AttemptStopReason.CANCELLED))
+        elif row.task_state is TaskState.PREEMPTED:
+            desired.append(StopAttempt(row.attempt_uid, AttemptStopReason.PREEMPTED))
         elif row.task_state in _TERMINAL_EXPECTED_STATES:
             if row.attempt_state in TERMINAL_TASK_STATES:
                 # Controller-induced terminal whose attempt is itself terminal:
@@ -196,29 +219,19 @@ def _reconcile_worker(
                 # the worker tears the process down; its resulting terminal
                 # observation finalizes the attempt and releases capacity.
                 stop_reason = (
-                    worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT
-                    if row.task_state == job_pb2.TASK_STATE_FAILED
-                    else worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
+                    AttemptStopReason.TASK_TIMEOUT
+                    if row.task_state is TaskState.FAILED
+                    else AttemptStopReason.JOB_TERMINATED
                 )
-                desired.append(
-                    worker_pb2.Worker.DesiredAttempt(
-                        attempt_uid=row.attempt_uid,
-                        stop=stop_reason,
-                    )
-                )
+                desired.append(StopAttempt(row.attempt_uid, stop_reason))
             else:
                 # Stranded attempt: the task is terminal but the attempt itself
                 # is not finalized and the worker may have lost the spec. Re-poll
                 # so the worker re-reports its real terminal status, or — if the
                 # worker has forgotten the attempt — the daemon synthesizes
                 # MISSING, which the controller treats as terminal and stamps.
-                desired.append(
-                    worker_pb2.Worker.DesiredAttempt(
-                        attempt_uid=row.attempt_uid,
-                        run=worker_pb2.Worker.AttemptSpec(),
-                    )
-                )
-        elif row.task_state == job_pb2.TASK_STATE_PENDING and row.attempt_state in TERMINAL_TASK_STATES:
+                desired.append(KeepAttempt(attempt_uid=row.attempt_uid))
+        elif row.task_state is TaskState.PENDING and row.attempt_state in TERMINAL_TASK_STATES:
             # The task rolled back to PENDING for retry — preemption with budget,
             # or a coscheduled-sibling requeue (the sibling's own attempt is left
             # unfinished) — but current_attempt_id still points at the old
@@ -231,20 +244,12 @@ def _reconcile_worker(
             # Emit 'stop' so the attempt stays in the plan; the worker tears the
             # process down and its terminal observation finalizes the attempt and
             # releases capacity (the reserved-until-heartbeats contract).
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
-                )
-            )
+            desired.append(StopAttempt(row.attempt_uid, AttemptStopReason.PREEMPTED))
         # Unrecognised states are omitted from desired.
 
     return WorkerReconcilePlan(
         worker_id=worker_id,
-        request=worker_pb2.Worker.ReconcileRequest(
-            worker_id=worker_id,
-            desired=desired,
-        ),
+        request=WorkerReconcileRequest(worker_id=worker_id, desired=tuple(desired)),
     )
 
 
@@ -255,13 +260,13 @@ def _reconcile_worker(
 
 def filter_observations_to_plan(
     plan: WorkerReconcilePlan,
-    observations: list[worker_pb2.Worker.AttemptObservation],
+    observations: list[AttemptObservation],
     worker_id: WorkerId,
-) -> list[worker_pb2.Worker.AttemptObservation]:
+) -> list[AttemptObservation]:
     """Drop observations whose attempt is not in the per-worker plan we sent."""
-    plan_uids: set[str] = {desired.attempt_uid for desired in plan.request.desired if desired.attempt_uid}
+    plan_uids = {desired.attempt_uid for desired in plan.request.desired if desired.attempt_uid}
 
-    kept: list[worker_pb2.Worker.AttemptObservation] = []
+    kept: list[AttemptObservation] = []
     dropped = 0
     for obs in observations:
         if obs.attempt_uid and obs.attempt_uid in plan_uids:
@@ -275,27 +280,20 @@ def filter_observations_to_plan(
 
 def observations_to_updates(
     snapshot: TransitionSnapshot,
-    observations: list[worker_pb2.Worker.AttemptObservation],
+    observations: list[AttemptObservation],
 ) -> list[TaskUpdate]:
-    """Translate ``AttemptObservation`` protos to ``TaskUpdate``s."""
+    """Translate runtime observations to ``TaskUpdate``s."""
     updates: list[TaskUpdate] = []
     for obs in observations:
         if not obs.attempt_uid:
             logger.warning("AttemptObservation missing attempt_uid; skipping: %s", obs)
             continue
-        resolved = snapshot.attempt_uid_index.get(AttemptUid(obs.attempt_uid))
+        resolved = snapshot.attempt_uid_index.get(obs.attempt_uid)
         if resolved is None:
             logger.warning("AttemptObservation uid=%s did not resolve to an attempt row; skipping", obs.attempt_uid)
             continue
         task_id, attempt_id = resolved
-        # proto3 has no presence for scalar ``exit_code``: an unset field and a
-        # genuine 0 both arrive as 0. Treat 0 as "no exit code reported" so a
-        # default-valued observation doesn't overwrite a previously recorded
-        # exit code; a real exit 0 is conveyed by the SUCCEEDED terminal state.
-        exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
-        error: str | None = obs.error or None
-        container_id: str | None = obs.container_id or None
-        if obs.state == job_pb2.TASK_STATE_MISSING:
+        if obs.state is TaskState.MISSING:
             # A worker reports MISSING when it can't resolve a desired attempt to
             # a live local one. While the task is still ACTIVE this is worker loss
             # (the worker restarted and failed to re-adopt a still-running
@@ -305,7 +303,7 @@ def observations_to_updates(
             # terminal-attempt finalize case -> FAILED stamps the dead attempt.
             snapshot_task = snapshot.tasks.get(task_id)
             task_active = snapshot_task is not None and snapshot_task.state in ACTIVE_TASK_STATES
-            missing_state = job_pb2.TASK_STATE_WORKER_FAILED if task_active else job_pb2.TASK_STATE_FAILED
+            missing_state = TaskState.WORKER_FAILED if task_active else TaskState.FAILED
             updates.append(
                 TaskUpdate(
                     task_id=task_id,
@@ -320,9 +318,9 @@ def observations_to_updates(
                     task_id=task_id,
                     attempt_id=attempt_id,
                     new_state=obs.state,
-                    error=error,
-                    exit_code=exit_code,
-                    container_id=container_id,
+                    error=obs.error,
+                    exit_code=obs.exit_code,
+                    container_id=obs.container_id,
                 )
             )
     return updates
@@ -339,13 +337,13 @@ def assigned_updates_from_plan(
         task = snapshot.tasks.get(task_id)
         if task is None:
             continue
-        if task.state != job_pb2.TASK_STATE_ASSIGNED:
+        if task.state != TaskState.ASSIGNED:
             continue
         updates.append(
             TaskUpdate(
                 task_id=task_id,
                 attempt_id=attempt_id,
-                new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                new_state=TaskState.WORKER_FAILED,
                 error=f"Reconcile RPC failed: {error}",
             )
         )

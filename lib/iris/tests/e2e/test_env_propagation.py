@@ -13,7 +13,7 @@ import pytest
 from iris.client.client import LocalClientConfig, iris_ctx
 from iris.client.local_client import local_client
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster
 

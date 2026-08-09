@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import pytest
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
+from iris.cluster.resources.execution import Entrypoint, ResourceSpec
+from iris.cluster.types import is_job_finished
 from marin.evaluation.evalchemy.result import EvalchemyResult
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig

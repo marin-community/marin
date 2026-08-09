@@ -17,6 +17,7 @@ from iris.cluster.resources.endpoint import (
     EndpointSummary,
     EndpointToken,
     ExecResult,
+    ProfileConfiguration,
     ProfileResult,
 )
 from iris.cluster.resources.identity import (
@@ -35,7 +36,6 @@ from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
-from iris.rpc import job_pb2
 
 
 class ResourceClientProtocol(Protocol):
@@ -127,7 +127,7 @@ class ResourceClientProtocol(Protocol):
         self,
         identity: AttemptIdentity,
         *,
-        profile: job_pb2.ProfileType,
+        profile: ProfileConfiguration,
         duration: Duration,
     ) -> ProfileResult: ...
 

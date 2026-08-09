@@ -11,11 +11,19 @@ from iris.cli.task import task
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.cluster.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
 from iris.cluster.resources.endpoint import ProfileResult
+from iris.cluster.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.cluster.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.cluster.resources.job import JobDetail, JobSpec, JobSummary
+from iris.cluster.resources.job import (
+    ContainerProfile,
+    ExistingJobPolicy,
+    JobDetail,
+    JobPreemptionPolicy,
+    JobSpec,
+    JobSummary,
+    PriorityBand,
+)
 from iris.cluster.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
 from iris.cluster.resources.task import TaskSummary
-from iris.cluster.types import ResourceSpec
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
@@ -49,9 +57,9 @@ def _job_detail() -> JobDetail:
         spec=JobSpec(
             version=1,
             name="train",
-            entrypoint=job_pb2.RuntimeEntrypoint(),
+            entrypoint=RuntimeEntrypoint((), CommandEntrypoint(()), {}, {}),
             resources=ResourceSpec(cpu=1, memory=1024, disk=2048),
-            environment=job_pb2.EnvironmentConfig(),
+            environment=Environment({}, ()),
             bundle_id="bundle",
             scheduling_timeout=None,
             ports=(),
@@ -63,13 +71,13 @@ def _job_detail() -> JobDetail:
             replicas=2,
             timeout=None,
             fail_if_exists=False,
-            preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
-            priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+            preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+            existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
+            priority_band=PriorityBand.INHERIT,
             task_image="",
             submit_argv=(),
             client_revision_date="",
-            container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+            container_profile=ContainerProfile.UNSPECIFIED,
         ),
     )
 
