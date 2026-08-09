@@ -40,8 +40,10 @@ def test_runtime_segment_lowering_keeps_counts_and_offsets_as_device_inputs() ->
     assert "const int* event_sources" in generated.source
     assert "if (producer_count == 0)" in generated.source
     assert "producer_count != source_end - source_begin" in generated.source
-    assert "init(&event, producer_count)" in generated.source
-    assert "event.wait" in generated.source
+    assert "remaining = producer_count" in generated.source
+    assert "__threadfence_block()" in generated.source
+    assert "atomicSub(&remaining, 1)" in generated.source
+    assert "prior_remaining == 1" in generated.source
     assert "__device__ __constant__" not in generated.source
     assert all(name not in generated.source.lower() for name in ("moe", "expert", "attention", "flash"))
 

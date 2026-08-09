@@ -216,8 +216,6 @@ def _runtime_event_source() -> str:
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAException.h>
-#include <cuda/barrier>
-#include <cuda/std/utility>
 #include <cuda_runtime.h>
 #include <cmath>
 
@@ -231,7 +229,7 @@ __global__ void shuttle_runtime_counted_event(
     const int* event_source_offsets,
     const int* event_sources,
     int event_count) {
-  __shared__ cuda::barrier<cuda::thread_scope_block> event;
+  __shared__ int remaining;
   const int event_index = blockIdx.x;
   if (event_index >= event_count) return;
   const int producer_count = event_counts[event_index];
@@ -245,15 +243,15 @@ __global__ void shuttle_runtime_counted_event(
     if (threadIdx.x == 0) output[event_index] = 0.0f;
     return;
   }
-  if (threadIdx.x == 0) init(&event, producer_count);
+  if (threadIdx.x == 0) remaining = producer_count;
   __syncthreads();
   if (threadIdx.x >= producer_count) return;
 
   const int source = event_sources[source_begin + threadIdx.x];
   partials[source] = input[source];
-  auto token = event.arrive();
-  if (threadIdx.x == 0) {
-    event.wait(cuda::std::move(token));
+  __threadfence_block();
+  const int prior_remaining = atomicSub(&remaining, 1);
+  if (prior_remaining == 1) {
     float accumulator = 0.0f;
     for (int index = source_begin; index < source_end; ++index) {
       accumulator = __fadd_rn(accumulator, partials[event_sources[index]]);
