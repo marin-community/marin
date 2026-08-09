@@ -1,0 +1,29 @@
+{
+  "completion_visibility": {
+    "acquire_before_consumer": true,
+    "release_on_notify": true,
+    "scope": "system"
+  },
+  "custom_call_count": 0,
+  "deterministic": true,
+  "device_count": 4,
+  "forward_all_reduce_count": 1,
+  "gradient_all_reduce_count": 2,
+  "gradient_max_abs_error": 0.0,
+  "maximum_axis_index_groups": [
+    [0, 1],
+    [2, 3]
+  ],
+  "maximum_max_abs_error": 0.0,
+  "output_sha256": "9e4591365b0a2423154bfa8e5adbf0fdce4ccb5161b35656f1f587655848fe9f",
+  "sum_axis_index_groups": [
+    [0, 1, 2, 3]
+  ],
+  "sum_event_initial_count": [
+    {
+      "coordinate": [0, 0],
+      "count": 4
+    }
+  ],
+  "sum_max_abs_error": 0.0
+}
