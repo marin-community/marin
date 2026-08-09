@@ -2300,3 +2300,34 @@ author: dlwh
   tests pass, and the complete tile-lifetime suite passes 369 tests.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_combined_gpu_gb200_v0/`.
+
+### 2026-08-09 - TLTC-EVENT-022 SM90 streaming synchronization attachment
+
+- Hypothesis: the synchronization configuration of the existing generic SM90
+  streaming Contract/Fold skeleton can be derived from exact task dependences
+  and bounded buffer lifetimes without changing its tensor-core payload.
+- Commit Hash: `915fee0b7a`.
+- Result: separate Q, K, and V task families now derive full-event edges,
+  last-consumer reuse edges, physical slots, and phased generations. The Event
+  Tensor attachment supplies one Q stage, the selected K/V pipeline depth, two
+  full/empty barriers per stage, transfer/matrix worker counts, scheduler-ring
+  arrival participants, and Q/K/V transaction bytes to the CuTe skeleton. The
+  backend checks every supplied quantity against its tiled-MMA and layout
+  construction.
+- Mutations: changing pipeline depth changes K/V slots, generations, barrier
+  storage, and the plan fingerprint. Changing the query tile from 128 to 64
+  changes the matrix decomposition from two warpgroups to one and erases the
+  pairwise scheduler event by program order.
+- Verification: 26 focused Event Tensor/streaming tests pass and scoped
+  pre-commit checks pass. The full package suite reports 372 passes and one
+  unrelated snapshot failure because an ignored historical `.stdout.log` is
+  absent from the fresh worktree.
+- Scope: this checkpoint is structural. The implementation is attached to the
+  real TMA/WGMMA CuTe payload, but it has not yet compiled or executed on H100,
+  so it carries no performance claim.
+- Grouped-GEMM gap: the MoK-derived generic GMM exposes semaphore storage but
+  not the internal producer/consumer ownership needed to derive its arrival
+  counts. The work stops at that explicit primitive-interface gap rather than
+  copying its literal counts into a generated header.
+- Design note:
+  `lib/tile_lifetime/docs/event_tensor_high_performance_attachment.md`.
