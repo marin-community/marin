@@ -432,6 +432,17 @@ from tile_lifetime.xla_axis_fold_pipeline_ffi import (
     plan_axis_fold_pipeline_hlo_replacement,
     replace_axis_fold_pipeline_hlo_with_custom_call,
 )
+from tile_lifetime.xla_normalized_exp_contract_reverse import (
+    NormalizedExpContractReverseHloRegion,
+    NormalizedExpContractReverseHloReplacementAudit,
+    NormalizedExpContractReverseHloReplacementPlan,
+    NormalizedExpContractReverseRecoveryReport,
+    NormalizedExpReverseContract,
+    audit_normalized_exp_contract_reverse_hlo_replacement,
+    plan_normalized_exp_contract_reverse_hlo_replacement,
+    recover_normalized_exp_contract_reverse_hlo_regions,
+    replace_normalized_exp_contract_reverse_hlo_region_with_custom_call,
+)
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
     StreamingReverseHloProvenance,
     StreamingReverseHloRegionReplacementAudit,

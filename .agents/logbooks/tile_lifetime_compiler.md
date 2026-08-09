@@ -2847,3 +2847,24 @@ author: dlwh
   `.agents/projects/tile_lifetime_compiler/normalized_exp_contract_training_plan.md`.
 - Verification: 31 focused tests pass; Pyrefly reports zero errors; scoped
   pre-commit and `git diff --check` pass.
+
+### 2026-08-09 15:02 PDT - TLTC-XLA-043 natural normalized-exp reverse recovery
+
+- The natural Grug post-SPMD module now structurally recovers the output-head
+  reverse as one score Contract, saved normalized-exponential state, Fold-domain
+  validity, indexed selection, a row cotangent, and input/operand reverse
+  Contracts. Recovery uses entry dataflow, opcodes, shapes, and dot dimension
+  relations; frontend metadata and instruction spelling do not participate.
+- Indexed selection is reduced to its compact inputs: one selected coordinate
+  and validity bit per row. The generated boundary does not need the materialized
+  one-hot tensor. The Fold restriction similarly consumes the one-dimensional
+  validity domain rather than its broadcast materialization.
+- A local two-output typed-FFI replacement is planned at the score-cotangent
+  boundary. It rewires the natural input- and operand-cotangent consumers while
+  leaving placement collectives outside the generated region. The old reverse
+  dataflow becomes dead after ordinary XLA cleanup.
+- The current work is recovery and exact HLO boundary formation only. A physical
+  generated CUDA body, JAX registration, H100 execution, and performance remain
+  open.
+- Verification: 13 focused normalized-exp/autodiff tests pass; Pyrefly reports
+  zero errors; scoped pre-commit and `git diff --check` pass.
