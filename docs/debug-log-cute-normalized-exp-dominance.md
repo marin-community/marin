@@ -37,6 +37,18 @@ state through repeated dataclass-field lookup inside its row child region. The
 upstream helper also binds state to locals before the update loop. Apply the
 same explicit SSA discipline to both update and finalize, then replay.
 
+The second H100 replay confirms this hypothesis. Commit `ad1a0c3192` compiles
+and runs on an H100 after carrying the state returned by each update iteration
+into the next iteration and finalization. Two counterbalanced 10-sample
+captures measured 0.080272 ms for the pre-Event source and 0.080352 ms with
+the derived Event Tensor attachment, a ratio of 1.000997. Both paths produced
+the same deterministic output hash and maximum sampled error of 0.015625.
+
+The failed finalize-only replay and the successful update/finalize replay are
+preserved under `lib/tile_lifetime/benchmarks/artifacts/` as
+`event_tensor_sm90_fold_alias_replay_h100_v1` and
+`event_tensor_sm90_fold_state_replay_h100_v1`.
+
 ## Future work
 
 - [ ] Determine whether other `ParamsBase` helpers directly access tensor fields
