@@ -1326,7 +1326,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
     mock_group.is_done.return_value = False
-    coordinator.set_worker_group(mock_group)
+    coordinator._worker_group = mock_group
 
     # Two workers pull both tasks.
     coordinator.heartbeat("worker-A")

@@ -188,29 +188,12 @@ class _OwnedPool:
 
     coordinator_group: ActorGroup
     coordinator: ActorHandle
-    worker_group: ActorGroup
     worker_count: int
 
     def shutdown(self, client: Client) -> None:
-        """Stop the workers before the coordinator."""
+        """Stop the workers, then the coordinator that owns them."""
         with suppress(Exception):
-            self.coordinator.stop_workers.remote().result(timeout=10.0)
-
-        with suppress(Exception):
-            if isinstance(client, LocalClient):
-                for worker in self.worker_group.wait_ready():
-                    worker.shutdown.remote().result(timeout=10.0)
-                self.worker_group.shutdown()
-            else:
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    if self.worker_group.is_done():
-                        break
-                    time.sleep(0.1)
-                else:
-                    logger.warning("Workers did not exit naturally, terminating")
-                    self.worker_group.shutdown()
-
+            self.coordinator.stop_workers.remote().result(timeout=30.0)
         with suppress(Exception):
             self.coordinator.shutdown.remote().result(timeout=10.0)
         with suppress(Exception):
@@ -389,7 +372,7 @@ class ZephyrContext:
         )
 
         deadline = time.monotonic() + ready_timeout
-        handles = pool.worker_group.wait_ready(count=pool.worker_count, timeout=ready_timeout)
+        handles = coordinator.worker_handles.remote(pool.worker_count, ready_timeout).result(timeout=ready_timeout)
 
         def load_pass() -> list[MemoryStoreActorStats]:
             calls = {
@@ -511,31 +494,27 @@ class ZephyrContext:
             actor_config=ActorConfig(max_concurrency=100),
         )
         coordinator: ActorHandle | None = None
-        worker_group: ActorGroup | None = None
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
-            worker_name = f"zephyr-{self.name}-workers-{pool_id}"
-            worker_group = self.client.create_actor_group(
+            # The coordinator creates the workers so they land in a child job of its
+            # own and Iris cascading termination retires them with it.
+            coordinator.start_workers.remote(
                 ZephyrWorker,
-                coordinator,
+                worker_count,
                 self.stage_runner_factory,
                 ZephyrTaskResources.from_resource_config(self.resources),
-                name=worker_name,
-                count=worker_count,
-                resources=self.resources,
-                actor_config=ActorConfig(max_concurrency=100, max_task_retries=10),
-            )
+                self.resources,
+                ActorConfig(max_concurrency=100, max_task_retries=10),
+            ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
-            worker_group.wait_ready(count=1, timeout=ready_wait)
-            coordinator.set_worker_group.remote(worker_group).result()
-            return _OwnedPool(coordinator_group, coordinator, worker_group, worker_count)
+            coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)
+            return _OwnedPool(coordinator_group, coordinator, worker_count)
         except Exception:
             if coordinator is not None:
                 with suppress(Exception):
-                    coordinator.shutdown.remote().result(timeout=10.0)
-            if worker_group is not None:
+                    coordinator.stop_workers.remote().result(timeout=30.0)
                 with suppress(Exception):
-                    worker_group.shutdown()
+                    coordinator.shutdown.remote().result(timeout=10.0)
             with suppress(Exception):
                 coordinator_group.shutdown()
             raise

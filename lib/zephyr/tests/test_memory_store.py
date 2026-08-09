@@ -15,7 +15,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
-from fray.iris_backend import IrisActorGroup
 from fray.types import ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -127,9 +126,8 @@ def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemorySt
 
 def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
     assert context._pool is not None
-    worker_group = context._pool.worker_group
-    assert isinstance(worker_group, IrisActorGroup)
-    return JobName.from_wire(f"{worker_group._job_id}/{actor_index}")
+    worker_job_id = context._pool.coordinator.worker_job_id.remote().result(timeout=30.0)
+    return JobName.from_wire(f"{worker_job_id}/{actor_index}")
 
 
 def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(local_client, tmp_path):

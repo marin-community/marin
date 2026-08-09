@@ -17,7 +17,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
-from fray.actor import ActorHandle, current_actor
+from fray.actor import ActorGroup, ActorHandle, current_actor
+from fray.current_client import current_client
+from fray.local_backend import LocalClient
+from fray.types import ActorConfig, ResourceConfig
 from rigging import telemetry
 from rigging.filesystem import StoragePath
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
@@ -328,7 +331,7 @@ class ZephyrCoordinator:
         # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
-        self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
+        self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
         self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
@@ -338,9 +341,12 @@ class ZephyrCoordinator:
         # frequently than the UI needs to refresh.
         self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
 
+        # Capture the actor context while its ContextVar is still set. Methods called
+        # later run on other threads, where current_actor() is unset.
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
         self._host_shutdown_event = actor_ctx.shutdown_event
+        self._self_handle = actor_ctx.handle
 
         self._stats_writer = StatsWriter.connect()
         self._result_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="zephyr-result")
@@ -352,9 +358,51 @@ class ZephyrCoordinator:
         )
         self._coordinator_thread.start()
 
-    def set_worker_group(self, worker_group: Any) -> None:
-        """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
-        self._worker_group = worker_group
+    def start_workers(
+        self,
+        worker_class: type,
+        worker_count: int,
+        stage_runner_factory: Any,
+        task_resources: ZephyrTaskResources,
+        worker_resources: ResourceConfig,
+        actor_config: ActorConfig,
+    ) -> None:
+        """Create the worker group from inside this coordinator's job.
+
+        Iris derives a submitted job's id from the enclosing job context, so a group
+        created here is a *child* of the coordinator job and Iris cascading termination
+        takes the workers down with it. Creating the group on the driver instead leaves
+        the two as siblings: a dead coordinator strands its workers, and a reconstructed
+        one comes back with no executions for them to poll.
+
+        ``worker_class`` is passed in rather than imported because ``worker`` imports
+        this module.
+        """
+        assert self._worker_group is None, "worker group already started"
+        self._worker_group = current_client().create_actor_group(
+            worker_class,
+            self._self_handle,
+            stage_runner_factory,
+            task_resources,
+            name=f"{self._name}-workers",
+            count=worker_count,
+            resources=worker_resources,
+            actor_config=actor_config,
+        )
+
+    def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:
+        """Wait for ``count`` workers and return their handles, for driver-side calls.
+
+        The worker group lives here, so callers that address workers directly -- the
+        memory store loads one table shard per actor -- ask for the handles.
+        """
+        assert self._worker_group is not None, "worker group not started"
+        return tuple(self._worker_group.wait_ready(count=count, timeout=timeout))
+
+    def worker_job_id(self) -> str:
+        """Wire form of the worker job id, for callers that address worker tasks."""
+        assert self._worker_group is not None, "worker group not started"
+        return str(self._worker_group._job_id)
 
     def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
@@ -1390,9 +1438,33 @@ class ZephyrCoordinator:
 
         logger.info("Coordinator shutdown complete")
 
-    def stop_workers(self) -> None:
-        """Tell workers to exit while the coordinator actor stays reachable."""
+    def stop_workers(self, drain_timeout: float = 5.0) -> None:
+        """Retire the worker group while this coordinator stays reachable.
+
+        Workers see the shutdown flag on their next ``pull_task`` and exit on their own.
+        Terminating the group is the backstop for the ones that do not.
+        """
         self._shutdown_event.set()
+        if self._worker_group is None:
+            return
+
+        group, self._worker_group = self._worker_group, None
+        with suppress(Exception):
+            if isinstance(current_client(), LocalClient):
+                # In-process actors: no job to terminate, so stop each one directly.
+                for worker in group.wait_ready():
+                    worker.shutdown.remote().result(timeout=10.0)
+                group.shutdown()
+                return
+
+            backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+            deadline = time.monotonic() + drain_timeout
+            while time.monotonic() < deadline:
+                if group.is_done():
+                    return
+                time.sleep(backoff.next_interval())
+            logger.warning("Workers did not exit within %.1fs, terminating the group", drain_timeout)
+            group.shutdown()
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""

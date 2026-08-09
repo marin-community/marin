@@ -58,7 +58,7 @@ def test_check_worker_group_skips_after_completed_stage(draining_coordinator):
 
     mock_group = MagicMock()
     mock_group.is_done.return_value = True
-    draining_coordinator.set_worker_group(mock_group)
+    draining_coordinator._worker_group = mock_group
     draining_coordinator._check_worker_group()
 
     assert draining_coordinator.get_fatal_error() is None
@@ -93,7 +93,7 @@ def test_check_worker_group_still_aborts_mid_stage(draining_coordinator):
 
     mock_group = MagicMock()
     mock_group.is_done.return_value = True
-    draining_coordinator.set_worker_group(mock_group)
+    draining_coordinator._worker_group = mock_group
     draining_coordinator._check_worker_group()
 
     fatal_error = draining_coordinator.get_fatal_error()
