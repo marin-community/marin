@@ -12,7 +12,7 @@ import hashlib
 import importlib
 import json
 import statistics
-import sys
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -121,12 +121,15 @@ def _register_cuda_target(library: ctypes.CDLL, target: str) -> None:
     )
 
 
-def _runtime_dependency_audit() -> tuple[str, ...]:
-    return tuple(
-        name
-        for name in sys.modules
-        if name == "torch" or name.startswith("torch.") or name == "triton" or name.startswith("triton.")
-    )
+def _runtime_dependency_audit(library_path: Path, source: str) -> tuple[str, ...]:
+    if "torch" in source.lower() or "triton" in source.lower():
+        raise RuntimeError(f"generated runtime source contains a Torch/Triton reference: {library_path}")
+    completed = subprocess.run(("ldd", str(library_path)), check=True, capture_output=True, text=True)
+    dependencies = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+    forbidden = tuple(line for line in dependencies if "torch" in line.lower() or "triton" in line.lower())
+    if forbidden:
+        raise RuntimeError(f"generated runtime library links Torch/Triton: {forbidden}")
+    return dependencies
 
 
 def _sha256(path: Path) -> str:
@@ -150,9 +153,6 @@ def run_smoke(
         raise ValueError("warmup must be nonnegative")
     if repeats <= 0 or repeats % 2:
         raise ValueError("repeats must be a positive even number")
-    initial_forbidden_modules = _runtime_dependency_audit()
-    if initial_forbidden_modules:
-        raise RuntimeError(f"runtime imported Torch/Triton before AOT build: {initial_forbidden_modules}")
     hlo = importlib.import_module("jaxlib._hlo")
     xla = importlib.import_module("jax.extend.xla")
     jax.config.update("jax_enable_compilation_cache", False)
@@ -179,8 +179,8 @@ def run_smoke(
     replacement_audits: list[Any] = []
     attention_liveness_audits: list[Any] = []
     libraries: dict[str, ctypes.CDLL] = {}
+    runtime_dependencies: dict[str, tuple[str, ...]] = {}
     attention_library_path: Path | None = None
-    final_forbidden_modules: tuple[str, ...] = ()
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
@@ -204,6 +204,7 @@ def run_smoke(
                 library = _compile_cuda_ffi_handler(source, source_directory, nvcc, architecture)
                 _register_cuda_target(library, target)
                 libraries[name] = library
+                runtime_dependencies[name] = _runtime_dependency_audit(Path(library._name), source)
                 return library
 
             def replace(serialized_module: bytes) -> bytes | None:
@@ -262,6 +263,10 @@ def run_smoke(
                 )
                 register_streaming_attention_backward_ffi(compiled_attention)
                 libraries["attention_backward"] = compiled_attention.library
+                runtime_dependencies["attention_backward"] = _runtime_dependency_audit(
+                    compiled_attention.library_path,
+                    compiled_attention.source_path.read_text(),
+                )
                 attention_library_path = compiled_attention.library_path
                 rewritten = replace_routed_training_and_attention_regions_with_custom_calls(
                     original,
@@ -313,9 +318,6 @@ def run_smoke(
                 )
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
-            final_forbidden_modules = _runtime_dependency_audit()
-            if final_forbidden_modules:
-                raise RuntimeError(f"runtime imported Torch/Triton after generated execution: {final_forbidden_modules}")
             comparison = _compare_under_ordered_fp(expected, actual)
 
             def timed_execution(executable: Any) -> tuple[float, str]:
@@ -515,7 +517,8 @@ def run_smoke(
         ),
         "baseline_unique_output_hashes": sorted(set(baseline_hashes)),
         "generated_unique_output_hashes": sorted(set(transformed_hashes)),
-        "runtime_torch_triton_modules": final_forbidden_modules,
+        "generated_runtime_dependencies": runtime_dependencies,
+        "generated_runtime_torch_triton_free": True,
         "raw_samples": raw_samples,
         **comparison,
         "outputs_match": True,
