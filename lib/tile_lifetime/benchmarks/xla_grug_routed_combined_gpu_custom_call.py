@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Execute five generic generated regions in one natural Grug train step."""
+"""Execute seven generic generated regions in one natural Grug train step."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _compile_cuda_ffi_handler,
     write_gzip_text,
 )
+from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
@@ -50,16 +51,19 @@ from tile_lifetime.streaming_attention_backward_reference import (
     StreamingAttentionBackwardDebugConfig,
     export_debug_streaming_attention_backward,
 )
+from tile_lifetime.xla_axis_fold_ffi import recover_axis_fold_hlo_region_candidates
 from tile_lifetime.xla_relation_program_recovery import RoutedInputAdjointFfiOperandRole
 from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ffi
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingAndAttentionFfiTargets,
+    RoutedTrainingAttentionAndAxisFoldFfiTargets,
     RoutedTrainingFfiTargets,
-    audit_routed_training_and_attention_replacement,
+    audit_routed_training_attention_and_axis_fold_replacement,
     entry_parameter_ancestors,
     plan_routed_training_and_attention_typed_ffi,
-    replace_routed_training_and_attention_regions_with_custom_calls,
+    plan_routed_training_attention_and_axis_fold_typed_ffi,
+    replace_routed_training_attention_and_axis_fold_regions_with_custom_calls,
 )
 from tile_lifetime.xla_routed_weight_gradient_ffi import generate_cuda_group_batched_contract_ffi
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
@@ -68,7 +72,7 @@ from tile_lifetime.xla_streaming_attention_backward_ffi import (
 )
 
 _PASS_NAME = "shuttle_grug_routed_training_gpu_v1"
-_TARGETS = RoutedTrainingAndAttentionFfiTargets(
+_ROUTED_ATTENTION_TARGETS = RoutedTrainingAndAttentionFfiTargets(
     routed=RoutedTrainingFfiTargets(
         forward="shuttle.routed_training.forward.v2",
         input_adjoint="shuttle.routed_training.input_adjoint.v2",
@@ -78,6 +82,13 @@ _TARGETS = RoutedTrainingAndAttentionFfiTargets(
         ),
     ),
     attention_backward="shuttle.routed_training.attention_backward.v2",
+)
+_TARGETS = RoutedTrainingAttentionAndAxisFoldFfiTargets(
+    routed_attention=_ROUTED_ATTENTION_TARGETS,
+    axis_folds=(
+        "shuttle.routed_training.axis_fold.0.v1",
+        "shuttle.routed_training.axis_fold.1.v1",
+    ),
 )
 
 
@@ -108,6 +119,24 @@ def _attention_reverse_program() -> tuple[Any, Any, bytes]:
         domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
     )
     return program, schedule, source_stablehlo
+
+
+def _generate_axis_fold_programs(hlo_text: str) -> tuple[Any, ...]:
+    report = recover_axis_fold_hlo_region_candidates(
+        hlo_text,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    selected = tuple(
+        plan
+        for plan in report.plans
+        if plan.program.rows == 8 and plan.program.columns == 32 and plan.output_ffi_shape.startswith("bf16[")
+    )
+    if len(selected) != len(_TARGETS.axis_folds):
+        raise RuntimeError(f"expected two Grug row-axis Folds, found {len(selected)}")
+    return tuple(
+        generate_cuda_axis_fold_ffi((plan.program,), target_name=target)
+        for plan, target in zip(selected, _TARGETS.axis_folds, strict=True)
+    )
 
 
 def _register_cuda_target(library: ctypes.CDLL, target: str) -> None:
@@ -167,7 +196,7 @@ def run_smoke(
     default_attention = generate_streaming_attention_backward_ffi(
         attention_program,
         attention_schedule,
-        target_name=_TARGETS.attention_backward,
+        target_name=_TARGETS.routed_attention.attention_backward,
     )
     if artifact_directory is not None:
         (directory / "source-attention-vjp-stablehlo.mlir.bc").write_bytes(source_attention_stablehlo)
@@ -175,7 +204,7 @@ def run_smoke(
     original_modules: list[str] = []
     transformed_modules: list[str] = []
     recovered_plans: list[Any] = []
-    generated_programs: list[tuple[Any, Any, tuple[Any, Any], Any]] = []
+    generated_programs: list[tuple[Any, Any, tuple[Any, Any], Any, tuple[Any, ...]]] = []
     replacement_audits: list[Any] = []
     attention_liveness_audits: list[Any] = []
     libraries: dict[str, ctypes.CDLL] = {}
@@ -224,35 +253,55 @@ def run_smoke(
                 attention = generate_streaming_attention_backward_ffi(
                     attention_program,
                     attention_schedule,
-                    target_name=_TARGETS.attention_backward,
+                    target_name=_TARGETS.routed_attention.attention_backward,
                     output_layouts=derive_streaming_attention_backward_ffi_output_layouts(
                         default_plan.attention_backward
                     ),
                 )
-                plan = plan_routed_training_and_attention_typed_ffi(original, attention_program, attention)
+                generated_axis_folds = _generate_axis_fold_programs(original)
+                plan = plan_routed_training_attention_and_axis_fold_typed_ffi(
+                    original,
+                    attention_program,
+                    attention,
+                    generated_axis_folds,
+                    axis_fold_numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+                )
                 forward = generate_cuda_routed_forward_ffi(
-                    plan.routed.forward,
-                    target=_TARGETS.routed.forward,
+                    plan.routed_attention.routed.forward,
+                    target=_TARGETS.routed_attention.routed.forward,
                 )
                 input_adjoint = generate_cuda_routed_input_adjoint_ffi(
-                    plan.routed.input_adjoint,
-                    target=_TARGETS.routed.input_adjoint,
+                    plan.routed_attention.routed.input_adjoint,
+                    target=_TARGETS.routed_attention.routed.input_adjoint,
                 )
                 weights = tuple(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
                     for weight, target in zip(
-                        plan.routed.weight_gradients,
-                        _TARGETS.routed.weight_gradients,
+                        plan.routed_attention.routed.weight_gradients,
+                        _TARGETS.routed_attention.routed.weight_gradients,
                         strict=True,
                     )
                 )
-                generated_sources = (forward.source, input_adjoint.source, *(weight.source for weight in weights))
+                generated_sources = (
+                    forward.source,
+                    input_adjoint.source,
+                    *(weight.source for weight in weights),
+                    *(axis_fold.source for axis_fold in generated_axis_folds),
+                )
                 if any("atomicAdd(" in source for source in generated_sources):
                     raise RuntimeError("generated routed training source contains semantic atomic accumulation")
-                compile_target(forward.source, _TARGETS.routed.forward, "routed_forward")
-                compile_target(input_adjoint.source, _TARGETS.routed.input_adjoint, "routed_input_adjoint")
-                for index, (weight, target) in enumerate(zip(weights, _TARGETS.routed.weight_gradients, strict=True)):
+                compile_target(forward.source, _TARGETS.routed_attention.routed.forward, "routed_forward")
+                compile_target(
+                    input_adjoint.source,
+                    _TARGETS.routed_attention.routed.input_adjoint,
+                    "routed_input_adjoint",
+                )
+                for index, (weight, target) in enumerate(
+                    zip(weights, _TARGETS.routed_attention.routed.weight_gradients, strict=True)
+                ):
                     compile_target(weight.source, target, f"group_batched_weight_gradient_{index}")
+                for index, (axis_fold, target) in enumerate(zip(generated_axis_folds, _TARGETS.axis_folds, strict=True)):
+                    compile_target(axis_fold.source, target, f"axis_fold_{index}")
                 compiled_attention = compile_streaming_attention_backward_ffi(
                     attention,
                     repository=repository,
@@ -268,18 +317,18 @@ def run_smoke(
                     compiled_attention.source_path.read_text(),
                 )
                 attention_library_path = compiled_attention.library_path
-                rewritten = replace_routed_training_and_attention_regions_with_custom_calls(
+                rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
                     original,
                     plan,
                     targets=_TARGETS,
                 )
                 recovered_plans.append(plan)
-                generated_programs.append((forward, input_adjoint, weights, compiled_attention))
+                generated_programs.append((forward, input_adjoint, weights, compiled_attention, generated_axis_folds))
                 transformed_module = hlo.hlo_module_from_text(rewritten)
                 transformed_text = transformed_module.to_string()
                 transformed_modules.append(transformed_text)
                 replacement_audits.append(
-                    audit_routed_training_and_attention_replacement(
+                    audit_routed_training_attention_and_axis_fold_replacement(
                         original,
                         transformed_text,
                         plan,
@@ -290,8 +339,8 @@ def run_smoke(
                     audit_streaming_attention_backward_region_replacement(
                         original,
                         transformed_text,
-                        plan.attention_backward,
-                        target=_TARGETS.attention_backward,
+                        plan.routed_attention.attention_backward,
+                        target=_TARGETS.routed_attention.attention_backward,
                     )
                 )
                 return transformed_module.as_serialized_hlo_module_proto()
@@ -369,6 +418,10 @@ def run_smoke(
                     libraries["attention_backward"],
                     "shuttle_streaming_attention_backward_ffi_call_count",
                 ),
+                "axis_folds": [
+                    _call_count(libraries[f"axis_fold_{index}"], "shuttle_axis_fold_ffi_call_count")
+                    for index in range(2)
+                ],
             }
     finally:
         if artifact_directory is not None:
@@ -377,6 +430,8 @@ def run_smoke(
                 "routed_input_adjoint",
                 "group_batched_weight_gradient_0",
                 "group_batched_weight_gradient_1",
+                "axis_fold_0",
+                "axis_fold_1",
             ):
                 compiled_library = directory / name / "generated_pair_map_handler.so"
                 if compiled_library.exists():
@@ -393,18 +448,21 @@ def run_smoke(
         or len(replacement_audits) != 1
         or len(attention_liveness_audits) != 1
     ):
-        raise RuntimeError("expected one combined routed-plus-attention replacement pass")
+        raise RuntimeError("expected one combined routed-plus-attention-plus-Fold replacement pass")
     original = original_modules[0]
     transformed_hlo = transformed_modules[0]
     plan = recovered_plans[0]
     replacement_audit = replacement_audits[0]
     attention_liveness = attention_liveness_audits[0]
-    forward, input_adjoint, weights, compiled_attention = generated_programs[0]
+    forward, input_adjoint, weights, compiled_attention, generated_axis_folds = generated_programs[0]
     target_occurrences = {
-        "forward": transformed_hlo.count(_TARGETS.routed.forward),
-        "input_adjoint": transformed_hlo.count(_TARGETS.routed.input_adjoint),
-        "weight_gradients": [transformed_hlo.count(target) for target in _TARGETS.routed.weight_gradients],
-        "attention_backward": transformed_hlo.count(_TARGETS.attention_backward),
+        "forward": transformed_hlo.count(_TARGETS.routed_attention.routed.forward),
+        "input_adjoint": transformed_hlo.count(_TARGETS.routed_attention.routed.input_adjoint),
+        "weight_gradients": [
+            transformed_hlo.count(target) for target in _TARGETS.routed_attention.routed.weight_gradients
+        ],
+        "attention_backward": transformed_hlo.count(_TARGETS.routed_attention.attention_backward),
+        "axis_folds": [transformed_hlo.count(target) for target in _TARGETS.axis_folds],
     }
     minimum_calls = repeats + warmup + 1
     observed_calls = [
@@ -412,29 +470,36 @@ def run_smoke(
         call_counts["input_adjoint"],
         *call_counts["weight_gradients"],
         call_counts["attention_backward"],
+        *call_counts["axis_folds"],
     ]
     observed_occurrences = [
         target_occurrences["forward"],
         target_occurrences["input_adjoint"],
         *target_occurrences["weight_gradients"],
         target_occurrences["attention_backward"],
+        *target_occurrences["axis_folds"],
     ]
-    if observed_occurrences != [1, 1, 1, 1, 1] or any(count < minimum_calls for count in observed_calls):
+    if observed_occurrences != [1, 1, 1, 1, 1, 1, 1] or any(count < minimum_calls for count in observed_calls):
         raise RuntimeError(f"custom-call evidence mismatch: occurrences={observed_occurrences}, calls={observed_calls}")
     all_operands = tuple(
         dict.fromkeys(
             (
-                *(operand.value.instruction for operand in plan.routed.forward.operands),
-                *(operand.value.instruction for operand in plan.routed.input_adjoint.operands),
-                *(operand.value.instruction for weight in plan.routed.weight_gradients for operand in weight.operands),
-                *(value.instruction for value in plan.attention_backward.inputs),
+                *(operand.value.instruction for operand in plan.routed_attention.routed.forward.operands),
+                *(operand.value.instruction for operand in plan.routed_attention.routed.input_adjoint.operands),
+                *(
+                    operand.value.instruction
+                    for weight in plan.routed_attention.routed.weight_gradients
+                    for operand in weight.operands
+                ),
+                *(value.instruction for value in plan.routed_attention.attention_backward.inputs),
+                *(value.instruction for fold in plan.axis_folds for value in fold.inputs),
             )
         )
     )
     parameter_ancestors = entry_parameter_ancestors(original, all_operands)
     static_roles = tuple(
         operand.role.value
-        for operand in plan.routed.input_adjoint.operands
+        for operand in plan.routed_attention.routed.input_adjoint.operands
         if not parameter_ancestors[operand.value.instruction]
     )
     if static_roles != (RoutedInputAdjointFfiOperandRole.FOLD_INITIAL.value,):
@@ -442,11 +507,11 @@ def run_smoke(
     baseline_median = statistics.median(baseline_samples)
     transformed_median = statistics.median(transformed_samples)
     if len(set(transformed_hashes)) != 1:
-        raise RuntimeError("generated five-call result is not bitwise deterministic")
+        raise RuntimeError("generated seven-call result is not bitwise deterministic")
     if artifact_directory is not None:
         write_gzip_text(directory / "transformed-gpu-pre-scheduler-hlo.txt.gz", transformed_hlo)
     return {
-        "kind": "xla_grug_combined_routed_training_and_attention_generated_ffi",
+        "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
         "jax_version": jax.__version__,
         "jaxlib_version": jaxlib.__version__,
         "platform": "cuda",
@@ -459,35 +524,51 @@ def run_smoke(
             "group-batched weight Contract 0",
             "group-batched weight Contract 1",
             "causal GQA attention reverse Contract/Fold/DomainRestriction region",
+            "generic 8x32 row-axis Fold 0",
+            "generic 8x32 row-axis Fold 1",
         ],
         "numerical_policies": {
-            "forward": plan.routed.forward.region.numerical_policy.value,
-            "input_adjoint": plan.routed.input_adjoint.region.numerical_policy.value,
+            "forward": plan.routed_attention.routed.forward.region.numerical_policy.value,
+            "input_adjoint": plan.routed_attention.routed.input_adjoint.region.numerical_policy.value,
             "weight_gradients": [
-                weight.numerical_contract.numerical_policy.value for weight in plan.routed.weight_gradients
+                weight.numerical_contract.numerical_policy.value
+                for weight in plan.routed_attention.routed.weight_gradients
             ],
-            "attention_backward": plan.attention_backward.reassociation,
+            "attention_backward": plan.routed_attention.attention_backward.reassociation,
+            "axis_folds": [fold.program.numerical_policy.value for fold in plan.axis_folds],
         },
-        "external_collectives": replacement_audit.routed.weight_gradient_collectives,
+        "external_collectives": replacement_audit.routed_attention.routed.weight_gradient_collectives,
         "uses_atomic_accumulation": False,
         "static_operand_roles": static_roles,
         "operand_ancestry": {operand: parameter_ancestors[operand] for operand in all_operands},
-        "output_alias_operands": [weight.output_alias_operand for weight in plan.routed.weight_gradients],
+        "output_alias_operands": [
+            weight.output_alias_operand for weight in plan.routed_attention.routed.weight_gradients
+        ],
         "custom_call_targets": {
-            "forward": _TARGETS.routed.forward,
-            "input_adjoint": _TARGETS.routed.input_adjoint,
-            "weight_gradients": _TARGETS.routed.weight_gradients,
-            "attention_backward": _TARGETS.attention_backward,
+            "forward": _TARGETS.routed_attention.routed.forward,
+            "input_adjoint": _TARGETS.routed_attention.routed.input_adjoint,
+            "weight_gradients": _TARGETS.routed_attention.routed.weight_gradients,
+            "attention_backward": _TARGETS.routed_attention.attention_backward,
+            "axis_folds": _TARGETS.axis_folds,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
-        "input_adjoint_auxiliary": replacement_audit.routed.input_adjoint_auxiliary,
+        "input_adjoint_auxiliary": replacement_audit.routed_attention.routed.input_adjoint_auxiliary,
         "target_instruction_names": (
-            *replacement_audit.routed.target_instructions,
-            replacement_audit.attention_backward_instruction,
+            *replacement_audit.routed_attention.routed.target_instructions,
+            replacement_audit.routed_attention.attention_backward_instruction,
+            *(axis_fold.call_instruction for axis_fold in replacement_audit.axis_folds),
         ),
-        "copy_count": dict(zip(("original", "transformed"), replacement_audit.routed.copy_count, strict=True)),
-        "transpose_count": dict(zip(("original", "transformed"), replacement_audit.routed.transpose_count, strict=True)),
+        "copy_count": dict(
+            zip(("original", "transformed"), replacement_audit.routed_attention.routed.copy_count, strict=True)
+        ),
+        "transpose_count": dict(
+            zip(
+                ("original", "transformed"),
+                replacement_audit.routed_attention.routed.transpose_count,
+                strict=True,
+            )
+        ),
         "attention_dead_reverse_closure": attention_liveness.dead_reverse_closure,
         "attention_preserved_shared_users": dict(attention_liveness.preserved_shared_users),
         "generated_semantic_sha256": {
@@ -495,6 +576,7 @@ def run_smoke(
             "input_adjoint": input_adjoint.semantic_digest,
             "weight_gradients": [weight.semantic_digest for weight in weights],
             "attention_backward": compiled_attention.generated.semantic_fingerprint,
+            "axis_folds": [axis_fold.semantic_fingerprints for axis_fold in generated_axis_folds],
         },
         "generated_source_sha256": {
             "forward": forward.source_digest,
@@ -504,15 +586,16 @@ def run_smoke(
                 "handler": _sha256(compiled_attention.source_path),
                 "aot_sources": [_sha256(path) for path in compiled_attention.aot_sources],
             },
+            "axis_folds": [axis_fold.source_sha256 for axis_fold in generated_axis_folds],
         },
         "baseline_median_ms": baseline_median,
         "generated_median_ms": transformed_median,
         "generated_over_baseline": transformed_median / baseline_median,
         "generated_minus_baseline_ms": transformed_median - baseline_median,
-        "independent_custom_call_count": 5,
-        "latency_delta_per_custom_call_us": (transformed_median - baseline_median) * 1e3 / 5,
+        "independent_custom_call_count": 7,
+        "latency_delta_per_custom_call_us": (transformed_median - baseline_median) * 1e3 / 7,
         "latency_delta_attribution": (
-            "Whole-step delta includes five fixed typed-FFI dispatches and changed kernels; the per-call quotient is "
+            "Whole-step delta includes seven fixed typed-FFI dispatches and changed kernels; the per-call quotient is "
             "reported only to expose the fixed-call scale, not as causal attribution."
         ),
         "baseline_unique_output_hashes": sorted(set(baseline_hashes)),
@@ -524,7 +607,7 @@ def run_smoke(
         "outputs_match": True,
         "remaining_ownership_gap": (
             "The rematerialized routed forward chain, relation index plane, and placement collectives remain under "
-            "XLA; this checkpoint composes five generic generated physical regions without a megakernel."
+            "XLA; this checkpoint composes seven generic generated physical regions without a megakernel."
         ),
     }
 

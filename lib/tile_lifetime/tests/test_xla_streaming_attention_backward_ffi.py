@@ -11,6 +11,12 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
+    _TARGETS as _SEVEN_CALL_TARGETS,
+)
+from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
+    _generate_axis_fold_programs,
+)
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBufferLayout,
@@ -628,6 +634,17 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
     assert all(value.call_instruction.startswith("shuttle.generated.axis_fold.region.") for value in audit.axis_folds)
     assert rewritten.count('custom_call_target="shuttle.combined.') == 7
     parse_hlo_module_text(rewritten)
+
+
+def test_seven_call_harness_generates_two_self_contained_axis_fold_targets() -> None:
+    _, _, hlo = _grug_region_inputs()
+
+    generated = _generate_axis_fold_programs(hlo)
+
+    assert tuple(value.target_name for value in generated) == _SEVEN_CALL_TARGETS.axis_folds
+    assert all(len(value.outputs) == 1 for value in generated)
+    assert all("shuttle_axis_fold_ffi_call_count" in value.source for value in generated)
+    assert all("torch" not in value.source.lower() and "triton" not in value.source.lower() for value in generated)
 
 
 def test_routed_and_attention_replacements_are_order_independent() -> None:
