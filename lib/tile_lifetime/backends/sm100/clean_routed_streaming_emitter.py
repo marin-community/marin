@@ -196,6 +196,7 @@ class PartialStateMergeProgram:
     partial_extent: int = 16
     feature_tile: int = 64
     pipeline_stages: int = 4
+    pipeline_buffers: int = 2
     vector_bytes: int = 16
     generic_program: TiledFoldFinalizeProgram | None = None
 
@@ -241,6 +242,7 @@ def tiled_fold_merge_program(
         partial_extent=schedule.axes.partial.extent,
         feature_tile=schedule.feature_tile,
         pipeline_stages=schedule.shared_stages,
+        pipeline_buffers=schedule.shared_buffers,
         vector_bytes=schedule.vector_bytes,
         generic_program=generic_program,
     )
@@ -355,11 +357,12 @@ def emitter_plan_from_lowering(
                 axes=axes,
                 partial_addressing=FoldPartialAddressing.DENSE,
                 row_tile=lowering.schedule.partial_merge_tile_rows,
-                feature_tile=64,
+                feature_tile=128,
                 vector_bytes=16,
                 shared_stages=4,
                 threads=lowering.schedule.partial_merge_threads,
                 partial_lanes=32,
+                shared_buffers=2,
                 input_layout=TiledFoldInputLayout(
                     addressing=FoldPartialAddressing.DENSE,
                     value_axis_order=(
@@ -732,6 +735,8 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         raise ValueError("generic Fold feature tile does not match the physical schedule")
     if schedule.shared_stages != program.pipeline_stages:
         raise ValueError("generic Fold shared stages do not match the physical schedule")
+    if schedule.shared_buffers != program.pipeline_buffers:
+        raise ValueError("generic Fold shared buffers do not match the physical schedule")
     if schedule.vector_bytes != program.vector_bytes:
         raise ValueError("generic Fold vector width does not match the physical schedule")
     if program.value_dtype is not PartialValueDType.BF16:
@@ -740,18 +745,25 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         raise ValueError("the first tiled Fold finalizer supports at most one warp of partials")
     if program.rows_per_block != program.threads // 32:
         raise ValueError("the tiled Fold finalizer assigns one logical row to each warp")
-    if program.feature_tile != 64:
-        raise ValueError("the first tiled Fold finalizer requires a 64-feature tile")
+    if program.feature_tile not in (64, 128):
+        raise ValueError("the tiled Fold finalizer requires a 64- or 128-feature tile")
     if program.pipeline_stages != 4:
         raise ValueError("the first tiled Fold finalizer requires four shared-memory stages")
+    if program.pipeline_buffers != 2:
+        raise ValueError("the pipelined Fold finalizer requires two shared-memory buffers")
     if program.vector_bytes != 16:
         raise ValueError("the first tiled Fold finalizer requires 128-bit global-to-shared copies")
+    features_per_lane = program.feature_tile // 32
+    if features_per_lane % 2:
+        raise ValueError("the Fold feature tile must assign an even number of BF16 values to each lane")
     input_layout = schedule.input_layout
     assert input_layout is not None
     if input_layout.feature_layout is FoldFeatureLayout.STG128_LANE_PERMUTED:
-        shared_feature0 = "real_col_to_stg128_half_col(real_feature0) - feature_base"
+        shared_features = tuple(
+            f"real_col_to_stg128_half_col(real_feature{element}) - feature_base" for element in range(features_per_lane)
+        )
     elif input_layout.feature_layout is FoldFeatureLayout.CONTIGUOUS:
-        shared_feature0 = "real_feature0 - feature_base"
+        shared_features = tuple(f"real_feature{element} - feature_base" for element in range(features_per_lane))
     else:
         raise ValueError(f"unsupported Fold feature layout {input_layout.feature_layout.value}")
     if input_layout.addressing is FoldPartialAddressing.DENSE:
@@ -833,35 +845,45 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         },
         ordered_fp=ordered_fp,
     )
-    contribution0 = _render_cuda_scalar_expression(
-        semantics.contribution_expression,
-        {"partial_value": "partial_value0", "weight": "weight"},
-        ordered_fp=ordered_fp,
+    contributions = tuple(
+        _render_cuda_scalar_expression(
+            semantics.contribution_expression,
+            {"partial_value": f"partial_value{element}", "weight": "weight"},
+            ordered_fp=ordered_fp,
+        )
+        for element in range(features_per_lane)
     )
-    contribution1 = _render_cuda_scalar_expression(
-        semantics.contribution_expression,
-        {"partial_value": "partial_value1", "weight": "weight"},
-        ordered_fp=ordered_fp,
+    updates = tuple(
+        _render_cuda_scalar_expression(
+            semantics.update_expression,
+            {"state": f"numerator{element}", "contribution": f"contribution{element}"},
+            ordered_fp=ordered_fp,
+        )
+        for element in range(features_per_lane)
     )
-    update0 = _render_cuda_scalar_expression(
-        semantics.update_expression,
-        {"state": "numerator0", "contribution": "contribution0"},
-        ordered_fp=ordered_fp,
+    finalizations = tuple(
+        _render_cuda_scalar_expression(
+            semantics.finalize_expression,
+            {"state": f"numerator{element}", "denominator": "denominator"},
+            ordered_fp=ordered_fp,
+        )
+        for element in range(features_per_lane)
     )
-    update1 = _render_cuda_scalar_expression(
-        semantics.update_expression,
-        {"state": "numerator1", "contribution": "contribution1"},
-        ordered_fp=ordered_fp,
+    feature_declarations = "\n".join(
+        f"  const int real_feature{element} = feature_base + lane * kFeaturesPerLane + {element};\n"
+        f"  const int shared_feature{element} = {shared_features[element]};"
+        for element in range(features_per_lane)
     )
-    finalize0 = _render_cuda_scalar_expression(
-        semantics.finalize_expression,
-        {"state": "numerator0", "denominator": "denominator"},
-        ordered_fp=ordered_fp,
+    numerator_declarations = "\n".join(f"  float numerator{element} = 0.0f;" for element in range(features_per_lane))
+    partial_loads = "\n".join(
+        f"        const float partial_value{element} = __bfloat162float(\n"
+        f"            staged_value[warp][current_buffer][stage][shared_feature{element}]);"
+        for element in range(features_per_lane)
     )
-    finalize1 = _render_cuda_scalar_expression(
-        semantics.finalize_expression,
-        {"state": "numerator1", "denominator": "denominator"},
-        ordered_fp=ordered_fp,
+    contribution_updates = "\n".join(
+        f"        const float contribution{element} = {contributions[element]};\n"
+        f"        numerator{element} = {updates[element]};"
+        for element in range(features_per_lane)
     )
     if semantics.scalar_reduction is FoldScalarReduction.MAXIMUM:
         scalar_reduction = f"""
@@ -889,6 +911,19 @@ def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str
         empty_guard = "true"
     else:
         raise ValueError(f"unsupported denominator policy {semantics.denominator.value}")
+    finalized_declarations = "\n".join(
+        f"  const float finalized{element} = {empty_guard} ? ({finalizations[element]}) : 0.0f;"
+        for element in range(features_per_lane)
+    )
+    result_stores = "\n".join(
+        f"  const __nv_bfloat162 result{pair} = __floats2bfloat162_rn(\n"
+        f"      finalized{pair * 2} * {program.output_scale:.17e}f,\n"
+        f"      finalized{pair * 2 + 1} * {program.output_scale:.17e}f);\n"
+        f"  const int64_t output_pair{pair} =\n"
+        f"      (static_cast<int64_t>(row) * value_width + real_feature{pair * 2}) / 2;\n"
+        f"  reinterpret_cast<__nv_bfloat162*>(output)[output_pair{pair}] = result{pair};"
+        for pair in range(features_per_lane // 2)
+    )
     return f"""
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
@@ -910,6 +945,9 @@ constexpr int kPartialExtent = {program.partial_extent};
 constexpr int kRowsPerBlock = {program.rows_per_block};
 constexpr int kFeatureTile = {program.feature_tile};
 constexpr int kPipelineStages = {program.pipeline_stages};
+constexpr int kPipelineBuffers = {program.pipeline_buffers};
+constexpr int kFeaturesPerLane = {features_per_lane};
+constexpr int kCopiesPerStage = kFeatureTile * sizeof(__nv_bfloat16) / 16;
 
 __device__ __forceinline__ int real_col_to_stg128_half_col(int real_col) {{
   const int tile = real_col / 32;
@@ -959,7 +997,7 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
     int query_heads_per_key_value_head,
     int value_width) {{
   __shared__ __align__(16) __nv_bfloat16
-      staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile];
+      staged_value[kRowsPerBlock][kPipelineBuffers][kPipelineStages][kFeatureTile];
 
   const int warp = threadIdx.x / 32;
   const int lane = threadIdx.x % 32;
@@ -974,29 +1012,49 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
   const float local_weight = {weight_expression};
   {denominator_reduction}
 
-  float numerator0 = 0.0f;
-  float numerator1 = 0.0f;
-  const int real_feature0 = feature_base + lane * 2;
-  const int shared_feature0 = {shared_feature0};
+{numerator_declarations}
+{feature_declarations}
 
+  // Prologue: make the first group available. Subsequent groups use the other
+  // shared-memory buffer so their cp.async transfers can run concurrently with
+  // the generated scalar AST over the current group.
+#pragma unroll
+  for (int stage = 0; stage < kPipelineStages; ++stage) {{
+    const int partial = stage;
+    if ({stage_validity} && lane < kCopiesPerStage) {{
+      const int fake_feature = feature_base + lane * 8;
+      const int64_t source_index =
+          (static_cast<int64_t>({source_row})) * value_width + fake_feature;
+      copy_global_to_shared_16(
+          &staged_value[warp][0][stage][lane * 8],
+          &partial_value[source_index]);
+    }}
+  }}
+  commit_async_group();
+  wait_for_all_async_groups();
+  __syncwarp();
+
+  int current_buffer = 0;
 #pragma unroll
   for (int partial_base = 0; partial_base < kPartialExtent;
        partial_base += kPipelineStages) {{
+    const int next_partial_base = partial_base + kPipelineStages;
+    const int next_buffer = current_buffer ^ 1;
+    if (next_partial_base < kPartialExtent) {{
 #pragma unroll
-    for (int stage = 0; stage < kPipelineStages; ++stage) {{
-      const int partial = partial_base + stage;
-      if ({stage_validity} && lane < 8) {{
+      for (int stage = 0; stage < kPipelineStages; ++stage) {{
+        const int partial = next_partial_base + stage;
+        if ({stage_validity} && lane < kCopiesPerStage) {{
         const int fake_feature = feature_base + lane * 8;
         const int64_t source_index =
             (static_cast<int64_t>({source_row})) * value_width + fake_feature;
         copy_global_to_shared_16(
-            &staged_value[warp][stage][lane * 8],
+              &staged_value[warp][next_buffer][stage][lane * 8],
             &partial_value[source_index]);
+        }}
       }}
       commit_async_group();
     }}
-    wait_for_all_async_groups();
-    __syncwarp();
 
 #pragma unroll
     for (int stage = 0; stage < kPipelineStages; ++stage) {{
@@ -1005,27 +1063,19 @@ __global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold
           ? __shfl_sync(0xffffffffu, local_weight, partial)
           : 0.0f;
       if (partial < kPartialExtent && weight != 0.0f) {{
-        const __nv_bfloat162 pair = *reinterpret_cast<const __nv_bfloat162*>(
-            &staged_value[warp][stage][shared_feature0]);
-        const float partial_value0 = __bfloat162float(pair.x);
-        const float partial_value1 = __bfloat162float(pair.y);
-        const float contribution0 = {contribution0};
-        const float contribution1 = {contribution1};
-        numerator0 = {update0};
-        numerator1 = {update1};
+{partial_loads}
+{contribution_updates}
       }}
     }}
-    __syncwarp();
+    if (next_partial_base < kPartialExtent) {{
+      wait_for_all_async_groups();
+      __syncwarp();
+      current_buffer = next_buffer;
+    }}
   }}
 
-  const float finalized0 = {empty_guard} ? ({finalize0}) : 0.0f;
-  const float finalized1 = {empty_guard} ? ({finalize1}) : 0.0f;
-  const __nv_bfloat162 result = __floats2bfloat162_rn(
-      finalized0 * {program.output_scale:.17e}f,
-      finalized1 * {program.output_scale:.17e}f);
-  const int64_t output_pair =
-      (static_cast<int64_t>(row) * value_width + real_feature0) / 2;
-  reinterpret_cast<__nv_bfloat162*>(output)[output_pair] = result;
+{finalized_declarations}
+{result_stores}
 }}
 
 }}  // namespace

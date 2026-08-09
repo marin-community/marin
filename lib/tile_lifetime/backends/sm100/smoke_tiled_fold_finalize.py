@@ -61,11 +61,12 @@ def _program(arguments: argparse.Namespace):
         axes=axes,
         partial_addressing=FoldPartialAddressing.INDEXED,
         row_tile=8,
-        feature_tile=64,
+        feature_tile=128,
         vector_bytes=16,
         shared_stages=4,
         threads=256,
         partial_lanes=1,
+        shared_buffers=2,
         input_layout=TiledFoldInputLayout(
             addressing=FoldPartialAddressing.INDEXED,
             value_axis_order=(FoldPhysicalAxis.SOURCE, FoldPhysicalAxis.FEATURE),

@@ -35,6 +35,8 @@ def _schedule(
     axes: TiledFoldAxes,
     partial_lanes: int,
     addressing: FoldPartialAddressing,
+    feature_tile: int = 64,
+    shared_buffers: int = 2,
 ) -> TiledFoldFinalizeSchedule:
     if addressing is FoldPartialAddressing.DENSE:
         input_layout = TiledFoldInputLayout(
@@ -54,11 +56,12 @@ def _schedule(
         axes=axes,
         partial_addressing=addressing,
         row_tile=8,
-        feature_tile=64,
+        feature_tile=feature_tile,
         vector_bytes=16,
         shared_stages=4,
         threads=256,
         partial_lanes=partial_lanes,
+        shared_buffers=shared_buffers,
         input_layout=input_layout,
     )
 
@@ -170,6 +173,59 @@ def test_same_tiled_skeleton_schedule_accepts_two_generic_fold_programs() -> Non
     assert normalized.schedule is weighted.schedule
     assert normalized_output.shape == weighted_output.shape == (2, 4)
     assert not np.array_equal(normalized_output, weighted_output)
+
+
+def test_128_feature_ping_pong_schedule_preserves_fold_semantics() -> None:
+    rng = np.random.default_rng(17)
+    axes = _axes(partials=8, rows=3, features=128)
+    schedule = _schedule(
+        axes=axes,
+        partial_lanes=32,
+        addressing=FoldPartialAddressing.DENSE,
+        feature_tile=128,
+        shared_buffers=2,
+    )
+    program = normalized_exponential_fold_program(
+        schedule,
+        partial_value_dtype=DType.FP32,
+        output_dtype=DType.FP32,
+    )
+    values = rng.normal(size=(8, 3, 128)).astype(np.float32)
+    log_normalizers = rng.normal(size=(8, 3)).astype(np.float32)
+    valid = np.ones((8, 3), dtype=np.bool_)
+    valid[5:, 0] = False
+
+    actual = evaluate_tiled_fold_finalize(program, values, log_normalizers, partial_valid=valid)
+    masked = np.where(valid, log_normalizers, -np.inf)
+    common = np.max(masked, axis=0)
+    weights = np.where(valid, np.exp(masked - common), 0.0).astype(np.float32)
+    expected = (
+        np.sum(weights[..., None] * values, axis=0, dtype=np.float32)
+        / np.sum(
+            weights,
+            axis=0,
+            dtype=np.float32,
+        )[:, None]
+    )
+
+    assert schedule.feature_tile == axes.feature.extent
+    assert schedule.shared_buffers == 2
+    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)
+
+
+@pytest.mark.parametrize(
+    ("shared_buffers", "message"),
+    ((0, "schedule parameters must be positive"), (3, "shared-buffer count must be a power of two")),
+)
+def test_schedule_rejects_invalid_shared_buffer_count(shared_buffers: int, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _schedule(
+            axes=_axes(partials=8, rows=3, features=128),
+            partial_lanes=32,
+            addressing=FoldPartialAddressing.DENSE,
+            feature_tile=128,
+            shared_buffers=shared_buffers,
+        )
 
 
 def test_weight_ast_mutation_changes_semantics_without_changing_the_skeleton() -> None:

@@ -138,6 +138,7 @@ class TiledFoldFinalizeSchedule:
     shared_stages: int
     threads: int
     partial_lanes: int
+    shared_buffers: int = 2
     input_layout: TiledFoldInputLayout | None = None
     partial_order: FoldPartialOrder = FoldPartialOrder.ASCENDING
 
@@ -169,6 +170,7 @@ class TiledFoldFinalizeSchedule:
                 self.feature_tile,
                 self.vector_bytes,
                 self.shared_stages,
+                self.shared_buffers,
                 self.threads,
                 self.partial_lanes,
             )
@@ -181,6 +183,8 @@ class TiledFoldFinalizeSchedule:
             raise ValueError("tiled Fold partial-lane count must be a power of two")
         if self.partial_lanes > self.threads:
             raise ValueError("partial reduction lanes cannot exceed the worker count")
+        if self.shared_buffers <= 0 or self.shared_buffers & (self.shared_buffers - 1):
+            raise ValueError("tiled Fold shared-buffer count must be a power of two")
 
 
 @dataclass(frozen=True)

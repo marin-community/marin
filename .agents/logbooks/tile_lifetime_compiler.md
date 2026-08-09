@@ -1492,3 +1492,51 @@ author: dlwh
   the post-SPMD train-step `HloModuleProto` through the pre-scheduler extension,
   recover one forward/backward contraction region without rewriting it, then
   replace the linear-SwiGLU family through a generic XLA FFI region call.
+
+### 2026-08-08 - TLTC-TRAIN-002 generated pair-Map gradient checkpoint
+
+- Natural two-projection plus scalar-Map algebra now lowers into a combined
+  interleaved Contract, generated pair-Map finalization, scalar-AST VJP, and
+  generic dX/dW Contracts. No linear-SwiGLU backward kernel is selected.
+- Saved-preactivation and recompute-preactivation are explicit physical
+  candidates. The H100 harness records forward-only, saved-backward,
+  recompute-backward, and complete forward/backward boundaries against
+  preallocated CODA components.
+- Changing `SiLU(left) * right` to `tanh(left) * right` changes the generated
+  forward and reverse expressions while retaining the same physical skeletons.
+- The package suite passes 226 tests. Commit `5fc7ab715b` is pushed; the matched
+  H100 result is pending a batch-priority allocation.
+
+### 2026-08-08 - TLTC-XLA-001 Grug pre-scheduler insertion point
+
+- JAX/JAXLIB 0.11.0 invokes a `PRE_SCHEDULER` HLO transformation once while
+  compiling the natural one-layer Grug MoE train step. The callback input
+  retains 82 dots, 67 reductions, 8 scatters, and 4 sorts.
+- Frontend StableHLO contains zero custom calls. XLA introduces one generic
+  `TopK` custom call before the callback; no FA, MoK, DeepEP, or recurrent
+  semantic kernel is present.
+- The callback returned `None`, so this is a real inspection/no-op insertion
+  point, not a region replacement. A disposable unary replacement confirmed
+  that returning a modified serialized proto changes the executable, but the
+  Python binding cannot construct a generic FFI custom call.
+- The exact CPU proto, compressed text, frontend StableHLO, census, JAX release
+  pin, and reproduction command are frozen under
+  `benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0` in commit
+  `6812303ead`.
+- A nontrivial GPU SPMD capture and a narrow C++ bridge for
+  `shuttle.execute_region_v1` remain open.
+
+### 2026-08-08 - TLTC-MSA-007 128-feature Fold candidate
+
+- Added one bounded generic physical candidate for the existing
+  `TiledFoldFinalizeProgram`. A 128-feature tile assigns four BF16 values to
+  each lane, so D=128 needs one output block instead of two.
+- Two shared-memory banks issue the next four-partial `cp.async` group before
+  evaluating the current generated contribution/update AST, then wait before
+  swapping banks. The semantic Fold, partial order, and AST generator are
+  unchanged.
+- The same emitter path covers normalized-exponential attention state and
+  indexed deterministic weighted sums. Focused numerical and emitted-source
+  tests pass. CUDA compilation and GB200 combine-only/full-path timing remain
+  pending; the candidate does not replace the accepted 1.198069-times result
+  until measured.

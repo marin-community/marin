@@ -272,14 +272,19 @@ def test_tiled_fold_finalizer_exposes_generic_vector_staging_and_fixed_tree_orde
 
     assert plan.partial_merge.partial_extent == lowering.selected_count
     assert plan.partial_merge.rows_per_block == 8
-    assert plan.partial_merge.feature_tile == 64
+    assert plan.partial_merge.feature_tile == 128
     assert plan.partial_merge.pipeline_stages == 4
+    assert plan.partial_merge.pipeline_buffers == 2
     assert plan.partial_merge.vector_bytes == 16
     assert "copy_global_to_shared_16" in source
     assert "cp.async.cg.shared.global" in source
     assert "fixed_warp_max" in source
     assert "fixed_warp_sum" in source
-    assert "staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile]" in source
+    assert "staged_value[kRowsPerBlock][kPipelineBuffers][kPipelineStages][kFeatureTile]" in source
+    assert "constexpr int kFeaturesPerLane = 4;" in source
+    assert "const int next_buffer = current_buffer ^ 1;" in source
+    assert source.index("&staged_value[warp][next_buffer]") < source.index("const float contribution0")
+    assert source.index("const float contribution0") < source.rindex("wait_for_all_async_groups();")
     assert "for (int partial_base = 0; partial_base < kPartialExtent;" in source
     assert "__shfl_sync(0xffffffffu, local_weight, partial)" in source
     assert "__floats2bfloat162_rn" in source
@@ -332,7 +337,8 @@ def test_tiled_fold_finalizer_generates_attention_and_non_attention_semantics_fr
     for mechanism in (
         "copy_global_to_shared_16",
         "cp.async.cg.shared.global",
-        "staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile]",
+        "staged_value[kRowsPerBlock][kPipelineBuffers][kPipelineStages][kFeatureTile]",
+        "const int next_buffer = current_buffer ^ 1;",
         "for (int partial_base = 0; partial_base < kPartialExtent;",
         "__floats2bfloat162_rn",
     ):
