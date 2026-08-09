@@ -10,9 +10,9 @@ evals (paloma + uncheatable every 1k), and per-size step counts match the Aug he
 (issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
 width/depth/head split and the token budget shrink relative to the d6144 shape.
 
-Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
-(EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
-target is not just a hardware choice -- see the ``TARGETS`` comments.
+Each ``--size`` submits one job on the fleet ``--target`` names: four GB200 nodes (EP16), a GB200
+rack (EP64), 8 H100 nodes (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it
+sets cell size, so the target is not just a hardware choice -- see the ``TARGETS`` comments.
 """
 
 import dataclasses
@@ -101,6 +101,11 @@ class Target:
 # attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
+    # EP16 keeps cross-node P2P in the experiment while fitting capacity gaps too small for a rack.
+    # At 1,048,576 tokens per step it has the d6144 hero's 65,536 tokens per sender shard, so E192
+    # top-4 runs reproduce the hero's routing-cell load. It is a relative transport-knob screen:
+    # 15 peers per rank cannot reproduce EP64's 63-peer FIFO pressure.
+    "gb200-4node": Target("GB200", HERO_GPUS_PER_NODE, 4, 120, "850g", "1t", "gpu_fa4_cute", True),
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
     # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
@@ -140,6 +145,7 @@ class Flavor:
 
 FLAVORS: dict[str, Flavor] = {
     "ep": Flavor(None, "fixed_all_to_all", 1),
+    "ep-ragged": Flavor(None, "ragged_all_to_all", 1),
     "fsdp-nodrop": Flavor(1, "scatter", 1),
 }
 

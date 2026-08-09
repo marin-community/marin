@@ -297,4 +297,40 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Hardware and topology: 16 workers with four GB200 GPUs and four JAX processes each on `cw-us-east-08a`; EP64; one data-parallel rack; interactive priority.
 - Initialization and stop boundary: initialize from scratch and stop after step 25. Checkpoints, eval, watch metrics, and profiling remain disabled. Score exactly steps 5 through 24 if the run completes.
 - DRI and monitoring: DRI `rjpower`; Codex owns monitoring. Stop on non-finite training, allocator or NCCL failure, exhausted retries, or a repeated low-power no-progress interval after communicator initialization.
-- Source commit, command, output root, W&B identity, and Iris job: pending snapshot and submission.
+- Source commit: `ad3e341524` on `weaver/hero-run-why-can-t-we-ragged-all`; pushed before submission. Source bundle size: 9.8 MB.
+- Command:
+
+  ```bash
+  UV_CACHE_DIR=/tmp/marin-ragged-uv-cache uv run iris \
+    --config lib/iris/config/marin.yaml job run --no-wait \
+    --enable-extra-resources --target-cluster cw-us-east-08a \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB \
+    --timeout 21600 --max-retries 10 \
+    --job-name ra2a-005-process-per-gpu-20260808-coord \
+    -e WANDB_API_KEY '<redacted>' \
+    -e WANDB_PROJECT marin_moe \
+    -e MARIN_PREFIX s3://marin-us-east-02a/marin \
+    -e XLA_FLAGS '--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false' \
+    -e NCCL_BUFFSIZE 1048576 \
+    -- python -m experiments.grug.moe_hero_ep.launch \
+    --run-id ra2a-005-process-per-gpu-20260808 \
+    --dp-racks 1 --num-steps 25 --flavor ep-ragged \
+    --watch-interval 0 --eval-every 0 --profile-steps 0 \
+    --no-save-checkpoints --version 2026.08.08 --run
+  ```
+
+- Output root: `s3://marin-us-east-02a/marin/grug/ra2a-005-process-per-gpu-20260808/2026.08.08`.
+- Tracking identity: W&B entity `marin-community`, project `marin_moe`, group `moe-hero-ep`, run name and ID `ra2a-005-process-per-gpu-20260808`, resume policy `allow`.
+- Iris coordinator: `/power/ra2a-005-process-per-gpu-20260808-coord`, submitted at 23:51:41 UTC. Child training job pending coordinator dispatch.
+
+### 2026-08-09 01:06 UTC - EP16 screening plan while the rack is production-gated
+
+- Capacity observation: 197 of 202 GB200 nodes had four requested GPUs, one node had one requested GPU, and four whole nodes were free. The rack job remained queued after three production preemptions. Reducing its 120-CPU request would not make 16 whole nodes available.
+- Purpose: use four GB200 nodes as an EP16 relative screen while `RA2A-005` waits. With 1,048,576 tokens per step, every EP16 sender shard carries 65,536 tokens, matching the d6144 hero. E192 top-4 therefore matches its routing-cell load while the d768 model keeps the screen cheap.
+- Limitation: EP16 has 15 peers per rank rather than EP64's 63. It cannot reproduce the rack's peer-FIFO memory pressure or establish the final MFU. Promote only large relative changes to EP64.
+- Source change: add the `gb200-4node` target and `ep-ragged` flavor to the existing small-scale EP launcher. The target retains one JAX process per GPU.
+- Validation: `uv run pytest tests/test_moe_hero_ep.py -q` passed all 22 tests; the required changed-file pre-commit gate passed.
+- Baseline configuration: d768, EP16, E192, top-4, capacity factor 1.33, sequence length 4096, batch 256, 1,048,576 tokens per step, and a 1x active-parameter token budget (52 optimizer steps). Score steps 5-24.
+- Runtime controls: ragged one-shot disabled, `NCCL_BUFFSIZE=1048576`, no grouped launch override, watch interval 0, profiler disabled, eval interval 1000, and no expected periodic checkpoint before completion.
+- Serialization: launch one EP16 baseline only. It may occupy the currently free four nodes, but no second small arm launches until it terminates. The EP64 job remains queued at interactive priority.
+- Source commit, command, output root, W&B identity, and Iris jobs: pending snapshot and submission.
