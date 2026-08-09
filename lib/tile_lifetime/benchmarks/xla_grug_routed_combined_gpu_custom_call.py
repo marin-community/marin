@@ -34,6 +34,7 @@ from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ff
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingFfiTargets,
+    audit_routed_training_replacement,
     entry_parameter_ancestors,
     plan_routed_training_typed_ffi,
     replace_routed_training_regions_with_custom_calls,
@@ -92,6 +93,7 @@ def run_smoke(
     transformed_modules: list[str] = []
     recovered_plans: list[Any] = []
     generated_programs: list[tuple[Any, Any, tuple[Any, Any]]] = []
+    replacement_audits: list[Any] = []
     libraries: dict[str, ctypes.CDLL] = {}
     try:
         with set_mesh(_mesh()):
@@ -136,6 +138,9 @@ def run_smoke(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
                     for weight, target in zip(plan.weight_gradients, _TARGETS.weight_gradients, strict=True)
                 )
+                generated_sources = (forward.source, input_adjoint.source, *(weight.source for weight in weights))
+                if any("atomicAdd(" in source for source in generated_sources):
+                    raise RuntimeError("generated routed training source contains semantic atomic accumulation")
                 compile_target(forward.source, _TARGETS.forward, "routed_forward")
                 compile_target(input_adjoint.source, _TARGETS.input_adjoint, "routed_input_adjoint")
                 for index, (weight, target) in enumerate(zip(weights, _TARGETS.weight_gradients, strict=True)):
@@ -148,7 +153,11 @@ def run_smoke(
                 recovered_plans.append(plan)
                 generated_programs.append((forward, input_adjoint, weights))
                 transformed_module = hlo.hlo_module_from_text(rewritten)
-                transformed_modules.append(transformed_module.to_string())
+                transformed_text = transformed_module.to_string()
+                transformed_modules.append(transformed_text)
+                replacement_audits.append(
+                    audit_routed_training_replacement(original, transformed_text, plan, targets=_TARGETS)
+                )
                 return transformed_module.as_serialized_hlo_module_proto()
 
             xla.register_hlo_module_transformation(
@@ -235,11 +244,17 @@ def run_smoke(
         if temporary is not None:
             temporary.cleanup()
 
-    if len(original_modules) != 1 or len(transformed_modules) != 1 or len(recovered_plans) != 1:
+    if (
+        len(original_modules) != 1
+        or len(transformed_modules) != 1
+        or len(recovered_plans) != 1
+        or len(replacement_audits) != 1
+    ):
         raise RuntimeError("expected one combined routed training replacement pass")
     original = original_modules[0]
     transformed_hlo = transformed_modules[0]
     plan = recovered_plans[0]
+    replacement_audit = replacement_audits[0]
     forward, input_adjoint, weights = generated_programs[0]
     target_occurrences = {
         "forward": transformed_hlo.count(_TARGETS.forward),
@@ -295,7 +310,7 @@ def run_smoke(
             "input_adjoint": plan.input_adjoint.region.numerical_policy.value,
             "weight_gradients": [weight.numerical_contract.numerical_policy.value for weight in plan.weight_gradients],
         },
-        "external_collectives": [weight.region.external_collectives for weight in plan.weight_gradients],
+        "external_collectives": replacement_audit.weight_gradient_collectives,
         "uses_atomic_accumulation": False,
         "static_operand_roles": static_roles,
         "operand_ancestry": {operand: parameter_ancestors[operand] for operand in all_operands},
@@ -307,14 +322,10 @@ def run_smoke(
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
-        "copy_count": {
-            "original": original.count(" copy("),
-            "transformed": transformed_hlo.count(" copy("),
-        },
-        "transpose_count": {
-            "original": original.count(" transpose("),
-            "transformed": transformed_hlo.count(" transpose("),
-        },
+        "input_adjoint_auxiliary": replacement_audit.input_adjoint_auxiliary,
+        "target_instruction_names": replacement_audit.target_instructions,
+        "copy_count": dict(zip(("original", "transformed"), replacement_audit.copy_count, strict=True)),
+        "transpose_count": dict(zip(("original", "transformed"), replacement_audit.transpose_count, strict=True)),
         "generated_semantic_sha256": {
             "forward": forward.semantic_digest,
             "input_adjoint": input_adjoint.semantic_digest,
