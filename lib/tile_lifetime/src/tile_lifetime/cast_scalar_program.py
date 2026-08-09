@@ -308,6 +308,8 @@ def _render_cuda_expression(expression: CastScalarExpression) -> str:
 
 def _round_float32_to_bfloat16(value: float) -> float:
     bits = struct.unpack("<I", struct.pack("<f", value))[0]
+    if bits & 0x7F800000 == 0x7F800000 and bits & 0x007FFFFF:
+        return struct.unpack("<f", struct.pack("<I", (bits & 0xFFFF0000) | 0x00400000))[0]
     rounded = bits + 0x7FFF + ((bits >> 16) & 1)
     return struct.unpack("<f", struct.pack("<I", rounded & 0xFFFF0000))[0]
 

@@ -184,9 +184,12 @@ __device__ __forceinline__ float shuttle_bf16_to_f32(std::uint16_t value) {{
 }}
 
 __device__ __forceinline__ std::uint16_t shuttle_f32_to_bf16(float value) {{
-  const std::uint32_t bits = __float_as_uint(value);
-  const std::uint32_t rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
-  return static_cast<std::uint16_t>(rounded >> 16);
+  union ShuttleBf16Bits {{
+    __nv_bfloat16 value;
+    std::uint16_t bits;
+  }} converted;
+  converted.value = __float2bfloat16_rn(value);
+  return converted.bits;
 }}
 
 ffi::Error Contract(

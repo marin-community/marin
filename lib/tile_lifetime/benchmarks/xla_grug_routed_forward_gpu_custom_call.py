@@ -35,7 +35,6 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     RoutedForwardCodegenDisposition,
-    RoutedForwardFfiOperandRole,
     plan_routed_forward_typed_ffi,
 )
 from tile_lifetime.xla_routed_forward_ffi import (
@@ -239,7 +238,7 @@ def run_smoke(
     roles_without_parameters = tuple(
         operand.role.value for operand in plan.operands if not parameter_ancestors[operand.value.instruction]
     )
-    if roles_without_parameters != (RoutedForwardFfiOperandRole.FOLD_INITIAL.value,):
+    if roles_without_parameters:
         raise RuntimeError(f"unexpected closed-over routed operands: {roles_without_parameters}")
     baseline_median = statistics.median(baseline_samples)
     transformed_median = statistics.median(transformed_samples)
