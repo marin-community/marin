@@ -23,6 +23,23 @@ from tile_lifetime.autodiff import (
     scalar_expression_vjp,
 )
 from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
+from tile_lifetime.contract_map_chain import (
+    BoundCastScalarMap,
+    ContractMapChainValue,
+    RankTwoContractShape,
+    TwoContractMapForwardResult,
+    TwoContractMapReverseResult,
+    TwoContractMapTrainingProgram,
+    execute_two_contract_map_forward,
+    execute_two_contract_map_reverse,
+    form_two_contract_map_training_program,
+)
+from tile_lifetime.cuda_contract_map_chain_codegen import (
+    ContractMapChainSourceAudit,
+    GeneratedCudaContractMapChainFfi,
+    audit_cuda_contract_map_chain_source,
+    generate_cuda_contract_map_chain_ffi,
+)
 from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
     GeneratedCudaNormalizedExpContractForwardFfi,
     generate_cuda_normalized_exp_contract_forward_ffi,
@@ -88,6 +105,11 @@ from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
     build_jax_collective_execution_plan,
     execute_jax_collective_completion,
+)
+from tile_lifetime.jax_contract_map_chain_ffi import (
+    call_cuda_contract_map_chain_forward_ffi,
+    call_cuda_contract_map_chain_reverse_ffi,
+    register_cuda_contract_map_chain_ffi,
 )
 from tile_lifetime.jax_normalized_exp_contract_forward_ffi import (
     call_cuda_normalized_exp_contract_forward_ffi,
