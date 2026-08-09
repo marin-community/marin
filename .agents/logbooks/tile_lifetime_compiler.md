@@ -2385,3 +2385,23 @@ author: dlwh
   counts into a generated header.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_compile_blocker_h100_v0/`.
+
+### 2026-08-09 - TLTC-DIST-025 collective Event Tensor readiness
+
+- Hypothesis: a recovered placement-changing completion Fold can induce tiled
+  readiness and visibility from replica-group structure without selecting a
+  collective transport backend or introducing routed-workload logic.
+- Commit Hash: `4a3c8e86d6` (integrated from `51c941d461`).
+- Result: every completion lowers to generic partial-value tiles, placement-
+  transition completion tiles, and collective Fold tiles. Replica membership
+  mechanically determines Event Tensor indegrees. Partial-to-transport edges
+  require device visibility; transport-to-Fold edges require system-scoped
+  release/acquire visibility.
+- Mutations: changing replica groups alters the task domain and readiness
+  counts without changing Fold semantics. Changing sum to maximum alters only
+  the semantic Fold; it produces the same task/event program.
+- Scope: this remains a structural schedule candidate. XLA still owns the
+  executable collective transport, and no NCCL or device-side transport choice
+  appears in the generic plan.
+- Verification: 33 focused collective/Event Tensor tests pass and scoped
+  pre-commit checks pass.
