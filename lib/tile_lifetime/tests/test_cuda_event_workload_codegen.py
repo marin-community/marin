@@ -116,6 +116,11 @@ def test_streaming_codegen_preserves_physical_stage_and_last_consumer_reuse() ->
     assert sum(entry.kind is EventRealizationKind.PHYSICAL for entry in generated.event_audit.entries) == 3
     assert "__syncthreads();" in generated.ffi.source
     assert "slot_generation[slot] = generation + 1" in generated.ffi.source
+    assert "__shared__ int generation_valid;" in generated.ffi.source
+    assert "if (threadIdx.x == 0 && slot_generation[slot] != generation) return;" not in generated.ffi.source
+    generation_check = generated.ffi.source.index("generation_valid = slot_generation[slot] == generation")
+    uniform_return = generated.ffi.source.index("if (!generation_valid) return;", generation_check)
+    assert "__syncthreads();" in generated.ffi.source[generation_check:uniform_return]
     assert "QK Contract, online normalized-exp Fold, and PV Contract" in " ".join(generated.physical_schedule)
 
 

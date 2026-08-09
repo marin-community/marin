@@ -469,6 +469,7 @@ __global__ void shuttle_streaming_contract_fold(
   float* staged_key = staged;
   float* staged_value = staged + kPipelineDepth * kKeyValueTile * kReductionDimension;
   __shared__ int slot_generation[kPipelineDepth];
+  __shared__ int generation_valid;
   const int row_tile = blockIdx.x;
   if (threadIdx.x < kPipelineDepth) slot_generation[threadIdx.x] = 0;
   __syncthreads();
@@ -483,7 +484,9 @@ __global__ void shuttle_streaming_contract_fold(
   for (int partition = 0; partition < kPartitionCount; ++partition) {
     const int slot = partition % kPipelineDepth;
     const int generation = partition / kPipelineDepth;
-    if (threadIdx.x == 0 && slot_generation[slot] != generation) return;
+    if (threadIdx.x == 0) generation_valid = slot_generation[slot] == generation;
+    __syncthreads();
+    if (!generation_valid) return;
     const int key_items = kKeyValueTile * kReductionDimension;
     for (int index = threadIdx.x; index < key_items; index += blockDim.x) {
       staged_key[slot * key_items + index] =
