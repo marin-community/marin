@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/app/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py", line 922, in <module>
+    main()
+  File "/app/lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py", line 716, in main
+    oracle_output = functional.scaled_dot_product_attention(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built.
