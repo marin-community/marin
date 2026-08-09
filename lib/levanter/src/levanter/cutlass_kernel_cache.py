@@ -133,7 +133,7 @@ def install(cache: PersistentKvCache) -> None:
     in_process = compile_module._CUTLASS_COMPILE_CACHE
     compile_result = compile_module.CompileResult
     try:
-        source_revision = _kernel_source_revision()
+        source_revision = _kernel_cache_revision()
     except (OSError, ValueError) as exc:
         logger.warning("CuTeDSL persistent kernel cache disabled, source identity unavailable: %s", exc)
         source_revision = None
@@ -188,7 +188,7 @@ def _kernel_key(fn: Any, spec: Any, source_revision: str | None) -> str | None:
 
 
 @functools.lru_cache(maxsize=None)
-def _kernel_source_revision() -> str:
+def _kernel_cache_revision() -> str:
     grug_sources = pathlib.Path(__file__).resolve().parent / "grug"
     return combined_content_hash(
         [

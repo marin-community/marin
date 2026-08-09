@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 # Compiled artifacts that outlive a single run but not a code change; the object
 # store reclaims a key that stops being written after this many days.
 _CACHE_TTL_DAYS = 30
+# Byte width used to frame every name and value length in content identities.
+_HASH_COMPONENT_LENGTH_BYTES = 8
 # Bound the at-exit drain so a slow upload cannot hang a shutting-down process.
 _EXIT_FLUSH_TIMEOUT = 10.0
 # How often a SyncedDirectory mirrors newly written files up while a run is live.
@@ -117,9 +119,9 @@ def workspace_lock_hash(start: pathlib.Path) -> str:
 
 def _hash_component(digest: _Digest, name: str, value: bytes) -> None:
     name_bytes = name.encode()
-    digest.update(len(name_bytes).to_bytes(8, "big"))
+    digest.update(len(name_bytes).to_bytes(_HASH_COMPONENT_LENGTH_BYTES, "big"))
     digest.update(name_bytes)
-    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(len(value).to_bytes(_HASH_COMPONENT_LENGTH_BYTES, "big"))
     digest.update(value)
 
 

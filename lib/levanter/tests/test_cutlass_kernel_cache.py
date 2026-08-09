@@ -76,7 +76,7 @@ def fake_cutlass(monkeypatch) -> FakeCutlass:
     cutlass = FakeCutlass()
     monkeypatch.setitem(sys.modules, "cutlass.jax.compile", cutlass.compile_module)
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", cutlass.primitive_module)
-    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_source_revision", lambda: "source-v1")
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: "source-v1")
     return cutlass
 
 
@@ -139,7 +139,7 @@ def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlas
     def unavailable_revision() -> str:
         raise ValueError("missing compiler file")
 
-    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_source_revision", unavailable_revision)
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", unavailable_revision)
     install(_kernel_store(tmp_path))
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
@@ -150,7 +150,7 @@ def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlas
 
 def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tmp_path, monkeypatch):
     revision = ["source-v1"]
-    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_source_revision", lambda: revision[0])
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: revision[0])
     spec = FakeFunctionSpec(shape=(8, 16))
 
     install(_kernel_store(tmp_path))
@@ -165,22 +165,22 @@ def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tm
     assert len(list(tmp_path.iterdir())) == 2
 
 
-def test_source_revision_combines_internal_source_and_dependency_lock(monkeypatch):
+def test_cache_revision_combines_internal_source_and_dependency_lock(monkeypatch):
     source_hash = ["source-v1"]
     dependency_hash = ["dependencies-v1"]
     monkeypatch.setattr(cutlass_kernel_cache, "directory_content_hash", lambda _path: source_hash[0])
     monkeypatch.setattr(cutlass_kernel_cache, "workspace_lock_hash", lambda _path: dependency_hash[0])
-    cutlass_kernel_cache._kernel_source_revision.cache_clear()
+    cutlass_kernel_cache._kernel_cache_revision.cache_clear()
     try:
-        original = cutlass_kernel_cache._kernel_source_revision()
+        original = cutlass_kernel_cache._kernel_cache_revision()
         source_hash[0] = "source-v2"
-        cutlass_kernel_cache._kernel_source_revision.cache_clear()
-        changed_source = cutlass_kernel_cache._kernel_source_revision()
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_source = cutlass_kernel_cache._kernel_cache_revision()
         dependency_hash[0] = "dependencies-v2"
-        cutlass_kernel_cache._kernel_source_revision.cache_clear()
-        changed_dependency = cutlass_kernel_cache._kernel_source_revision()
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_dependency = cutlass_kernel_cache._kernel_cache_revision()
     finally:
-        cutlass_kernel_cache._kernel_source_revision.cache_clear()
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
 
     assert len({original, changed_source, changed_dependency}) == 3
 

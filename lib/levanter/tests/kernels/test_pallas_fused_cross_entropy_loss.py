@@ -1593,29 +1593,28 @@ def test_fused_ce_autotune_cache_key_changes_with_source_revision(monkeypatch: p
     assert cache_key() != original
 
 
-def test_fused_ce_autotune_revision_includes_shared_autotune_helpers(monkeypatch: pytest.MonkeyPatch):
-    captured_directories = []
-    captured_files = []
-    monkeypatch.setattr(
-        fused_api,
-        "directory_content_hash",
-        lambda path: captured_directories.append(path) or "source-v1",
-    )
-    monkeypatch.setattr(
-        fused_api,
-        "file_content_hash",
-        lambda path: captured_files.append(path) or "helper-v1",
-    )
-    monkeypatch.setattr(fused_api, "workspace_lock_hash", lambda _path: "dependencies-v1")
+def test_shared_autotune_helper_change_invalidates_fused_ce_revision(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "marin"
+    source_root = workspace / "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss"
+    source_root.mkdir(parents=True)
+    module_path = source_root / "api.py"
+    module_path.write_text("# cache identity fixture\n")
+    helper_path = source_root.parent / "autotune_utils.py"
+    helper_path.write_text("AUTOTUNE_VERSION = 1\n")
+    (workspace / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = []\n")
+    (workspace / "uv.lock").write_text("version = 1\n")
+
+    monkeypatch.setattr(fused_api, "__file__", str(module_path))
     fused_api._autotune_revision.cache_clear()
     try:
-        revision = fused_api._autotune_revision("batched_xla")
+        original = fused_api._autotune_revision("batched_xla")
+        helper_path.write_text("AUTOTUNE_VERSION = 2\n")
+        fused_api._autotune_revision.cache_clear()
+        changed = fused_api._autotune_revision("batched_xla")
     finally:
         fused_api._autotune_revision.cache_clear()
 
-    assert revision
-    assert [path.name for path in captured_directories] == ["fused_cross_entropy_loss"]
-    assert [path.name for path in captured_files] == ["autotune_utils.py"]
+    assert changed != original
 
 
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
