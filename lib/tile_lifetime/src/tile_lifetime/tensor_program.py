@@ -46,6 +46,7 @@ class ScalarExpressionKind(StrEnum):
     MULTIPLY = "multiply"
     DIVIDE = "divide"
     EXP = "exp"
+    LOG = "log"
     RSQRT = "rsqrt"
     TANH = "tanh"
     LESS_EQUAL = "less_equal"
@@ -76,6 +77,7 @@ class ScalarExpression:
             ScalarExpressionKind.MULTIPLY: 2,
             ScalarExpressionKind.DIVIDE: 2,
             ScalarExpressionKind.EXP: 1,
+            ScalarExpressionKind.LOG: 1,
             ScalarExpressionKind.RSQRT: 1,
             ScalarExpressionKind.TANH: 1,
             ScalarExpressionKind.LESS_EQUAL: 2,
@@ -140,7 +142,12 @@ def scalar_constant(value: float | bool) -> ScalarExpression:
 
 def scalar_unary(kind: ScalarExpressionKind, operand: ScalarExpression) -> ScalarExpression:
     """Construct a unary scalar expression."""
-    if kind not in (ScalarExpressionKind.EXP, ScalarExpressionKind.RSQRT, ScalarExpressionKind.TANH):
+    if kind not in (
+        ScalarExpressionKind.EXP,
+        ScalarExpressionKind.LOG,
+        ScalarExpressionKind.RSQRT,
+        ScalarExpressionKind.TANH,
+    ):
         raise ValueError(f"{kind.value} is not unary")
     return ScalarExpression(kind=kind, operands=(operand,))
 

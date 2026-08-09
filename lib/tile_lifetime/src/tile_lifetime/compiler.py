@@ -1041,7 +1041,7 @@ def _render_scalar_expression(
         return str(expression.constant)
     if expression.kind is ScalarExpressionKind.RSQRT:
         return f"rsqrt({_render_scalar_expression(expression.operands[0], aliases)})"
-    if expression.kind in {ScalarExpressionKind.EXP, ScalarExpressionKind.TANH}:
+    if expression.kind in {ScalarExpressionKind.EXP, ScalarExpressionKind.LOG, ScalarExpressionKind.TANH}:
         return f"{expression.kind.value}({_render_scalar_expression(expression.operands[0], aliases)})"
     operator = {
         ScalarExpressionKind.ADD: ("+", 10),

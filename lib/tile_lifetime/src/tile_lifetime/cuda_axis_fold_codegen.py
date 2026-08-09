@@ -1399,6 +1399,8 @@ def _cuda_expression(expression: ScalarExpression, aliases: dict[str, str]) -> s
         return f"({operands[0]} / {operands[1]})"
     if kind is ScalarExpressionKind.EXP:
         return f"expf({operands[0]})"
+    if kind is ScalarExpressionKind.LOG:
+        return f"logf({operands[0]})"
     if kind is ScalarExpressionKind.RSQRT:
         return f"rsqrtf({operands[0]})"
     if kind is ScalarExpressionKind.TANH:
@@ -1491,6 +1493,8 @@ def _evaluate_expression(expression: ScalarExpression, aliases: dict[str, float]
         return float(operands[0]) / float(operands[1])
     if kind is ScalarExpressionKind.EXP:
         return math.exp(float(operands[0]))
+    if kind is ScalarExpressionKind.LOG:
+        return math.log(float(operands[0]))
     if kind is ScalarExpressionKind.RSQRT:
         return 1.0 / math.sqrt(float(operands[0]))
     if kind is ScalarExpressionKind.TANH:

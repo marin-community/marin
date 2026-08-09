@@ -84,9 +84,15 @@ def _cute_expression(
         return aliases[expression.input_name]
     if kind is ScalarExpressionKind.CONSTANT:
         return repr(expression.constant)
-    if kind in {ScalarExpressionKind.EXP, ScalarExpressionKind.RSQRT, ScalarExpressionKind.TANH}:
+    if kind in {
+        ScalarExpressionKind.EXP,
+        ScalarExpressionKind.LOG,
+        ScalarExpressionKind.RSQRT,
+        ScalarExpressionKind.TANH,
+    }:
         function = {
             ScalarExpressionKind.EXP: "cute.exp",
+            ScalarExpressionKind.LOG: "cute.log",
             ScalarExpressionKind.RSQRT: "cute.rsqrt",
             ScalarExpressionKind.TANH: "cute.tanh",
         }[kind]

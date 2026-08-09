@@ -73,6 +73,8 @@ def differentiate_scalar_expression(expression: ScalarExpression, input_name: st
         return _divide(numerator, _multiply(operands[1], operands[1]))
     if kind is ScalarExpressionKind.EXP:
         return _multiply(scalar_unary(ScalarExpressionKind.EXP, operands[0]), derivatives[0])
+    if kind is ScalarExpressionKind.LOG:
+        return _divide(derivatives[0], operands[0])
     if kind is ScalarExpressionKind.RSQRT:
         inverse_root = scalar_unary(ScalarExpressionKind.RSQRT, operands[0])
         inverse_cube = _multiply(inverse_root, _multiply(inverse_root, inverse_root))

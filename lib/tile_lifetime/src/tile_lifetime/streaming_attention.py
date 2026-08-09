@@ -632,6 +632,8 @@ def _evaluate_map(operation: MapPrimitive, bindings: dict[str, np.ndarray]) -> n
             return np.divide(*operands)
         if expression.kind is ScalarExpressionKind.EXP:
             return np.exp(operands[0])
+        if expression.kind is ScalarExpressionKind.LOG:
+            return np.log(operands[0])
         if expression.kind is ScalarExpressionKind.RSQRT:
             return np.reciprocal(np.sqrt(operands[0]))
         if expression.kind is ScalarExpressionKind.TANH:

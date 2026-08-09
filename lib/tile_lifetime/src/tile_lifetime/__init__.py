@@ -123,6 +123,14 @@ from tile_lifetime.msa_recovery import (
     compile_natural_projected_routed_attention,
     recover_projected_routed_attention_program,
 )
+from tile_lifetime.normalized_exp_contract_training import (
+    IndexedFoldSelection,
+    NormalizedExpContractTrainingExecution,
+    NormalizedExpContractTrainingProgram,
+    build_normalized_exp_contract_training_program,
+    execute_normalized_exp_contract_training,
+    tanh_soft_cap_score_expression,
+)
 from tile_lifetime.pipeline import (
     compile_stablehlo_attention_region,
     compile_stablehlo_dense_transformer_region,

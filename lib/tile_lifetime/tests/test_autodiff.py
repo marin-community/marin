@@ -67,6 +67,17 @@ def test_scalar_ast_vjp_derives_swiglu_and_semantic_mutation() -> None:
     assert mutated_vjp != gate_vjp
 
 
+def test_scalar_ast_log_vjp_remains_generic() -> None:
+    expression = scalar_unary(ScalarExpressionKind.LOG, scalar_input("state"))
+    vjp = scalar_expression_vjp(expression, input_name="state", cotangent_name="cotangent")
+
+    assert math.isclose(
+        float(evaluate_scalar_expression(vjp, {"state": 2.5, "cotangent": 0.75})),
+        0.75 / 2.5,
+        rel_tol=1e-7,
+    )
+
+
 def _rms_contract_program() -> TensorProgram:
     row = TensorAxis(1, 2, "row")
     hidden = TensorAxis(2, 3, "hidden")

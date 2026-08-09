@@ -218,6 +218,8 @@ def evaluate_scalar_expression(expression: ScalarExpression, inputs: Mapping[str
         return float(values[0]) / float(values[1])
     if kind is ScalarExpressionKind.EXP:
         return math.exp(float(values[0]))
+    if kind is ScalarExpressionKind.LOG:
+        return math.log(float(values[0]))
     if kind is ScalarExpressionKind.RSQRT:
         return 1.0 / math.sqrt(float(values[0]))
     if kind is ScalarExpressionKind.TANH:
@@ -279,6 +281,8 @@ def _cuda_expression(
         return f"({operands[0]} / {operands[1]})"
     if kind is ScalarExpressionKind.EXP:
         return f"expf({operands[0]})"
+    if kind is ScalarExpressionKind.LOG:
+        return f"logf({operands[0]})"
     if kind is ScalarExpressionKind.RSQRT:
         return f"rsqrtf({operands[0]})"
     if kind is ScalarExpressionKind.TANH:

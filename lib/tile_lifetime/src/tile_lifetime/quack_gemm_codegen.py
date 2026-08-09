@@ -453,9 +453,15 @@ def _scalar_source(expression: ScalarExpression, aliases: dict[str, str], parent
         return aliases[expression.input_name]
     if expression.kind is ScalarExpressionKind.CONSTANT:
         return repr(expression.constant)
-    if expression.kind in {ScalarExpressionKind.EXP, ScalarExpressionKind.RSQRT, ScalarExpressionKind.TANH}:
+    if expression.kind in {
+        ScalarExpressionKind.EXP,
+        ScalarExpressionKind.LOG,
+        ScalarExpressionKind.RSQRT,
+        ScalarExpressionKind.TANH,
+    }:
         function = {
             ScalarExpressionKind.EXP: "cute.exp",
+            ScalarExpressionKind.LOG: "cute.log",
             ScalarExpressionKind.RSQRT: "cute.rsqrt",
             ScalarExpressionKind.TANH: "cute.tanh",
         }[expression.kind]

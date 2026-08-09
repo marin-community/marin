@@ -2825,3 +2825,25 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/`.
 - Infrastructure: holder `/dlwh/dev-gpu-codex-h100-narrowed-da49` was released;
   local session status and pod lookup both verified no active allocation.
+
+### 2026-08-09 14:32 PDT - TLTC-XLA-042 normalized-exp Contract training semantics
+
+- The next natural Grug ownership target is expressed without a loss or model
+  dispatch key as Contract, score Map, Fold-domain restriction, maximum and sum
+  Folds, indexed selection, and a final Map. JAX-provided output and saved-state
+  cotangents feed a generated score reverse Map followed by generic input and
+  operand reverse Contracts.
+- The scalar algebra now includes generic `log` evaluation, differentiation,
+  CUDA rendering, and CuTe/QuACK rendering. The score Map may be identity or a
+  finite tanh soft cap; the same Contract/Fold family and reverse construction
+  handle both mutations.
+- The materialized CPU reference matches an independent normalized-exp
+  forward/reverse calculation with a restricted padded Fold domain, invalid
+  rows, indexed selection, nonzero output cotangent, and nonzero saved-state
+  cotangent. Invalid or restricted selected coordinates fail closed.
+- This is semantic and source-generation groundwork only. Natural post-SPMD HLO
+  recovery, exact replacement/liveness audit, GPU generation, and performance
+  remain open. The bounded implementation plan is
+  `.agents/projects/tile_lifetime_compiler/normalized_exp_contract_training_plan.md`.
+- Verification: 31 focused tests pass; Pyrefly reports zero errors; scoped
+  pre-commit and `git diff --check` pass.
