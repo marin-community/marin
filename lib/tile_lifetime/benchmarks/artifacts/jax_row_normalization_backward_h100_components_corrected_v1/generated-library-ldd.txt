@@ -1,0 +1,10 @@
+	linux-vdso.so.1
+	libcudart.so.13 => /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13
+	libstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+	libgcc_s.so.1 => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6
+	/lib64/ld-linux-x86-64.so.2
+	libdl.so.2 => /usr/lib/x86_64-linux-gnu/libdl.so.2
+	libpthread.so.0 => /usr/lib/x86_64-linux-gnu/libpthread.so.0
+	librt.so.1 => /usr/lib/x86_64-linux-gnu/librt.so.1
+	libm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6

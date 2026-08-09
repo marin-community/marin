@@ -46,6 +46,14 @@ Raw matched-compiled-algebra samples in milliseconds:
 
 ## Torch-free JAX typed-FFI Fold execution
 
+The performance comparison in this subsection is withdrawn. The matched XLA
+function closed over benchmark arrays, so XLA constant-folded the computation.
+The raw samples remain preserved, and the generated correctness, handler-call,
+and determinism evidence remains valid. The corrected H100 runtime-input replay
+is under `../jax_row_normalization_backward_h100_components_corrected_v1`; GB200
+must be replayed with the same correction before making a GB200 performance
+claim.
+
 At Shuttle revision `1e0512923d`, JAX 0.11.0 registered and called the
 generated CUDA Fold family through typed FFI. The runtime path has no Torch
 dependency. NVCC was CUDA 13.0.88 and the generated source SHA-256 was
@@ -53,7 +61,7 @@ dependency. NVCC was CUDA 13.0.88 and the generated source SHA-256 was
 
 - Generated typed-FFI median: 0.0610992545 ms.
 - Matched XLA algebra median: 0.0669200905 ms.
-- Ratio: 0.9130181101.
+- Withdrawn ratio: 0.9130181101; invalid constant-folded XLA baseline.
 - Handler executions: 312.
 - Maximum matched-FP32 dX/feature-Fold errors: 9.53674e-7 / 2.28882e-5.
 - Output hashes: `db038d17c1d830c0bd24007e2ada6f785b7421e0dcbec75e75cd5a0a45c0de51`,

@@ -1865,9 +1865,11 @@ author: dlwh
   directly, without Torch in the accepted runtime, while remaining competitive
   with the same explicit algebra compiled by XLA.
 - Commit Hash: `1e0512923d`.
-- Result: on one GB200 the JAX typed-FFI path measures 0.0610993 ms versus
-  0.0669201 ms for matched XLA algebra (0.91302x), across 30 counterbalanced
-  samples and 312 handler executions. Repeated hashes are deterministic.
+- Withdrawn performance result: the JAX typed-FFI path measured 0.0610993 ms
+  versus 0.0669201 ms for the nominal XLA baseline, but the XLA function closed
+  over benchmark arrays and was constant-folded. The `0.91302x` ratio is
+  invalid. The 312 handler executions, repeated hashes, and correctness metrics
+  remain valid. GB200 requires a corrected runtime-input replay.
   Against the matched FP32 algebra, maximum errors are 9.537e-7 for dX and
   2.289e-5 for the feature Fold.
 - Numerical boundary: after casting both results to the natural BF16 VJP
@@ -1945,9 +1947,29 @@ author: dlwh
 - The generated result is bitwise deterministic. Against matched explicit FP32
   algebra, `dx` maximum/mean error is `9.537e-7`/`9.838e-10` and feature-scale
   cotangent maximum/mean error is `2.289e-5`/`3.701e-6`.
-- Thirty counterbalanced samples measure 0.079698 ms generated versus 0.040753
-  ms matched XLA, a `1.955629x` ratio. This closes the H100 execution and
-  correctness check but fails the performance gate; no LayerNorm-specific
-  tuning was attempted.
+- Withdrawn performance result: the nominal XLA baseline was constant-folded
+  because it closed over benchmark arrays. The `1.955629x` ratio is invalid.
+  This entry retains only the H100 execution, correctness, and determinism
+  evidence; corrected profiling is recorded below.
 - The natural BF16 JAX VJP is separately reported as an order/cast diagnostic.
   Source-ordered BF16 equivalence is not established.
+
+### 2026-08-09 - TLTC-TRAIN-011 corrected RMS reverse component profile
+
+- HLO inspection showed that the prior JAX/XLA benchmark closed over its random
+  arrays. XLA compiled constants and copies, invalidating the H100 `1.955629x`
+  and GB200 `0.913018x` ratios. Their raw samples remain preserved; only their
+  correctness and determinism evidence is retained.
+- Revision `9de6770953` makes all generated and matched-XLA arrays runtime
+  arguments. On one H100, 30 counterbalanced samples with 100 iterations each
+  measure 0.072270 ms generated and 0.072500 ms XLA (`0.996827x`) for the full
+  reverse.
+- Isolated generated/XLA measurements are 0.041130/0.053499 ms (`0.768795x`)
+  for the input-cotangent row Fold and 0.031282/0.033126 ms (`0.944353x`) for
+  the feature-scale column Fold. Separate generated components are bitwise
+  identical to full generated outputs and repeat hashes are stable.
+- Corrected optimized HLO contains parameters. Full XLA emits a Triton row
+  reduction followed by one input fusion that produces dX and performs the
+  feature-scale reduction. This identifies generic multi-output Map/Fold fusion
+  as a useful follow-up, but the current generated full path already matches
+  XLA on H100.

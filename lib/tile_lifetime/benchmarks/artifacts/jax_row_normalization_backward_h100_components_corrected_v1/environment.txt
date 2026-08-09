@@ -1,0 +1,19 @@
+GPU: NVIDIA H100 80GB HBM3
+GPU UUID: GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e
+NVIDIA driver: 595.71.05
+Power limit: 700 W
+Captured active SM clock: 1830 MHz
+Captured memory clock: 2619 MHz
+JAX: 0.11.0
+JAXlib: 0.11.0
+JAX CUDA plugin: 0.11.0
+JAX CUDA PJRT: 0.11.0
+NVCC: 13.0.88
+PTXAS: 13.0.88
+NVVM: 13.0.88
+NVRTC: 13.0.88
+NvJitLink: 13.0.88
+CUDA runtime: 13.0.96
+cuBLAS: 13.6.1.10
+Allocation priority: batch
+Allocation resources: 1 H100, 1 CPU, 16GB RAM, 50GB disk
