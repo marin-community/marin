@@ -30,6 +30,8 @@ from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_row_normalization_backward import compile_stablehlo_row_normalization_backward
 
 _TARGET_NAME = "shuttle.axis_fold_reverse_v1"
+_INPUT_TARGET_NAME = "shuttle.axis_fold_reverse_input_v1"
+_FEATURE_TARGET_NAME = "shuttle.axis_fold_reverse_feature_v1"
 
 
 def _normalization(x: jax.Array, feature_scale: jax.Array) -> jax.Array:
@@ -123,6 +125,12 @@ def _measure(
     )
 
 
+def _handler_call_count(library: ctypes.CDLL) -> int:
+    function = library.shuttle_axis_fold_ffi_call_count
+    function.restype = ctypes.c_int
+    return int(function())
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Compile ordinary JAX AD, register generated Fold code, and benchmark it."""
     if not jax.devices() or jax.devices()[0].platform != "gpu":
@@ -148,6 +156,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     generated = generate_cuda_axis_fold_ffi(programs, target_name=_TARGET_NAME)
     library = _compile_generated_source(generated.source, args.artifact_directory, args.nvcc, args.architecture)
     register_cuda_axis_fold_ffi(generated, library)
+
+    input_generated = None
+    input_library = None
+    feature_generated = None
+    feature_library = None
+    if args.profile_components:
+        input_generated = generate_cuda_axis_fold_ffi((programs[0],), target_name=_INPUT_TARGET_NAME)
+        input_library = _compile_generated_source(
+            input_generated.source,
+            args.artifact_directory / "input_cotangent",
+            args.nvcc,
+            args.architecture,
+        )
+        register_cuda_axis_fold_ffi(input_generated, input_library)
+        feature_generated = generate_cuda_axis_fold_ffi((programs[1],), target_name=_FEATURE_TARGET_NAME)
+        feature_library = _compile_generated_source(
+            feature_generated.source,
+            args.artifact_directory / "feature_scale_cotangent",
+            args.nvcc,
+            args.architecture,
+        )
+        register_cuda_axis_fold_ffi(feature_generated, feature_library)
 
     key = jax.random.key(args.seed)
     x_key, scale_key, cotangent_key = jax.random.split(key, 3)
@@ -179,6 +209,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         feature_cotangent = jnp.sum(projected * standardized.astype(jnp.float32), axis=0)
         return input_cotangent, feature_cotangent
 
+    @jax.jit
+    def matched_xla_input_cotangent() -> jax.Array:
+        scaled = projected * feature_scale.astype(jnp.float32)
+        correlation = jnp.sum(scaled * standardized.astype(jnp.float32), axis=1, keepdims=True) / args.hidden
+        return inverse_scale[:, None] * (scaled - standardized.astype(jnp.float32) * correlation)
+
+    @jax.jit
+    def matched_xla_feature_scale_cotangent() -> jax.Array:
+        return jnp.sum(projected * standardized.astype(jnp.float32), axis=0)
+
     generated_outputs = generated_reverse()
     xla_outputs = matched_xla_algebra()
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
@@ -205,10 +245,68 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         repeats=args.repeats,
         iterations=args.iterations,
     )
+    component_profile = None
+    if input_generated is not None and feature_generated is not None:
+
+        @jax.jit
+        def generated_input_cotangent() -> jax.Array:
+            return call_cuda_axis_fold_ffi(
+                input_generated,
+                {
+                    "projected": projected,
+                    "feature_scale": feature_scale,
+                    "standardized": standardized,
+                    "inverse_scale": inverse_scale,
+                },
+            )[0]
+
+        @jax.jit
+        def generated_feature_scale_cotangent() -> jax.Array:
+            return call_cuda_axis_fold_ffi(
+                feature_generated,
+                {"projected": projected, "standardized": standardized},
+            )[0]
+
+        input_measurements, input_execution_order = _measure(
+            (
+                ("generated_ffi", generated_input_cotangent),
+                ("matched_xla", matched_xla_input_cotangent),
+            ),
+            warmups=args.warmups,
+            repeats=args.repeats,
+            iterations=args.iterations,
+        )
+        feature_measurements, feature_execution_order = _measure(
+            (
+                ("generated_ffi", generated_feature_scale_cotangent),
+                ("matched_xla", matched_xla_feature_scale_cotangent),
+            ),
+            warmups=args.warmups,
+            repeats=args.repeats,
+            iterations=args.iterations,
+        )
+        assert input_library is not None
+        assert feature_library is not None
+        component_profile = {
+            "input_cotangent": {
+                "measurements": input_measurements,
+                "execution_order": input_execution_order,
+                "ratio_generated_to_matched_xla": (
+                    input_measurements["generated_ffi"]["median_ms"] / input_measurements["matched_xla"]["median_ms"]
+                ),
+                "generated_handler_executions": _handler_call_count(input_library),
+            },
+            "feature_scale_cotangent": {
+                "measurements": feature_measurements,
+                "execution_order": feature_execution_order,
+                "ratio_generated_to_matched_xla": (
+                    feature_measurements["generated_ffi"]["median_ms"] / feature_measurements["matched_xla"]["median_ms"]
+                ),
+                "generated_handler_executions": _handler_call_count(feature_library),
+            },
+        }
     generated_ms = measurements["generated_ffi"]["median_ms"]
     xla_ms = measurements["matched_xla"]["median_ms"]
-    call_count_function = library.shuttle_axis_fold_ffi_call_count
-    call_count_function.restype = ctypes.c_int
     telemetry = subprocess.check_output(
         (
             "nvidia-smi",
@@ -233,7 +331,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "target": generated.target_name,
             "source_sha256": generated.source_sha256,
             "semantic_fingerprints": list(generated.semantic_fingerprints),
-            "handler_executions": int(call_count_function()),
+            "handler_executions": _handler_call_count(library),
         },
         "numerical_contract": {
             "generated_reassociation": [program.reassociation.value for program in programs],
@@ -245,6 +343,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "correctness": {**correctness, "deterministic_hashes": list(first_hashes)},
         "measurements": measurements,
+        "component_profile": component_profile,
         "execution_order": execution_order,
         "ratio_generated_to_matched_xla": generated_ms / xla_ms,
         "benchmark": {
@@ -273,6 +372,7 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=10)
+    parser.add_argument("--profile-components", action="store_true")
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", choices=("sm_90a", "sm_100a"), required=True)
