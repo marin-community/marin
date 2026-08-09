@@ -76,6 +76,17 @@ from tile_lifetime.gated_delta_scan import (
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, GemmProgram, compile_gemm_program
 from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.jax_streaming_attention_backward_ffi import (
+    CompiledStreamingAttentionBackwardFfi,
+    GeneratedStreamingAttentionBackwardFfi,
+    StreamingAttentionBackwardFfiBuffer,
+    StreamingAttentionBackwardStatePolicy,
+    TritonAotKernelPlan,
+    call_streaming_attention_backward_ffi,
+    compile_streaming_attention_backward_ffi,
+    generate_streaming_attention_backward_ffi,
+    register_streaming_attention_backward_ffi,
+)
 from tile_lifetime.kimi_delta_scan import (
     KimiDeltaScanCompilation,
     chunkwise_kimi_delta_reference,
