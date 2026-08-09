@@ -52,6 +52,19 @@ def test_cuda_toolkit_shared_library_resolves_versioned_pip_library(tmp_path: Pa
     assert cuda_toolkit_shared_library(nvcc, "cublas") == versioned
 
 
+def test_cuda_toolkit_shared_library_resolves_versioned_runtime(tmp_path: Path) -> None:
+    toolkit = tmp_path / "nvidia" / "cu13"
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    library_directory = toolkit / "lib"
+    library_directory.mkdir()
+    versioned = library_directory / "libcudart.so.13"
+    versioned.touch()
+
+    assert cuda_toolkit_shared_library(nvcc, "cudart") == versioned
+
+
 def test_cuda_toolkit_shared_library_link_flags_wrap_exact_versioned_paths(tmp_path: Path) -> None:
     toolkit = tmp_path / "nvidia" / "cu13"
     nvcc = toolkit / "bin" / "nvcc"
