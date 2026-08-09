@@ -1,0 +1,21 @@
+The following measured component inputs have no diff between
+bcafcc5ab13677146af36644b4f12b008790b676 and
+d9e8990e878def454d683bc7ae36d0ed39510c25:
+
+lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py
+lib/tile_lifetime/src/tile_lifetime/contract_map_chain.py
+lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_chain_codegen.py
+lib/tile_lifetime/src/tile_lifetime/jax_contract_map_chain_ffi.py
+lib/tile_lifetime/src/tile_lifetime/xla_low_rank_gated_product.py
+lib/tile_lifetime/src/tile_lifetime/xla_normalized_exp_contract_forward.py
+lib/tile_lifetime/src/tile_lifetime/xla_normalized_exp_contract_reverse.py
+lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/transformed-gpu-pre-scheduler-hlo.txt.gz
+
+Verification command:
+
+git diff --exit-code \
+  bcafcc5ab13677146af36644b4f12b008790b676..d9e8990e878def454d683bc7ae36d0ed39510c25 \
+  -- <the paths above>
+
+Exit status: 0
+
