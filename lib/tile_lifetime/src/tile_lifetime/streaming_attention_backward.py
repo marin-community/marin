@@ -78,6 +78,7 @@ class StreamingAttentionBackwardTileSchedule:
     query_tile_size: int
     key_value_tile_size: int
     query_heads_per_key_value_tile: int
+    key_value_query_partitions: int
     domain_traversal: StreamingAttentionBackwardDomainTraversal
     key_value_fold_order: StreamingAttentionBackwardFoldOrder
 
@@ -86,6 +87,7 @@ class StreamingAttentionBackwardTileSchedule:
             self.query_tile_size,
             self.key_value_tile_size,
             self.query_heads_per_key_value_tile,
+            self.key_value_query_partitions,
         )
         if any(extent <= 0 for extent in extents):
             raise ValueError("streaming backward tile extents must be positive")
@@ -102,10 +104,13 @@ class StreamingAttentionBackwardWorkEstimate:
     key_value_gradient_contract_invocations: int
     scalar_head_key_value_contract_invocations: int
     full_domain_scalar_head_key_value_contract_invocations: int
+    key_value_task_invocations: int
+    key_value_finalize_invocations: int
     packed_query_rows: int
     peak_score_tile_elements: int
     peak_query_tile_elements: int
     key_value_gradient_accumulator_elements: int
+    key_value_partial_elements: int
 
     @property
     def key_value_contract_invocation_reduction(self) -> float:
@@ -190,6 +195,7 @@ def derive_streaming_attention_backward_tile_schedule(
     query_tile_size: int,
     key_value_tile_size: int,
     domain_traversal: StreamingAttentionBackwardDomainTraversal,
+    key_value_query_partitions: int = 1,
 ) -> StreamingAttentionBackwardTileSchedule:
     """Coalesce query heads that share one operand through a Contract index map."""
     query, key = program.forward.qk.inputs
@@ -209,6 +215,7 @@ def derive_streaming_attention_backward_tile_schedule(
         query_tile_size=query_tile_size,
         key_value_tile_size=key_value_tile_size,
         query_heads_per_key_value_tile=index_map.divisor,
+        key_value_query_partitions=key_value_query_partitions,
         domain_traversal=domain_traversal,
         key_value_fold_order=StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE,
     )
@@ -253,6 +260,17 @@ def estimate_streaming_attention_backward_work(
     scalar_key_value_contracts = logical_tile_pairs * 4
     full_domain_scalar_key_value_contracts = batch_count * query_head.extent * all_tile_pairs * 4
     packed_query_rows = schedule.query_tile_size * schedule.query_heads_per_key_value_tile
+    key_value_tasks = batch_count * key_value_head.extent * key_tiles * schedule.key_value_query_partitions
+    partial_elements = (
+        2
+        * schedule.key_value_query_partitions
+        * batch_count
+        * key_axis.extent
+        * key_value_head.extent
+        * query_feature.extent
+        if schedule.key_value_query_partitions > 1
+        else 0
+    )
     return StreamingAttentionBackwardWorkEstimate(
         logical_query_key_tile_pairs=logical_tile_pairs,
         fully_restricted_tile_pairs=fully_restricted,
@@ -261,10 +279,13 @@ def estimate_streaming_attention_backward_work(
         key_value_gradient_contract_invocations=grouped_key_value_contracts,
         scalar_head_key_value_contract_invocations=scalar_key_value_contracts,
         full_domain_scalar_head_key_value_contract_invocations=full_domain_scalar_key_value_contracts,
+        key_value_task_invocations=key_value_tasks,
+        key_value_finalize_invocations=(batch_count * key_value_head.extent * key_tiles if partial_elements else 0),
         packed_query_rows=packed_query_rows,
         peak_score_tile_elements=packed_query_rows * schedule.key_value_tile_size,
         peak_query_tile_elements=packed_query_rows * query_feature.extent,
         key_value_gradient_accumulator_elements=2 * schedule.key_value_tile_size * query_feature.extent,
+        key_value_partial_elements=partial_elements,
     )
 
 

@@ -195,3 +195,34 @@ def test_score_map_mutation_changes_domain_work_without_changing_grouped_schedul
     assert softcap_work.fully_restricted_tile_pairs == 0
     assert causal.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
     assert softcap.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
+
+
+def test_key_value_query_partitioning_changes_only_physical_fold_tasks() -> None:
+    backward = derive_streaming_attention_backward(_program(causal=True))
+    baseline = derive_streaming_attention_backward_tile_schedule(
+        backward,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    partitioned = derive_streaming_attention_backward_tile_schedule(
+        backward,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+        key_value_query_partitions=4,
+    )
+
+    baseline_work = estimate_streaming_attention_backward_work(backward, baseline)
+    partitioned_work = estimate_streaming_attention_backward_work(backward, partitioned)
+
+    assert partitioned.query_heads_per_key_value_tile == baseline.query_heads_per_key_value_tile
+    assert partitioned_work.logical_query_key_tile_pairs == baseline_work.logical_query_key_tile_pairs
+    assert (
+        partitioned_work.key_value_gradient_contract_invocations == baseline_work.key_value_gradient_contract_invocations
+    )
+    assert partitioned_work.key_value_task_invocations == 4 * baseline_work.key_value_task_invocations
+    assert baseline_work.key_value_finalize_invocations == 0
+    assert partitioned_work.key_value_finalize_invocations == 10
+    assert baseline_work.key_value_partial_elements == 0
+    assert partitioned_work.key_value_partial_elements == 240
