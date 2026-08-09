@@ -42,8 +42,10 @@ def test_cuda_toolkit_shared_library_resolves_versioned_pip_library(tmp_path: Pa
     nvcc = toolkit / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
     nvcc.touch()
+    older = toolkit / "lib" / "libcublas.so.9"
     versioned = toolkit / "lib" / "libcublas.so.13"
     versioned.parent.mkdir()
+    older.touch()
     versioned.touch()
 
     assert cuda_toolkit_shared_library(nvcc, "cublas") == versioned

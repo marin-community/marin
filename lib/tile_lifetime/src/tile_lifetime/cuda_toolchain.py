@@ -22,7 +22,11 @@ def cuda_toolkit_shared_library(nvcc: Path, name: str) -> Path:
         unversioned = directory / filename
         if unversioned.is_file():
             return unversioned
-        versioned = sorted(directory.glob(f"{filename}.*"), reverse=True)
+        versioned = sorted(
+            directory.glob(f"{filename}.*"),
+            key=lambda path: tuple(int(component) for component in path.name.removeprefix(f"{filename}.").split(".")),
+            reverse=True,
+        )
         if versioned:
             return versioned[0]
     searched = ", ".join(str(directory / filename) for directory in directories)

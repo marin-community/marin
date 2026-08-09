@@ -24,7 +24,7 @@ import jaxlib
 import numpy as np
 
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
-from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags
+from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library
 from tile_lifetime.jax_axis_fold_ffi import call_cuda_axis_fold_ffi, register_cuda_axis_fold_ffi
 from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_row_normalization_backward import compile_stablehlo_row_normalization_backward
@@ -67,7 +67,9 @@ def _compile_generated_source(source: str, directory: Path, nvcc: Path, architec
             str(source_path),
             "-o",
             str(library_path),
+            "-cudart=none",
             *cuda_toolkit_link_flags(nvcc, runtime_search_path=False),
+            str(cuda_toolkit_shared_library(nvcc, "cudart")),
         ),
         check=True,
     )
