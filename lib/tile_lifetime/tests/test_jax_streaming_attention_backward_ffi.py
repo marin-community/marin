@@ -64,6 +64,38 @@ def _program_and_schedule(scale: float = 0.5):
     return program, schedule
 
 
+@functools.cache
+def _short_program_and_schedule(head_dimension: int):
+    config = StreamingAttentionBackwardDebugConfig(
+        batch=2,
+        query_length=4,
+        key_length=4,
+        query_heads=2,
+        key_value_heads=1,
+        head_dimension=head_dimension,
+        scale=0.32421875,
+    )
+    graph = import_stablehlo(
+        export_debug_streaming_attention_backward(config),
+        input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    )
+    recovered = recover_stablehlo_streaming_attention_backward(
+        graph,
+        schedule=StreamingTileSchedule(query_tile_size=4, key_value_tile_size=4, pipeline_depth=2),
+    )
+    program = eliminate_normalized_exp_maximum_vjp(
+        recovered.program,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=4,
+        key_value_tile_size=4,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    return program, schedule
+
+
 def _function_argument_count(path: Path, function_name: str) -> int:
     module = ast.parse(path.read_text())
     function = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == function_name)
@@ -97,6 +129,34 @@ def test_recompute_plan_preserves_natural_vjp_signature_and_emits_three_aot_kern
     assert "triton" not in generated.handler_template.lower()
     assert "ScratchAllocator" in generated.handler_template
     assert "{forward_launcher}" in generated.handler_template
+
+
+def test_short_d16_plan_legalizes_only_physical_aot_tiles() -> None:
+    program, schedule = _short_program_and_schedule(16)
+
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.short_d16_test_v1",
+    )
+
+    forward, query_cotangent, key_value_cotangents = generated.aot_kernels
+    assert (schedule.query_tile_size, schedule.key_value_tile_size) == (4, 4)
+    assert forward.signature[-8:-4] == ("16", "16", "16", "2")
+    assert query_cotangent.signature[-6:-2] == ("16", "16", "16", "2")
+    assert key_value_cotangents.signature[-6:-2] == ("16", "16", "16", "2")
+    assert tuple(kernel.grid for kernel in generated.aot_kernels) == ((1, 2, 1), (1, 2, 1), (1, 2, 1))
+
+
+def test_short_unsupported_head_dimension_fails_closed() -> None:
+    program, schedule = _short_program_and_schedule(32)
+
+    with pytest.raises(ValueError, match="equal head dimensions 16, 64, and 128"):
+        generate_streaming_attention_backward_ffi(
+            program,
+            schedule,
+            target_name="shuttle.streaming_reverse.short_d32_test_v1",
+        )
 
 
 def test_saved_state_is_an_explicit_alternative_not_a_hidden_recompute_input() -> None:

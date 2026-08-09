@@ -109,6 +109,7 @@ def _streaming_dq_kernel(
     query_tokens = query_start + query_offsets_in_block
     key_offsets = tl.arange(0, block_n)
     features = tl.arange(0, head_dimension)
+    query_valid = query_tokens < sequence_length
     query_offsets = (
         batch_index * stride_qb
         + query_tokens[:, None] * stride_qs
@@ -133,13 +134,17 @@ def _streaming_dq_kernel(
         + query_heads_for_rows[:, None] * stride_dqh
         + features[None, :] * stride_dqd
     )
-    query_tile = tl.load(query + query_offsets)
-    output_tile = tl.load(output + output_offsets).to(tl.float32)
-    output_cotangent_tile = tl.load(output_cotangent + output_cotangent_offsets)
+    query_tile = tl.load(query + query_offsets, mask=query_valid[:, None], other=0.0)
+    output_tile = tl.load(output + output_offsets, mask=query_valid[:, None], other=0.0).to(tl.float32)
+    output_cotangent_tile = tl.load(
+        output_cotangent + output_cotangent_offsets,
+        mask=query_valid[:, None],
+        other=0.0,
+    )
     row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
-    lse = tl.load(log_sum_exp + row_offset)
+    lse = tl.load(log_sum_exp + row_offset, mask=query_valid, other=-float("inf"))
     delta = tl.sum(output_tile * output_cotangent_tile.to(tl.float32), axis=1)
-    tl.store(output_dot + row_offset, delta)
+    tl.store(output_dot + row_offset, delta, mask=query_valid)
     query_gradient = tl.zeros((packed_query_rows, head_dimension), tl.float32)
     key_stop = sequence_length
     if causal:
@@ -162,8 +167,8 @@ def _streaming_dq_kernel(
             block_shape=(head_dimension, block_n),
             order=(0, 1),
         )
-        key_tile = tl.load(key_block)
-        value_tile = tl.load(value_block)
+        key_tile = tl.load(key_block, boundary_check=(0, 1), padding_option="zero")
+        value_tile = tl.load(value_block, boundary_check=(0, 1), padding_option="zero")
         score = tl.dot(query_tile, key_tile) * scale_log2
         score_slope = tl.full((packed_query_rows, block_n), scale, tl.float32)
         if has_softcap:
@@ -171,16 +176,20 @@ def _streaming_dq_kernel(
             tanh_score = 2.0 * tl.sigmoid(2.0 * score / cap_log2) - 1.0
             score = cap_log2 * tanh_score
             score_slope *= 1.0 - tanh_score * tanh_score
-        valid = tl.full((packed_query_rows, block_n), True, tl.int1)
+        key_valid = key_start + key_offsets < sequence_length
+        valid = query_valid[:, None] & key_valid[None, :]
         if causal:
             valid &= query_tokens[:, None] >= key_start + key_offsets[None, :]
-        probability = tl.math.exp2(score - lse[:, None])
-        probability = tl.where(valid, probability, 0.0)
+        probability = tl.where(valid, tl.math.exp2(score - lse[:, None]), 0.0)
         probability_cotangent = tl.dot(output_cotangent_tile, value_tile) * output_scale
         mapped_score_cotangent = probability * (probability_cotangent - delta[:, None])
         raw_score_cotangent = tl.where(valid, mapped_score_cotangent * score_slope, 0.0)
         query_gradient += tl.dot(raw_score_cotangent.to(tl.bfloat16), tl.trans(key_tile))
-    tl.store(query_cotangent + query_cotangent_offsets, query_gradient.to(tl.bfloat16))
+    tl.store(
+        query_cotangent + query_cotangent_offsets,
+        query_gradient.to(tl.bfloat16),
+        mask=query_valid[:, None],
+    )
 
 
 @triton.jit
@@ -237,6 +246,7 @@ def _streaming_dkdv_kernel(
     key_value_head = batch_key_value_head % key_value_heads
     key_start = key_block_index * block_n
     key_offsets = key_start + tl.arange(0, block_n)
+    key_valid = key_offsets < sequence_length
     key_block = tl.make_block_ptr(
         base=key + batch_index * stride_kb + key_value_head * stride_kh,
         shape=(head_dimension, sequence_length),
@@ -253,8 +263,8 @@ def _streaming_dkdv_kernel(
         block_shape=(head_dimension, block_n),
         order=(0, 1),
     )
-    key_tile = tl.load(key_block)
-    value_tile = tl.load(value_block)
+    key_tile = tl.load(key_block, boundary_check=(0, 1), padding_option="zero")
+    value_tile = tl.load(value_block, boundary_check=(0, 1), padding_option="zero")
     key_gradient = tl.zeros((block_n, head_dimension), tl.float32)
     value_gradient = tl.zeros((block_n, head_dimension), tl.float32)
     packed_query_rows: tl.constexpr = block_m * head_group_size
@@ -269,6 +279,7 @@ def _streaming_dkdv_kernel(
     for query_start in tl.range(first_query_start, sequence_length, block_m):
         query_start = tl.multiple_of(query_start, block_m)
         query_tokens = query_start + query_offsets_in_block
+        query_valid = query_tokens < sequence_length
         query_offsets = (
             batch_index * stride_qb
             + query_tokens[:, None] * stride_qs
@@ -281,11 +292,15 @@ def _streaming_dkdv_kernel(
             + query_heads_for_rows[:, None] * stride_dh
             + features[None, :] * stride_dd
         )
-        query_tile = tl.load(query + query_offsets)
-        output_cotangent_tile = tl.load(output_cotangent + output_cotangent_offsets)
+        query_tile = tl.load(query + query_offsets, mask=query_valid[:, None], other=0.0)
+        output_cotangent_tile = tl.load(
+            output_cotangent + output_cotangent_offsets,
+            mask=query_valid[:, None],
+            other=0.0,
+        )
         row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
-        lse = tl.load(log_sum_exp + row_offset)
-        delta = tl.load(output_dot + row_offset)
+        lse = tl.load(log_sum_exp + row_offset, mask=query_valid, other=-float("inf"))
+        delta = tl.load(output_dot + row_offset, mask=query_valid, other=0.0)
         score = tl.dot(query_tile, key_tile) * scale_log2
         score_slope = tl.full((packed_query_rows, block_n), scale, tl.float32)
         if has_softcap:
@@ -293,11 +308,10 @@ def _streaming_dkdv_kernel(
             tanh_score = 2.0 * tl.sigmoid(2.0 * score / cap_log2) - 1.0
             score = cap_log2 * tanh_score
             score_slope *= 1.0 - tanh_score * tanh_score
-        valid = tl.full((packed_query_rows, block_n), True, tl.int1)
+        valid = query_valid[:, None] & key_valid[None, :]
         if causal:
             valid &= query_tokens[:, None] >= key_offsets[None, :]
-        probability = tl.math.exp2(score - lse[:, None])
-        probability = tl.where(valid, probability, 0.0)
+        probability = tl.where(valid, tl.math.exp2(score - lse[:, None]), 0.0)
         value_gradient += output_scale * tl.dot(
             tl.trans(probability.to(tl.bfloat16)),
             output_cotangent_tile,
@@ -318,8 +332,8 @@ def _streaming_dkdv_kernel(
         + key_value_head * stride_dvh
         + features[None, :] * stride_dvd
     )
-    tl.store(key_cotangent + key_cotangent_offsets, key_gradient.to(tl.bfloat16))
-    tl.store(value_cotangent + value_cotangent_offsets, value_gradient.to(tl.bfloat16))
+    tl.store(key_cotangent + key_cotangent_offsets, key_gradient.to(tl.bfloat16), mask=key_valid[:, None])
+    tl.store(value_cotangent + value_cotangent_offsets, value_gradient.to(tl.bfloat16), mask=key_valid[:, None])
 
 
 @dataclass(frozen=True)

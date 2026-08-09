@@ -2,15 +2,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Execute four generated routed regions in one natural Grug train step."""
+"""Execute five generic generated regions in one natural Grug train step."""
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import importlib
 import json
 import statistics
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -29,27 +31,83 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _compile_cuda_ffi_handler,
     write_gzip_text,
 )
+from tile_lifetime.jax_streaming_attention_backward_ffi import (
+    compile_streaming_attention_backward_ffi,
+    generate_streaming_attention_backward_ffi,
+    register_streaming_attention_backward_ffi,
+)
+from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.stablehlo_import import import_stablehlo
+from tile_lifetime.stablehlo_streaming_attention_backward import recover_stablehlo_streaming_attention_backward
+from tile_lifetime.streaming_attention import StreamingTileSchedule
+from tile_lifetime.streaming_attention_backward import (
+    StreamingAttentionBackwardDomainTraversal,
+    derive_streaming_attention_backward_tile_schedule,
+    eliminate_normalized_exp_maximum_vjp,
+)
+from tile_lifetime.streaming_attention_backward_reference import (
+    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    StreamingAttentionBackwardDebugConfig,
+    export_debug_streaming_attention_backward,
+)
 from tile_lifetime.xla_relation_program_recovery import RoutedInputAdjointFfiOperandRole
 from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ffi
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
 from tile_lifetime.xla_routed_training_ffi import (
+    RoutedTrainingAndAttentionFfiTargets,
     RoutedTrainingFfiTargets,
-    audit_routed_training_replacement,
+    audit_routed_training_and_attention_replacement,
     entry_parameter_ancestors,
-    plan_routed_training_typed_ffi,
-    replace_routed_training_regions_with_custom_calls,
+    plan_routed_training_and_attention_typed_ffi,
+    replace_routed_training_and_attention_regions_with_custom_calls,
 )
 from tile_lifetime.xla_routed_weight_gradient_ffi import generate_cuda_group_batched_contract_ffi
+from tile_lifetime.xla_streaming_attention_backward_ffi import (
+    audit_streaming_attention_backward_region_replacement,
+    derive_streaming_attention_backward_ffi_output_layouts,
+)
 
 _PASS_NAME = "shuttle_grug_routed_training_gpu_v1"
-_TARGETS = RoutedTrainingFfiTargets(
-    forward="shuttle.routed_training.forward.v1",
-    input_adjoint="shuttle.routed_training.input_adjoint.v1",
-    weight_gradients=(
-        "shuttle.routed_training.weight_gradient.0.v1",
-        "shuttle.routed_training.weight_gradient.1.v1",
+_TARGETS = RoutedTrainingAndAttentionFfiTargets(
+    routed=RoutedTrainingFfiTargets(
+        forward="shuttle.routed_training.forward.v2",
+        input_adjoint="shuttle.routed_training.input_adjoint.v2",
+        weight_gradients=(
+            "shuttle.routed_training.weight_gradient.0.v2",
+            "shuttle.routed_training.weight_gradient.1.v2",
+        ),
     ),
+    attention_backward="shuttle.routed_training.attention_backward.v2",
 )
+
+
+def _attention_reverse_program() -> tuple[Any, Any, bytes]:
+    config = StreamingAttentionBackwardDebugConfig(
+        batch=2,
+        query_length=4,
+        key_length=4,
+        query_heads=2,
+        key_value_heads=1,
+        head_dimension=16,
+        scale=0.32421875,
+    )
+    source_stablehlo = export_debug_streaming_attention_backward(config)
+    graph = import_stablehlo(source_stablehlo, input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES)
+    recovered = recover_stablehlo_streaming_attention_backward(
+        graph,
+        schedule=StreamingTileSchedule(query_tile_size=4, key_value_tile_size=4, pipeline_depth=2),
+    )
+    program = eliminate_normalized_exp_maximum_vjp(
+        recovered.program,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=4,
+        key_value_tile_size=4,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    return program, schedule, source_stablehlo
 
 
 def _register_cuda_target(library: ctypes.CDLL, target: str) -> None:
@@ -63,21 +121,38 @@ def _register_cuda_target(library: ctypes.CDLL, target: str) -> None:
     )
 
 
+def _runtime_dependency_audit() -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in sys.modules
+        if name == "torch" or name.startswith("torch.") or name == "triton" or name.startswith("triton.")
+    )
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def run_smoke(
     nvcc: Path,
     architecture: str,
     artifact_directory: Path | None,
     *,
+    repository: Path,
+    triton_target: str | None,
     warmup: int = 4,
     repeats: int = 30,
 ) -> dict[str, Any]:
-    """Compile, execute, and time the combined routed training transform."""
+    """Compile, execute, and time the combined routed-plus-attention transform."""
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the combined routed training replacement requires a CUDA JAX device")
     if warmup < 0:
         raise ValueError("warmup must be nonnegative")
     if repeats <= 0 or repeats % 2:
         raise ValueError("repeats must be a positive even number")
+    initial_forbidden_modules = _runtime_dependency_audit()
+    if initial_forbidden_modules:
+        raise RuntimeError(f"runtime imported Torch/Triton before AOT build: {initial_forbidden_modules}")
     hlo = importlib.import_module("jaxlib._hlo")
     xla = importlib.import_module("jax.extend.xla")
     jax.config.update("jax_enable_compilation_cache", False)
@@ -88,13 +163,24 @@ def run_smoke(
     else:
         artifact_directory.mkdir(parents=True, exist_ok=True)
         directory = artifact_directory
+    attention_program, attention_schedule, source_attention_stablehlo = _attention_reverse_program()
+    default_attention = generate_streaming_attention_backward_ffi(
+        attention_program,
+        attention_schedule,
+        target_name=_TARGETS.attention_backward,
+    )
+    if artifact_directory is not None:
+        (directory / "source-attention-vjp-stablehlo.mlir.bc").write_bytes(source_attention_stablehlo)
 
     original_modules: list[str] = []
     transformed_modules: list[str] = []
     recovered_plans: list[Any] = []
-    generated_programs: list[tuple[Any, Any, tuple[Any, Any]]] = []
+    generated_programs: list[tuple[Any, Any, tuple[Any, Any], Any]] = []
     replacement_audits: list[Any] = []
+    attention_liveness_audits: list[Any] = []
     libraries: dict[str, ctypes.CDLL] = {}
+    attention_library_path: Path | None = None
+    final_forbidden_modules: tuple[str, ...] = ()
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
@@ -121,6 +207,7 @@ def run_smoke(
                 return library
 
             def replace(serialized_module: bytes) -> bytes | None:
+                nonlocal attention_library_path
                 module = hlo.HloModule.from_serialized_hlo_module_proto(serialized_module)
                 if module.name != "jit_train_step":
                     return None
@@ -128,35 +215,79 @@ def run_smoke(
                 original_modules.append(original)
                 if artifact_directory is not None:
                     write_gzip_text(directory / "original-gpu-pre-scheduler-hlo.txt.gz", original)
-                plan = plan_routed_training_typed_ffi(original)
-                forward = generate_cuda_routed_forward_ffi(plan.forward, target=_TARGETS.forward)
+                default_plan = plan_routed_training_and_attention_typed_ffi(
+                    original,
+                    attention_program,
+                    default_attention,
+                )
+                attention = generate_streaming_attention_backward_ffi(
+                    attention_program,
+                    attention_schedule,
+                    target_name=_TARGETS.attention_backward,
+                    output_layouts=derive_streaming_attention_backward_ffi_output_layouts(
+                        default_plan.attention_backward
+                    ),
+                )
+                plan = plan_routed_training_and_attention_typed_ffi(original, attention_program, attention)
+                forward = generate_cuda_routed_forward_ffi(
+                    plan.routed.forward,
+                    target=_TARGETS.routed.forward,
+                )
                 input_adjoint = generate_cuda_routed_input_adjoint_ffi(
-                    plan.input_adjoint,
-                    target=_TARGETS.input_adjoint,
+                    plan.routed.input_adjoint,
+                    target=_TARGETS.routed.input_adjoint,
                 )
                 weights = tuple(
                     generate_cuda_group_batched_contract_ffi(weight, target=target)
-                    for weight, target in zip(plan.weight_gradients, _TARGETS.weight_gradients, strict=True)
+                    for weight, target in zip(
+                        plan.routed.weight_gradients,
+                        _TARGETS.routed.weight_gradients,
+                        strict=True,
+                    )
                 )
                 generated_sources = (forward.source, input_adjoint.source, *(weight.source for weight in weights))
                 if any("atomicAdd(" in source for source in generated_sources):
                     raise RuntimeError("generated routed training source contains semantic atomic accumulation")
-                compile_target(forward.source, _TARGETS.forward, "routed_forward")
-                compile_target(input_adjoint.source, _TARGETS.input_adjoint, "routed_input_adjoint")
-                for index, (weight, target) in enumerate(zip(weights, _TARGETS.weight_gradients, strict=True)):
+                compile_target(forward.source, _TARGETS.routed.forward, "routed_forward")
+                compile_target(input_adjoint.source, _TARGETS.routed.input_adjoint, "routed_input_adjoint")
+                for index, (weight, target) in enumerate(zip(weights, _TARGETS.routed.weight_gradients, strict=True)):
                     compile_target(weight.source, target, f"group_batched_weight_gradient_{index}")
-                rewritten = replace_routed_training_regions_with_custom_calls(
+                compiled_attention = compile_streaming_attention_backward_ffi(
+                    attention,
+                    repository=repository,
+                    directory=directory / "attention_backward",
+                    nvcc=nvcc,
+                    architecture=architecture,
+                    triton_target=triton_target,
+                )
+                register_streaming_attention_backward_ffi(compiled_attention)
+                libraries["attention_backward"] = compiled_attention.library
+                attention_library_path = compiled_attention.library_path
+                rewritten = replace_routed_training_and_attention_regions_with_custom_calls(
                     original,
                     plan,
                     targets=_TARGETS,
                 )
                 recovered_plans.append(plan)
-                generated_programs.append((forward, input_adjoint, weights))
+                generated_programs.append((forward, input_adjoint, weights, compiled_attention))
                 transformed_module = hlo.hlo_module_from_text(rewritten)
                 transformed_text = transformed_module.to_string()
                 transformed_modules.append(transformed_text)
                 replacement_audits.append(
-                    audit_routed_training_replacement(original, transformed_text, plan, targets=_TARGETS)
+                    audit_routed_training_and_attention_replacement(
+                        original,
+                        transformed_text,
+                        plan,
+                        targets=_TARGETS,
+                    )
+                )
+                attention_liveness_audits.append(
+                    audit_streaming_attention_backward_region_replacement(
+                        original,
+                        transformed_text,
+                        plan.attention_backward,
+                        target=_TARGETS.attention_backward,
+                    )
                 )
                 return transformed_module.as_serialized_hlo_module_proto()
 
@@ -182,6 +313,9 @@ def run_smoke(
                 )
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
+            final_forbidden_modules = _runtime_dependency_audit()
+            if final_forbidden_modules:
+                raise RuntimeError(f"runtime imported Torch/Triton after generated execution: {final_forbidden_modules}")
             comparison = _compare_under_ordered_fp(expected, actual)
 
             def timed_execution(executable: Any) -> tuple[float, str]:
@@ -229,6 +363,10 @@ def run_smoke(
                     )
                     for index in range(2)
                 ],
+                "attention_backward": _call_count(
+                    libraries["attention_backward"],
+                    "shuttle_streaming_attention_backward_ffi_call_count",
+                ),
             }
     finally:
         if artifact_directory is not None:
@@ -241,6 +379,8 @@ def run_smoke(
                 compiled_library = directory / name / "generated_pair_map_handler.so"
                 if compiled_library.exists():
                     compiled_library.unlink()
+            if attention_library_path is not None and attention_library_path.exists():
+                attention_library_path.unlink()
         if temporary is not None:
             temporary.cleanup()
 
@@ -249,50 +389,62 @@ def run_smoke(
         or len(transformed_modules) != 1
         or len(recovered_plans) != 1
         or len(replacement_audits) != 1
+        or len(attention_liveness_audits) != 1
     ):
-        raise RuntimeError("expected one combined routed training replacement pass")
+        raise RuntimeError("expected one combined routed-plus-attention replacement pass")
     original = original_modules[0]
     transformed_hlo = transformed_modules[0]
     plan = recovered_plans[0]
     replacement_audit = replacement_audits[0]
-    forward, input_adjoint, weights = generated_programs[0]
+    attention_liveness = attention_liveness_audits[0]
+    forward, input_adjoint, weights, compiled_attention = generated_programs[0]
     target_occurrences = {
-        "forward": transformed_hlo.count(_TARGETS.forward),
-        "input_adjoint": transformed_hlo.count(_TARGETS.input_adjoint),
-        "weight_gradients": [transformed_hlo.count(target) for target in _TARGETS.weight_gradients],
+        "forward": transformed_hlo.count(_TARGETS.routed.forward),
+        "input_adjoint": transformed_hlo.count(_TARGETS.routed.input_adjoint),
+        "weight_gradients": [transformed_hlo.count(target) for target in _TARGETS.routed.weight_gradients],
+        "attention_backward": transformed_hlo.count(_TARGETS.attention_backward),
     }
     minimum_calls = repeats + warmup + 1
-    observed_calls = [call_counts["forward"], call_counts["input_adjoint"], *call_counts["weight_gradients"]]
+    observed_calls = [
+        call_counts["forward"],
+        call_counts["input_adjoint"],
+        *call_counts["weight_gradients"],
+        call_counts["attention_backward"],
+    ]
     observed_occurrences = [
         target_occurrences["forward"],
         target_occurrences["input_adjoint"],
         *target_occurrences["weight_gradients"],
+        target_occurrences["attention_backward"],
     ]
-    if observed_occurrences != [1, 1, 1, 1] or any(count < minimum_calls for count in observed_calls):
+    if observed_occurrences != [1, 1, 1, 1, 1] or any(count < minimum_calls for count in observed_calls):
         raise RuntimeError(f"custom-call evidence mismatch: occurrences={observed_occurrences}, calls={observed_calls}")
     all_operands = tuple(
         dict.fromkeys(
             (
-                *(operand.value.instruction for operand in plan.forward.operands),
-                *(operand.value.instruction for operand in plan.input_adjoint.operands),
-                *(operand.value.instruction for weight in plan.weight_gradients for operand in weight.operands),
+                *(operand.value.instruction for operand in plan.routed.forward.operands),
+                *(operand.value.instruction for operand in plan.routed.input_adjoint.operands),
+                *(operand.value.instruction for weight in plan.routed.weight_gradients for operand in weight.operands),
+                *(value.instruction for value in plan.attention_backward.inputs),
             )
         )
     )
     parameter_ancestors = entry_parameter_ancestors(original, all_operands)
     static_roles = tuple(
         operand.role.value
-        for operand in plan.input_adjoint.operands
+        for operand in plan.routed.input_adjoint.operands
         if not parameter_ancestors[operand.value.instruction]
     )
     if static_roles != (RoutedInputAdjointFfiOperandRole.FOLD_INITIAL.value,):
         raise RuntimeError(f"unexpected routed training static operands: {static_roles}")
     baseline_median = statistics.median(baseline_samples)
     transformed_median = statistics.median(transformed_samples)
+    if len(set(transformed_hashes)) != 1:
+        raise RuntimeError("generated five-call result is not bitwise deterministic")
     if artifact_directory is not None:
         write_gzip_text(directory / "transformed-gpu-pre-scheduler-hlo.txt.gz", transformed_hlo)
     return {
-        "kind": "xla_grug_combined_routed_training_generated_ffi",
+        "kind": "xla_grug_combined_routed_training_and_attention_generated_ffi",
         "jax_version": jax.__version__,
         "jaxlib_version": jaxlib.__version__,
         "platform": "cuda",
@@ -304,49 +456,72 @@ def run_smoke(
             "Contract -> reverse Map -> Contract -> source Fold",
             "group-batched weight Contract 0",
             "group-batched weight Contract 1",
+            "causal GQA attention reverse Contract/Fold/DomainRestriction region",
         ],
         "numerical_policies": {
-            "forward": plan.forward.region.numerical_policy.value,
-            "input_adjoint": plan.input_adjoint.region.numerical_policy.value,
-            "weight_gradients": [weight.numerical_contract.numerical_policy.value for weight in plan.weight_gradients],
+            "forward": plan.routed.forward.region.numerical_policy.value,
+            "input_adjoint": plan.routed.input_adjoint.region.numerical_policy.value,
+            "weight_gradients": [
+                weight.numerical_contract.numerical_policy.value for weight in plan.routed.weight_gradients
+            ],
+            "attention_backward": plan.attention_backward.reassociation,
         },
-        "external_collectives": replacement_audit.weight_gradient_collectives,
+        "external_collectives": replacement_audit.routed.weight_gradient_collectives,
         "uses_atomic_accumulation": False,
         "static_operand_roles": static_roles,
         "operand_ancestry": {operand: parameter_ancestors[operand] for operand in all_operands},
-        "output_alias_operands": [weight.output_alias_operand for weight in plan.weight_gradients],
+        "output_alias_operands": [weight.output_alias_operand for weight in plan.routed.weight_gradients],
         "custom_call_targets": {
-            "forward": _TARGETS.forward,
-            "input_adjoint": _TARGETS.input_adjoint,
-            "weight_gradients": _TARGETS.weight_gradients,
+            "forward": _TARGETS.routed.forward,
+            "input_adjoint": _TARGETS.routed.input_adjoint,
+            "weight_gradients": _TARGETS.routed.weight_gradients,
+            "attention_backward": _TARGETS.attention_backward,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
-        "input_adjoint_auxiliary": replacement_audit.input_adjoint_auxiliary,
-        "target_instruction_names": replacement_audit.target_instructions,
-        "copy_count": dict(zip(("original", "transformed"), replacement_audit.copy_count, strict=True)),
-        "transpose_count": dict(zip(("original", "transformed"), replacement_audit.transpose_count, strict=True)),
+        "input_adjoint_auxiliary": replacement_audit.routed.input_adjoint_auxiliary,
+        "target_instruction_names": (
+            *replacement_audit.routed.target_instructions,
+            replacement_audit.attention_backward_instruction,
+        ),
+        "copy_count": dict(zip(("original", "transformed"), replacement_audit.routed.copy_count, strict=True)),
+        "transpose_count": dict(zip(("original", "transformed"), replacement_audit.routed.transpose_count, strict=True)),
+        "attention_dead_reverse_closure": attention_liveness.dead_reverse_closure,
+        "attention_preserved_shared_users": dict(attention_liveness.preserved_shared_users),
         "generated_semantic_sha256": {
             "forward": forward.semantic_digest,
             "input_adjoint": input_adjoint.semantic_digest,
             "weight_gradients": [weight.semantic_digest for weight in weights],
+            "attention_backward": compiled_attention.generated.semantic_fingerprint,
         },
         "generated_source_sha256": {
             "forward": forward.source_digest,
             "input_adjoint": input_adjoint.source_digest,
             "weight_gradients": [weight.source_digest for weight in weights],
+            "attention_backward": {
+                "handler": _sha256(compiled_attention.source_path),
+                "aot_sources": [_sha256(path) for path in compiled_attention.aot_sources],
+            },
         },
         "baseline_median_ms": baseline_median,
         "generated_median_ms": transformed_median,
         "generated_over_baseline": transformed_median / baseline_median,
+        "generated_minus_baseline_ms": transformed_median - baseline_median,
+        "independent_custom_call_count": 5,
+        "latency_delta_per_custom_call_us": (transformed_median - baseline_median) * 1e3 / 5,
+        "latency_delta_attribution": (
+            "Whole-step delta includes five fixed typed-FFI dispatches and changed kernels; the per-call quotient is "
+            "reported only to expose the fixed-call scale, not as causal attribution."
+        ),
         "baseline_unique_output_hashes": sorted(set(baseline_hashes)),
         "generated_unique_output_hashes": sorted(set(transformed_hashes)),
+        "runtime_torch_triton_modules": final_forbidden_modules,
         "raw_samples": raw_samples,
         **comparison,
         "outputs_match": True,
         "remaining_ownership_gap": (
             "The rematerialized routed forward chain, relation index plane, and placement collectives remain under "
-            "XLA; this checkpoint composes four existing generated physical regions without a megakernel."
+            "XLA; this checkpoint composes five generic generated physical regions without a megakernel."
         ),
     }
 
@@ -361,6 +536,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", required=True)
+    parser.add_argument("--repository", type=Path, default=Path.cwd())
+    parser.add_argument("--triton-target")
     parser.add_argument("--artifact-directory", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--warmup", type=int, default=4)
@@ -370,6 +547,8 @@ def main() -> None:
         args.nvcc,
         args.architecture,
         args.artifact_directory,
+        repository=args.repository,
+        triton_target=args.triton_target,
         warmup=args.warmup,
         repeats=args.repeats,
     )

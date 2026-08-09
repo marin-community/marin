@@ -324,7 +324,7 @@ def audit_streaming_attention_backward_region_replacement(
 
 
 def derive_streaming_attention_backward_ffi_output_layouts(
-    plan: StreamingReverseHloReplacementPlan,
+    plan: StreamingReverseHloReplacementPlan | StreamingReverseHloRegionReplacementPlan,
 ) -> tuple[StreamingAttentionBackwardFfiBufferLayout, ...]:
     """Derive generic FFI output layouts from the proven physical boundary."""
     return tuple(

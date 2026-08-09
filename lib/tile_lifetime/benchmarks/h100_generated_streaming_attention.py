@@ -219,7 +219,7 @@ def _stream_kv_tiles(
             block_shape=(block_n, head_dimension),
             order=(1, 0),
         )
-        key_tile = tl.load(key_block)
+        key_tile = tl.load(key_block, boundary_check=(0, 1), padding_option="zero")
         scores = tl.dot(query_tile, key_tile) * scale_log2
         if has_softcap:
             cap_log2 = softcap * 1.4426950408889634
@@ -549,7 +549,7 @@ def _stream_grouped_query_kv_tiles(
             block_shape=(block_n, head_dimension),
             order=(1, 0),
         )
-        key_tile = tl.load(key_block)
+        key_tile = tl.load(key_block, boundary_check=(0, 1), padding_option="zero")
         scores = tl.dot(query_tile, key_tile) * scale_log2
         if has_softcap:
             cap_log2 = softcap * 1.4426950408889634
@@ -562,7 +562,9 @@ def _stream_grouped_query_kv_tiles(
                 + (current_key + key_offsets[None, :]) * stride_bias_k
             )
             scores += tl.load(bias + bias_offsets).to(tl.float32) * 1.4426950408889634
-        valid = tl.full((tile_rows, block_n), True, tl.int1)
+        query_valid = query_tokens < sequence_length
+        key_valid = current_key + key_offsets < sequence_length
+        valid = query_valid[:, None] & key_valid[None, :]
         if has_mask:
             mask_offsets = (
                 batch_index * stride_mask_b
@@ -570,18 +572,26 @@ def _stream_grouped_query_kv_tiles(
                 + query_tokens[:, None] * stride_mask_q
                 + (current_key + key_offsets[None, :]) * stride_mask_k
             )
-            valid &= tl.load(score_mask + mask_offsets).to(tl.int1)
+            valid &= tl.load(score_mask + mask_offsets, mask=valid, other=0).to(tl.int1)
         if causal:
-            query_position = tl.load(query_positions + query_tokens * stride_query_position)
-            key_position = tl.load(key_positions + (current_key + key_offsets) * stride_key_position)
+            query_position = tl.load(
+                query_positions + query_tokens * stride_query_position,
+                mask=query_valid,
+                other=0,
+            )
+            key_position = tl.load(
+                key_positions + (current_key + key_offsets) * stride_key_position,
+                mask=key_valid,
+                other=0,
+            )
             valid &= query_position[:, None] >= key_position[None, :]
         scores = tl.where(valid, scores, -float("inf"))
         next_max = tl.maximum(row_max, tl.max(scores, axis=1))
-        probabilities = tl.math.exp2(scores - next_max[:, None])
+        probabilities = tl.where(valid, tl.math.exp2(scores - next_max[:, None]), 0.0)
         correction = tl.math.exp2(row_max - next_max)
         row_sum = row_sum * correction + tl.sum(probabilities, axis=1)
         accumulator *= correction[:, None]
-        value_tile = tl.load(value_block)
+        value_tile = tl.load(value_block, boundary_check=(0, 1), padding_option="zero")
         accumulator = tl.dot(probabilities.to(tl.bfloat16), value_tile, accumulator)
         row_max = next_max
     return accumulator, row_sum, row_max
@@ -656,7 +666,8 @@ def _streaming_grouped_query_forward(
         + query_head_indices[:, None] * stride_qh
         + features[None, :] * stride_qd
     )
-    query_tile = tl.load(query + query_offsets)
+    query_valid = query_tokens < sequence_length
+    query_tile = tl.load(query + query_offsets, mask=query_valid[:, None], other=0.0)
     accumulator = tl.zeros((tile_rows, head_dimension), tl.float32)
     row_sum = tl.full((tile_rows,), 1.0, tl.float32)
     row_max = tl.full((tile_rows,), -float("inf"), tl.float32)
@@ -808,9 +819,9 @@ def _streaming_grouped_query_forward(
         + query_head_indices[:, None] * stride_oh
         + features[None, :] * stride_od
     )
-    tl.store(output + output_offsets, accumulator.to(tl.bfloat16))
+    tl.store(output + output_offsets, accumulator.to(tl.bfloat16), mask=query_valid[:, None])
     lse_offsets = batch_index * query_heads * sequence_length + query_head_indices * sequence_length + query_tokens
-    tl.store(log_sum_exp + lse_offsets, row_max + tl.math.log2(row_sum))
+    tl.store(log_sum_exp + lse_offsets, row_max + tl.math.log2(row_sum), mask=query_valid)
 
 
 def _aligned_score_strides(

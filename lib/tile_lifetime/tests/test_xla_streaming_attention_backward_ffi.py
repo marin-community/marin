@@ -14,8 +14,6 @@ import pytest
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.ir import DType
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
-    GeneratedStreamingAttentionBackwardFfi,
-    StreamingAttentionBackwardFfiBuffer,
     StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
     generate_streaming_attention_backward_ffi,
@@ -151,33 +149,16 @@ def _grug_region_inputs(scale: float = 0.32421875):
         recovered.program,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
-    query_shape = (2, 4, 2, 16)
-    key_value_shape = (2, 4, 1, 16)
-
-    def buffer(name: str, shape: tuple[int, ...]) -> StreamingAttentionBackwardFfiBuffer:
-        return StreamingAttentionBackwardFfiBuffer(name, DType.BF16, shape)
-
-    # The preserved natural Grug fixture uses D16, below the current AOT
-    # backend's D64/D128 gate. This is a real typed-buffer boundary used only
-    # for CPU HLO planning; the test does not claim or simulate GPU execution.
-    generated = GeneratedStreamingAttentionBackwardFfi(
-        target_name="shuttle.streaming_reverse.grug_region_test",
-        handler_symbol="shuttle_streaming_reverse_grug_region_test",
-        state_policy=StreamingAttentionBackwardStatePolicy.RECOMPUTE,
-        inputs=(
-            buffer("query", query_shape),
-            buffer("key", key_value_shape),
-            buffer("value", key_value_shape),
-            buffer("output_cotangent", query_shape),
-        ),
-        outputs=(
-            buffer("query_cotangent", query_shape),
-            buffer("key_cotangent", key_value_shape),
-            buffer("value_cotangent", key_value_shape),
-        ),
-        aot_kernels=(),
-        handler_template="",
-        semantic_fingerprint=f"grug-region-structural-test-{scale}",
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=4,
+        key_value_tile_size=4,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name=f"shuttle.streaming_reverse.grug_region_test_{str(scale).replace('.', '_')}",
     )
     hlo = gzip.decompress(_GRUG_GPU_HLO.read_bytes()).decode()
     return program, generated, hlo

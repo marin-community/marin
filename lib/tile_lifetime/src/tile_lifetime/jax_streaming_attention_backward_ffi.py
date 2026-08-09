@@ -40,6 +40,8 @@ from tile_lifetime.streaming_attention_backward import (
 from tile_lifetime.tensor_program import ScalarExpression, ScalarExpressionKind, serialize_scalar_expression
 
 LOG2_E = 1.4426950408889634
+MINIMUM_AOT_DOT_EXTENT = 16
+SUPPORTED_AOT_HEAD_DIMENSIONS = (16, 64, 128)
 TRITON_COMPILE_MODULE = "triton.tools.compile"
 FORWARD_KERNEL_SOURCE = Path("lib/tile_lifetime/benchmarks/h100_generated_streaming_attention.py")
 REVERSE_KERNEL_SOURCE = Path("lib/tile_lifetime/benchmarks/h100_generated_streaming_attention_backward.py")
@@ -451,8 +453,8 @@ def _validate_program(
         raise ValueError("AOT streaming reverse requires equal K/V and matched batch dimensions")
     if query.shape[1] != key.shape[1]:
         raise ValueError("the first AOT streaming reverse requires equal query/key lengths")
-    if query.shape[-1] not in (64, 128) or key.shape[-1] != query.shape[-1]:
-        raise ValueError("AOT streaming reverse supports equal head dimensions 64 and 128")
+    if query.shape[-1] not in SUPPORTED_AOT_HEAD_DIMENSIONS or key.shape[-1] != query.shape[-1]:
+        raise ValueError("AOT streaming reverse supports equal head dimensions 16, 64, and 128")
     if query.shape[2] % key.shape[2]:
         raise ValueError("query heads must be divisible by key/value heads")
     if schedule.query_heads_per_key_value_tile != query.shape[2] // key.shape[2]:
@@ -483,6 +485,7 @@ def _forward_aot_plan(
     batch, sequence, query_heads, dimension = query_shape
     key_value_heads = key_shape[2]
     heads_per_program = schedule.query_heads_per_key_value_tile
+    block_m, block_n = _aot_tile_extents(schedule)
     pointer_types = (
         "*bf16:16",
         "*bf16:16",
@@ -517,8 +520,8 @@ def _forward_aot_plan(
         "0",
         "1",
         "1",
-        str(schedule.query_tile_size),
-        str(schedule.key_value_tile_size),
+        str(block_m),
+        str(block_n),
         str(dimension),
         str(heads_per_program),
         str(int(parameters.causal)),
@@ -531,7 +534,7 @@ def _forward_aot_plan(
         kernel_name="_streaming_grouped_query_forward",
         output_name="shuttle_streaming_forward",
         signature=signature,
-        grid=(sequence // schedule.query_tile_size, batch * query_heads // heads_per_program, 1),
+        grid=((sequence + block_m - 1) // block_m, batch * query_heads // heads_per_program, 1),
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -550,6 +553,7 @@ def _reverse_aot_plans(
 ) -> tuple[TritonAotKernelPlan, TritonAotKernelPlan]:
     batch, sequence, query_heads, dimension = query_shape
     key_value_heads = key_shape[2]
+    block_m, block_n = _aot_tile_extents(schedule)
     q_strides = _contiguous_strides(query_shape)
     k_strides = _contiguous_strides(key_shape)
     output_by_name = {output.name: output for output in outputs}
@@ -581,8 +585,8 @@ def _reverse_aot_plans(
         *(str(value) for value in q_strides),
         *(str(value) for value in q_strides),
         *(str(value) for value in query_cotangent_strides),
-        str(schedule.query_tile_size),
-        str(schedule.key_value_tile_size),
+        str(block_m),
+        str(block_n),
         str(dimension),
         str(schedule.query_heads_per_key_value_tile),
         str(int(parameters.causal)),
@@ -604,8 +608,8 @@ def _reverse_aot_plans(
         *(str(value) for value in q_strides),
         *(str(value) for value in key_cotangent_strides),
         *(str(value) for value in value_cotangent_strides),
-        str(schedule.query_tile_size),
-        str(schedule.key_value_tile_size),
+        str(block_m),
+        str(block_n),
         str(dimension),
         str(schedule.query_heads_per_key_value_tile),
         str(int(parameters.causal)),
@@ -617,7 +621,7 @@ def _reverse_aot_plans(
             kernel_name="_streaming_dq_kernel",
             output_name="shuttle_streaming_dq",
             signature=dq_signature,
-            grid=(sequence // schedule.query_tile_size, batch * key_value_heads, 1),
+            grid=((sequence + block_m - 1) // block_m, batch * key_value_heads, 1),
             num_warps=num_warps,
             num_stages=num_stages,
         ),
@@ -626,10 +630,18 @@ def _reverse_aot_plans(
             kernel_name="_streaming_dkdv_kernel",
             output_name="shuttle_streaming_dkdv",
             signature=dkdv_signature,
-            grid=(sequence // schedule.key_value_tile_size, batch * key_value_heads, 1),
+            grid=((sequence + block_n - 1) // block_n, batch * key_value_heads, 1),
             num_warps=num_warps,
             num_stages=num_stages,
         ),
+    )
+
+
+def _aot_tile_extents(schedule: StreamingAttentionBackwardTileSchedule) -> tuple[int, int]:
+    """Legalize semantic tiles to tensor-core extents without changing graph semantics."""
+    return (
+        max(schedule.query_tile_size, MINIMUM_AOT_DOT_EXTENT),
+        max(schedule.key_value_tile_size, MINIMUM_AOT_DOT_EXTENT),
     )
 
 
