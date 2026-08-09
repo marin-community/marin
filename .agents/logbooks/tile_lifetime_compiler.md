@@ -2445,3 +2445,27 @@ author: dlwh
   executes the same whole-entry replacement.
 - Verification: 15 focused recovery, rewrite, typed-FFI, and StableHLO tests
   and all 392 tile-lifetime tests pass; scoped pre-commit checks pass.
+
+### 2026-08-09 - TLTC-DIST-028 executable JAX collective completion
+
+- Hypothesis: a recovered collective Fold and its Event Tensor completion can
+  execute through a JAX-owned transport boundary without Shuttle taking over
+  model AD or introducing a communication custom call.
+- Commit Hash: `f7a02b9f35`.
+- Result: the adapter binds the recovered reducer, numerical policy, replica
+  groups, and system-scoped completion visibility to a JAX named-axis
+  collective. Global device IDs map explicitly to JAX axis indices. Local
+  replica-ID semantics, product reduction, and bitwise-fixed reduction trees
+  fail closed.
+- Four-device CPU replay: full-group sum, two-group maximum mutation, and the
+  JAX-generated sum gradient have zero error against direct references. The
+  forward StableHLO has one all-reduce and no custom call; the differentiated
+  StableHLO has two all-reduces. Repeated output is deterministic.
+- Scope: the JAX array result is the device completion dependency, not a
+  host-observed event. Transport is whole-value, so it legally coarsens tiled
+  readiness. GPU and multi-host transport remain untested; XLA still selects
+  the physical communication implementation.
+- Verification: 13 focused tests and all 397 tile-lifetime tests pass. The
+  checksum manifest seals the replay results and JAX/JAXlib/host environment.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_collective_completion_cpu_v0/`.
