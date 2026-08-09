@@ -259,6 +259,11 @@ from tile_lifetime.stablehlo_scan_recovery import (
     stateful_scan_scheduling_keys,
     validate_stateful_scan_semantic_erasure,
 )
+from tile_lifetime.stablehlo_streaming_attention_backward import (
+    RecoveredStableHLOStreamingAttentionBackward,
+    StableHLOStreamingAttentionBackwardError,
+    recover_stablehlo_streaming_attention_backward,
+)
 from tile_lifetime.stateful_scan import (
     AffineChunkSummary,
     AffineStateTransform,
@@ -325,6 +330,7 @@ from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,
     StreamingAttentionBackwardExecution,
     StreamingAttentionBackwardFoldOrder,
+    StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProgram,
     StreamingAttentionBackwardProvenance,
     StreamingAttentionBackwardReassociation,
@@ -336,6 +342,13 @@ from tile_lifetime.streaming_attention_backward import (
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
+)
+from tile_lifetime.streaming_attention_backward_reference import (
+    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    StreamingAttentionBackwardDebugConfig,
+    causal_gqa_attention,
+    causal_gqa_attention_vjp,
+    export_debug_streaming_attention_backward,
 )
 from tile_lifetime.swiglu import compile_swiglu_region
 from tile_lifetime.tensor_program import (

@@ -127,8 +127,21 @@ natural JAX program
 validate recovery and benchmark the physical schedule in isolation. Programs
 carry explicit `REFERENCE_SYMBOLIC_VJP` or `JAX_VJP_HLO_RECOVERY` provenance.
 The tile scheduler never dispatches on that provenance and does not derive a
-model VJP. A full acceptance result still requires recovering the equivalent
-generic reverse program from JAX VJP HLO and executing that recovered program.
+model VJP.
+
+The bounded frontend proof now exports an ordinary causal GQA function through
+`jax.vjp`, imports the differentiated StableHLO, and mechanically assigns the
+five `dot_general` operations to primal QK, dP, dV, dK, and dQ roles from their
+index shapes and data dependencies. Recovery also validates the max/sum
+normalized-exponential Folds, causal iota/compare/select restriction, score
+Map, grouped-head views, and JAX's equal-split maximum-VJP Fold before assigning
+`JAX_VJP_HLO_RECOVERY`. A changed score scale uses the same recovery and reverse
+executor. The small frozen and live fixtures match JAX BF16 dQ/dK/dV bitwise.
+
+This closes the frontend algebra boundary, not the device acceptance result.
+The recovered program is connected to the backend-neutral reference executor;
+the H100 emitter still needs to consume this recovered object directly and to
+measure the complete JAX-export-to-generated-kernel path.
 
 Torch is used only for the numerical and timing oracle in the standalone
 benchmark. It is not a runtime dependency of the compiler-owned schedule or a

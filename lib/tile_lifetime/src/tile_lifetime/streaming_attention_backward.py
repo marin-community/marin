@@ -47,6 +47,13 @@ class StreamingAttentionBackwardReassociation(StrEnum):
     DETERMINISTIC_TREE = "deterministic_tree"
 
 
+class StreamingAttentionBackwardMaximumVJP(StrEnum):
+    """Treatment of the maximum Fold introduced by JAX's normalized-exp VJP."""
+
+    NORMALIZED_EXP_INVARIANT = "normalized_exp_invariant"
+    JAX_EQUAL_SPLIT = "jax_equal_split"
+
+
 class StreamingAttentionBackwardProvenance(StrEnum):
     """Origin of the visible generic reverse algebra."""
 
@@ -148,6 +155,7 @@ class StreamingAttentionBackwardProgram:
     provenance: StreamingAttentionBackwardProvenance
     accumulation_dtype: DType = DType.FP32
     reassociation: StreamingAttentionBackwardReassociation = StreamingAttentionBackwardReassociation.DETERMINISTIC_TREE
+    maximum_vjp: StreamingAttentionBackwardMaximumVJP = StreamingAttentionBackwardMaximumVJP.NORMALIZED_EXP_INVARIANT
 
 
 @dataclass(frozen=True)
@@ -399,15 +407,23 @@ def execute_streaming_attention_backward(
         output_dot = np.sum(output_cotangent_tile * output_tile, axis=-1)
         query_gradient_tile = np.zeros(query_tile.shape, dtype=np.float32)
 
-        for key_start in range(0, key_axis.extent, forward.schedule.key_value_tile_size):
+        def reverse_tile_data(
+            key_start: int,
+            current_query_start: int,
+            current_query_stop: int,
+            current_query_tile: np.ndarray,
+            current_row_max: np.ndarray,
+            current_row_sum_exp: np.ndarray,
+            current_output_cotangent: np.ndarray,
+        ):
             key_stop = min(key_start + forward.schedule.key_value_tile_size, key_axis.extent)
             tile_slices = {
-                query_axis: slice(query_start, query_stop),
+                query_axis: slice(current_query_start, current_query_stop),
                 key_axis: slice(key_start, key_stop),
             }
             key_tile = _slice_array(key, key_value, tile_slices).astype(np.float32)
             value_tile = _slice_array(value, value_value, tile_slices).astype(np.float32)
-            raw_score = _contract(forward.qk, (query_tile, key_tile))
+            raw_score = _contract(forward.qk, (current_query_tile, key_tile))
             score_bindings = {forward.qk.output.name: raw_score}
             for score_input in forward.score_map.inputs[1:]:
                 score_bindings[score_input.name] = _slice_array(
@@ -416,15 +432,96 @@ def execute_streaming_attention_backward(
                     tile_slices,
                 )
             mapped_score = _evaluate_map(forward.score_map, score_bindings)
-            probability = np.exp(mapped_score - _align_array(row_max, row_axes, score_axes))
-            probability /= _align_array(row_sum_exp, row_axes, score_axes)
+            exponential = np.exp(mapped_score - _align_array(current_row_max, row_axes, score_axes))
+            probability = exponential / _align_array(current_row_sum_exp, row_axes, score_axes)
             key_head_map = forward.qk.index_maps_for_input(1)[0]
             head_indices = key_head_map.indices()
             key_expanded = np.take(key_tile, head_indices, axis=key_value.axes.index(key_head_map.operand_axis))
             value_expanded = np.take(value_tile, head_indices, axis=value_value.axes.index(key_head_map.operand_axis))
-            d_probability = np.einsum("bqhv,bkhv->bhqk", output_cotangent_tile, value_expanded)
+            d_probability = np.einsum("bqhv,bkhv->bhqk", current_output_cotangent, value_expanded)
             d_probability *= program.output_scale
-            d_mapped_score = probability * (d_probability - output_dot[:, :, :, None].transpose(0, 2, 1, 3))
+            return (
+                key_stop,
+                score_bindings,
+                mapped_score,
+                exponential,
+                probability,
+                head_indices,
+                key_expanded,
+                d_probability,
+            )
+
+        global_d_sum = None
+        global_d_maximum = None
+        global_tie_count = None
+        if program.maximum_vjp is StreamingAttentionBackwardMaximumVJP.JAX_EQUAL_SPLIT:
+            row_shape = (*_align_array(row_sum_exp, row_axes, score_axes).shape[:-1], 1)
+            global_d_sum = np.zeros(row_shape, dtype=np.float32)
+            global_tie_count = np.zeros(row_shape, dtype=np.int32)
+            aligned_sum = _align_array(row_sum_exp, row_axes, score_axes)
+            maximum = _align_array(row_max, row_axes, score_axes)
+            for key_start in range(0, key_axis.extent, forward.schedule.key_value_tile_size):
+                _, _, mapped_score, exponential, _, _, _, d_probability = reverse_tile_data(
+                    key_start,
+                    query_start,
+                    query_stop,
+                    query_tile,
+                    row_max,
+                    row_sum_exp,
+                    output_cotangent_tile,
+                )
+                global_d_sum += np.sum(
+                    -d_probability * exponential / np.square(aligned_sum),
+                    axis=-1,
+                    keepdims=True,
+                )
+                global_tie_count += np.sum(mapped_score == maximum, axis=-1, keepdims=True)
+            global_d_maximum = np.zeros(row_shape, dtype=np.float32)
+            for key_start in range(0, key_axis.extent, forward.schedule.key_value_tile_size):
+                _, _, _, exponential, _, _, _, d_probability = reverse_tile_data(
+                    key_start,
+                    query_start,
+                    query_stop,
+                    query_tile,
+                    row_max,
+                    row_sum_exp,
+                    output_cotangent_tile,
+                )
+                d_centered = (d_probability / aligned_sum + global_d_sum) * exponential
+                global_d_maximum -= np.sum(d_centered, axis=-1, keepdims=True)
+            if np.any(global_tie_count <= 0):
+                raise ValueError("JAX maximum VJP has a row without a maximum tie")
+
+        for key_start in range(0, key_axis.extent, forward.schedule.key_value_tile_size):
+            (
+                key_stop,
+                score_bindings,
+                mapped_score,
+                exponential,
+                probability,
+                head_indices,
+                key_expanded,
+                d_probability,
+            ) = reverse_tile_data(
+                key_start,
+                query_start,
+                query_stop,
+                query_tile,
+                row_max,
+                row_sum_exp,
+                output_cotangent_tile,
+            )
+            if program.maximum_vjp is StreamingAttentionBackwardMaximumVJP.JAX_EQUAL_SPLIT:
+                assert global_d_sum is not None
+                assert global_d_maximum is not None
+                assert global_tie_count is not None
+                aligned_sum = _align_array(row_sum_exp, row_axes, score_axes)
+                d_centered = (d_probability / aligned_sum + global_d_sum) * exponential
+                maximum = _align_array(row_max, row_axes, score_axes)
+                maximum_ties = mapped_score == maximum
+                d_mapped_score = d_centered + maximum_ties * (global_d_maximum / global_tie_count)
+            else:
+                d_mapped_score = probability * (d_probability - output_dot[:, :, :, None].transpose(0, 2, 1, 3))
             score_derivative = _evaluate_map(program.score_map_vjp, score_bindings)
             d_raw_score = d_mapped_score * score_derivative
             query_gradient_tile += np.einsum("bhqk,bkhd->bqhd", d_raw_score, key_expanded)
