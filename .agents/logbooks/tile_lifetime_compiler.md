@@ -1763,3 +1763,28 @@ author: dlwh
   generic segmented Contracts, generated scalar Maps, deterministic generated
   scatter Folds, and group-batched weight-gradient Contracts, with all-reduce
   left external. GPU execution and GMM attachment remain open.
+
+### 2026-08-08 22:12 PDT - TLTC-TRAIN-008 JAX-owned RMS reverse recovery
+
+- Hypothesis: JAX can own model-level AD while Shuttle recovers and fuses the
+  resulting normalization reverse algebra without a normalization-backward
+  recognizer or compiler-owned VJP in the accepted path.
+- Commit Hash: `a152a7eb40af7cb475893642fb8dc3a9b78093ac`.
+- Command: `uv run --frozen --package marin-tile-lifetime --group test pytest
+  lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py
+  lib/tile_lifetime/tests/test_row_normalization_training.py -q`.
+- Config: ordinary BF16 JAX normalization followed by `jax.vjp` and
+  `jax.export`; arbitrary importer input names; RMS and centered-normalization
+  mutation; generated row and feature-axis Fold programs.
+- Result: 13 tests pass. The RMS reverse graph imports as generic StableHLO
+  Map/Fold algebra, and name-independent role/axis recovery produces the same
+  generic executable Fold family previously reached through Shuttle-owned AD.
+  The centered mutation adds the expected mean and centering Folds through the
+  same path. Generated CUDA source contains neither RMS nor LayerNorm names.
+- Interpretation: the accepted architecture no longer needs Shuttle-owned AD
+  for this component. The current CUDA benchmark still uses Torch only to
+  compile/load generated source and provide a matched timing oracle; this is
+  parity scaffolding rather than the intended final JAX runtime path.
+- Next action: replay the exact commit on H100/GB200, then connect the recovered
+  program to the JAX typed-FFI replacement boundary so the final execution path
+  is Torch-free by default.
