@@ -2235,3 +2235,35 @@ author: dlwh
   collectives.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_weight_gradient_gpu_gb200_v0/`.
+
+### 2026-08-09 - TLTC-EVENT-020 Event Tensor workload linkage on GB200
+
+- Hypothesis: schedule-level Event Tensor plans derived from generic task
+  dependences can drive real runtime-relation and streaming Contract/Fold
+  payloads on GPU without introducing MoE- or attention-specific event
+  construction.
+- Commit Hash: implementation checkpoint `e59c81d836`; hardened replay artifact
+  checkpoint `2a915cd2dd`.
+- Runtime relation path: runtime `RelationPlan` CSR counts, offsets, and source
+  rows determine a ragged segmented-Contract task domain. The first physical
+  lowering erases readiness to verified in-task program order.
+- Streaming path: generic QK Contract, normalized-exponential Fold, and PV
+  Contract task families use a bounded shared K/V buffer. The compiler derives
+  the last PV consumer, circular-slot reuse edges, slot generations, and the
+  physical CTA acquire/release barriers. Same-owner dependences erase only
+  after a covering-order audit.
+- Result: on one actual NVIDIA GB200 at compute capability 10.0, segmented
+  primary/mutation medians are 0.073328/0.072800 ms and streaming
+  primary/mutation medians are 0.074672/0.074224 ms. All four generated JAX
+  typed-FFI paths are correct and bitwise deterministic across repeated
+  execution. The allocation used one CPU, 32 GB host memory, and batch
+  priority; no B200 result is involved.
+- Scope: these are deliberately small FP32 generated payload kernels. They
+  validate real tensor/CSR execution, physical Event Tensor realization,
+  bounded-buffer generations, mutation, and the Torch-free JAX boundary. They
+  are not grouped-GEMM or tensor-core attention throughput results.
+- Verification: all six artifact hashes pass from a detached checkout, 43
+  focused Event Tensor tests pass, and the complete tile-lifetime suite passes
+  363 tests.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
