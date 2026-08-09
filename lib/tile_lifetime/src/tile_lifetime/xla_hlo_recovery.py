@@ -11,6 +11,7 @@ names when identifying regions.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -19,6 +20,13 @@ _INSTRUCTION_NAME = re.compile(r"^\s*(?P<root>ROOT )?%?(?P<name>[^ ]+) = (?P<bod
 _VALUE_REFERENCE = re.compile(r"%([A-Za-z0-9_.-]+)")
 _CALL_REFERENCE = re.compile(r"(?:calls|to_apply)=%?([A-Za-z0-9_.-]+)")
 _PARAMETER_NUMBER = re.compile(r"parameter\((\d+)\)")
+_ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\](?:\{(?P<layout>[0-9,]+)\})?")
+_DOT_DIMENSION = re.compile(
+    r"(?P<name>lhs_contracting_dims|rhs_contracting_dims|lhs_batch_dims|rhs_batch_dims)=" r"\{(?P<dims>[0-9,]*)\}"
+)
+_CONCATENATE_DIMENSION = re.compile(r"dimensions=\{(?P<axis>[0-9]+)\}")
+_SLICE_ATTRIBUTE = re.compile(r"slice=\{(?P<ranges>(?:\[[^]]+\](?:, )?)+)\}")
+_SLICE_RANGE = re.compile(r"\[(?P<start>[0-9]+):(?P<limit>[0-9]+)(?::(?P<stride>[0-9]+))?\]")
 
 _POINTWISE_OPCODES = frozenset(
     {
@@ -274,6 +282,58 @@ class MultiOutputContractMapRecoveryReport:
 
 
 @dataclass(frozen=True)
+class ContractDemandPartition:
+    """One concatenated operand part and its aligned output demand."""
+
+    source_node: str
+    source_shape: str
+    source_start: int
+    source_limit: int
+    output: EntryRegionValue
+    output_start: int
+    output_limit: int
+    external_users: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RecoveredDemandSlicedContract:
+    """A Contract that can keep or split one concatenated output domain.
+
+    The split candidate changes only a noncontracting output domain.  It does
+    not change the K reduction.  Bitwise equivalence still requires a physical
+    backend to retain the same per-output reduction schedule.
+    """
+
+    entry_instruction: str
+    contract: ContractRecord
+    concatenated_operand: int
+    concatenation_axis: int
+    output_partition_axis: int
+    partitions: tuple[ContractDemandPartition, ...]
+    flops: int
+    reduction_order_unchanged: bool = True
+
+
+@dataclass(frozen=True)
+class DemandSlicedContractRecoveryReport:
+    """Coverage and exact partition plans for live demand-sliced Contracts."""
+
+    live_contract_count: int
+    live_contract_flops: int
+    regions: tuple[RecoveredDemandSlicedContract, ...]
+
+    @property
+    def covered_contract_count(self) -> int:
+        """Return the number of Contracts admitting the split candidate."""
+        return len(self.regions)
+
+    @property
+    def covered_contract_flops(self) -> int:
+        """Return logical FLOPs represented by the split candidates."""
+        return sum(region.flops for region in self.regions)
+
+
+@dataclass(frozen=True)
 class EntryRegionValue:
     """One physical entry-computation value on a recovered region boundary."""
 
@@ -384,6 +444,50 @@ def recover_multi_output_contract_map_regions(hlo_text: str) -> MultiOutputContr
     )
 
 
+def recover_aligned_demand_sliced_contracts(hlo_text: str) -> DemandSlicedContractRecoveryReport:
+    """Recover live Contracts whose concatenated output domain is sliced.
+
+    A candidate is admitted only when one noncontracting operand is a
+    concatenation and every direct Contract user is a unit-stride slice aligned
+    one-to-one with that concatenation's parts.  The resulting plan exposes two
+    generic physical choices: materialize the concatenated Contract result, or
+    issue one Contract per demanded part without changing the reduction axis.
+    """
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    nodes = {node.id: node for node in graph.nodes}
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    reachable_entry = _reachable_entry_instructions(entry)
+    reachable_nodes = _reachable_inlined_nodes(graph, reachable_entry)
+    users = _entry_users(entry)
+    live_contracts = tuple(
+        node for node in graph.nodes if node.id in reachable_nodes and node.opcode == "dot" and len(node.operands) == 2
+    )
+    candidates: list[RecoveredDemandSlicedContract] = []
+    for instruction in entry.instructions:
+        if instruction.name not in reachable_entry:
+            continue
+        contract_node = graph.node(graph.strip_wrappers(graph.entry_value(instruction.name)).base)
+        if contract_node.opcode != "dot" or contract_node.id not in reachable_nodes:
+            continue
+        candidate = _aligned_demand_sliced_contract(
+            instruction,
+            contract_node,
+            graph,
+            nodes,
+            instructions,
+            users,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return DemandSlicedContractRecoveryReport(
+        live_contract_count=len(live_contracts),
+        live_contract_flops=sum(_dot_flops(contract, nodes) for contract in live_contracts),
+        regions=tuple(candidates),
+    )
+
+
 def _form_entry_region(
     module: HloModuleGraph,
     graph: InlinedHloGraph,
@@ -449,6 +553,199 @@ def _first_entry_contract_users(
         if instruction.opcode in _WRAPPER_OPCODES | {"transpose"}:
             pending.extend(users.get(name, ()))
     return tuple(sorted(contracts))
+
+
+def _aligned_demand_sliced_contract(
+    entry_instruction: HloInstruction,
+    contract: InlinedHloNode,
+    graph: InlinedHloGraph,
+    nodes: dict[str, InlinedHloNode],
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+) -> RecoveredDemandSlicedContract | None:
+    if _shape_dimensions(entry_instruction.shape) != _shape_dimensions(contract.shape):
+        return None
+    concatenations: list[tuple[int, InlinedHloNode]] = []
+    for index, operand in enumerate(contract.operands):
+        stripped = graph.strip_wrappers(operand)
+        base = nodes[stripped.base]
+        if base.opcode != "concatenate":
+            continue
+        if any(
+            _shape_dimensions(wrapper.source_shape) != _shape_dimensions(wrapper.result_shape)
+            for wrapper in stripped.wrappers
+        ):
+            return None
+        concatenations.append((index, base))
+    if len(concatenations) != 1:
+        return None
+    concatenated_operand, concatenation = concatenations[0]
+    axis_match = _CONCATENATE_DIMENSION.search(concatenation.attributes)
+    if axis_match is None:
+        return None
+    concatenation_axis = int(axis_match.group("axis"))
+    output_axis = _contract_output_axis(contract, nodes, concatenated_operand, concatenation_axis)
+    if output_axis is None:
+        return None
+    output_dimensions = _shape_dimensions(contract.shape)
+    direct_users = tuple(dict.fromkeys(users.get(entry_instruction.name, ())))
+    if len(direct_users) < 2 or any(instructions[user].opcode != "slice" for user in direct_users):
+        return None
+    demands: dict[tuple[int, int], HloInstruction] = {}
+    for user in direct_users:
+        demand = instructions[user]
+        ranges = _slice_ranges(demand.attributes)
+        if len(ranges) != len(output_dimensions):
+            return None
+        for axis, (start, limit, stride) in enumerate(ranges):
+            if stride != 1:
+                return None
+            if axis != output_axis and (start != 0 or limit != output_dimensions[axis]):
+                return None
+        start, limit, _ = ranges[output_axis]
+        if (start, limit) in demands:
+            return None
+        demands[(start, limit)] = demand
+
+    source_partitions: list[tuple[int, int, InlinedHloNode]] = []
+    source_start = 0
+    for source_id in concatenation.operands:
+        source = nodes[source_id]
+        dimensions = _shape_dimensions(source.shape)
+        if concatenation_axis >= len(dimensions):
+            return None
+        source_limit = source_start + dimensions[concatenation_axis]
+        source_partitions.append((source_start, source_limit, source))
+        source_start = source_limit
+    if source_start != output_dimensions[output_axis]:
+        return None
+    expected_ranges = tuple((start, limit) for start, limit, _ in source_partitions)
+    if tuple(sorted(demands)) != expected_ranges:
+        return None
+
+    partitions = tuple(
+        ContractDemandPartition(
+            source_node=source.id,
+            source_shape=source.shape,
+            source_start=start,
+            source_limit=limit,
+            output=EntryRegionValue(demands[(start, limit)].name, demands[(start, limit)].shape),
+            output_start=start,
+            output_limit=limit,
+            external_users=tuple(dict.fromkeys(users.get(demands[(start, limit)].name, ()))),
+        )
+        for start, limit, source in source_partitions
+    )
+    return RecoveredDemandSlicedContract(
+        entry_instruction=entry_instruction.name,
+        contract=ContractRecord(
+            node=contract.id,
+            lhs=graph.strip_wrappers(contract.operands[0]),
+            rhs=graph.strip_wrappers(contract.operands[1]),
+            output_shape=contract.shape,
+        ),
+        concatenated_operand=concatenated_operand,
+        concatenation_axis=concatenation_axis,
+        output_partition_axis=output_axis,
+        partitions=partitions,
+        flops=_dot_flops(contract, nodes),
+    )
+
+
+def _contract_output_axis(
+    contract: InlinedHloNode,
+    nodes: dict[str, InlinedHloNode],
+    concatenated_operand: int,
+    concatenation_axis: int,
+) -> int | None:
+    dimensions = _dot_dimensions(contract.attributes)
+    lhs_dimensions = _shape_dimensions(nodes[contract.operands[0]].shape)
+    rhs_dimensions = _shape_dimensions(nodes[contract.operands[1]].shape)
+    lhs_batch = dimensions.get("lhs_batch_dims", ())
+    rhs_batch = dimensions.get("rhs_batch_dims", ())
+    if len(lhs_batch) != len(rhs_batch):
+        return None
+    lhs_contracting = dimensions.get("lhs_contracting_dims", ())
+    rhs_contracting = dimensions.get("rhs_contracting_dims", ())
+    lhs_output = tuple(axis for axis in range(len(lhs_dimensions)) if axis not in lhs_batch + lhs_contracting)
+    rhs_output = tuple(axis for axis in range(len(rhs_dimensions)) if axis not in rhs_batch + rhs_contracting)
+    if concatenated_operand == 0:
+        if concatenation_axis not in lhs_output:
+            return None
+        return len(lhs_batch) + lhs_output.index(concatenation_axis)
+    if concatenation_axis not in rhs_output:
+        return None
+    return len(lhs_batch) + len(lhs_output) + rhs_output.index(concatenation_axis)
+
+
+def _reachable_entry_instructions(entry: HloComputation) -> frozenset[str]:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    reachable: set[str] = set()
+    pending = [entry.root.name]
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        pending.extend(operand for operand in instructions[name].operands if operand in instructions)
+    return frozenset(reachable)
+
+
+def _reachable_inlined_nodes(graph: InlinedHloGraph, entry_instructions: frozenset[str]) -> frozenset[str]:
+    reachable: set[str] = set()
+    pending = [graph.entry_value(name) for name in entry_instructions]
+    nodes = {node.id: node for node in graph.nodes}
+    while pending:
+        node_id = pending.pop()
+        if node_id in reachable:
+            continue
+        reachable.add(node_id)
+        pending.extend(nodes[node_id].operands)
+    return frozenset(reachable)
+
+
+def _entry_users(entry: HloComputation) -> dict[str, tuple[str, ...]]:
+    mutable: dict[str, list[str]] = {instruction.name: [] for instruction in entry.instructions}
+    for instruction in entry.instructions:
+        for operand in instruction.operands:
+            mutable.setdefault(operand, []).append(instruction.name)
+    return {name: tuple(values) for name, values in mutable.items()}
+
+
+def _dot_dimensions(attributes: str) -> dict[str, tuple[int, ...]]:
+    return {
+        match.group("name"): tuple(int(value) for value in match.group("dims").split(",") if value)
+        for match in _DOT_DIMENSION.finditer(attributes)
+    }
+
+
+def _dot_flops(contract: InlinedHloNode, nodes: dict[str, InlinedHloNode]) -> int:
+    lhs_dimensions = _shape_dimensions(nodes[contract.operands[0]].shape)
+    output_dimensions = _shape_dimensions(contract.shape)
+    contracting = _dot_dimensions(contract.attributes).get("lhs_contracting_dims", ())
+    return 2 * math.prod(output_dimensions) * math.prod(lhs_dimensions[axis] for axis in contracting)
+
+
+def _shape_dimensions(shape: str) -> tuple[int, ...]:
+    match = _ARRAY_SHAPE.match(shape.lstrip("("))
+    if match is None:
+        raise ValueError(f"unsupported HLO array shape {shape!r}")
+    return tuple(int(value) for value in match.group("dims").split(",") if value)
+
+
+def _slice_ranges(attributes: str) -> tuple[tuple[int, int, int], ...]:
+    attribute = _SLICE_ATTRIBUTE.search(attributes)
+    if attribute is None:
+        return ()
+    ranges = tuple(
+        (
+            int(match.group("start")),
+            int(match.group("limit")),
+            int(match.group("stride") or "1"),
+        )
+        for match in _SLICE_RANGE.finditer(attribute.group("ranges"))
+    )
+    return ranges
 
 
 def parse_hlo_module_text(hlo_text: str) -> HloModuleGraph:

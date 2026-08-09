@@ -22,8 +22,13 @@ from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
     inline_elementwise_fusions,
     parse_hlo_module_text,
+    recover_aligned_demand_sliced_contracts,
     recover_multi_output_contract_map_regions,
     recover_pair_map_regions,
+)
+from tile_lifetime.xla_low_rank_gated_product_ffi import (
+    plan_generated_low_rank_contract_map_training,
+    replace_generated_low_rank_contract_map_training,
 )
 
 _SYNTHETIC_PAIR_MAP = """\
@@ -86,6 +91,39 @@ right_weight: f32[64,16]) -> (f32[8,16], f32[8,16]) {
 }
 """
 
+_SYNTHETIC_DEMAND_SLICED_CONTRACT = """\
+HloModule synthetic_demand_sliced
+
+ENTRY %main (activation: bf16[2,3], left: bf16[2,3], middle: bf16[1,3], right: bf16[3,3]) \
+-> (bf16[2,2], bf16[2,1], bf16[2,3]) {
+  %activation = bf16[2,3]{1,0} parameter(0)
+  %left = bf16[2,3]{0,1} parameter(1)
+  %middle = bf16[1,3]{0,1} parameter(2)
+  %right = bf16[3,3]{0,1} parameter(3)
+  %weights = bf16[6,3]{0,1} concatenate(%left, %middle, %right), dimensions={0}
+  %projection = bf16[2,6]{1,0} dot(%activation, %weights), lhs_contracting_dims={1}, rhs_contracting_dims={1}
+  %left_result = bf16[2,2]{1,0} slice(%projection), slice={[0:2], [0:2]}
+  %middle_result = bf16[2,1]{1,0} slice(%projection), slice={[0:2], [2:3]}
+  %right_result = bf16[2,3]{1,0} slice(%projection), slice={[0:2], [3:6]}
+  ROOT %result = (bf16[2,2]{1,0}, bf16[2,1]{1,0}, bf16[2,3]{1,0}) tuple(%left_result, %middle_result, %right_result)
+}
+"""
+
+
+def _post_gated_product_grug_hlo() -> str:
+    artifact = (
+        Path(__file__).parents[1]
+        / "benchmarks/artifacts/xla_grug_shared_map_h100_fused_reverses_unaccepted_e3411679_v0/"
+        "transformed-gpu-pre-scheduler-hlo.txt.gz"
+    )
+    hlo = gzip.decompress(artifact.read_bytes()).decode()
+    plan = plan_generated_low_rank_contract_map_training(
+        hlo,
+        forward_target_prefix="shuttle.generic.low_rank_contract_map.generated.forward.test",
+        reverse_target_prefix="shuttle.generic.low_rank_contract_map.generated.reverse.test",
+    )
+    return replace_generated_low_rank_contract_map_training(hlo, plan)
+
 
 def test_fusion_inlining_exposes_contract_and_pointwise_operations() -> None:
     module = parse_hlo_module_text(_SYNTHETIC_PAIR_MAP)
@@ -122,6 +160,61 @@ def test_pair_map_recovery_tracks_scalar_body_mutation_without_a_named_pattern()
     assert "tanh" not in region.map_opcodes
 
 
+def test_demand_sliced_contract_recovery_aligns_concat_parts_without_named_semantics() -> None:
+    report = recover_aligned_demand_sliced_contracts(_SYNTHETIC_DEMAND_SLICED_CONTRACT)
+
+    assert report.live_contract_count == 1
+    assert report.live_contract_flops == 72
+    assert report.covered_contract_count == 1
+    assert report.covered_contract_flops == 72
+    region = report.regions[0]
+    assert region.concatenated_operand == 1
+    assert region.concatenation_axis == 0
+    assert region.output_partition_axis == 1
+    assert region.reduction_order_unchanged
+    assert tuple((part.source_start, part.source_limit) for part in region.partitions) == ((0, 2), (2, 3), (3, 6))
+    assert tuple((part.output_start, part.output_limit) for part in region.partitions) == ((0, 2), (2, 3), (3, 6))
+    assert tuple(part.external_users for part in region.partitions) == (("result",),) * 3
+
+
+def test_demand_sliced_contract_recovery_tracks_partition_mutation_through_same_plan() -> None:
+    mutated = (
+        _SYNTHETIC_DEMAND_SLICED_CONTRACT.replace("left: bf16[2,3]", "left: bf16[1,3]")
+        .replace("middle: bf16[1,3]", "middle: bf16[2,3]")
+        .replace("%left = bf16[2,3]{0,1}", "%left = bf16[1,3]{0,1}")
+        .replace("%middle = bf16[1,3]{0,1}", "%middle = bf16[2,3]{0,1}")
+        .replace(
+            "%left_result = bf16[2,2]{1,0} slice(%projection), slice={[0:2], [0:2]}",
+            "%left_result = bf16[2,1]{1,0} slice(%projection), slice={[0:2], [0:1]}",
+        )
+        .replace(
+            "%middle_result = bf16[2,1]{1,0} slice(%projection), slice={[0:2], [2:3]}",
+            "%middle_result = bf16[2,2]{1,0} slice(%projection), slice={[0:2], [1:3]}",
+        )
+        .replace(
+            "(bf16[2,2]{1,0}, bf16[2,1]{1,0}, bf16[2,3]{1,0}) tuple",
+            "(bf16[2,1]{1,0}, bf16[2,2]{1,0}, bf16[2,3]{1,0}) tuple",
+        )
+    )
+
+    original = recover_aligned_demand_sliced_contracts(_SYNTHETIC_DEMAND_SLICED_CONTRACT).regions[0]
+    changed = recover_aligned_demand_sliced_contracts(mutated).regions[0]
+
+    assert changed.contract == original.contract
+    assert changed.flops == original.flops
+    assert tuple((part.source_start, part.source_limit) for part in changed.partitions) == ((0, 1), (1, 3), (3, 6))
+    assert tuple((part.output_start, part.output_limit) for part in changed.partitions) == ((0, 1), (1, 3), (3, 6))
+
+
+def test_demand_sliced_contract_recovery_rejects_non_aligned_output_demand() -> None:
+    non_aligned = _SYNTHETIC_DEMAND_SLICED_CONTRACT.replace(
+        "%left_result = bf16[2,2]{1,0} slice(%projection), slice={[0:2], [0:2]}",
+        "%left_result = bf16[2,1]{1,0} slice(%projection), slice={[0:2], [0:1]}",
+    )
+
+    assert not recover_aligned_demand_sliced_contracts(non_aligned).regions
+
+
 def test_frozen_grug_hlo_recovers_pair_map_without_source_names() -> None:
     artifact = (
         Path(__file__).parents[1]
@@ -140,6 +233,30 @@ def test_frozen_grug_hlo_recovers_pair_map_without_source_names() -> None:
         assert "multiply" in region.map_opcodes
         assert any(boundary.changes_dtype for boundary in region.map_cast_boundaries)
         assert len(region.consumer_contracts) == 1
+
+
+def test_post_gated_product_grug_hlo_recovers_aligned_demand_sliced_contracts() -> None:
+    report = recover_aligned_demand_sliced_contracts(_post_gated_product_grug_hlo())
+
+    assert report.live_contract_count == 24
+    assert report.live_contract_flops == 397_312
+    assert report.covered_contract_count == 6
+    assert report.covered_contract_flops == 205_824
+    assert all(region.concatenated_operand == 1 for region in report.regions)
+    assert all(region.concatenation_axis == 0 for region in report.regions)
+    assert tuple(region.output_partition_axis for region in report.regions) == (2, 2, 2, 2, 1, 1)
+    assert tuple(len(region.partitions) for region in report.regions) == (4, 3, 4, 3, 4, 3)
+    assert all(region.reduction_order_unchanged for region in report.regions)
+    assert tuple(region.contract.output_shape for region in report.regions[:4]) == (
+        "bf16[2,4,66]{2,1,0}",
+        "bf16[2,4,68]{2,1,0}",
+        "bf16[2,4,66]{2,1,0}",
+        "bf16[2,4,68]{2,1,0}",
+    )
+    assert tuple(region.contract.output_shape for region in report.regions[4:]) == (
+        "bf16[32,66]{1,0}",
+        "bf16[32,68]{1,0}",
+    )
 
 
 def test_frozen_grug_backward_pair_map_forms_generic_multi_output_boundary() -> None:
