@@ -1442,6 +1442,7 @@ def _compile_cuda_ffi_handler(
             str(source_path),
             "-o",
             str(library_path),
+            "-lcublas",
         ],
         check=True,
     )

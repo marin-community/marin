@@ -9,6 +9,7 @@ from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call
 )
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _TARGET_NAME,
+    ContractMapRegionRewrite,
     MultiOutputFixedShapeProgram,
     contract_map_recovery_diagnostic,
     generate_cuda_contract_map_ffi_handler,
@@ -279,11 +280,23 @@ def test_gpu_grug_contract_map_rewrite_preserves_bf16_map_rounding() -> None:
 
     rewrite = recover_contract_map_region_rewrite(hlo_text, 0)
     selected = _recover_gpu_region_rewrite(hlo_text)
-    source = generate_cuda_contract_map_ffi_handler(rewrite.program)
+    assert isinstance(selected, ContractMapRegionRewrite)
+    source = generate_cuda_contract_map_ffi_handler(selected.program)
     diagnostic = contract_map_recovery_diagnostic(hlo_text)
 
     assert rewrite.program.input_dtypes == ("bf16",) * 7
-    assert selected == rewrite
+    assert tuple(value.instruction for value in selected.boundary.inputs) == (
+        "mul.73",
+        "reshape.227",
+        "remat2.66",
+    )
+    assert tuple(value.instruction for value in selected.boundary.outputs) == ("dot_general.226", "mul.963")
+    assert selected.program.scalar_expressions == (
+        "projection_value",
+        "shuttle_round_bf16(((shuttle_bf16_to_f32(input0[index])) * (projection_value)))",
+    )
+    assert selected.program.contract_lhs_input == 1
+    assert selected.program.contract_rhs_input == 2
     assert rewrite.program.output_dtype == "bf16"
     assert rewrite.program.contract_lhs_input == 3
     assert rewrite.program.contract_rhs_input == 4
@@ -298,3 +311,27 @@ def test_gpu_grug_contract_map_rewrite_preserves_bf16_map_rounding() -> None:
     assert "shuttle_f32_to_bf16" in source
     assert diagnostic["contract_map_region_count"] == 1
     assert "lowering_error" not in diagnostic["candidates"][0]
+
+
+def test_gpu_grug_nonconvex_region_replacement_preserves_contract_for_later_maps() -> None:
+    artifact = (
+        Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_backward_multi_output_gpu_sm100_diagnostic_v0/"
+        "original-gpu-pre-scheduler-hlo.txt.gz"
+    )
+    hlo_text = gzip.decompress(artifact.read_bytes()).decode()
+    selected = _recover_gpu_region_rewrite(hlo_text)
+    assert isinstance(selected, ContractMapRegionRewrite)
+
+    transformed = replace_multi_output_region_with_custom_call(
+        hlo_text,
+        selected,
+        _TARGET_NAME,
+        typed_ffi=True,
+    )
+
+    call_position = transformed.index("%shuttle_generated_multi_output_region =")
+    assert transformed.index("%remat2.66 =") < call_position
+    assert call_position < transformed.index("%dot_general.226 =")
+    assert transformed.count(_TARGET_NAME) == 1
+    assert transformed.count("get-tuple-element(%shuttle_generated_multi_output_region)") == 2
+    assert "%mul.965 = bf16[8,32]{1,0} multiply(%dot_general.226, %reshape.1030)" in transformed

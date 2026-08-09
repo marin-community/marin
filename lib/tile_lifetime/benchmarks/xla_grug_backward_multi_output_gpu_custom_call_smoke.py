@@ -11,7 +11,9 @@ import ctypes
 import hashlib
 import importlib
 import json
+import re
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +45,121 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     replace_multi_output_region_with_custom_call,
     write_gzip_text,
 )
-from tile_lifetime.xla_hlo_recovery import recover_multi_output_contract_map_regions, recover_pair_map_regions
+from tile_lifetime.xla_hlo_recovery import (
+    EntryRegionValue,
+    RecoveredEntryRegionBoundary,
+    parse_hlo_module_text,
+    recover_multi_output_contract_map_regions,
+    recover_pair_map_regions,
+)
+
+_INPUT_REFERENCE = re.compile(r"\binput(?P<index>[0-9]+)\b")
+
+
+def _instruction_order(hlo_text: str) -> tuple[dict[str, Any], dict[str, int]]:
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    return instructions, order
+
+
+def _is_topologically_insertable(hlo_text: str, rewrite: ContractMapRegionRewrite) -> bool:
+    _, order = _instruction_order(hlo_text)
+    latest_input = max(order[value.instruction] for value in rewrite.boundary.inputs)
+    earliest_output = min(order[value.instruction] for value in rewrite.boundary.outputs)
+    return latest_input < earliest_output
+
+
+def _renumber_scalar_inputs(expression: str, indices: dict[int, int]) -> str:
+    def substitute(match: re.Match[str]) -> str:
+        old_index = int(match.group("index"))
+        if old_index not in indices:
+            raise ValueError(f"scalar expression references unavailable input {old_index}")
+        return f"input{indices[old_index]}"
+
+    return _INPUT_REFERENCE.sub(substitute, expression)
+
+
+def _schedulable_contract_map_prefix(
+    hlo_text: str,
+    rewrite: ContractMapRegionRewrite,
+) -> ContractMapRegionRewrite:
+    """Expose a Contract plus the Maps schedulable at its definition point.
+
+    A maximal pointwise region may be non-convex in XLA source order when one
+    early output is consumed before side inputs for a later output exist. One
+    tuple call cannot legally reference those later values. Preserve the
+    maximal semantic recovery, but lower the largest prefix whose side inputs
+    are already available when the Contract executes. The Contract result is
+    an auxiliary output so the remaining original Maps reuse it rather than
+    recomputing the Contract.
+    """
+    instructions, order = _instruction_order(hlo_text)
+    internal = set(rewrite.boundary.internal_instructions)
+    contract_names = tuple(name for name in rewrite.boundary.internal_instructions if instructions[name].opcode == "dot")
+    if len(contract_names) != 1:
+        raise ValueError(f"expected one Contract in generic Contract/Map region, found {len(contract_names)}")
+    contract_name = contract_names[0]
+    contract_order = order[contract_name]
+    contract_input_indices = {rewrite.program.contract_lhs_input, rewrite.program.contract_rhs_input}
+    selected: list[tuple[EntryRegionValue, str, set[int]]] = []
+    for output, expression in zip(rewrite.boundary.outputs, rewrite.program.scalar_expressions, strict=True):
+        expression_inputs = {int(match.group("index")) for match in _INPUT_REFERENCE.finditer(expression)}
+        required_inputs = contract_input_indices | expression_inputs
+        if all(order[rewrite.boundary.inputs[index].instruction] < contract_order for index in required_inputs):
+            selected.append((output, expression, expression_inputs))
+    if not selected:
+        raise ValueError("non-convex Contract/Map region has no output schedulable with its Contract")
+
+    retained_input_indices = sorted(contract_input_indices | set().union(*(inputs for _, _, inputs in selected)))
+    new_index = {old: current for current, old in enumerate(retained_input_indices)}
+    new_inputs = tuple(rewrite.boundary.inputs[index] for index in retained_input_indices)
+    new_expressions = (
+        "projection_value",
+        *(_renumber_scalar_inputs(expression, new_index) for _, expression, _ in selected),
+    )
+    new_program = replace(
+        rewrite.program,
+        input_dtypes=tuple(rewrite.program.input_dtypes[index] for index in retained_input_indices),
+        contract_lhs_input=new_index[rewrite.program.contract_lhs_input],
+        contract_rhs_input=new_index[rewrite.program.contract_rhs_input],
+        scalar_expressions=new_expressions,
+    )
+
+    selected_names = {output.instruction for output, _, _ in selected}
+    new_internal = {contract_name}
+
+    def add_internal_ancestors(name: str) -> None:
+        if name in new_internal or name not in internal:
+            return
+        for operand in instructions[name].operands:
+            add_internal_ancestors(operand)
+        new_internal.add(name)
+
+    for name in selected_names:
+        add_internal_ancestors(name)
+    users: dict[str, list[str]] = {name: [] for name in instructions}
+    for instruction in instructions.values():
+        for operand in instruction.operands:
+            users.setdefault(operand, []).append(instruction.name)
+    new_outputs = (
+        EntryRegionValue(contract_name, instructions[contract_name].shape),
+        *(output for output, _, _ in selected),
+    )
+    ordered_internal = tuple(sorted(new_internal, key=order.__getitem__))
+    boundary = RecoveredEntryRegionBoundary(
+        internal_instructions=ordered_internal,
+        inputs=new_inputs,
+        outputs=new_outputs,
+        external_users=tuple(
+            (output.instruction, tuple(user for user in users[output.instruction] if user not in new_internal))
+            for output in new_outputs
+        ),
+        has_explicit_sharding=rewrite.boundary.has_explicit_sharding,
+        has_side_effect=rewrite.boundary.has_side_effect,
+    )
+    return ContractMapRegionRewrite(program=new_program, boundary=boundary)
 
 
 def _recover_gpu_region_rewrite(hlo_text: str) -> ContractMapRegionRewrite | MultiOutputRegionRewrite:
@@ -57,7 +173,10 @@ def _recover_gpu_region_rewrite(hlo_text: str) -> ContractMapRegionRewrite | Mul
             "expected one generic Contract/multi-output-Map region when no pair region exists, "
             f"found {len(contract_map_report.regions)}"
         )
-    return recover_contract_map_region_rewrite(hlo_text, 0)
+    rewrite = recover_contract_map_region_rewrite(hlo_text, 0)
+    if _is_topologically_insertable(hlo_text, rewrite):
+        return rewrite
+    return _schedulable_contract_map_prefix(hlo_text, rewrite)
 
 
 def _generate_cuda_handler(rewrite: ContractMapRegionRewrite | MultiOutputRegionRewrite) -> str:
