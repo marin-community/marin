@@ -1,0 +1,47 @@
+{
+  "bitwise_equal_leaf_count": 58,
+  "custom_call_handler_executions": 1,
+  "custom_call_occurrences_in_transformed_hlo": 1,
+  "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
+  "device_kind": "cpu",
+  "explicit_warning": "Disposable proof only: region-local but still an HLO text edit using the removed legacy CPU ABI.",
+  "generated_handler_sha256": "9b2a04c3bafa70ddc732e27c7804cf96ab7f32180986f226776ef9922ee32f74",
+  "generated_scalar_expression": "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) * (shuttle_round_bf16(projection0[row * kFeatures + feature]))))",
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_pre_scheduler_grug_region_custom_call_smoke",
+  "matching_infinity_value_count": 0,
+  "matching_nan_value_count": 2,
+  "maximum_absolute_error": 0.0,
+  "mean_absolute_error": 0.0,
+  "natural_frontend": "ordinary one-layer Grug train step",
+  "outputs_match": true,
+  "physical_operand_shapes": [
+    "f32[8,32]{1,0}",
+    "f32[32,32]{1,0}",
+    "f32[32,32]{1,0}",
+    "f32[32,32]{1,0}"
+  ],
+  "physical_operands": [
+    "convert_bitcast_fusion.22",
+    "wrapped_convert.49",
+    "wrapped_convert.51",
+    "wrapped_convert.53"
+  ],
+  "platform": "cpu",
+  "preserved_map_cast_boundary_count": 16,
+  "production_blockers": [
+    "typed C++ instruction replacement and dead-subgraph cleanup",
+    "supported XLA FFI ABI with plan fingerprint and buffer metadata",
+    "explicit sharding/aliasing/side-effect transfer for arbitrary target instructions",
+    "supported multi-result FFI for the separately validated backward region",
+    "GPU lowering from the recovered scalar AST"
+  ],
+  "recovered_region_count": 2,
+  "replaced_entry_instruction": "ynn_fusion.61",
+  "result_leaf_count": 58,
+  "selection": "unique structurally recovered row-preserving two-Contract/Map/Contract region",
+  "unsupported_recovered_regions": [
+    "region 1: pair Map is not an isolated entry fusion over the recovered Contracts"
+  ]
+}

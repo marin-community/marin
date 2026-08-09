@@ -1,0 +1,90 @@
+{
+  "bitwise_equal_leaf_count": 58,
+  "custom_call_handler_executions": 1,
+  "custom_call_occurrences_in_transformed_hlo": 1,
+  "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
+  "device_kind": "cpu",
+  "explicit_warning": "Disposable proof only: tuple ABI works here but still uses text mutation and removed legacy CPU ABI.",
+  "external_users": [
+    [
+      "convert_convert_fusion.3",
+      [
+        "ynn_fusion.39",
+        "dot_general.242"
+      ]
+    ],
+    [
+      "convert_convert_fusion.4",
+      [
+        "ynn_fusion.41",
+        "dot_general.238"
+      ]
+    ],
+    [
+      "convert_convert_fusion",
+      [
+        "dot_general.234"
+      ]
+    ]
+  ],
+  "generated_handler_sha256": "185e4f4c39aa970d4c436e8ab6c722ecd4575c0df150108daa1dc7a4a2a751c2",
+  "generated_scalar_expressions": [
+    "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(((shuttle_bf16_to_f32(cotangent[row * kFeatures + feature])) * (shuttle_round_bf16(projection0[row * kFeatures + feature]))))) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) + (shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((shuttle_bf16_to_f32(cotangent[row * kFeatures + feature])) * (shuttle_round_bf16(projection0[row * kFeatures + feature])))))))) * (shuttle_round_bf16(((shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature]))))))))))))) * (shuttle_round_bf16(((1) - (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature]))))))))))))))))))))))))",
+    "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) * (shuttle_bf16_to_f32(cotangent[row * kFeatures + feature]))))",
+    "shuttle_round_bf16(((shuttle_round_bf16(((shuttle_round_bf16(projection1[row * kFeatures + feature])) * (shuttle_round_bf16(((1) / (shuttle_round_bf16(((1) + (shuttle_round_bf16(std::exp(shuttle_round_bf16((-(shuttle_round_bf16(projection1[row * kFeatures + feature])))))))))))))))) * (shuttle_round_bf16(projection0[row * kFeatures + feature]))))"
+  ],
+  "has_explicit_sharding": false,
+  "has_side_effect": false,
+  "internal_instruction_count": 9,
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_pre_scheduler_grug_backward_multi_output_custom_call_smoke",
+  "matching_infinity_value_count": 0,
+  "matching_nan_value_count": 2,
+  "maximum_absolute_error": 0.0,
+  "mean_absolute_error": 0.0,
+  "natural_frontend": "ordinary one-layer Grug train step",
+  "outputs_match": true,
+  "platform": "cpu",
+  "production_blockers": [
+    "typed C++ connected-region replacement and dead instruction deletion",
+    "supported multi-result XLA FFI handler",
+    "generic output alias/sharding/effect transfer",
+    "GPU lowering from the same multi-output semantic AST"
+  ],
+  "region_inputs": [
+    [
+      "convert_bitcast_fusion.12",
+      "f32[8,32]{1,0}"
+    ],
+    [
+      "wrapped_convert.49",
+      "f32[32,32]{1,0}"
+    ],
+    [
+      "wrapped_convert.51",
+      "f32[32,32]{1,0}"
+    ],
+    [
+      "wrapped_convert.64",
+      "bf16[8,32]{1,0}"
+    ]
+  ],
+  "region_outputs": [
+    [
+      "convert_convert_fusion.3",
+      "f32[8,32]{1,0}"
+    ],
+    [
+      "convert_convert_fusion.4",
+      "f32[8,32]{1,0}"
+    ],
+    [
+      "convert_convert_fusion",
+      "f32[8,32]{1,0}"
+    ]
+  ],
+  "result_leaf_count": 58,
+  "selection": "unique generic pair-Map region with multiple externally used pointwise outputs",
+  "tuple_get_element_count": 3
+}

@@ -5,6 +5,7 @@ import gzip
 from pathlib import Path
 
 from tile_lifetime.xla_hlo_recovery import (
+    form_pair_map_entry_region,
     inline_elementwise_fusions,
     parse_hlo_module_text,
     recover_pair_map_regions,
@@ -59,6 +60,7 @@ def test_fusion_inlining_exposes_contract_and_pointwise_operations() -> None:
     mapped = graph.node(graph.entry_value("mapped"))
     assert mapped.opcode == "convert"
     assert mapped.dtype == "bf16"
+    assert mapped.attributes.startswith("convert(")
 
 
 def test_pair_map_recovery_uses_structure_and_preserves_cast_boundaries() -> None:
@@ -101,3 +103,29 @@ def test_frozen_grug_hlo_recovers_pair_map_without_source_names() -> None:
         assert "multiply" in region.map_opcodes
         assert any(boundary.changes_dtype for boundary in region.map_cast_boundaries)
         assert len(region.consumer_contracts) == 1
+
+
+def test_frozen_grug_backward_pair_map_forms_generic_multi_output_boundary() -> None:
+    artifact = (
+        Path(__file__).parents[1]
+        / "benchmarks/artifacts/grug_moe_train_step_pre_scheduler_jax011_v0/pre-scheduler-hlo.txt.gz"
+    )
+    hlo_text = gzip.decompress(artifact.read_bytes()).decode()
+    regions = recover_pair_map_regions(hlo_text).regions
+    boundaries = tuple(form_pair_map_entry_region(hlo_text, region) for region in regions)
+    multi_output = tuple(boundary for boundary in boundaries if len(boundary.outputs) > 1)
+
+    assert len(multi_output) == 1
+    boundary = multi_output[0]
+    assert len(boundary.inputs) == 4
+    assert tuple(value.shape for value in boundary.inputs) == (
+        "f32[8,32]{1,0}",
+        "f32[32,32]{1,0}",
+        "f32[32,32]{1,0}",
+        "bf16[8,32]{1,0}",
+    )
+    assert len(boundary.internal_instructions) == 9
+    assert tuple(value.shape for value in boundary.outputs) == ("f32[8,32]{1,0}",) * 3
+    assert tuple(len(users) for _, users in boundary.external_users) == (2, 2, 1)
+    assert not boundary.has_explicit_sharding
+    assert not boundary.has_side_effect

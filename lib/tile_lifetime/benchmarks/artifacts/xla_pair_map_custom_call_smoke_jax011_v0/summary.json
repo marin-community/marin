@@ -1,0 +1,30 @@
+{
+  "custom_call_handler_executions": 1,
+  "custom_call_occurrences_in_transformed_hlo": 1,
+  "custom_call_target": "shuttle.pair_map_contract_smoke_v1",
+  "device_kind": "cpu",
+  "explicit_warning": "Disposable proof only: legacy CPU custom-call ABI and whole-module HLO text round trip; never use this rewrite mechanism on the frozen Grug module.",
+  "generated_handler_sha256": "03bd0a076e746cb16557b5a7e85cbafe2f26c229a5750f3daa10aaba8c6bc7db",
+  "generated_scalar_expression": "((std::tanh(projection1[row * kFeatures + feature])) * (projection0[row * kFeatures + feature]))",
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_pre_scheduler_pair_map_custom_call_smoke",
+  "maximum_absolute_error": 1.9073486328125e-06,
+  "mean_absolute_error": 4.333754475283058e-07,
+  "natural_frontend": "two dot_general, scalar tanh/multiply, consumer dot_general",
+  "outputs_match": true,
+  "platform": "cpu",
+  "production_blockers": [
+    "typed C++ HLO mutation/custom-call insertion",
+    "buffer aliasing and sharding preservation",
+    "generic FFI ABI and executable-plan serialization",
+    "region-local replacement inside multi-output training graphs"
+  ],
+  "recovered_dimensions": {
+    "features": 16,
+    "outputs": 6,
+    "reduction": 8,
+    "rows": 4
+  },
+  "recovery": "opcode/shape/dependency-only recover_pair_map_regions"
+}

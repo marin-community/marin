@@ -103,6 +103,7 @@ class InlinedHloNode:
     opcode: str
     shape: str
     operands: tuple[str, ...]
+    attributes: str
     source_computation: str
     source_instruction: str
 
@@ -252,6 +253,89 @@ class PairMapRecoveryReport:
         }
 
 
+@dataclass(frozen=True)
+class EntryRegionValue:
+    """One physical entry-computation value on a recovered region boundary."""
+
+    instruction: str
+    shape: str
+
+
+@dataclass(frozen=True)
+class RecoveredEntryRegionBoundary:
+    """Maximal pointwise region grown from a recovered Contract pair."""
+
+    internal_instructions: tuple[str, ...]
+    inputs: tuple[EntryRegionValue, ...]
+    outputs: tuple[EntryRegionValue, ...]
+    external_users: tuple[tuple[str, tuple[str, ...]], ...]
+    has_explicit_sharding: bool
+    has_side_effect: bool
+
+
+def form_pair_map_entry_region(
+    hlo_text: str,
+    region: RecoveredPairMapRegion,
+) -> RecoveredEntryRegionBoundary:
+    """Grow a maximal entry-local pointwise region from two Contracts.
+
+    Growth follows only physical dataflow and pointwise/wrapper opcodes. Other
+    Contracts and reductions remain outside and become users of the region's
+    outputs. Additional operands, including saved values and cotangents, become
+    explicit region inputs.
+    """
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    source_order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    users: dict[str, list[str]] = {instruction.name: [] for instruction in entry.instructions}
+    for instruction in entry.instructions:
+        for operand in instruction.operands:
+            users.setdefault(operand, []).append(instruction.name)
+
+    def entry_instruction_for(node_id: str) -> str:
+        prefix = f"{module.entry}/"
+        if not node_id.startswith(prefix):
+            raise ValueError(f"node {node_id!r} is outside the entry computation")
+        name = node_id.removeprefix(prefix).split("/", 1)[0]
+        if name not in instructions:
+            raise ValueError(f"node {node_id!r} has no entry instruction boundary")
+        return name
+
+    seeds = {
+        entry_instruction_for(region.left_contract.node),
+        entry_instruction_for(region.right_contract.node),
+    }
+    internal = set(seeds)
+    pending = list(seeds)
+    while pending:
+        producer = pending.pop()
+        for user in users.get(producer, ()):
+            root = graph.node(graph.entry_value(user))
+            if root.opcode not in _POINTWISE_OPCODES | _WRAPPER_OPCODES:
+                continue
+            if user not in internal:
+                internal.add(user)
+                pending.append(user)
+
+    ordered_internal = tuple(sorted(internal, key=source_order.__getitem__))
+    input_names = {operand for name in internal for operand in instructions[name].operands if operand not in internal}
+    output_names = {name for name in internal if any(user not in internal for user in users.get(name, ()))}
+    ordered_inputs = tuple(sorted(input_names, key=source_order.__getitem__))
+    ordered_outputs = tuple(sorted(output_names, key=source_order.__getitem__))
+    return RecoveredEntryRegionBoundary(
+        internal_instructions=ordered_internal,
+        inputs=tuple(EntryRegionValue(name, instructions[name].shape) for name in ordered_inputs),
+        outputs=tuple(EntryRegionValue(name, instructions[name].shape) for name in ordered_outputs),
+        external_users=tuple(
+            (name, tuple(user for user in users[name] if user not in internal)) for name in ordered_outputs
+        ),
+        has_explicit_sharding=any("sharding=" in instructions[name].attributes for name in internal),
+        has_side_effect=any("custom_call_has_side_effect=true" in instructions[name].attributes for name in internal),
+    )
+
+
 def parse_hlo_module_text(hlo_text: str) -> HloModuleGraph:
     """Parse computations and data operands from an XLA HLO text dump."""
     computations: list[HloComputation] = []
@@ -347,6 +431,7 @@ def inline_elementwise_fusions(module: HloModuleGraph) -> InlinedHloGraph:
             opcode=instruction.opcode,
             shape=instruction.shape,
             operands=operands,
+            attributes=instruction.attributes,
             source_computation=computation_name,
             source_instruction=instruction.name,
         )
@@ -378,6 +463,7 @@ def inline_elementwise_fusions(module: HloModuleGraph) -> InlinedHloGraph:
             opcode=instruction.opcode,
             shape=instruction.shape,
             operands=operands,
+            attributes=instruction.attributes,
             source_computation=entry.name,
             source_instruction=instruction.name,
         )
