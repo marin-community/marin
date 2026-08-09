@@ -45,6 +45,7 @@ class ContractMapChainSourceAudit:
     has_explicit_bf16_contract_boundaries: bool
     has_generated_forward_maps: bool
     has_generated_reverse_maps: bool
+    has_handler_counters: bool
     has_atomics: bool
     opaque_semantic_dependencies: tuple[str, ...]
 
@@ -130,6 +131,8 @@ constexpr int kRows = {rows};
 constexpr int kInputFeatures = {input_features};
 constexpr int kRank = {rank};
 constexpr int kThreads = {threads};
+std::uint64_t forward_call_count = 0;
+std::uint64_t reverse_call_count = 0;
 
 __global__ void ShuttleContractMapChainForwardKernel(
     const __nv_bfloat16* __restrict__ input,
@@ -293,6 +296,7 @@ ffi::Error ShuttleContractMapChainForward(
   if (status != cudaSuccess) {{
     return ffi::Error::Internal("Contract/Map forward launch failed: " + std::string(cudaGetErrorString(status)));
   }}
+  ++forward_call_count;
   return ffi::Error::Success();
 }}
 
@@ -323,6 +327,7 @@ ffi::Error ShuttleContractMapChainReverse(
   if (status != cudaSuccess) {{
     return ffi::Error::Internal("Contract/Map reverse launch failed: " + std::string(cudaGetErrorString(status)));
   }}
+  ++reverse_call_count;
   return ffi::Error::Success();
 }}
 
@@ -362,6 +367,14 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {reverse_symbol},
     ShuttleContractMapChainReverse,
     ShuttleContractMapChainReverseBinding());
+
+extern "C" std::uint64_t shuttle_contract_map_chain_forward_call_count() {{
+  return forward_call_count;
+}}
+
+extern "C" std::uint64_t shuttle_contract_map_chain_reverse_call_count() {{
+  return reverse_call_count;
+}}
 """
     return GeneratedCudaContractMapChainFfi(
         forward_target=forward_target,
@@ -401,6 +414,10 @@ def audit_cuda_contract_map_chain_source(
         has_generated_reverse_maps=all(
             name in generated.source
             for name in ("generated_second_output_vjp_map", "generated_hidden_vjp_map", "generated_input_vjp_map")
+        ),
+        has_handler_counters=(
+            "shuttle_contract_map_chain_forward_call_count" in generated.source
+            and "shuttle_contract_map_chain_reverse_call_count" in generated.source
         ),
         has_atomics="atomic" in lowered,
         opaque_semantic_dependencies=tuple(token for token in opaque_tokens if token in lowered),

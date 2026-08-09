@@ -164,6 +164,7 @@ def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries
     assert audit.has_explicit_bf16_contract_boundaries
     assert audit.has_generated_forward_maps
     assert audit.has_generated_reverse_maps
+    assert audit.has_handler_counters
     assert not audit.has_atomics
     assert not audit.opaque_semantic_dependencies
     assert generated.external_dependencies == ("CUDA BF16/runtime primitives", "XLA typed FFI")
