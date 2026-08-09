@@ -40,6 +40,7 @@ from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.jax_runtime import jax_nightly_pip_packages
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
@@ -249,6 +250,7 @@ def build_small_run(
     latent_dim: int | None = None,
     tokens_per_active_param: int = 60,
     watch_interval: int = 0,
+    jax_nightly_version: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size``.
@@ -351,6 +353,7 @@ def build_small_run(
                     f"seq{seq_len}",
                     f"tok{tokens_per_step // 1024}k",
                     f"watch{watch_interval}",
+                    f"jax-{jax_nightly_version or 'stable'}",
                     flavor,
                     target,
                     "MHEP",
@@ -404,6 +407,7 @@ def build_small_run(
                 eval_ema=False,
             ),
             processes_per_task=fleet.gpus_per_node,
+            worker_pip_packages=jax_nightly_pip_packages(jax_nightly_version),
         )
 
     return ArtifactStep(
@@ -487,6 +491,11 @@ def build_small_run(
     show_default=True,
     help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
 )
+@click.option(
+    "--jax-nightly-version",
+    default=None,
+    help="Install this exact JAX nightly on workers after the locked GPU environment sync.",
+)
 @build_options
 def main(
     run_id: str,
@@ -502,6 +511,7 @@ def main(
     latent_dim: int | None,
     tokens_per_active_param: int,
     watch_interval: int,
+    jax_nightly_version: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_small_run(
         run_id=run_id,
@@ -517,6 +527,7 @@ def main(
         latent_dim=latent_dim,
         tokens_per_active_param=tokens_per_active_param,
         watch_interval=watch_interval,
+        jax_nightly_version=jax_nightly_version,
     )
 
 

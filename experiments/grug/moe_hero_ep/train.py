@@ -149,6 +149,9 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # Exact packages installed on workers after the locked workspace sync. This is reserved for
+    # runtime A/Bs such as a pinned JAX nightly and stays empty in production configurations.
+    worker_pip_packages: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -761,6 +764,7 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        pip_packages=config.worker_pip_packages,
     )
 
 

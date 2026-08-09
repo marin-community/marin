@@ -21,7 +21,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, small_scale_abl_launch, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, jax_runtime, launch, model, small_scale_abl_launch, train
 
 
 def test_hero_run_without_shape_overrides_uses_the_selected_model():
@@ -39,6 +39,65 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
     ) == (6144, 48, 192, 6272, 4, 3072, 1.33, 1024, 4096)
+    assert config.worker_pip_packages == ()
+
+
+def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
+    step = launch.build_hero_run(
+        run_id="four-node-proxy",
+        dp_racks=1,
+        ep_nodes=4,
+        num_steps=25,
+        batch_size=256,
+        num_experts=48,
+        flavor="ep-ragged",
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert (
+        config.model.hidden_dim,
+        config.model.num_layers,
+        config.model.num_experts,
+        config.model.intermediate_dim,
+        config.model.num_experts_per_token,
+        config.model.latent_dim,
+        config.model.capacity_factor,
+    ) == (6144, 48, 48, 6272, 4, 3072, 1.33)
+    assert config.trainer.expert_axis_size == 16
+    assert config.trainer.replica_axis_size == 1
+    assert step.runtime_args["train_resources"].replicas == 4
+    assert config.processes_per_task == 4
+    assert config.trainer.trainer.train_batch_size == 256
+    assert config.stop_after_steps == 25
+
+
+def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
+    nightly = "0.11.1.dev20260808"
+    step = small_scale_abl_launch.build_small_run(
+        run_id="nightly-device-kernel",
+        size="d768",
+        target="gb200-4node",
+        flavor="ep-ragged",
+        tokens_per_active_param=1,
+        jax_nightly_version=nightly,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.worker_pip_packages == (
+        f"jax=={nightly}",
+        f"jaxlib=={nightly}",
+        f"jax-cuda13-plugin[with-cuda]=={nightly}",
+        f"jax-cuda13-pjrt=={nightly}",
+        "--index",
+        jax_runtime.JAX_NIGHTLY_INDEX,
+    )
+
+
+def test_jax_nightly_version_must_be_an_exact_dated_build():
+    with pytest.raises(ValueError, match="must look like"):
+        jax_runtime.jax_nightly_pip_packages("nightly")
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -86,6 +145,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -110,6 +170,7 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -138,6 +199,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):

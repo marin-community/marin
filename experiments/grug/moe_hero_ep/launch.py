@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GB200 launcher for the EP64 MoE hero configuration."""
+"""GB200 launcher for the expert-parallel MoE hero configuration."""
 
 import dataclasses
 import os
@@ -27,6 +27,7 @@ from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.jax_runtime import jax_nightly_pip_packages
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, WatchMode, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -35,7 +36,6 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
-HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
@@ -59,17 +59,17 @@ class Flavor:
     one and still drops about 1.9 percent, so it cannot price the cost of dropping.
     """
 
-    expert_axis_size: int
+    expert_axis_size: int | None  # None spans the EP fleet
     moe_implementation: str
 
 
 FLAVORS: dict[str, Flavor] = {
-    "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all"),
+    "ep": Flavor(None, "fixed_all_to_all"),
     # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
     # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
     # because this path measured slow, which is what a same-shape run is for.
-    "ep-ragged": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "ragged_all_to_all"),
+    "ep-ragged": Flavor(None, "ragged_all_to_all"),
     "fsdp-nodrop": Flavor(1, "scatter"),
 }
 
@@ -111,6 +111,7 @@ def build_hero_run(
     run_id: str,
     dp_racks: int,
     num_steps: int,
+    ep_nodes: int = HERO_EP_NODES,
     schedule_steps: int | None = None,
     seed: int = 0,
     batch_size: int = HERO_EP_BATCH_SIZE,
@@ -127,17 +128,19 @@ def build_hero_run(
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
     profile_start_step: int = 5,
+    jax_nightly_version: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the EP64 hero throughput run.
+    """Build the hero throughput run on an explicitly sized EP fleet.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
 
-    Two arguments do move those optimizer values, deliberately: ``batch_size`` and
-    ``schedule_steps`` both change the token budget the heuristic scales from. ``flavor`` also
-    changes the expert axis, so ``fsdp-nodrop`` runs on axis 1 rather than EP64.
+    ``ep_nodes`` controls the expert axis and allocated nodes while preserving one process per GPU.
+    ``batch_size`` and ``schedule_steps`` move the optimizer values by changing the token budget
+    that the heuristic scales from. ``flavor`` can also change the expert axis; ``fsdp-nodrop``
+    remains on axis 1.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -145,11 +148,16 @@ def build_hero_run(
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if ep_nodes <= 0:
+        raise ValueError(f"ep_nodes must be positive, got {ep_nodes}")
     if checkpoint_interval <= timedelta(0):
         raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
     if flavor not in FLAVORS:
         raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
     sharding = FLAVORS[flavor]
+    if sharding.expert_axis_size is not None and ep_nodes != HERO_EP_NODES:
+        raise ValueError("--ep-nodes is only supported for expert-parallel flavors")
+    expert_axis_size = ep_nodes * HERO_GPUS_PER_NODE if sharding.expert_axis_size is None else sharding.expert_axis_size
     # `scatter` computes every assignment, so a capacity factor would be silently inert. Reject it
     # rather than let a sweep think it swept something.
     if capacity_factor is not None and sharding.moe_implementation == "scatter":
@@ -193,8 +201,8 @@ def build_hero_run(
     )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % sharding.expert_axis_size != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {sharding.expert_axis_size}")
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
@@ -213,7 +221,7 @@ def build_hero_run(
         # without this, every preemption restarts from step 0, so a run longer than the mean time
         # between evictions never finishes.
         save_checkpoints=save_checkpoints,
-        expert_axis_size=sharding.expert_axis_size,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
@@ -223,7 +231,7 @@ def build_hero_run(
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_EP_NODES * dp_racks,
+        replicas=ep_nodes * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -258,6 +266,8 @@ def build_hero_run(
                     f"flavor-{flavor}",
                     capacity_tag,
                     size_tag,
+                    f"ep-nodes-{ep_nodes}",
+                    f"jax-{jax_nightly_version or 'stable'}",
                     "gb200",
                     "MHEP",
                 ],
@@ -295,6 +305,7 @@ def build_hero_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            worker_pip_packages=jax_nightly_pip_packages(jax_nightly_version),
         )
 
     return ArtifactStep(
@@ -311,6 +322,13 @@ def build_hero_run(
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
+@click.option(
+    "--ep-nodes",
+    type=click.IntRange(min=1),
+    default=HERO_EP_NODES,
+    show_default=True,
+    help="GB200 nodes in each expert-parallel replica.",
+)
 @click.option(
     "--num-steps",
     type=click.IntRange(min=1),
@@ -338,7 +356,7 @@ def build_hero_run(
     "--num-experts",
     type=click.IntRange(min=1),
     default=None,
-    help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
+    help="Override the routed expert count. Must be divisible by the selected expert axis.",
 )
 @click.option(
     "--num-experts-per-token",
@@ -425,6 +443,11 @@ def build_hero_run(
     help="First traced step. Keep it past compile and warmup.",
 )
 @click.option(
+    "--jax-nightly-version",
+    default=None,
+    help="Install this exact JAX nightly on workers after the locked GPU environment sync.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -434,6 +457,7 @@ def build_hero_run(
 def main(
     run_id: str,
     dp_racks: int,
+    ep_nodes: int,
     num_steps: int,
     schedule_steps: int | None,
     seed: int,
@@ -451,10 +475,12 @@ def main(
     watch_mode: str,
     profile_steps: int,
     profile_start_step: int,
+    jax_nightly_version: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
         dp_racks=dp_racks,
+        ep_nodes=ep_nodes,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
         seed=seed,
@@ -472,6 +498,7 @@ def main(
         watch_mode=WatchMode(watch_mode),
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
+        jax_nightly_version=jax_nightly_version,
     )
 
 
