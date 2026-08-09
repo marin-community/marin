@@ -612,6 +612,7 @@ def main() -> None:
     if args.semantic_source == "jax_vjp_hlo_recovery":
         if args.mutation != "causal":
             raise ValueError("natural JAX VJP recovery currently supports the causal domain mutation")
+        jax.config.update("jax_platforms", "cpu")
         config = StreamingAttentionBackwardDebugConfig(
             batch=1,
             query_length=args.sequence,
@@ -900,6 +901,7 @@ def main() -> None:
         },
         "environment": {
             "jax": jax.__version__,
+            "jax_semantic_export_platform": "cpu",
             "torch": torch.__version__,
             "triton": triton.__version__,
             "cuda": torch.version.cuda,
