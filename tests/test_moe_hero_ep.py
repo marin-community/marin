@@ -84,6 +84,8 @@ def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
     assert config.trainer.expert_axis_size == 16
     assert config.trainer.replica_axis_size == 1
     assert step.runtime_args["train_resources"].replicas == 4
+    assert step.runtime_args["train_resources"].cpu == launch.FOUR_NODE_EP_WORKER_CPU
+    assert step.runtime_args["train_resources"].ram == launch.FOUR_NODE_EP_WORKER_RAM
     assert config.processes_per_task == 4
     assert config.trainer.trainer.train_batch_size == 256
     assert config.stop_after_steps == 25
@@ -102,6 +104,8 @@ def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
+    assert step.runtime_args["train_resources"].cpu == launch.FOUR_NODE_EP_WORKER_CPU
+    assert step.runtime_args["train_resources"].ram == small_scale_abl_launch.GB200_FOUR_NODE_SCREEN_RAM
     assert config.worker_pip_packages == (
         f"jax=={nightly}",
         f"jaxlib=={nightly}",

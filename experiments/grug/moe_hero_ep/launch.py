@@ -37,6 +37,9 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
+HERO_WORKER_CPU = 120
+FOUR_NODE_EP_WORKER_CPU = 16
+FOUR_NODE_EP_WORKER_RAM = "256g"
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
@@ -229,8 +232,8 @@ def build_hero_run(
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=120,
-        ram="850g",
+        cpu=FOUR_NODE_EP_WORKER_CPU if ep_nodes == 4 else HERO_WORKER_CPU,
+        ram=FOUR_NODE_EP_WORKER_RAM if ep_nodes == 4 else "850g",
         disk="1t",
         replicas=ep_nodes * dp_racks,
     )

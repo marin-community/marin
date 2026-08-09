@@ -619,3 +619,12 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Controlled change from S09c: increase `tokens_per_active_param` from 1 to the ladder's standard 60. This restores the intended optimizer token budget and learning-rate schedule. Process-per-GPU, JAX 0.11 one-shot ragged, d768/L8, E192, expert width 384, top-4, capacity 1.33, 1,048,576 tokens per step, `NCCL_BUFFSIZE=1048576`, allocator, latency hiding, command buffers, and metric controls are unchanged.
 - Stop/scoring contract: score steps 5-24 if loss remains finite, then stop manually. Watch and explicit profiling remain disabled; eval is at step 1000 and the 30-minute checkpoint is outside the expected timing window.
 - Scheduling state: the same 4 x GB200, 120 CPU, 850 GiB task shape admitted S09c immediately and is known schedulable. S10 is currently Kueue-gated behind production, with zero failures or preemptions. Retain the single-NVLink-domain gang constraint and wait.
+
+### 2026-08-09 06:20 UTC - Four-node host reservations corrected
+
+- S10 at 120 CPU / 850 GiB was not merely waiting for GPUs: Kueue excluded all 202 nodes on CPU. It was stopped before admission.
+- S10b at 32 CPU / 850 GiB reduced the CPU exclusion to 199 nodes, but still left only three candidates. S10c at 16 CPU / 850 GiB moved the dominant exclusion to memory: 4 CPU and 198 memory. Both were stopped before admission.
+- S10d at 16 CPU / 256 GiB left 4 CPU, 195 memory, and 3 GPU exclusions. The four-node exact d6144 proxy retains this 256 GiB profile because its offloaded optimizer state is about 112 GiB/node before loader and runtime headroom.
+- Final small-screen profile: 16 CPU and 128 GiB per four-GPU node. Four CPU cores per JAX process matches the H100 screen's ratio; the d768 screen does not offload optimizer state. The full-rack hero remains at 120 CPU / 850 GiB.
+- Active run: `/power/ra2a-s10e-ep16-oneshot-pgle-off-standard-schedule-20260809-coord`. Kueue still reports 4 CPU, 195 memory, and 3 GPU exclusions across 202 nodes, so production reservations/topology now dominate even at the bounded small-screen profile. Leave the interactive-priority one-domain gang queued and wait; do not lower host resources further or permit cross-rack placement.
+- Verification: the focused suite passes 26 tests and asserts both the small-screen and exact-proxy resource profiles. Required changed-file checks pass.

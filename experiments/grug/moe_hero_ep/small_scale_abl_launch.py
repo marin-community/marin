@@ -44,6 +44,7 @@ from experiments.grug.moe_hero_ep.jax_runtime import jax_nightly_pip_packages
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
     FLAVORS,
+    FOUR_NODE_EP_WORKER_CPU,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
@@ -64,6 +65,7 @@ SLIDING_WINDOW = 512
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
 BASELINE_TOKENS_PER_ACTIVE_PARAM = 60
+GB200_FOUR_NODE_SCREEN_RAM = "128g"
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -108,7 +110,16 @@ TARGETS: dict[str, Target] = {
     # At 1,048,576 tokens per step it has the d6144 hero's 65,536 tokens per sender shard, so E192
     # top-4 runs reproduce the hero's routing-cell load. It is a relative transport-knob screen:
     # 15 peers per rank cannot reproduce EP64's 63-peer FIFO pressure.
-    "gb200-4node": Target("GB200", HERO_GPUS_PER_NODE, 4, 120, "850g", "1t", "gpu_fa4_cute", True),
+    "gb200-4node": Target(
+        "GB200",
+        HERO_GPUS_PER_NODE,
+        4,
+        FOUR_NODE_EP_WORKER_CPU,
+        GB200_FOUR_NODE_SCREEN_RAM,
+        "1t",
+        "gpu_fa4_cute",
+        True,
+    ),
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
     # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
