@@ -267,6 +267,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 {"projected": projected, "standardized": standardized},
             )[0]
 
+        component_outputs = (
+            generated_input_cotangent(),
+            generated_feature_scale_cotangent(),
+        )
+        jax.block_until_ready(component_outputs)
+        component_hashes = tuple(_hash(value) for value in component_outputs)
+        repeated_component_outputs = (
+            generated_input_cotangent(),
+            generated_feature_scale_cotangent(),
+        )
+        jax.block_until_ready(repeated_component_outputs)
+        repeated_component_hashes = tuple(_hash(value) for value in repeated_component_outputs)
+        if component_hashes != repeated_component_hashes:
+            raise AssertionError("separately generated axis-Fold FFI components are not deterministic")
+
         input_measurements, input_execution_order = _measure(
             (
                 ("generated_ffi", generated_input_cotangent),
@@ -288,6 +303,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         assert input_library is not None
         assert feature_library is not None
         component_profile = {
+            "correctness": {
+                "against_full_generated": {
+                    "input_cotangent": _error(component_outputs[0], generated_outputs[0]),
+                    "feature_scale_cotangent": _error(component_outputs[1], generated_outputs[1]),
+                },
+                "against_matched_xla": {
+                    "input_cotangent": _error(component_outputs[0], xla_outputs[0]),
+                    "feature_scale_cotangent": _error(component_outputs[1], xla_outputs[1]),
+                },
+                "deterministic_hashes": list(component_hashes),
+            },
             "input_cotangent": {
                 "measurements": input_measurements,
                 "execution_order": input_execution_order,
