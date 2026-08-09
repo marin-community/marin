@@ -7,6 +7,7 @@ from pathlib import Path
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     MultiOutputFixedShapeProgram,
     generate_cuda_multi_output_ffi_handler,
+    pair_map_recovery_diagnostic,
 )
 from tile_lifetime.xla_hlo_recovery import (
     form_pair_map_entry_region,
@@ -157,3 +158,14 @@ def test_cuda_multi_output_ffi_uses_one_generic_thread_local_scalar_body() -> No
     assert "projection0[kRows" not in source
     assert "projection1[kRows" not in source
     assert "for (int reduction" not in source
+
+
+def test_pair_map_recovery_diagnostic_records_candidates_before_selection() -> None:
+    diagnostic = pair_map_recovery_diagnostic(_SYNTHETIC_PAIR_MAP)
+
+    assert diagnostic["contract_count"] == 3
+    assert diagnostic["pair_map_region_count"] == 1
+    candidate = diagnostic["candidates"][0]
+    assert candidate["index"] == 0
+    assert candidate["output_shapes"] == ("f32[8,64]{1,0}",)
+    assert candidate["external_user_counts"] == (1,)

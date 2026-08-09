@@ -33,6 +33,7 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _compile_cuda_ffi_handler,
     _register_cuda_ffi_custom_call,
     generate_cuda_multi_output_ffi_handler,
+    pair_map_recovery_diagnostic,
     recover_multi_output_region_rewrite,
     replace_multi_output_region_with_custom_call,
     write_gzip_text,
@@ -109,12 +110,17 @@ def run_smoke(nvcc: Path, architecture: str, artifact_directory: Path | None) ->
                 if module.name != "jit_train_step":
                     return None
                 original = module.to_string()
+                original_modules.append(original)
+                if artifact_directory is not None:
+                    write_gzip_text(directory / "original-gpu-pre-scheduler-hlo.txt.gz", original)
+                    (directory / "gpu-recovery-diagnostic.json").write_text(
+                        json.dumps(pair_map_recovery_diagnostic(original), indent=2, sort_keys=True) + "\n"
+                    )
                 rewrite = recover_multi_output_region_rewrite(original, _multi_output_region_index(original))
                 source = generate_cuda_multi_output_ffi_handler(rewrite.program)
                 library = _compile_cuda_ffi_handler(source, directory, nvcc, architecture)
                 _register_cuda_ffi_custom_call(library)
                 holder["library"] = library
-                original_modules.append(original)
                 rewrites.append(rewrite)
                 transformed_text = replace_multi_output_region_with_custom_call(
                     original,
