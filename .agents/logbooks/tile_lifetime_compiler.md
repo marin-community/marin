@@ -2565,3 +2565,26 @@ author: dlwh
 - Hardware taxonomy remains strict: the preserved artifact reports an actual
   NVIDIA GB200. Schmidt allocations, if used later, are B200 portability data
   and must not be cited as GB200 evidence.
+
+### 2026-08-09 - TLTC-XLA-031 collective replay and anonymous row Folds
+
+- A two-device H100 replay now executes the JAX-owned collective boundary with
+  EventTensor-derived completion plans. BF16 full-group sum, grouped maximum,
+  and the JAX-owned gradient have zero maximum absolute error and bitwise-stable
+  repeated hashes. StableHLO retains ordinary `all-reduce` operations and zero
+  custom calls; Shuttle owns completion/readiness planning, while JAX/XLA owns
+  AD and transport.
+- The replay used two physically verified NVIDIA H100 80GB HBM3 devices. It is
+  not B200 or GB200 evidence. Raw results and StableHLO are preserved under
+  `lib/tile_lifetime/benchmarks/artifacts/jax_collective_completion_h100_v0/`.
+- Generic physical-HLO recovery now finds and rewrites anonymous entry-local
+  sum-Fold plus final-Map regions. The selected Grug composition adds two 8x32
+  BF16 row-axis calls without using RMS, model, or metadata names. Metadata
+  renaming leaves semantic fingerprints unchanged, and sequential replacement
+  adds no copy or transpose adapter.
+- Parallel reduction is admitted only under the explicit
+  `ALLOW_ROUNDING_REORDER` policy; `BITWISE_EXACT` fails closed. The generated
+  boundary consumes the exact FP32 values and retains the final BF16 cast.
+- The routed, attention-reverse, collective, and axis-Fold focused suite passes
+  35 tests. Changed-file lint, formatting, and type checks pass at canonical
+  revision `4c74101ce9`.
