@@ -2068,3 +2068,66 @@ author: dlwh
   Contract→reverse-Map→Contract→source-Fold region, followed by the routed
   weight-gradient Contracts. Keep collectives external until those local
   regions execute correctly.
+
+### 2026-08-09 - TLTC-TRAIN-015 recovered attention reverse on H100
+
+- Hypothesis: the JAX-owned VJP recovered into generic
+  Contract/Fold/DomainRestriction algebra can drive the existing deterministic
+  streaming reverse skeleton within 1.20x of a matched H100 expert backend.
+- Commit Hash: artifact source `9cac1dd40b`; integrated artifact `0823671efb`.
+- Command: `h100_generated_streaming_attention_backward.py --semantic-source
+  jax_vjp_hlo_recovery --sequence 2048 --mutation causal --block-m 32
+  --block-n 32 --num-warps 8 --num-stages 3 --warmups 5 --repeats 30
+  --iterations 5 --profile-components`. The cuDNN SDPA backend was disabled
+  after it failed to construct an oracle plan; Torch flash SDPA supplied the
+  matched oracle.
+- Config: one NVIDIA H100 80GB HBM3, driver 595.71.05, CUDA 12.8, Torch
+  2.11.0+cu128, Triton 3.6.0, JAX 0.11.0, causal BF16 GQA, batch 1, 32 query
+  heads, eight K/V heads, dimension 128, sequence 2,048. Thirty
+  counterbalanced samples contain five iterations each.
+- Result: generated/oracle medians are 0.549139/0.462077 ms, a 1.188415x ratio
+  inside the 1.20 proof target. Component medians are 0.044742 ms for the
+  output-dot Fold, 0.157680 ms for dQ, and 0.356966 ms for dK/dV. Maximum errors
+  are 0.003906 for the forward output, 0.015625 for dQ, 0.03125 for dK, and
+  0.0625 for dV. Repeated generated outputs have one stable hash.
+- Synthesis boundary: ordinary JAX owns AD; StableHLO recovery identifies the
+  generic reverse algebra; a guard verifies that the physical score-Map VJP is
+  the derivative of the recovered forward scalar AST. The physical harness is
+  still Torch/Triton and is not the final Torch-free JAX runtime.
+- Interpretation: dK/dV accounts for most generated time. The separate
+  output-dot Fold is 8.1% of generated latency and is a useful generic
+  attachment candidate: compute/store it in the dQ owner traversal, then let
+  dK/dV consume the result.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_h100_replay_9cac1dd40b/`.
+- Next action: reproduce the same boundary on GB200, then test the output-dot
+  Fold attachment before pursuing a broader physical reverse-pipeline rewrite.
+
+### 2026-08-09 - TLTC-TRAIN-016 recovered attention reverse on GB200
+
+- Hypothesis: the H100 result transfers to the same generic streaming reverse
+  schedule on SM100 without changing recovered semantics or physical tile
+  parameters.
+- Commit Hash: artifact source `9cac1dd40b`; integrated artifact `18f82b2342`.
+- Command/config: identical to TLTC-TRAIN-015, using one NVIDIA GB200,
+  compute capability 10.0, driver 595.71.05, 1,200 W power limit, CUDA 12.8,
+  Torch 2.11.0+cu128, Triton 3.6.0, and JAX 0.11.0. Thirty counterbalanced
+  samples contain five iterations each.
+- Allocation correction: one nominal GB200 request exposed the same H100 UUID
+  and compute capability 9.0 as TLTC-TRAIN-015. It was released before any
+  environment install or benchmark. The accepted replay used the proven GB200
+  pool and verified the model and compute capability before setup. No B200
+  result is involved.
+- Result: generated/oracle medians are 0.484029/0.409293 ms, a 1.182598x ratio
+  inside the 1.20 proof target. Component medians are 0.040477 ms for the
+  output-dot Fold, 0.136282 ms for dQ, and 0.314320 ms for dK/dV. Correctness
+  passes and repeated generated outputs have one stable hash.
+- Interpretation: H100 and GB200 agree on the physical bottleneck. dK/dV is
+  64.9% of generated latency, and the standalone output-dot Fold is 8.4%.
+  Attaching that Fold to the dQ owner traversal is the next bounded generic
+  optimization; a larger reverse-pipeline rewrite is unnecessary unless the
+  attachment fails to close the remaining gap.
+- Artifacts:
+  `lib/tile_lifetime/benchmarks/artifacts/streaming_attention_backward_gb200_replay_9cac1dd40b/`
+  and the rejected-device record under
+  `streaming_attention_backward_gb200_replay_blocked_9cac1dd40b/`.
