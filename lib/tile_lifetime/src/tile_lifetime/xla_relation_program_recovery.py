@@ -34,6 +34,7 @@ from tile_lifetime.cast_scalar_program import (
     GeneratedCudaScalarBody,
     generate_cuda_scalar_body,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import (
     EntryRegionValue,
     HloComputation,
@@ -455,6 +456,60 @@ class RoutedInputAdjointTypedFfiCodegenPlan:
     segmented_layout: SegmentedLayoutRecord
 
 
+class RoutedWeightGradientFfiOperandRole(StrEnum):
+    """Structural role of one group-batched weight-adjoint operand."""
+
+    LHS = "lhs"
+    RHS = "rhs"
+
+
+@dataclass(frozen=True)
+class RoutedWeightGradientFfiOperand:
+    """One runtime value bound to a generic group-batched Contract."""
+
+    role: RoutedWeightGradientFfiOperandRole
+    value: EntryRegionValue
+    parameter_ancestors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RoutedWeightGradientNumericalContract:
+    """Explicit finite-precision contract for one generated weight adjoint."""
+
+    input_dtype: str
+    accumulation_dtype: str
+    output_dtype: str
+    output_rounding: str
+    numerical_policy: NumericalPolicy
+    deterministic_accumulation: bool
+    effect: str
+
+
+@dataclass(frozen=True)
+class RoutedWeightGradientRegionRecord:
+    """One physical group-batched Contract before its placement collective."""
+
+    gradient: RoutedWeightGradientRecord
+    boundary: RecoveredEntryRegionBoundary
+    contract: RoutedForwardContractStage
+    external_collectives: tuple[str, ...]
+    insertion_instruction: str
+    convex: bool
+    topologically_insertable: bool
+
+
+@dataclass(frozen=True)
+class RoutedWeightGradientTypedFfiCodegenPlan:
+    """Typed-FFI plan for a generic group-batched weight-gradient Contract."""
+
+    region: RoutedWeightGradientRegionRecord
+    api_version: int
+    contract: RoutedForwardContractStage
+    operands: tuple[RoutedWeightGradientFfiOperand, ...]
+    numerical_contract: RoutedWeightGradientNumericalContract
+    output_alias_operand: int | None
+
+
 @dataclass(frozen=True)
 class RelationProgramRecoveryReport:
     """Inspectable generic ownership boundary for routed forward/backward work."""
@@ -862,6 +917,128 @@ def plan_routed_input_adjoint_typed_ffi(hlo_text: str) -> RoutedInputAdjointType
         operands=_recover_routed_input_adjoint_ffi_operands(hlo_text, region),
         segmented_layout=segmented_layout,
     )
+
+
+def form_routed_weight_gradient_regions(hlo_text: str) -> tuple[RoutedWeightGradientRegionRecord, ...]:
+    """Form group-batched Contract regions whose collectives remain external.
+
+    Region formation uses only rank, Contract dimensions, relation ancestry,
+    and the immediate placement boundary. Each region contains exactly one
+    physical Contract; masked/padded physical operands remain ordinary runtime
+    inputs and the following all-reduce remains in XLA.
+    """
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    report = recover_relation_programs(hlo_text)
+    entry = module.computation(module.entry)
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    records: list[RoutedWeightGradientRegionRecord] = []
+    for gradient in report.weight_gradients:
+        instruction = _entry_instruction_for_node(module, gradient.contract.node)
+        internal = (instruction,)
+        boundary = _entry_region_boundary(entry, internal)
+        contract = _contract_codegen_stage(graph, gradient.contract)
+        topologically_insertable = all(order[value.instruction] < order[instruction] for value in boundary.inputs)
+        records.append(
+            RoutedWeightGradientRegionRecord(
+                gradient=gradient,
+                boundary=boundary,
+                contract=contract,
+                external_collectives=tuple(
+                    _entry_instruction_for_node(module, collective) for collective in gradient.external_collectives
+                ),
+                insertion_instruction=instruction,
+                convex=_entry_region_is_convex(entry, internal),
+                topologically_insertable=topologically_insertable,
+            )
+        )
+    return tuple(records)
+
+
+def plan_routed_weight_gradient_typed_ffi(
+    hlo_text: str,
+    *,
+    numerical_policy: NumericalPolicy = NumericalPolicy.ALLOW_ROUNDING_REORDER,
+) -> tuple[RoutedWeightGradientTypedFfiCodegenPlan, ...]:
+    """Plan generated group-batched weight adjoints from differentiated HLO.
+
+    JAX owns differentiation. Shuttle only recovers the resulting Contracts.
+    The generated backend uses FP32 accumulation and a single BF16 output cast;
+    this is not a bitwise promise for an unspecified source reduction tree.
+    """
+    if numerical_policy is NumericalPolicy.BITWISE_EXACT:
+        raise ValueError("group-batched weight gradients cannot preserve an unspecified bitwise dot reduction tree")
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    plans: list[RoutedWeightGradientTypedFfiCodegenPlan] = []
+    for region in form_routed_weight_gradient_regions(hlo_text):
+        if not region.convex or not region.topologically_insertable:
+            raise ValueError(f"weight-gradient Contract %{region.insertion_instruction} is not replaceable")
+        if len(region.boundary.inputs) != 2 or len(region.boundary.outputs) != 1:
+            raise ValueError("weight-gradient Contract requires two inputs and one fresh output")
+        node = instructions[region.insertion_instruction]
+        boundary_inputs = {value.instruction: value for value in region.boundary.inputs}
+        if set(boundary_inputs) != set(node.operands):
+            raise ValueError("weight-gradient boundary does not contain exactly the Contract operands")
+        input_dtypes = {instructions[operand].dtype for operand in node.operands}
+        if input_dtypes != {"bf16"} or node.dtype != "bf16":
+            raise ValueError("generated weight-gradient Contract currently requires BF16 storage")
+        operands = tuple(
+            RoutedWeightGradientFfiOperand(
+                role=role,
+                value=value,
+                parameter_ancestors=_entry_parameter_ancestors(entry, value.instruction),
+            )
+            for role, value in zip(
+                RoutedWeightGradientFfiOperandRole,
+                (boundary_inputs[operand] for operand in node.operands),
+                strict=True,
+            )
+        )
+        if any(not operand.parameter_ancestors for operand in operands):
+            raise ValueError("weight-gradient Contract operand lacks runtime parameter ancestry")
+        plans.append(
+            RoutedWeightGradientTypedFfiCodegenPlan(
+                region=region,
+                api_version=1,
+                contract=region.contract,
+                operands=operands,
+                numerical_contract=RoutedWeightGradientNumericalContract(
+                    input_dtype="bf16",
+                    accumulation_dtype="f32",
+                    output_dtype="bf16",
+                    output_rounding="round_to_nearest_even",
+                    numerical_policy=numerical_policy,
+                    deterministic_accumulation=True,
+                    effect=(
+                        "Each output element has one group-batched Contract owner. BF16 operands are accumulated "
+                        "in FP32 and rounded once to BF16 before the external placement collective; no atomic or "
+                        "cross-task accumulation is introduced."
+                    ),
+                ),
+                output_alias_operand=None,
+            )
+        )
+    return tuple(plans)
+
+
+def _entry_parameter_ancestors(entry: HloComputation, value: str) -> tuple[str, ...]:
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    pending = [value]
+    seen: set[str] = set()
+    parameters: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        instruction = instructions[current]
+        if instruction.opcode == "parameter":
+            parameters.add(current)
+        else:
+            pending.extend(instruction.operands)
+    return tuple(sorted(parameters))
 
 
 def _recover_routed_input_adjoint_ffi_operands(
