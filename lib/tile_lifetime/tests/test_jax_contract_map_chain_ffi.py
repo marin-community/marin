@@ -14,6 +14,7 @@ from tile_lifetime.cuda_contract_map_chain_codegen import generate_cuda_contract
 from tile_lifetime.jax_contract_map_chain_ffi import (
     call_cuda_contract_map_chain_forward_ffi,
     call_cuda_contract_map_chain_reverse_ffi,
+    to_jax_ffi_layout,
 )
 from tile_lifetime.xla_low_rank_gated_product import recover_low_rank_gated_product_training
 from tile_lifetime.xla_normalized_exp_contract_forward import (
@@ -89,3 +90,14 @@ def test_jax_contract_map_chain_reverse_rejects_non_bf16_save_before_dispatch() 
             jnp.zeros((8, 32), dtype=jnp.bfloat16),
             jnp.zeros((8, 32), dtype=jnp.bfloat16),
         )
+
+
+@pytest.mark.parametrize(
+    ("minor_to_major", "expected_major_to_minor"),
+    (((1, 0), (0, 1)), ((0, 1), (1, 0)), ((2, 0, 1), (1, 0, 2))),
+)
+def test_jax_contract_map_chain_layout_converts_xla_order_for_ffi(
+    minor_to_major: tuple[int, ...],
+    expected_major_to_minor: tuple[int, ...],
+) -> None:
+    assert to_jax_ffi_layout(minor_to_major) == expected_major_to_minor

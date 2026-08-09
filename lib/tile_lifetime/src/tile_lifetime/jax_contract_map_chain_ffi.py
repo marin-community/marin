@@ -91,9 +91,9 @@ def call_cuda_contract_map_chain_reverse_ffi(
         result_shapes,
         vmap_method="broadcast_all",
         output_layouts=(
-            (1, 0),
-            generated.first_weight_adjoint_minor_to_major,
-            generated.second_weight_adjoint_minor_to_major,
+            to_jax_ffi_layout((1, 0)),
+            to_jax_ffi_layout(generated.first_weight_adjoint_minor_to_major),
+            to_jax_ffi_layout(generated.second_weight_adjoint_minor_to_major),
         ),
     )(
         activation,
@@ -105,6 +105,13 @@ def call_cuda_contract_map_chain_reverse_ffi(
         output_cotangent,
     )
     return results[0], results[1], results[2]
+
+
+def to_jax_ffi_layout(minor_to_major: tuple[int, ...]) -> tuple[int, ...]:
+    """Convert XLA/CUDA minor-to-major layout order to JAX FFI order."""
+    if sorted(minor_to_major) != list(range(len(minor_to_major))):
+        raise ValueError(f"layout must be an axis permutation, found {minor_to_major}")
+    return tuple(reversed(minor_to_major))
 
 
 def _require_bf16(name: str, value: jax.Array, shape: tuple[int, int]) -> None:
