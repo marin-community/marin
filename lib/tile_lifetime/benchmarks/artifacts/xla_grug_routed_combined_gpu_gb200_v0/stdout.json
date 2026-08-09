@@ -1,0 +1,969 @@
+{
+  "architecture": "sm_100a",
+  "baseline_median_ms": 0.5543361185118556,
+  "baseline_unique_output_hashes": [
+    "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d",
+    "22c97731fb4451d5e04cfa5368450c80bc0d051df690a86a35b51596b268204c",
+    "4544c5db6b7b5ed3eed9cd963f2bf1833d54516382645c481f9b105f94d31bba",
+    "50cfd6bbb43028c749619ffba800054510c693b0292a8e699151646bd0fd25cf",
+    "573429d3afbd6d77522675f4ec6ade4921568c486b2f5fe990b1bb15c49e659d",
+    "71405bfb57fccfa0030b7500fafbcccd2ca6949edca3472f6a85d274858c49ef",
+    "770e70870bbd058184b58ccb91457c4f36b111d3e8366c5055117e04b60ad052",
+    "83ab2cbe8263e641a1e88a74ff8b32e8ba12cbeac4bd346d20545376d445c145",
+    "a810953dde57baedd06621851f115e30db93c4295e6864fc15616da484990aad",
+    "ae34d7f88033753dc7c21310c43b7fa797a50a2b780c7a452cf52fb674a1c63f",
+    "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21",
+    "c955ad78de9ae8a1d74cb9d9a483569357eaa279f02f794266349e9804abbd72",
+    "e77a53c977d892a00a833e98d388ab258089731195a8a2ecdfa7377924c37363"
+  ],
+  "bitwise_equal_leaf_count": 49,
+  "copy_count": {
+    "original": 0,
+    "transformed": 0
+  },
+  "custom_call_handler_executions": {
+    "forward": 35,
+    "input_adjoint": 35,
+    "weight_gradients": [
+      35,
+      35
+    ]
+  },
+  "custom_call_occurrences_in_transformed_hlo": {
+    "forward": 1,
+    "input_adjoint": 1,
+    "weight_gradients": [
+      1,
+      1
+    ]
+  },
+  "custom_call_targets": {
+    "forward": "shuttle.routed_training.forward.v1",
+    "input_adjoint": "shuttle.routed_training.input_adjoint.v1",
+    "weight_gradients": [
+      "shuttle.routed_training.weight_gradient.0.v1",
+      "shuttle.routed_training.weight_gradient.1.v1"
+    ]
+  },
+  "device_kind": "NVIDIA GB200",
+  "external_collectives": [
+    "psum.58",
+    "psum.59"
+  ],
+  "generated_median_ms": 0.6548966048285365,
+  "generated_over_baseline": 1.1814070614533305,
+  "generated_regions": [
+    "Contract -> Map -> Contract -> source Fold",
+    "Contract -> reverse Map -> Contract -> source Fold",
+    "group-batched weight Contract 0",
+    "group-batched weight Contract 1"
+  ],
+  "generated_semantic_sha256": {
+    "forward": "5292c1792db050560fef6066e82f6186a4c266c3f2b8d4d2ffdbf148b13dadc4",
+    "input_adjoint": "5ebb1d61dbc7f25233b5be527a650e885490be48f45ad95f5245aecfd2988870",
+    "weight_gradients": [
+      "3343839d298ef5ecbb95dbaec1876c4cda0e13d33dfa20fba28daf4472658b3b",
+      "0e7d409b45ccc6929fcbb5e08bc5dc55fd226d41137b91557c4d4e98b40099f3"
+    ]
+  },
+  "generated_source_sha256": {
+    "forward": "7ae70c9420121109bb2695a054ac58a0f1b9e2281441b77f13138b35b7e18b97",
+    "input_adjoint": "a937129447852ea6d6e9257c0d54baf49904a46efb646fecd5775091d56a321d",
+    "weight_gradients": [
+      "276b8556dbb98a88b8d243ebad497227866087c775089f31f0cdf84987c1cd61",
+      "6fa34da932ddf7ee5964cf8e48772667a21da8eeaffdc54cc93c5e5f57e1ac86"
+    ]
+  },
+  "generated_unique_output_hashes": [
+    "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+  ],
+  "input_adjoint_auxiliary": "select.7",
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_grug_combined_routed_training_generated_ffi",
+  "maximum_absolute_error": 3.725290298461914e-09,
+  "mean_absolute_error": 1.1989784419818406e-12,
+  "natural_frontend": "ordinary one-layer Grug train step with JAX-owned differentiation",
+  "numerical_policies": {
+    "forward": "source_ordered",
+    "input_adjoint": "source_ordered",
+    "weight_gradients": [
+      "allow_rounding_reorder",
+      "allow_rounding_reorder"
+    ]
+  },
+  "operand_ancestry": {
+    "and.29": [
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "and.35": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "broadcast.113": [],
+    "broadcast_in_dim.359": [
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "broadcast_in_dim.428": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "dot.66": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "dot_general.182": [
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_token_embed.1"
+    ],
+    "mul.779": [
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "reshape.348": [
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "reshape.349": [
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1"
+    ],
+    "reshape.352": [
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1"
+    ],
+    "reshape.357": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "reshape.358": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "reshape.361": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "select.3": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "select.5": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "select.6": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ],
+    "select.7": [
+      "batch_loss_weight.1",
+      "batch_tokens.1",
+      "state_params_blocks_0__attn_attn_gate.1",
+      "state_params_blocks_0__attn_gated_norm_w_down.1",
+      "state_params_blocks_0__attn_gated_norm_w_up.1",
+      "state_params_blocks_0__attn_w_k.1",
+      "state_params_blocks_0__attn_w_o.1",
+      "state_params_blocks_0__attn_w_q.1",
+      "state_params_blocks_0__attn_w_v.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+      "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+      "state_params_blocks_0__mlp_gated_norm_w_down.1",
+      "state_params_blocks_0__mlp_gated_norm_w_up.1",
+      "state_params_blocks_0__mlp_router.1",
+      "state_params_blocks_0__rms_attn_weight.1",
+      "state_params_blocks_0__rms_mlp_weight.1",
+      "state_params_blocks_0__shared_w_down.1",
+      "state_params_blocks_0__shared_w_gate.1",
+      "state_params_blocks_0__shared_w_up.1",
+      "state_params_embed_gated_norm_w_down.1",
+      "state_params_embed_gated_norm_w_up.1",
+      "state_params_embed_norm_weight.1",
+      "state_params_final_gated_norm_w_down.1",
+      "state_params_final_gated_norm_w_up.1",
+      "state_params_final_norm_weight.1",
+      "state_params_output_proj.1",
+      "state_params_token_embed.1",
+      "state_pending_qb_betas.1"
+    ]
+  },
+  "output_alias_operands": [
+    null,
+    null
+  ],
+  "outputs_match": true,
+  "platform": "cuda",
+  "raw_samples": [
+    {
+      "baseline": {
+        "latency_ms": 0.558176077902317,
+        "output_hash": "22c97731fb4451d5e04cfa5368450c80bc0d051df690a86a35b51596b268204c"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6542399059981108,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.557855935767293,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6421438883990049,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5512000061571598,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.674752052873373,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5767680704593658,
+        "output_hash": "71405bfb57fccfa0030b7500fafbcccd2ca6949edca3472f6a85d274858c49ef"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6494091358035803,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5598720163106918,
+        "output_hash": "770e70870bbd058184b58ccb91457c4f36b111d3e8366c5055117e04b60ad052"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6515199784189463,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5591679364442825,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6639678031206131,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5409279838204384,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6550720427185297,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5565120372921228,
+        "output_hash": "71405bfb57fccfa0030b7500fafbcccd2ca6949edca3472f6a85d274858c49ef"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.659680925309658,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5472640041261911,
+        "output_hash": "573429d3afbd6d77522675f4ec6ade4921568c486b2f5fe990b1bb15c49e659d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6478079594671726,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5547520704567432,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.658079981803894,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.552609097212553,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6470400840044022,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5494090728461742,
+        "output_hash": "71405bfb57fccfa0030b7500fafbcccd2ca6949edca3472f6a85d274858c49ef"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6647680420428514,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5401920061558485,
+        "output_hash": "83ab2cbe8263e641a1e88a74ff8b32e8ba12cbeac4bd346d20545376d445c145"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6554240826517344,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5612799432128668,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6608318071812391,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5605758633464575,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.663776183500886,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5584321916103363,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.665983883664012,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5529921036213636,
+        "output_hash": "e77a53c977d892a00a833e98d388ab258089731195a8a2ecdfa7377924c37363"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6524170748889446,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5762879736721516,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6547211669385433,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5470400210469961,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.648832181468606,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5493119824677706,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6546890363097191,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5500160623341799,
+        "output_hash": "573429d3afbd6d77522675f4ec6ade4921568c486b2f5fe990b1bb15c49e659d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6582720670849085,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5634559784084558,
+        "output_hash": "50cfd6bbb43028c749619ffba800054510c693b0292a8e699151646bd0fd25cf"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6617610342800617,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.553920166566968,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.643744133412838,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5474239587783813,
+        "output_hash": "a810953dde57baedd06621851f115e30db93c4295e6864fc15616da484990aad"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6482559256255627,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5513280630111694,
+        "output_hash": "c955ad78de9ae8a1d74cb9d9a483569357eaa279f02f794266349e9804abbd72"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6620159838348627,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5604159086942673,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6485120393335819,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5473599303513765,
+        "output_hash": "ae34d7f88033753dc7c21310c43b7fa797a50a2b780c7a452cf52fb674a1c63f"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6574720609933138,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5533760413527489,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.643871957436204,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5552638322114944,
+        "output_hash": "4544c5db6b7b5ed3eed9cd963f2bf1833d54516382645c481f9b105f94d31bba"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6531849503517151,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5564158782362938,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6775038782507181,
+        "output_hash": "a727a0fbdbb891d691d6899a5a659c50b686ec1ac0472ec4ff12c48dbd580f71"
+      }
+    }
+  ],
+  "remaining_ownership_gap": "The rematerialized routed forward chain, relation index plane, and placement collectives remain under XLA; this checkpoint composes four existing generated physical regions without a megakernel.",
+  "result_leaf_count": 53,
+  "static_operand_roles": [
+    "fold_initial"
+  ],
+  "target_instruction_names": [
+    "shuttle_generated_routed_forward_region",
+    "shuttle_generated_routed_input_adjoint_region",
+    "dot.6",
+    "dot.7"
+  ],
+  "transpose_count": {
+    "original": 51,
+    "transformed": 50
+  },
+  "uses_atomic_accumulation": false
+}
