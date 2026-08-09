@@ -10,24 +10,76 @@ import hashlib
 import json
 import statistics
 import subprocess
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
+from typing import TypedDict
 
+import jax
+import jax.numpy as jnp
 import torch
 from torch.utils.cpp_extension import load
 
 from tile_lifetime import (
-    DType,
-    RowNormalizationSavePolicy,
-    RowStatisticKind,
-    RowStatisticScalePlacement,
-    build_row_normalized_contract_program,
-    compile_row_normalization_training,
-    lower_row_normalization_axis_folds,
+    RowNormalizationAxisFoldPrograms,
+    compile_stablehlo_row_normalization_backward,
 )
 from tile_lifetime.cuda_axis_fold_codegen import GeneratedCudaAxisFold, generate_cuda_axis_fold
+from tile_lifetime.stablehlo_import import import_stablehlo
+
+
+class BenchmarkVariantRecord(TypedDict):
+    samples_ms: list[float]
+    median_ms: float
+    minimum_ms: float
+
+
+class BenchmarkResult(TypedDict):
+    variants: dict[str, BenchmarkVariantRecord]
+    execution_order: list[list[str]]
+    ratio_generated_to_torch_compile: float
+
+
+def _compile_natural_jax_vjp(
+    *, rows: int, hidden: int, centered: bool, threads: int
+) -> tuple[RowNormalizationAxisFoldPrograms, dict[str, object]]:
+    """Export ordinary JAX AD and lower its recovered generic row Folds."""
+
+    def normalization(x, feature_scale):
+        local = x.astype(jnp.float32)
+        if centered:
+            local -= jnp.mean(local, axis=-1, keepdims=True)
+        inverse = jax.lax.rsqrt(jnp.mean(jnp.square(local), axis=-1, keepdims=True) + 1e-5)
+        return (local * inverse * feature_scale.astype(jnp.float32)).astype(jnp.bfloat16)
+
+    def reverse(x, feature_scale, cotangent):
+        _, pullback = jax.vjp(normalization, x, feature_scale)
+        return pullback(cotangent)
+
+    arguments = (
+        jnp.zeros((rows, hidden), dtype=jnp.bfloat16),
+        jnp.ones((hidden,), dtype=jnp.bfloat16),
+        jnp.zeros((rows, hidden), dtype=jnp.bfloat16),
+    )
+    exported = jax.export.export(jax.jit(reverse))(*arguments)
+    serialized = exported.mlir_module_serialized
+    graph = import_stablehlo(
+        serialized,
+        input_names=("matrix_a", "feature_vector", "matrix_b"),
+    )
+    compilation = compile_stablehlo_row_normalization_backward(graph, threads=threads)
+    provenance: dict[str, object] = {
+        "source": "ordinary_jax_vjp_stablehlo",
+        "jax_owns_ad": True,
+        "stablehlo_sha256": hashlib.sha256(serialized).hexdigest(),
+        "stablehlo_operation_count": len(graph.operations),
+        "stablehlo_operation_kinds": dict(sorted(Counter(operation.kind for operation in graph.operations).items())),
+        "recovered_row_fold_operations": list(compilation.recovered.row_fold_operations),
+        "recovered_feature_fold_operations": list(compilation.recovered.feature_fold_operations),
+    }
+    return compilation.programs, provenance
 
 
 def _load_generated_axis_fold(
@@ -51,6 +103,8 @@ def _load_generated_axis_fold(
         with_cuda=True,
         verbose=True,
     )
+    if not isinstance(module, ModuleType):
+        raise TypeError(f"expected compiled extension module, got {type(module).__name__}")
     return module, source_path
 
 
@@ -60,7 +114,7 @@ def _benchmark_variants(
     warmups: int,
     repeats: int,
     iterations: int,
-) -> dict[str, object]:
+) -> BenchmarkResult:
     for _ in range(warmups):
         for _, function in variants:
             function()
@@ -79,7 +133,7 @@ def _benchmark_variants(
             end.record()
             end.synchronize()
             samples[name].append(start.elapsed_time(end) / iterations)
-    records = {
+    records: dict[str, BenchmarkVariantRecord] = {
         name: {
             "samples_ms": values,
             "median_ms": statistics.median(values),
@@ -146,22 +200,13 @@ def main() -> None:
     if args.repeats % 2:
         raise ValueError("counterbalanced benchmark requires an even repeat count")
 
-    statistic_kind = (
-        RowStatisticKind.UNCENTERED_SECOND_MOMENT if args.statistic == "rms" else RowStatisticKind.CENTERED_SECOND_MOMENT
-    )
-    source = build_row_normalized_contract_program(
+    centered = args.statistic == "layer"
+    programs, frontend_provenance = _compile_natural_jax_vjp(
         rows=args.rows,
         hidden=args.hidden,
-        features=128,
-        statistic_kind=statistic_kind,
-        dtype=DType.BF16,
+        centered=centered,
+        threads=args.threads,
     )
-    plan = compile_row_normalization_training(
-        source,
-        save_policy=RowNormalizationSavePolicy.SAVE_NORMALIZED,
-        scale_placement=RowStatisticScalePlacement.SOURCE_ORDERED_PREPARATION,
-    )
-    programs = lower_row_normalization_axis_folds(plan, threads=args.threads)
     generated_input = generate_cuda_axis_fold(programs.input_cotangent)
     scale_program = replace(
         programs.feature_scale_cotangent,
@@ -196,7 +241,6 @@ def main() -> None:
     inverse_scale = torch.rand((args.rows,), dtype=torch.float32, device="cuda", generator=generator) + 0.25
     input_cotangent = torch.empty_like(projected)
     feature_scale_cotangent = torch.empty((args.hidden,), dtype=torch.float32, device="cuda")
-    centered = statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT
 
     @torch.compile(fullgraph=True, dynamic=False)
     def torch_reference() -> tuple[torch.Tensor, torch.Tensor]:
@@ -227,7 +271,7 @@ def main() -> None:
     generated_full()
     torch.cuda.synchronize()
     reference_input, reference_scale = reference_outputs
-    correctness = {
+    correctness: dict[str, object] = {
         "input_cotangent": _error(input_cotangent, reference_input),
         "feature_scale_cotangent": _error(feature_scale_cotangent, reference_scale),
     }
@@ -245,7 +289,7 @@ def main() -> None:
         raise AssertionError("generated row-normalization backward is not deterministic")
     correctness["deterministic_hashes"] = first_hashes
 
-    measurements = {
+    measurements: dict[str, BenchmarkResult] = {
         "full": _benchmark_variants(
             (("generated", generated_full), ("torch_compile", compiled_full)),
             warmups=args.warmups,
@@ -278,6 +322,7 @@ def main() -> None:
             "outputs": {"input_cotangent": "float32", "feature_scale_cotangent": "float32"},
         },
         "semantic_lowering": {
+            "frontend": frontend_provenance,
             "named_semantics_erased": True,
             "input_fold_state_count": len(programs.input_cotangent.reductions),
             "input_fold_fingerprint": programs.input_cotangent.semantic_fingerprint,
@@ -306,6 +351,7 @@ def main() -> None:
             "feature_scale_sha256": generated_scale.source_sha256,
         },
         "environment": {
+            "jax": jax.__version__,
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
             "device": properties.name,

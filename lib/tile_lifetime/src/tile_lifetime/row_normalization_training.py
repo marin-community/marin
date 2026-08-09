@@ -308,7 +308,26 @@ def lower_row_normalization_axis_folds(
     the physical generator and schedule remain unchanged.
     """
     rows, hidden = plan.source.inputs[0].shape
-    source_dtype = plan.source.inputs[0].dtype
+    return build_row_normalization_axis_fold_programs(
+        rows=rows,
+        hidden=hidden,
+        source_dtype=plan.source.inputs[0].dtype,
+        statistic_kind=plan.statistic_kind,
+        threads=threads,
+    )
+
+
+def build_row_normalization_axis_fold_programs(
+    *,
+    rows: int,
+    hidden: int,
+    source_dtype: DType,
+    statistic_kind: RowStatisticKind,
+    threads: int = 256,
+) -> RowNormalizationAxisFoldPrograms:
+    """Build fused axis Folds from recovered generic reverse algebra."""
+    if rows <= 0 or hidden <= 0:
+        raise ValueError("row-normalization reverse extents must be positive")
     projected = scalar_input("projected")
     feature_scale = scalar_input("feature_scale")
     standardized = scalar_input("standardized")
@@ -328,7 +347,7 @@ def lower_row_normalization_axis_folds(
             _divide(scalar_input(correlation_name), scalar_constant(float(hidden))),
         ),
     )
-    if plan.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT:
+    if statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT:
         reductions.append(AxisFoldReduction("local_sum", local))
         centered_term = _subtract(
             centered_term,

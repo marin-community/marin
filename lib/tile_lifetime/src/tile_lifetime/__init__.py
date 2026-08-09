@@ -193,6 +193,7 @@ from tile_lifetime.row_normalization_training import (
     RowNormalizationTrainingPlan,
     RowStatisticKind,
     RowStatisticScalePlacement,
+    build_row_normalization_axis_fold_programs,
     build_row_normalized_contract_program,
     compile_row_normalization_training,
     lower_row_normalization_axis_folds,
@@ -236,6 +237,13 @@ from tile_lifetime.sm100_selection_lowering import (
     SM100SelectionStrategy,
     default_sm100_selection_schedules,
     lower_sm100_projected_selection,
+)
+from tile_lifetime.stablehlo_row_normalization_backward import (
+    RecoveredStableHLORowNormalizationBackward,
+    StableHLORowNormalizationBackwardCompilation,
+    StableHLORowNormalizationBackwardError,
+    compile_stablehlo_row_normalization_backward,
+    recover_stablehlo_row_normalization_backward,
 )
 from tile_lifetime.stablehlo_scan_recovery import (
     StableHLOScanRecoveryError,
