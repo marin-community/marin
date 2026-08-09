@@ -162,6 +162,69 @@ def test_axis_fold_replacement_rewires_every_external_user_without_copy_or_trans
     assert transformed.count(f'custom_call_target="{_TARGET}"') == 1
 
 
+def test_axis_fold_roundtrip_audit_fails_closed_on_target_signature_and_consumer_changes() -> None:
+    hlo = _hlo()
+    _, plan = _generated_and_plan(hlo)
+    transformed = replace_axis_fold_hlo_region_with_custom_call(hlo, plan, target=_TARGET)
+
+    wrong_target = transformed.replace(
+        f'custom_call_target="{_TARGET}"',
+        'custom_call_target="shuttle.wrong.target"',
+        1,
+    )
+    with pytest.raises(ValueError, match="expected one post-roundtrip axis-Fold call"):
+        audit_axis_fold_hlo_region_replacement(hlo, wrong_target, plan, target=_TARGET)
+
+    expected_constraints = f"operand_layout_constraints={{{', '.join(value.ffi_shape for value in plan.inputs)}}}"
+    wrong_signature = transformed.replace(expected_constraints, "operand_layout_constraints={}", 1)
+    with pytest.raises(ValueError, match="operand layout signature changed"):
+        audit_axis_fold_hlo_region_replacement(hlo, wrong_signature, plan, target=_TARGET)
+
+    replacement_output = "shuttle.axis_fold.output.physical.shuttle.generic_axis_fold.test"
+    user = plan.external_users[0]
+    user_line = next(line for line in transformed.splitlines() if line.startswith(f"  %{user} = "))
+    wrong_consumer_line = user_line.replace(f"%{replacement_output}", f"%{plan.inputs[0].instruction}", 1)
+    assert wrong_consumer_line != user_line
+    wrong_consumer = transformed.replace(user_line, wrong_consumer_line, 1)
+    with pytest.raises(ValueError, match="does not consume replacement Fold output"):
+        audit_axis_fold_hlo_region_replacement(hlo, wrong_consumer, plan, target=_TARGET)
+
+    old_consumer_line = user_line.replace(f"%{replacement_output}", f"%{plan.output_instruction}", 1)
+    still_live = transformed.replace(user_line, old_consumer_line, 1)
+    with pytest.raises(ValueError, match="remains externally live"):
+        audit_axis_fold_hlo_region_replacement(hlo, still_live, plan, target=_TARGET)
+
+
+def test_axis_fold_roundtrip_audit_allows_dead_layout_elimination_but_rejects_new_layout_work() -> None:
+    hlo = _hlo()
+    _, plan = _generated_and_plan(hlo)
+    transformed = replace_axis_fold_hlo_region_with_custom_call(hlo, plan, target=_TARGET)
+    module = parse_hlo_module_text(hlo)
+    entry = module.computation(module.entry)
+    copy_instruction = next(instruction for instruction in entry.instructions if instruction.opcode == "copy")
+    copy_line = next(line for line in hlo.splitlines() if line.startswith(f"  %{copy_instruction.name} = "))
+    copy_name = copy_line.split(" = ", 1)[0]
+    dead_copy = copy_line.replace(copy_name, "  %audit.dead.copy", 1)
+
+    original_with_dead_copy = hlo.replace(copy_line, copy_line + "\n" + dead_copy, 1)
+    audit = audit_axis_fold_hlo_region_replacement(
+        original_with_dead_copy,
+        transformed,
+        plan,
+        target=_TARGET,
+    )
+    assert audit.copy_count[1] < audit.copy_count[0]
+
+    transformed_with_new_copy = transformed.replace(copy_line, copy_line + "\n" + dead_copy, 1)
+    with pytest.raises(ValueError, match="increased copy count"):
+        audit_axis_fold_hlo_region_replacement(
+            hlo,
+            transformed_with_new_copy,
+            plan,
+            target=_TARGET,
+        )
+
+
 def test_preserved_gb200_hlo_recovers_two_anonymous_row_fold_programs() -> None:
     hlo = _gb200_hlo()
     report = recover_axis_fold_hlo_region_candidates(

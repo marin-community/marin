@@ -286,24 +286,81 @@ def audit_axis_fold_hlo_region_replacement(
     )
     if len(calls) != 1:
         raise ValueError(f"expected one post-roundtrip axis-Fold call for {target!r}, found {len(calls)}")
+    call = calls[0]
+    suffix = re.sub(r"[^A-Za-z0-9_.-]", "_", target)
+    expected_call_shape = f"({plan.output_ffi_shape})"
+    if call.shape != expected_call_shape:
+        raise ValueError(f"axis-Fold call output signature changed: {call.shape} != {expected_call_shape}")
+    expected_operands: list[str] = []
+    for value in plan.inputs:
+        if value.physical_shape == value.ffi_shape:
+            expected_operands.append(value.instruction)
+            continue
+        adapter_name = f"shuttle.axis_fold.{value.name}.canonical.{suffix}"
+        adapter = transformed_instructions.get(adapter_name)
+        if adapter is None:
+            raise ValueError(f"axis-Fold input adapter %{adapter_name} is missing")
+        if adapter.opcode != "reshape" or adapter.shape != value.ffi_shape or adapter.operands != (value.instruction,):
+            raise ValueError(f"axis-Fold input adapter %{adapter_name} changed signature or source")
+        expected_operands.append(adapter_name)
+    if call.operands != tuple(expected_operands):
+        raise ValueError(f"axis-Fold call operands changed: {call.operands} != {tuple(expected_operands)}")
+    expected_constraints = f"operand_layout_constraints={{{', '.join(value.ffi_shape for value in plan.inputs)}}}"
+    if expected_constraints not in call.attributes:
+        raise ValueError("axis-Fold call operand layout signature changed")
+    if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
+        raise ValueError("axis-Fold call no longer uses the typed FFI API")
+
+    canonical_output_name = f"shuttle.axis_fold.output.canonical.{suffix}"
+    canonical_output = transformed_instructions.get(canonical_output_name)
+    if canonical_output is None:
+        raise ValueError(f"axis-Fold canonical output %{canonical_output_name} is missing")
+    if (
+        canonical_output.opcode != "get-tuple-element"
+        or canonical_output.shape != plan.output_ffi_shape
+        or canonical_output.operands != (call.name,)
+        or not canonical_output.attributes.endswith(", index=0")
+    ):
+        raise ValueError("axis-Fold canonical output changed signature or source")
+    replacement_output = canonical_output_name
+    if plan.output_ffi_shape != plan.output_physical_shape:
+        physical_output_name = f"shuttle.axis_fold.output.physical.{suffix}"
+        physical_output = transformed_instructions.get(physical_output_name)
+        if physical_output is None:
+            raise ValueError(f"axis-Fold physical output %{physical_output_name} is missing")
+        if (
+            physical_output.opcode != "reshape"
+            or physical_output.shape != plan.output_physical_shape
+            or physical_output.operands != (canonical_output_name,)
+        ):
+            raise ValueError("axis-Fold physical output changed signature or source")
+        replacement_output = physical_output_name
+
     internal = set(plan.internal_instructions)
     for name in internal:
-        crossing = tuple(user for user in transformed_users[name] if user not in internal)
+        crossing = tuple(user for user in transformed_users.get(name, ()) if user not in internal)
         if crossing:
             raise ValueError(f"old axis-Fold value %{name} remains externally live through {crossing}")
     for user in plan.external_users:
-        if plan.output_instruction in transformed_instructions[user].operands:
+        transformed_user = transformed_instructions.get(user)
+        if transformed_user is None:
+            raise ValueError(f"external axis-Fold user %{user} is missing")
+        if plan.output_instruction in transformed_user.operands:
             raise ValueError(f"external user %{user} still consumes old Fold output %{plan.output_instruction}")
+        if replacement_output not in transformed_user.operands:
+            raise ValueError(f"external user %{user} does not consume replacement Fold output %{replacement_output}")
 
     def count(entry: HloComputation, opcode: str) -> int:
         return sum(instruction.opcode == opcode for instruction in entry.instructions)
 
     copy_count = (count(original_entry, "copy"), count(transformed_entry, "copy"))
     transpose_count = (count(original_entry, "transpose"), count(transformed_entry, "transpose"))
-    if copy_count[1] != copy_count[0]:
-        raise ValueError(f"axis-Fold replacement changed copy count: {copy_count[0]} -> {copy_count[1]}")
-    if transpose_count[1] != transpose_count[0]:
-        raise ValueError(f"axis-Fold replacement changed transpose count: {transpose_count[0]} -> {transpose_count[1]}")
+    if copy_count[1] > copy_count[0]:
+        raise ValueError(f"axis-Fold replacement increased copy count: {copy_count[0]} -> {copy_count[1]}")
+    if transpose_count[1] > transpose_count[0]:
+        raise ValueError(
+            f"axis-Fold replacement increased transpose count: {transpose_count[0]} -> {transpose_count[1]}"
+        )
     return AxisFoldHloRegionReplacementAudit(
         call_instruction=calls[0].name,
         dead_internal_instructions=plan.internal_instructions,

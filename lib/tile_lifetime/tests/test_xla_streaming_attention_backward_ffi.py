@@ -636,6 +636,79 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
     parse_hlo_module_text(rewritten)
 
 
+def test_combined_roundtrip_audit_accepts_xla_text_canonicalization() -> None:
+    program, generated_attention, hlo = _grug_region_inputs()
+    fold_report = recover_axis_fold_hlo_region_candidates(
+        hlo,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    selected_folds = tuple(
+        plan
+        for plan in fold_report.plans
+        if plan.program.rows == 8 and plan.program.columns == 32 and plan.output_ffi_shape.startswith("bf16[")
+    )
+    generated_folds = tuple(
+        generate_cuda_axis_fold_ffi((fold.program,), target_name=target)
+        for fold, target in zip(selected_folds, _SIX_TARGETS.axis_folds, strict=True)
+    )
+    plan = plan_routed_training_attention_and_axis_fold_typed_ffi(
+        hlo,
+        program,
+        generated_attention,
+        generated_folds,
+        axis_fold_numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    rewritten = replace_routed_training_attention_and_axis_fold_regions_with_custom_calls(
+        hlo,
+        plan,
+        targets=_SIX_TARGETS,
+    )
+
+    computations = parse_hlo_module_text(rewritten).computations
+    first_name, second_name = computations[0].name, computations[1].name
+
+    def computation_span(text: str, name: str) -> tuple[int, int]:
+        header = re.search(rf"(?m)^(?:ENTRY )?%?{re.escape(name)}.*\{{$", text)
+        assert header is not None
+        end = text.find("\n}\n", header.start())
+        assert end >= 0
+        return header.start(), end + len("\n}\n")
+
+    first_start, first_end = computation_span(rewritten, first_name)
+    second_start, second_end = computation_span(rewritten, second_name)
+    assert first_end <= second_start
+    canonicalized = (
+        rewritten[:first_start]
+        + rewritten[second_start:second_end]
+        + rewritten[first_end:second_start]
+        + rewritten[first_start:first_end]
+        + rewritten[second_end:]
+    )
+    canonicalized = re.sub(
+        r"stack_frame_id=(\d+)",
+        lambda match: f"stack_frame_id={int(match.group(1)) + 1000}",
+        canonicalized,
+    )
+    assert "constant(-0)" in canonicalized
+    canonicalized = canonicalized.replace("constant(-0)", "constant(0)", 1)
+    axis_call_line = next(
+        line for line in canonicalized.splitlines() if f'custom_call_target="{_SIX_TARGETS.axis_folds[0]}"' in line
+    )
+    commented_axis_call = axis_call_line.replace(", %", ", /*index=1*/%", 1)
+    assert commented_axis_call != axis_call_line
+    canonicalized = canonicalized.replace(axis_call_line, commented_axis_call, 1)
+
+    audit = audit_routed_training_attention_and_axis_fold_replacement(
+        hlo,
+        canonicalized,
+        plan,
+        targets=_SIX_TARGETS,
+    )
+
+    assert len(audit.axis_folds) == 2
+    assert any(value.transpose_count[1] < value.transpose_count[0] for value in audit.axis_folds)
+
+
 def test_seven_call_harness_generates_two_self_contained_axis_fold_targets() -> None:
     _, _, hlo = _grug_region_inputs()
 

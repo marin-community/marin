@@ -455,25 +455,15 @@ def audit_routed_training_attention_and_axis_fold_replacement(
     targets: RoutedTrainingAttentionAndAxisFoldFfiTargets,
 ) -> RoutedTrainingAttentionAndAxisFoldReplacementAudit:
     """Audit routed, attention, and Fold replacements after one HLO round trip."""
-    before_fold = replace_routed_training_and_attention_regions_with_custom_calls(
-        original_hlo,
-        plan.routed_attention,
-        targets=targets.routed_attention,
-    )
-    fold_audits: list[AxisFoldHloRegionReplacementAudit] = []
-    for axis_fold, target in zip(plan.axis_folds, targets.axis_folds, strict=True):
-        after_fold = replace_axis_fold_hlo_region_with_custom_call(before_fold, axis_fold, target=target)
-        fold_audits.append(
-            audit_axis_fold_hlo_region_replacement(
-                before_fold,
-                after_fold,
-                axis_fold,
-                target=target,
-            )
+    fold_audits = tuple(
+        audit_axis_fold_hlo_region_replacement(
+            original_hlo,
+            transformed_hlo,
+            axis_fold,
+            target=target,
         )
-        before_fold = after_fold
-    if parse_hlo_module_text(before_fold) != parse_hlo_module_text(transformed_hlo):
-        raise ValueError("composed Fold audit did not reconstruct the transformed HLO module")
+        for axis_fold, target in zip(plan.axis_folds, targets.axis_folds, strict=True)
+    )
     return RoutedTrainingAttentionAndAxisFoldReplacementAudit(
         routed_attention=audit_routed_training_and_attention_replacement(
             original_hlo,
@@ -481,7 +471,7 @@ def audit_routed_training_attention_and_axis_fold_replacement(
             plan.routed_attention,
             targets=targets.routed_attention,
         ),
-        axis_folds=tuple(fold_audits),
+        axis_folds=fold_audits,
     )
 
 
