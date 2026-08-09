@@ -2506,3 +2506,34 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_pre_scheduler_h100_v0/`
   and
   `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_pre_scheduler_h100_s64_negative_v0/`.
+
+### 2026-08-09 - TLTC-XLA-029 physical-layout-native reverse outputs
+
+- Hypothesis: binding the generated dK/dV stores to the physical layouts of the
+  exact live HLO results can erase both PRE_SCHEDULER output copies and close
+  the integrated attention-reverse gap.
+- Replay revision: `c6a4244052` on one H100 with two host CPUs, 32 GB host
+  memory, and batch priority. The allocation was released after artifact copy.
+- Structural result: Shuttle derives each output's minor-to-major permutation
+  from the captured HLO, specializes the typed-FFI result layouts and generated
+  strides, and emits dQ, dK, and dV directly in their requested layouts. The
+  transformed HLO contains zero Shuttle boundary copies, down from two. Invalid,
+  duplicate, incomplete, or absent output layouts fail closed.
+- Measurement: 30 balanced samples with five executions each measure
+  4.433139 ms for stock JAX/XLA, 0.838209 ms for direct layout-native typed
+  FFI, and 0.829328 ms for the integrated replacement. Direct and integrated
+  outputs are bitwise identical and deterministic. Maximum absolute errors are
+  0.03125; mean errors are at most 0.000146.
+- Performance conclusion: eliminating 16 MiB nominal copy traffic improves the
+  prior integrated result by 5.8%, but remains approximately 1.307x the prior
+  0.634584 ms matched expert measurement. The physical-layout-native plan is a
+  candidate rather than a mandatory legalization rule.
+- Bounded negative: a generic layout-selected block-pointer store remains
+  correct and copy-free but measures 0.868246 ms, 4.7% slower than explicit
+  arbitrary-stride stores. Its source and raw distribution are preserved and
+  the candidate was reverted from the active emitter.
+- Runtime boundary: the replay imports neither Torch nor Triton. Both remain
+  build-only AOT dependencies; the generated DSO links no Torch or Triton
+  library.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_physical_layout_h100_v0/`.
