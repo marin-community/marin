@@ -188,12 +188,14 @@ from tile_lifetime.row_normalization_training import (
     GeneratedContractSkeleton,
     GeneratedFoldSkeleton,
     GeneratedMapSkeleton,
+    RowNormalizationAxisFoldPrograms,
     RowNormalizationSavePolicy,
     RowNormalizationTrainingPlan,
     RowStatisticKind,
     RowStatisticScalePlacement,
     build_row_normalized_contract_program,
     compile_row_normalization_training,
+    lower_row_normalization_axis_folds,
 )
 from tile_lifetime.runtime import (
     PlanRuntimeError,

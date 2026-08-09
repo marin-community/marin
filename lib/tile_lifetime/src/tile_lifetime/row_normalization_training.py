@@ -15,6 +15,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from tile_lifetime.autodiff import DifferentiatedTensorProgram, differentiate_tensor_program
+from tile_lifetime.cuda_axis_fold_codegen import (
+    AxisFoldDirection,
+    AxisFoldInput,
+    AxisFoldInputLayout,
+    AxisFoldOutputKind,
+    AxisFoldProgram,
+    AxisFoldReassociation,
+    AxisFoldReduction,
+)
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import Attachment, AttachmentSite, GemmSkeleton, NumericalEquivalence
@@ -130,6 +139,14 @@ class RowNormalizationTrainingPlan:
     def contracts(self) -> tuple[GeneratedContractSkeleton, ...]:
         """Contraction skeletons in reverse execution order."""
         return tuple(step for step in self.backward_steps if isinstance(step, GeneratedContractSkeleton))
+
+
+@dataclass(frozen=True)
+class RowNormalizationAxisFoldPrograms:
+    """Executable generic axis-Fold programs extracted from one reverse graph."""
+
+    input_cotangent: AxisFoldProgram
+    feature_scale_cotangent: AxisFoldProgram
 
 
 def build_row_normalized_contract_program(
@@ -275,6 +292,89 @@ def compile_row_normalization_training(
         recomputed_values=recomputed_values,
         forward_contract=forward_contract,
         backward_steps=backward_steps,
+    )
+
+
+def lower_row_normalization_axis_folds(
+    plan: RowNormalizationTrainingPlan,
+    *,
+    threads: int = 256,
+) -> RowNormalizationAxisFoldPrograms:
+    """Fuse the reverse graph's scalar Maps into two generic axis Folds.
+
+    The first program reduces row-local correlation state and applies the final
+    input-cotangent Map.  The second reduces the feature-scale cotangent over
+    rows.  A centered statistic adds one reduction state to the first program;
+    the physical generator and schedule remain unchanged.
+    """
+    rows, hidden = plan.source.inputs[0].shape
+    source_dtype = plan.source.inputs[0].dtype
+    projected = scalar_input("projected")
+    feature_scale = scalar_input("feature_scale")
+    standardized = scalar_input("standardized")
+    inverse_scale = scalar_input("inverse_scale")
+    local = _multiply(projected, feature_scale)
+    correlation_name = "correlation_sum"
+    reductions = [
+        AxisFoldReduction(
+            correlation_name,
+            _multiply(local, standardized),
+        )
+    ]
+    centered_term = _subtract(
+        local,
+        _multiply(
+            standardized,
+            _divide(scalar_input(correlation_name), scalar_constant(float(hidden))),
+        ),
+    )
+    if plan.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT:
+        reductions.append(AxisFoldReduction("local_sum", local))
+        centered_term = _subtract(
+            centered_term,
+            _divide(scalar_input("local_sum"), scalar_constant(float(hidden))),
+        )
+    shared_inputs = (
+        AxisFoldInput("projected", DType.FP32, AxisFoldInputLayout.ELEMENT),
+        AxisFoldInput("feature_scale", source_dtype, AxisFoldInputLayout.COLUMN),
+        AxisFoldInput("standardized", source_dtype, AxisFoldInputLayout.ELEMENT),
+        AxisFoldInput("inverse_scale", DType.FP32, AxisFoldInputLayout.ROW),
+    )
+    input_cotangent = AxisFoldProgram(
+        rows=rows,
+        columns=hidden,
+        inputs=shared_inputs,
+        reductions=tuple(reductions),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=_multiply(inverse_scale, centered_term),
+        output_dtype=DType.FP32,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    feature_scale_cotangent = AxisFoldProgram(
+        rows=rows,
+        columns=hidden,
+        inputs=(
+            AxisFoldInput("projected", DType.FP32, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("standardized", source_dtype, AxisFoldInputLayout.ELEMENT),
+        ),
+        reductions=(
+            AxisFoldReduction(
+                "feature_scale_sum",
+                _multiply(projected, standardized),
+            ),
+        ),
+        reduction_axis=AxisFoldDirection.ROWS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("feature_scale_sum"),
+        output_dtype=DType.FP32,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    return RowNormalizationAxisFoldPrograms(
+        input_cotangent=input_cotangent,
+        feature_scale_cotangent=feature_scale_cotangent,
     )
 
 

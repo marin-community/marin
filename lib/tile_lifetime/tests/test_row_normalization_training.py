@@ -11,7 +11,9 @@ from tile_lifetime import (
     build_row_normalized_contract_program,
     compile_row_normalization_training,
     execute_tensor_program,
+    lower_row_normalization_axis_folds,
 )
+from tile_lifetime.cuda_axis_fold_codegen import evaluate_axis_fold_program, generate_cuda_axis_fold
 from tile_lifetime.plan import NumericalEquivalence
 
 
@@ -212,3 +214,65 @@ def test_centering_mutation_reuses_contract_map_fold_lowering() -> None:
     assert len(centered.folds) == len(uncentered.folds) + 1
     assert centered.folds[-1].reducer.value == "sum"
     assert centered.maps[-1].expression != uncentered.maps[-1].expression
+
+
+@pytest.mark.parametrize("statistic_kind", list(RowStatisticKind))
+def test_row_normalization_axis_folds_match_independent_backward(
+    statistic_kind: RowStatisticKind,
+) -> None:
+    rows, hidden, features = 5, 7, 3
+    epsilon = 2e-4
+    source = build_row_normalized_contract_program(
+        rows=rows,
+        hidden=hidden,
+        features=features,
+        statistic_kind=statistic_kind,
+        epsilon=epsilon,
+    )
+    plan = compile_row_normalization_training(
+        source,
+        save_policy=RowNormalizationSavePolicy.SAVE_NORMALIZED,
+        scale_placement=RowStatisticScalePlacement.SOURCE_ORDERED_PREPARATION,
+    )
+    programs = lower_row_normalization_axis_folds(plan, threads=8)
+    rng = np.random.default_rng(77)
+    x = rng.normal(size=(rows, hidden)).astype(np.float32)
+    gamma = rng.normal(size=(hidden,)).astype(np.float32)
+    weight = rng.normal(size=(hidden, features)).astype(np.float32)
+    output_cotangent = rng.normal(size=(rows, features)).astype(np.float32)
+    local = x - np.mean(x, axis=1, keepdims=True) if statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT else x
+    inverse = np.reciprocal(np.sqrt(np.mean(local * local, axis=1) + epsilon))
+    standardized = local * inverse[:, None]
+    projected = output_cotangent @ weight.T
+    local_cotangent = projected * gamma
+    expected_input = local_cotangent - standardized * np.mean(
+        local_cotangent * standardized,
+        axis=1,
+        keepdims=True,
+    )
+    if statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT:
+        expected_input -= np.mean(local_cotangent, axis=1, keepdims=True)
+    expected_input *= inverse[:, None]
+    expected_gamma = np.sum(projected * standardized, axis=0)
+
+    actual_input = evaluate_axis_fold_program(
+        programs.input_cotangent,
+        {
+            "projected": projected,
+            "feature_scale": gamma,
+            "standardized": standardized,
+            "inverse_scale": inverse,
+        },
+    )
+    actual_gamma = evaluate_axis_fold_program(
+        programs.feature_scale_cotangent,
+        {"projected": projected, "standardized": standardized},
+    )
+
+    np.testing.assert_allclose(actual_input, expected_input, rtol=2e-6, atol=2e-6)
+    np.testing.assert_allclose(actual_gamma, expected_gamma, rtol=2e-6, atol=2e-6)
+    expected_reductions = 2 if statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT else 1
+    assert len(programs.input_cotangent.reductions) == expected_reductions
+    generated = generate_cuda_axis_fold(programs.input_cotangent).source.lower()
+    assert "rms" not in generated
+    assert "layernorm" not in generated
