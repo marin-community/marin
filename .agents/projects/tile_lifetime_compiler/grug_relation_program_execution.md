@@ -86,3 +86,32 @@ The bounded forward region passes when:
 
 This is an incremental ownership proof. It does not yet claim that routing,
 backward, weight gradients, or collectives are Shuttle-owned.
+
+## Bounded region-formation result
+
+The frozen forward chain forms one convex, topologically insertable physical
+entry region. It contains six entry instructions spanning the first Contract,
+the scalar and layout Map path, the second Contract, the weighted contribution
+Map, and the source Fold. All seven boundary inputs are available before the
+first region instruction. The only boundary output is the Fold result, so this
+case does not require an auxiliary-output split.
+
+The first typed-FFI plan is nevertheless rejected before GPU code generation.
+The recovered scalar AST describes the logical routed Map over `[16,32]`, while
+the second cuBLAS-compatible Contract consumes a physical `[512,128]` operand.
+The intervening path contains select, pad, transpose, copy, and bitcast stages,
+but the current recovery record does not preserve the affine/runtime index map
+that assigns logical routed rows to padded expert feature panels. Opcode and
+shape lists are insufficient to reconstruct that mapping safely.
+
+The next prerequisite is therefore a generic segmented-layout record derived
+from the existing `RelationPlan` and physical HLO indexing. It must describe:
+
+- the logical edge-row to padded physical-row map;
+- the destination segment to feature-panel map;
+- valid/padded positions and their fill value; and
+- the inverse map needed by the source-keyed Fold.
+
+No workload-specific layout rule or GPU kernel is introduced at this
+checkpoint. Map and Fold mutations retain the same convex boundary and cuBLAS
+Contract dimension maps while changing only their generated scalar bodies.
