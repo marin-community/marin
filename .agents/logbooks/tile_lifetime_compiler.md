@@ -3104,3 +3104,31 @@ author: dlwh
   artifact copy; Iris reports it killed and Kubernetes reports no pod.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_fused_reverses_unaccepted_e3411679_v0/`.
+
+### 2026-08-09 15:19 PDT - TLTC-XLA-053 low-rank gated-product training recovery
+
+- Commit `dae11b30e4` structurally recovers six forward/rematerialized
+  low-rank gated-product realizations and four JAX-owned reverse families from
+  the pinned natural post-SPMD Grug HLO. Recovery uses rank-two Contract
+  dimensions, scalar dataflow, root liveness, layout-stripped value identity,
+  and shared parameter origins. Removing frontend metadata produces identical
+  plans.
+- The repeated family contains 12 forward/rematerialized, eight input-adjoint,
+  and eight weight-adjoint Contracts. After applying the compact
+  normalized-exponential forward and reverse replacements, these 28 Contracts
+  account for `1,835,008` of `2,232,320` live dot FLOPs, or `82.2%`, in the
+  pinned small padded fixture.
+- Every forward and reverse scalar Map is a source-ordered imported AST. All six
+  hidden Maps share one digest, all six output Maps share one digest, and each
+  of the three reverse Maps shares one digest across four families. A tanh
+  hidden-Map mutation regenerates through the same scalar generator without
+  changing either Contract.
+- BF16 Contract and Map boundaries, BF16 weight-adjoint outputs before the FP32
+  optimizer conversion, and upstream placement all-reduces are explicit. JAX
+  remains responsible for AD.
+- This is static recovery evidence. No HLO replacement, GPU execution,
+  launch-count reduction, or latency result is claimed. The design and exact
+  instance audit are in
+  `.agents/projects/tile_lifetime_compiler/grug_low_rank_gated_product_training.md`.
+- Verification: four focused tests pass; Pyrefly reports zero errors; scoped
+  pre-commit and `git diff --check` pass.
