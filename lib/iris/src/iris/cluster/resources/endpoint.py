@@ -11,11 +11,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.resources.errors import InvalidResourceKey
 from iris.cluster.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
-
-
-class EndpointAccess(StrEnum):
-    PRIVATE = "private"
-    LINK = "link"
+from iris.cluster.resources.state import EndpointAccess as EndpointAccess
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,7 +10,8 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.resources.identity import JobIdentity, ResourceKey
-from iris.cluster.types import CoschedulingConfig, JobState, ResourceSpec
+from iris.cluster.resources.state import JobState, TaskState
+from iris.cluster.types import CoschedulingConfig, ResourceSpec
 from iris.rpc import job_pb2
 
 
@@ -81,7 +82,7 @@ class FederationPosture(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TaskStateCount:
-    state: int
+    state: TaskState
     count: int
 
 

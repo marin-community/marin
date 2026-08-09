@@ -16,6 +16,7 @@ from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select
 
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
@@ -42,7 +43,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import job_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
 from iris.rpc.proto_display import priority_band_name, resolve_container_profile
 
 logger = logging.getLogger(__name__)

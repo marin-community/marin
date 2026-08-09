@@ -369,18 +369,22 @@ class JourneyWorld:
     def set_budget(self, user: str, *, limit: int = 10_000) -> None:
         """Create or replace one budget row through the public service."""
         with identity_scope(VerifiedIdentity(user_id="journey-admin", role="admin")):
-            self.controller.set_user_budget(
+            self.controller.controller_service.set_user_budget(
                 controller_pb2.Controller.SetUserBudgetRequest(
                     user_id=user,
                     budget_limit=limit,
                     max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-                )
+                ),
+                None,
             )
 
     def budget_spent(self, user: str) -> int:
         """Return public current spend for a configured user budget."""
         with identity_scope(VerifiedIdentity(user_id=user, role="user")):
-            return self.controller.get_user_budget(user).budget_spent
+            return self.controller.controller_service.get_user_budget(
+                controller_pb2.Controller.GetUserBudgetRequest(user_id=user),
+                None,
+            ).budget_spent
 
     def register_endpoint(
         self,
@@ -396,14 +400,15 @@ class JourneyWorld:
         current_attempt_id = current.attempt_number if attempt_id is None and current is not None else attempt_id
         if current_attempt_id is None:
             raise AssertionError(f"{task.wire_id} has no current Attempt")
-        response = self.controller.register_endpoint(
+        response = self.controller.controller_service.endpoint_service.register_endpoint(
             controller_pb2.Controller.RegisterEndpointRequest(
                 name=name,
                 address=address,
                 task_id=task.wire_id,
                 attempt_id=current_attempt_id,
                 endpoint_id=endpoint_id,
-            )
+            ),
+            None,
         )
         self.trace.append(f"endpoint {name} {endpoint_id} attempt={current_attempt_id}")
         return response.endpoint_id

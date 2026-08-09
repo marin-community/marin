@@ -23,6 +23,7 @@ from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text
 
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
@@ -107,7 +108,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.rpc.proto_display import (
     job_state_friendly,

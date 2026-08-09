@@ -169,16 +169,3 @@ def authorize(action: AuthzAction) -> VerifiedIdentity:
     if identity.role not in allowed:
         raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
     return identity
-
-
-def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
-    """Require the caller owns the resource or is admin."""
-    identity = require_identity()
-    if identity.role == "admin":
-        return identity
-    if identity.user_id != resource_owner:
-        raise ConnectError(
-            Code.PERMISSION_DENIED,
-            f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
-        )
-    return identity

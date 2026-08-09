@@ -7,6 +7,7 @@ import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
     CONTROL_PLANE_AUDIENCES,
@@ -18,7 +19,6 @@ from iris.rpc.auth import (
     AuthzAction,
     authorize,
     authorize_method,
-    authorize_resource_owner,
 )
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.token_authority import (

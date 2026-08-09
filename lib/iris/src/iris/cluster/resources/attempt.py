@@ -17,7 +17,7 @@ from iris.cluster.resources.identity import (
     NodeIdentity,
 )
 from iris.cluster.resources.source import ResourceSourceStatus
-from iris.cluster.types import TaskState
+from iris.cluster.resources.state import TaskState
 
 
 @dataclass(frozen=True, slots=True)

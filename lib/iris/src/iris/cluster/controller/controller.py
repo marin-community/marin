@@ -129,7 +129,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
@@ -1739,59 +1739,10 @@ class Controller:
     def resources(self) -> ResourceController:
         return self._resources
 
-    def register_endpoint(
-        self,
-        request: controller_pb2.Controller.RegisterEndpointRequest,
-    ) -> controller_pb2.Controller.RegisterEndpointResponse:
-        """Register or renew a Task endpoint."""
-        return self._service.endpoint_service.register_endpoint(request, None)
-
-    def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
-        """Remove a Task endpoint by ID."""
-        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        return self._service.endpoint_service.unregister_endpoint(request, None)
-
-    def set_user_budget(
-        self,
-        request: controller_pb2.Controller.SetUserBudgetRequest,
-    ) -> controller_pb2.Controller.SetUserBudgetResponse:
-        """Set the budget limit and maximum priority band for one user."""
-        return self._service.set_user_budget(request, None)
-
-    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
-        """Return one user's budget configuration and current spend."""
-        request = controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id)
-        return self._service.get_user_budget(request, None)
-
-    def register_worker(
-        self,
-        request: controller_pb2.Controller.RegisterRequest,
-    ) -> controller_pb2.Controller.RegisterResponse:
-        """Register or renew a worker identity and capacity."""
-        return self._service.register(request, None)
-
-    def list_workers(
-        self,
-        request: controller_pb2.Controller.ListWorkersRequest | None = None,
-    ) -> controller_pb2.Controller.ListWorkersResponse:
-        """Return workers matching the optional request filters."""
-        return self._service.list_workers(request or controller_pb2.Controller.ListWorkersRequest(), None)
-
-    def get_worker_status(self, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
-        """Return current health and metadata for one worker."""
-        request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
-        return self._service.get_worker_status(request, None)
-
-    def federation_sync(
-        self,
-        request: controller_pb2.Controller.FederationSyncRequest,
-    ) -> controller_pb2.Controller.FederationSyncResponse:
-        """Apply an authenticated federation delta from a peer."""
-        return self._service.federation_sync(request, None)
-
-    def list_peers(self) -> controller_pb2.Controller.ListPeersResponse:
-        """Return configured federation peers and their current status."""
-        return self._service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
+    @property
+    def controller_service(self) -> ControllerServiceImpl:
+        """The ControllerService transport adapter hosted by this controller."""
+        return self._service
 
     # Properties
 

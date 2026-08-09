@@ -188,12 +188,13 @@ class WorkerJourney:
             if existing is not None and existing.worker_id == worker_id
             else self.fleet.attach(address, worker_id)
         )
-        response = self.controller.register_worker(
+        response = self.controller.controller_service.register(
             controller_pb2.Controller.RegisterRequest(
                 worker_id=worker_id,
                 address=address,
                 metadata=_worker_metadata(cpu_millicores=cpu_millicores),
-            )
+            ),
+            None,
         )
         if not response.accepted:
             raise AssertionError(f"worker registration rejected: {worker_id}")

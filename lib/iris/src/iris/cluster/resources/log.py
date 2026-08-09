@@ -4,11 +4,31 @@
 """Exact resource log queries and pages."""
 
 from dataclasses import dataclass
+from enum import IntEnum
 
 from rigging.timing import Timestamp
 
 from iris.cluster.resources.source import ResourceSourceStatus
-from iris.rpc import iris_logging_pb2
+
+
+class LogLevel(IntEnum):
+    UNKNOWN = 0
+    DEBUG = 1
+    INFO = 2
+    WARNING = 3
+    ERROR = 4
+    CRITICAL = 5
+
+
+@dataclass(frozen=True, slots=True)
+class LogEntry:
+    timestamp: Timestamp | None
+    source: str
+    data: str
+    attempt_id: int
+    level: LogLevel
+    key: str
+    sequence: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,12 +37,12 @@ class LogQuery:
     cursor: int = 0
     max_lines: int = 1_000
     substring: str = ""
-    minimum_level: iris_logging_pb2.LogLevel = iris_logging_pb2.LOG_LEVEL_UNKNOWN
+    minimum_level: LogLevel = LogLevel.UNKNOWN
     tail: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class LogPage:
-    entries: tuple[iris_logging_pb2.LogEntry, ...]
+    entries: tuple[LogEntry, ...]
     next_cursor: int
     source_statuses: tuple[ResourceSourceStatus, ...]

@@ -12,7 +12,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.resources.facade import CapabilityUrlConfig, ResourceController
-from iris.cluster.controller.schema import workers_table
+from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.resources.endpoint import EndpointQuery
 from iris.cluster.resources.errors import ResourceNotFound
@@ -282,6 +282,63 @@ def test_node_pages_are_bounded_at_the_sqlite_bind_ceiling(worker_resources) -> 
     assert page_token is not None
     assert page_select_counts == [3, 3, 3]
     assert backend.status.call_count == 3
+
+
+def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_resources) -> None:
+    resources, db, _backend = worker_resources
+    with db.transaction() as tx:
+        tx.execute(
+            workers_table.insert().values(
+                worker_id="worker-a",
+                address="worker-a:8080",
+                total_cpu_millicores=8_000,
+                total_memory_bytes=64_000,
+                total_gpu_count=4,
+                device_type="gpu",
+                device_variant="h100",
+                slice_id="slice-a",
+                md_disk_bytes=1_000,
+            )
+        )
+        tx.execute(
+            worker_attributes_table.insert(),
+            [
+                {
+                    "worker_id": "worker-a",
+                    "key": "region",
+                    "value_type": "str",
+                    "str_value": "us-east1",
+                    "int_value": None,
+                    "float_value": None,
+                },
+                {
+                    "worker_id": "worker-a",
+                    "key": "rack",
+                    "value_type": "int",
+                    "str_value": None,
+                    "int_value": 7,
+                    "float_value": None,
+                },
+            ],
+        )
+
+    (node,) = resources.list_nodes(NodeQuery()).items
+    detail = resources.describe_node(NodeLocator(node.identity.key, node.identity.backend_id, node.identity.node_uid))
+
+    assert node.capacity.cpu_millicores == 8_000
+    assert node.capacity.memory_bytes == 64_000
+    assert node.capacity.disk_bytes == 1_000
+    assert (node.capacity.accelerator_kind, node.capacity.accelerator_variant, node.capacity.accelerator_count) == (
+        "gpu",
+        "h100",
+        4,
+    )
+    assert node.slice is not None and node.slice.key.resource_id == "slice-a"
+    assert node.region == "us-east1"
+    assert [(attribute.key, attribute.string_value, attribute.integer_value) for attribute in detail.attributes] == [
+        ("rack", None, 7),
+        ("region", "us-east1", None),
+    ]
 
 
 def test_slices_filter_page_and_describe_observed_membership(resources: ResourceController) -> None:

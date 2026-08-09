@@ -68,12 +68,12 @@ from iris.cluster.resources.identity import (
     TaskIdentity,
 )
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
-from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.log import LogEntry, LogPage, LogQuery
 from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.rpc import iris_logging_pb2, job_pb2, resource_pb2
+from iris.rpc import job_pb2, resource_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.errors import call_with_retry
 from iris.rpc.resource_connect import ResourceServiceClientSync
@@ -242,24 +242,24 @@ class ResourceClient:
         self,
         identity: JobIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._stream_logs(lambda current: self.fetch_job_logs(identity, current), query)
 
     def stream_task_logs(
         self,
         identity: TaskIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._stream_logs(lambda current: self.fetch_task_logs(identity, current), query)
 
     def stream_attempt_logs(
         self,
         identity: AttemptIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._stream_logs(lambda current: self.fetch_attempt_logs(identity, current), query)
 
-    def _stream_logs(self, fetch, query: LogQuery) -> Iterator[iris_logging_pb2.LogEntry]:
+    def _stream_logs(self, fetch, query: LogQuery) -> Iterator[LogEntry]:
         current = query
         while True:
             page = fetch(current)

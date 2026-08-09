@@ -6,13 +6,13 @@
 import uuid
 
 import click
-from rigging.timing import Timestamp
 
 from iris.cluster.resources.action import ActionReceipt
 from iris.cluster.resources.activity import ActivityEntry
 from iris.cluster.resources.identity import AttemptLocator, ResourceKey, ResourceKind
+from iris.cluster.resources.log import LogEntry
 from iris.cluster.resources.source import ResourceSourceStatus, SourceState
-from iris.rpc import iris_logging_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 
 DEFAULT_RESOURCE_LIST_LIMIT = 100
@@ -73,9 +73,9 @@ def echo_activity(entries: tuple[ActivityEntry, ...]) -> None:
         click.echo(f"{entry.occurred_at.epoch_ms()}  {entry.severity:<8} {entry.kind:<20} {entry.message}")
 
 
-def echo_logs(entries: tuple[iris_logging_pb2.LogEntry, ...]) -> None:
+def echo_logs(entries: tuple[LogEntry, ...]) -> None:
     for entry in entries:
-        prefix = f"{Timestamp(entry.timestamp.epoch_ms)} " if entry.HasField("timestamp") else ""
+        prefix = f"{entry.timestamp} " if entry.timestamp is not None else ""
         source = f"{entry.source}: " if entry.source else ""
         click.echo(f"{prefix}{source}{entry.data}")
 

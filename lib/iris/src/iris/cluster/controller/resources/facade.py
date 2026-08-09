@@ -17,11 +17,11 @@ from typing import Protocol, cast
 from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.errors import StatsError
-from finelog.rpc import logging_pb2
 from rigging.connect import capability_path, federated_capability_path
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import Row, and_, bindparam, func, or_, select
 
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller import reads, writes
@@ -35,7 +35,6 @@ from iris.cluster.controller.backend import BackendCapability, ProviderError, Ta
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_job_spec,
-    worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -51,6 +50,12 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.resources.jobs import FederationSubmission, JobResources
+from iris.cluster.controller.resources.logs import fetch_log_entries
+from iris.cluster.controller.resources.observations import (
+    observe_autoscaler_resources,
+    observe_backend_resources,
+    worker_node_metadata,
+)
 from iris.cluster.controller.schema import (
     federated_jobs_table,
     job_config_table,
@@ -59,7 +64,7 @@ from iris.cluster.controller.schema import (
     tasks_table,
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.manager import FederationManager, FederationPeerObservation
 from iris.cluster.federation.store import CancelTarget, FederationDirection, HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
@@ -114,7 +119,6 @@ from iris.cluster.resources.log import LogPage, LogQuery
 from iris.cluster.resources.node import (
     NodeAttribute,
     NodeAttributeKind,
-    NodeCapacity,
     NodeDetail,
     NodeHealth,
     NodeQuery,
@@ -136,6 +140,7 @@ from iris.cluster.resources.source import (
     ResourceSourceStatus,
     SourceState,
 )
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
 from iris.cluster.types import (
@@ -143,13 +148,9 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     JobName,
-    JobState,
     UserBudgetDefaults,
     WorkerId,
 )
-from iris.rpc import controller_pb2, iris_logging_pb2, job_pb2
-from iris.rpc.auth import authorize_resource_owner
-from iris.time_proto import timestamp_from_proto
 
 _RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
 _RESOURCE_UID_PREFIX = "iris-resource-v2"
@@ -166,13 +167,6 @@ _SOURCE_UNSUPPORTED = "unsupported"
 _FINELOG_NOT_CONFIGURED = "finelog is not configured"
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class _WorkerAccelerator:
-    kind: str
-    variant: str
-    count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,28 +433,6 @@ def _string_node_attribute(key: str, value: str) -> NodeAttribute | None:
     return NodeAttribute(key=key, kind=NodeAttributeKind.STRING, string_value=value)
 
 
-def _worker_attributes(metadata: job_pb2.WorkerMetadata) -> tuple[NodeAttribute, ...]:
-    attributes: list[NodeAttribute] = []
-    for key, value in sorted(metadata.attributes.items()):
-        selected = value.WhichOneof("value")
-        if selected == "string_value":
-            attributes.append(NodeAttribute(key, NodeAttributeKind.STRING, string_value=value.string_value))
-        elif selected == "int_value":
-            attributes.append(NodeAttribute(key, NodeAttributeKind.INTEGER, integer_value=value.int_value))
-        elif selected == "float_value":
-            attributes.append(NodeAttribute(key, NodeAttributeKind.FLOAT, float_value=value.float_value))
-    return tuple(attributes)
-
-
-def _worker_accelerator(metadata: job_pb2.WorkerMetadata) -> _WorkerAccelerator:
-    kind = metadata.device.WhichOneof("device")
-    if kind == "gpu":
-        return _WorkerAccelerator("gpu", metadata.device.gpu.variant, metadata.device.gpu.count)
-    if kind == "tpu":
-        return _WorkerAccelerator("tpu", metadata.device.tpu.variant, metadata.device.tpu.count)
-    return _WorkerAccelerator("", "", 0)
-
-
 def _slice_lifecycle(value: str) -> SliceLifecycle:
     if value == "ready":
         return SliceLifecycle.READY
@@ -653,7 +625,7 @@ class ResourceController:
                 ),
                 {"job_ids_json": json.dumps(normalized)},
             ).all()
-        return {str(row.resource_id): cast(JobState, int(row.state)) for row in rows}
+        return {str(row.resource_id): JobState(int(row.state)) for row in rows}
 
     def observe_jobs(self, summaries: Sequence[JobSummary]) -> tuple[JobObservation, ...]:
         """Read bounded Task, child, and federation aggregates for Jobs in one snapshot."""
@@ -681,7 +653,7 @@ class ResourceController:
                         failure_count=aggregate.failure_count,
                         preemption_count=aggregate.preemption_count,
                         state_counts=tuple(
-                            TaskStateCount(state=state, count=count)
+                            TaskStateCount(state=TaskState(state), count=count)
                             for state, count in sorted(aggregate.task_state_counts.items())
                         ),
                     ),
@@ -838,22 +810,25 @@ class ResourceController:
             )
         return tuple(details)
 
-    def _failure_highlights(self, task_id: JobName, state: int) -> _FailureHighlights:
-        if state not in (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED):
+    def _failure_highlights(self, task_id: JobName, state: TaskState) -> _FailureHighlights:
+        if state not in (TaskState.FAILED, TaskState.WORKER_FAILED):
             return _FailureHighlights((), None)
         if self._log_client is None:
             status = _unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED))
             return _FailureHighlights((), status)
         source, match_scope = build_log_source(task_id)
         try:
-            response = self._log_client.fetch_logs(
-                logging_pb2.FetchLogsRequest(source=source, match_scope=match_scope, max_lines=200, tail=True)
+            entries, _ = fetch_log_entries(
+                self._log_client,
+                source=source,
+                match_scope=match_scope,
+                query=LogQuery(max_lines=200, tail=True),
             )
         except (ConnectError, ConnectionError, OSError, RuntimeError) as exc:
             logger.warning("Finelog unavailable while reading failure highlights for %s: %s", task_id, exc)
             return _FailureHighlights((), _unavailable_finelog_source(self._cluster_id, exc))
         return _FailureHighlights(
-            tuple(extract_failure_highlights([entry.data for entry in response.entries])),
+            tuple(extract_failure_highlights([entry.data for entry in entries])),
             _available_source(f"finelog:{self._cluster_id}"),
         )
 
@@ -1191,22 +1166,13 @@ class ResourceController:
                 source_statuses=(_unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED)),),
             )
         source, match_scope = build_log_source(job_name, attempt_number)
-        minimum_level = ""
-        if query.minimum_level != logging_pb2.LOG_LEVEL_UNKNOWN:
-            minimum_level = logging_pb2.LogLevel.Name(query.minimum_level).removeprefix("LOG_LEVEL_")
-        request = logging_pb2.FetchLogsRequest(
-            source=source,
-            match_scope=match_scope,
-            cursor=query.cursor,
-            max_lines=query.max_lines,
-            substring=query.substring,
-            min_level=minimum_level,
-            tail=query.tail,
-        )
-        if query.after is not None:
-            request.since_ms = query.after.epoch_ms()
         try:
-            response = self._log_client.fetch_logs(request)
+            entries, next_cursor = fetch_log_entries(
+                self._log_client,
+                source=source,
+                match_scope=match_scope,
+                query=query,
+            )
         except (ConnectError, ConnectionError, OSError, RuntimeError) as exc:
             return LogPage(
                 entries=(),
@@ -1214,8 +1180,8 @@ class ResourceController:
                 source_statuses=(_unavailable_finelog_source(self._cluster_id, exc),),
             )
         return LogPage(
-            entries=tuple(iris_logging_pb2.LogEntry.FromString(entry.SerializeToString()) for entry in response.entries),
-            next_cursor=response.cursor,
+            entries=entries,
+            next_cursor=next_cursor,
             source_statuses=(_available_source(f"finelog:{self._cluster_id}"),),
         )
 
@@ -1758,53 +1724,45 @@ class ResourceController:
         statuses: list[ResourceSourceStatus] = []
         for backend_id, backend in sorted(self._backends.items()):
             try:
-                status = backend.status()
+                observation = observe_backend_resources(backend)
             except (ConnectionError, ProviderError) as exc:
                 statuses.append(_unavailable_backend_source(backend_id, exc))
             else:
-                if status.HasField("kubernetes"):
-                    if len(status.kubernetes.nodes) > MAX_PROVIDER_SNAPSHOT_ITEMS:
-                        statuses.append(
-                            _unavailable_backend_source(
-                                backend_id,
-                                ValueError(f"provider returned more than {MAX_PROVIDER_SNAPSHOT_ITEMS} nodes"),
-                            )
-                        )
-                        continue
-                    observed_at = Timestamp.now()
-                    for node in status.kubernetes.nodes:
-                        identity = NodeIdentity(
-                            ResourceKey(self._cluster_id, ResourceKind.NODE, node.name),
+                if len(observation.nodes) > MAX_PROVIDER_SNAPSHOT_ITEMS:
+                    statuses.append(
+                        _unavailable_backend_source(
                             backend_id,
-                            _opaque_uid(f"kubernetes:{backend_id}:{node.name}:{node.created}"),
+                            ValueError(f"provider returned more than {MAX_PROVIDER_SNAPSHOT_ITEMS} nodes"),
                         )
-                        summary = NodeSummary(
-                            identity=identity,
-                            health=NodeHealth.READY if node.ready else NodeHealth.UNAVAILABLE,
-                            schedulable=node.schedulable,
-                            capacity=NodeCapacity(
-                                cpu_millicores=node.cpu_millicores,
-                                memory_bytes=node.memory_bytes,
-                                disk_bytes=node.disk_bytes,
-                                accelerator_kind="gpu" if node.gpu_count else "",
-                                accelerator_variant=node.gpu_model,
-                                accelerator_count=node.gpu_count,
-                            ),
-                            scaling_group_id=None,
-                            slice=None,
-                            running_task_count=node.running_pods,
-                            observed_at=observed_at,
-                            region=node.region or None,
+                    )
+                    continue
+                observed_at = Timestamp.now()
+                for node in observation.nodes:
+                    identity = NodeIdentity(
+                        ResourceKey(self._cluster_id, ResourceKind.NODE, node.provider_node_id),
+                        backend_id,
+                        _opaque_uid(f"kubernetes:{backend_id}:{node.provider_node_id}:{node.incarnation}"),
+                    )
+                    summary = NodeSummary(
+                        identity=identity,
+                        health=NodeHealth.READY if node.ready else NodeHealth.UNAVAILABLE,
+                        schedulable=node.schedulable,
+                        capacity=node.capacity,
+                        scaling_group_id=None,
+                        slice=None,
+                        running_task_count=node.running_task_count,
+                        observed_at=observed_at,
+                        region=node.region,
+                    )
+                    attributes = tuple(
+                        attribute
+                        for attribute in (
+                            _string_node_attribute("instance_type", node.instance_type or ""),
+                            _string_node_attribute("region", node.region or ""),
                         )
-                        attributes = tuple(
-                            attribute
-                            for attribute in (
-                                _string_node_attribute("instance_type", node.instance_type),
-                                _string_node_attribute("region", node.region),
-                            )
-                            if attribute is not None
-                        )
-                        candidates.append(_ProviderNodeCandidate(summary, _NodeDetails(None, attributes)))
+                        if attribute is not None
+                    )
+                    candidates.append(_ProviderNodeCandidate(summary, _NodeDetails(None, attributes)))
                 statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
         return _ProviderNodeSnapshot(tuple(candidates), tuple(statuses))
 
@@ -1895,45 +1853,35 @@ class ResourceController:
             worker = candidate.worker
             worker_id = WorkerId(worker.worker_id)
             stored_attributes = attributes_by_worker.get(worker_id, {})
-            metadata = worker_metadata_to_proto(worker, stored_attributes)
+            metadata = worker_node_metadata(worker, stored_attributes)
             identity = NodeIdentity(
                 ResourceKey(self._cluster_id, ResourceKind.NODE, worker_id),
                 candidate.backend_id,
                 worker_id,
             )
-            accelerator = _worker_accelerator(metadata)
-            region = stored_attributes.get("region")
             slice_identity = None
-            slice_id = str(metadata.tpu_name or "")
-            if slice_id:
+            if metadata.slice_id:
                 slice_identity = SliceIdentity(
-                    ResourceKey(self._cluster_id, ResourceKind.SLICE, slice_id),
+                    ResourceKey(self._cluster_id, ResourceKind.SLICE, metadata.slice_id),
                     candidate.backend_id,
-                    _opaque_uid(f"rpc:{candidate.backend_id}:{slice_id}"),
+                    _opaque_uid(f"rpc:{candidate.backend_id}:{metadata.slice_id}"),
                 )
             nodes.append(
                 NodeSummary(
                     identity=identity,
                     health=NodeHealth.READY if candidate.liveness.healthy else NodeHealth.DEGRADED,
                     schedulable=candidate.liveness.healthy,
-                    capacity=NodeCapacity(
-                        cpu_millicores=metadata.cpu_count * 1_000,
-                        memory_bytes=metadata.memory_bytes,
-                        disk_bytes=metadata.disk_bytes,
-                        accelerator_kind=accelerator.kind,
-                        accelerator_variant=accelerator.variant,
-                        accelerator_count=accelerator.count,
-                    ),
+                    capacity=metadata.capacity,
                     scaling_group_id=str(worker.scale_group or "") or None,
                     slice=slice_identity,
                     running_task_count=len(running.get(worker_id, set())),
                     observed_at=Timestamp.from_ms(candidate.liveness.last_heartbeat_ms),
-                    region=region if isinstance(region, str) and region else None,
+                    region=metadata.region,
                 )
             )
             details[(candidate.backend_id, identity.node_uid)] = _NodeDetails(
                 str(worker.address or "") or None,
-                _worker_attributes(metadata),
+                metadata.attributes,
             )
         return tuple(nodes), details
 
@@ -1946,12 +1894,11 @@ class ResourceController:
                 statuses.append(_unsupported_source(f"backend:{backend_id}", backend_id=backend_id))
                 continue
             try:
-                status = backend.autoscaler_status()
+                observation = observe_autoscaler_resources(backend)
             except (ConnectionError, ProviderError) as exc:
                 statuses.append(_unavailable_backend_source(backend_id, exc))
                 continue
-            slice_count = sum(len(group.slices) for group in status.groups)
-            if slice_count > MAX_PROVIDER_SNAPSHOT_ITEMS:
+            if len(observation.slices) > MAX_PROVIDER_SNAPSHOT_ITEMS:
                 statuses.append(
                     _unavailable_backend_source(
                         backend_id,
@@ -1960,43 +1907,38 @@ class ResourceController:
                 )
                 continue
             statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
-            observed_at = (
-                timestamp_from_proto(status.last_evaluation) if status.HasField("last_evaluation") else Timestamp.now()
-            )
-            for group in status.groups:
-                for item in group.slices:
-                    slice_uid = _opaque_uid(
-                        f"rpc:{backend_id}:{item.slice_id}:"
-                        f"{item.created_at.epoch_ms if item.HasField('created_at') else 0}"
+            for item in observation.slices:
+                slice_uid = _opaque_uid(
+                    f"rpc:{backend_id}:{item.slice_id}:{item.created_at.epoch_ms() if item.created_at else 0}"
+                )
+                identity = SliceIdentity(
+                    ResourceKey(self._cluster_id, ResourceKind.SLICE, item.slice_id),
+                    backend_id,
+                    slice_uid,
+                )
+                lifecycle = _slice_lifecycle(item.lifecycle_state)
+                membership_state = (
+                    MembershipState.OBSERVED if lifecycle is SliceLifecycle.READY else MembershipState.UNKNOWN
+                )
+                slices.append(
+                    SliceSummary(
+                        identity=identity,
+                        scaling_group_id=item.scaling_group_id,
+                        lifecycle=lifecycle,
+                        membership_state=membership_state,
+                        observed_member_count=len(item.provider_node_ids),
+                        observed_at=observation.observed_at,
+                        error_message=item.error_message,
                     )
-                    identity = SliceIdentity(
-                        ResourceKey(self._cluster_id, ResourceKind.SLICE, item.slice_id),
-                        backend_id,
-                        slice_uid,
+                )
+                members[(backend_id, slice_uid)] = tuple(
+                    SliceMember(
+                        provider_node_id=provider_node_id,
+                        node=None,
+                        observed_at=observation.observed_at,
                     )
-                    lifecycle = _slice_lifecycle(item.state)
-                    membership_state = (
-                        MembershipState.OBSERVED if lifecycle is SliceLifecycle.READY else MembershipState.UNKNOWN
-                    )
-                    slices.append(
-                        SliceSummary(
-                            identity=identity,
-                            scaling_group_id=group.name,
-                            lifecycle=lifecycle,
-                            membership_state=membership_state,
-                            observed_member_count=len(item.vms),
-                            observed_at=observed_at,
-                            error_message=item.error_message,
-                        )
-                    )
-                    members[(backend_id, slice_uid)] = tuple(
-                        SliceMember(
-                            provider_node_id=vm.vm_id,
-                            node=None,
-                            observed_at=observed_at,
-                        )
-                        for vm in item.vms
-                    )
+                    for provider_node_id in item.provider_node_ids
+                )
         return _SliceSnapshot(tuple(slices), members, tuple(statuses))
 
     def _terminal_action(
@@ -2167,7 +2109,7 @@ class ResourceController:
             ),
             owner_id=job_id.user,
             parent=parent,
-            state=row.state,
+            state=JobState(row.state),
             execution_cluster_id=execution,
             backend_id=self._known_backend_id(str(row.backend_id or ""), execution),
             num_tasks=int(row.num_tasks),
@@ -2179,7 +2121,7 @@ class ResourceController:
         )
 
     def _job_pending_reason(self, row, coordinates) -> str:
-        if row.state != job_pb2.JOB_STATE_PENDING:
+        if JobState(row.state) is not JobState.PENDING:
             return ""
         if getattr(coordinates, "direction", None) == int(FederationDirection.SENT):
             peer_id = str(getattr(coordinates, "peer_id", "") or "")
@@ -2232,7 +2174,7 @@ class ResourceController:
             identity=task_identity,
             job=job_identity,
             task_index=int(row.task_index),
-            state=row.state,
+            state=TaskState(row.state),
             execution_cluster_id=execution,
             backend_id=backend_id,
             current_attempt=attempt_identity,
@@ -2257,7 +2199,7 @@ class ResourceController:
             node = self._current_node_identity(execution, backend_id, node_id)
         return AttemptSummary(
             identity=AttemptIdentity(task_key, int(attempt.attempt_id), str(attempt.attempt_uid)),
-            state=attempt.state,
+            state=TaskState(attempt.state),
             execution_cluster_id=execution,
             backend_id=backend_id,
             node=node,
@@ -2360,11 +2302,7 @@ class ResourceController:
             name=row.name,
             task=task,
             execution_cluster_id=execution,
-            access=(
-                EndpointAccess.LINK
-                if row.access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
-                else EndpointAccess.PRIVATE
-            ),
+            access=EndpointAccess.from_storage(row.access),
             lease_deadline=row.lease_deadline,
         )
 
@@ -2464,28 +2402,28 @@ class ResourceController:
         statuses = [_available_source(f"controller:{self._cluster_id}")]
         for backend_id, backend in sorted(self._backends.items()):
             try:
-                backend.status()
+                observe_backend_resources(backend)
             except (ConnectionError, ProviderError) as exc:
                 statuses.append(_unavailable_backend_source(backend_id, exc))
             else:
                 statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
-        peer_summaries = {peer.peer_id: peer for peer in self._runtime.federation.peer_summaries()}
-        statuses.extend(self._peer_source_statuses(set(peer_summaries), summaries=peer_summaries))
+        peer_observations = {peer.peer_id: peer for peer in self._runtime.federation.peer_observations()}
+        statuses.extend(self._peer_source_statuses(set(peer_observations), observations=peer_observations))
         return tuple(statuses)
 
     def _peer_source_statuses(
         self,
         peer_ids: set[str],
         *,
-        summaries: Mapping[str, controller_pb2.Controller.PeerSummary] | None = None,
+        observations: Mapping[str, FederationPeerObservation] | None = None,
     ) -> tuple[ResourceSourceStatus, ...]:
         if not peer_ids:
             return ()
-        if summaries is None:
-            summaries = {peer.peer_id: peer for peer in self._runtime.federation.peer_summaries()}
+        if observations is None:
+            observations = {peer.peer_id: peer for peer in self._runtime.federation.peer_observations()}
         statuses = []
         for peer_id in sorted(peer_ids):
-            peer = summaries.get(peer_id)
+            peer = observations.get(peer_id)
             if peer is None:
                 statuses.append(
                     ResourceSourceStatus(

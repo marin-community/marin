@@ -20,6 +20,7 @@ from iris.cluster.controller.controller import Controller
 from iris.cluster.controller.resources.jobs import FederationSubmission
 from iris.cluster.controller.resources.rpc import ResourceServiceImpl
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
+from iris.cluster.federation.manager import FederationPeerObservation
 from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
 from iris.cluster.federation.store import FederationSyncBatch
 from iris.cluster.resources.action import ActionReceipt
@@ -39,7 +40,6 @@ PARENT_CLUSTER_ID = "journey-parent"
 PEER_ID = "peer-b"
 _PEER_CONTROLLER_ADDRESS = "http://peer-b.invalid"
 _PEER_IDENTITY = VerifiedIdentity(user_id=PARENT_CLUSTER_ID, role=FEDERATION_PEER_ROLE)
-_READER_IDENTITY = VerifiedIdentity(user_id="journey-reader", role="admin")
 
 
 class InProcessPeerConnection:
@@ -78,8 +78,9 @@ class InProcessPeerConnection:
     def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            response = self._controller.federation_sync(
-                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor)
+            response = self._controller.controller_service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor),
+                None,
             )
         return federation_batch_from_legacy(response)
 
@@ -254,8 +255,6 @@ class FederationJourney:
     def peer_tasks(self, job: JobRef) -> list[TaskSummary]:
         return list(self.peer.tasks(job))
 
-    def peer_summary(self) -> controller_pb2.Controller.PeerSummary:
-        with identity_scope(_READER_IDENTITY):
-            response = self.parent.controller.list_peers()
-        (summary,) = response.peers
+    def peer_summary(self) -> FederationPeerObservation:
+        (summary,) = self.parent.controller.federation.peer_observations()
         return summary

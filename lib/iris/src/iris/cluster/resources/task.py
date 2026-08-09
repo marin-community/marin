@@ -14,7 +14,7 @@ from iris.cluster.resources.source import (
     MAX_ROOT_CAUSE_HIGHLIGHTS,
     ResourceSourceStatus,
 )
-from iris.cluster.types import TaskState
+from iris.cluster.resources.state import TaskState
 
 
 @dataclass(frozen=True, slots=True)

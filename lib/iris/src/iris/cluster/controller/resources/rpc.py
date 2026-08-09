@@ -8,6 +8,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, get_verified_identity
 
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.resources.facade import ResourceController
 from iris.cluster.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
@@ -33,14 +34,15 @@ from iris.cluster.resources.identity import (
     TaskIdentity,
 )
 from iris.cluster.resources.job import JobQuery, JobSpec
-from iris.cluster.resources.log import LogQuery
+from iris.cluster.resources.log import LogEntry, LogLevel, LogQuery
 from iris.cluster.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
 from iris.cluster.resources.slice import MembershipState, SliceLifecycle, SliceQuery
 from iris.cluster.resources.source import Freshness, ResourceSourceStatus, SourceState
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskQuery
 from iris.cluster.types import CoschedulingConfig, JobName, ResourceSpec
-from iris.rpc import resource_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
+from iris.rpc import iris_logging_pb2, resource_pb2
+from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
@@ -248,6 +250,20 @@ def _page_info(next_page_token: str | None, statuses: tuple[ResourceSourceStatus
         next_page_token=next_page_token or "",
         source_statuses=[_source_status_to_proto(status) for status in statuses],
     )
+
+
+def _log_entry_to_proto(value: LogEntry) -> iris_logging_pb2.LogEntry:
+    result = iris_logging_pb2.LogEntry(
+        source=value.source,
+        data=value.data,
+        attempt_id=value.attempt_id,
+        level=int(value.level),
+        key=value.key,
+        seq=value.sequence,
+    )
+    if value.timestamp is not None:
+        result.timestamp.CopyFrom(timestamp_to_proto(value.timestamp))
+    return result
 
 
 def _job_summary_to_proto(value) -> resource_pb2.JobSummary:
@@ -508,7 +524,7 @@ class ResourceServiceImpl:
                     owner_id=owner_id,
                     parent=_resource_key_from_proto(query.parent) if query.HasField("parent") else None,
                     job_id_prefix=query.job_id_prefix or None,
-                    states=frozenset(query.states),
+                    states=frozenset(JobState(state) for state in query.states),
                     backend_id=query.backend_id or None,
                     execution_cluster_id=query.execution_cluster_id or None,
                     page_size=query.page.page_size or _DEFAULT_JOB_PAGE_SIZE,
@@ -559,7 +575,7 @@ class ResourceServiceImpl:
                 TaskQuery(
                     job=job,
                     job_id_prefix=job_id_prefix,
-                    states=frozenset(query.states),
+                    states=frozenset(TaskState(state) for state in query.states),
                     backend_id=query.backend_id or None,
                     authority_cluster_id=query.authority_cluster_id or None,
                     execution_cluster_id=query.execution_cluster_id or None,
@@ -840,7 +856,7 @@ class ResourceServiceImpl:
                     cursor=request.query.cursor,
                     max_lines=request.query.max_lines or 1_000,
                     substring=request.query.substring,
-                    minimum_level=request.query.minimum_level,
+                    minimum_level=LogLevel(request.query.minimum_level),
                     tail=request.query.tail,
                 ),
             )
@@ -851,7 +867,7 @@ class ResourceServiceImpl:
         except ResourceReplaced as exc:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         return resource_pb2.FetchLogsResponse(
-            entries=page.entries,
+            entries=[_log_entry_to_proto(entry) for entry in page.entries],
             next_cursor=page.next_cursor,
             source_statuses=[_source_status_to_proto(status) for status in page.source_statuses],
         )

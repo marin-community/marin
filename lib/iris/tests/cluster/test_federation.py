@@ -149,20 +149,22 @@ def test_peer_probe_failure_marks_unreachable_and_keeps_last_backends():
     assert [b.backend_id for b in heartbeat.backends] == ["tpu-fleet"]  # last-known backends retained
 
 
-def test_list_peers_view_surfaces_heartbeat_backends():
+def test_peer_observation_surfaces_current_reachability():
     backend = _backend("tpu-fleet", kind="worker-daemon", worker_count=3)
     peer = _peer("cw-east", _StubConnection((backend,)))
     manager = FederationManager([peer], threads=get_thread_container())
     peer.probe()
-    (summary,) = manager.peer_summaries()
+    (summary,) = manager.peer_observations()
     assert summary.peer_id == "cw-east"
     assert summary.controller_address == "http://cw:10000"
     assert summary.reachable is True
-    (forwarded,) = summary.backends
-    assert forwarded.backend_id == "tpu-fleet"
-    assert forwarded.kind == "worker-daemon"
-    assert forwarded.worker_count == 3
     assert summary.last_contact_ms > 0
+    (observed_backend,) = summary.backends
+    assert (observed_backend.backend_id, observed_backend.kind, observed_backend.worker_count) == (
+        "tpu-fleet",
+        "worker-daemon",
+        3,
+    )
 
 
 def _availability_backend(backend_id: str, version: int) -> controller_pb2.Controller.BackendSummary:

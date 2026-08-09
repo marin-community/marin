@@ -34,7 +34,7 @@ from iris.cluster.resources.identity import (
     TaskIdentity,
 )
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
-from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.log import LogEntry, LogLevel, LogPage, LogQuery
 from iris.cluster.resources.node import (
     NodeAttribute,
     NodeAttributeKind,
@@ -53,6 +53,7 @@ from iris.cluster.resources.slice import (
     SliceSummary,
 )
 from iris.cluster.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.types import CoschedulingConfig, ResourceSpec
 from iris.rpc import resource_pb2
@@ -239,7 +240,7 @@ def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
         identity=job_identity_from_proto(value.identity),
         owner_id=value.owner_id,
         parent=job_identity_from_proto(value.parent) if value.HasField("parent") else None,
-        state=value.state,
+        state=JobState(value.state),
         execution_cluster_id=value.execution_cluster_id,
         backend_id=value.backend_id,
         num_tasks=value.num_tasks,
@@ -347,7 +348,7 @@ def _task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
         identity=_task_identity_from_proto(value.identity),
         job=job_identity_from_proto(value.job),
         task_index=value.task_index,
-        state=value.state,
+        state=TaskState(value.state),
         execution_cluster_id=value.execution_cluster_id,
         backend_id=value.backend_id,
         current_attempt=(
@@ -367,7 +368,7 @@ def _task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
 def _attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSummary:
     return AttemptSummary(
         identity=_attempt_identity_from_proto(value.identity),
-        state=value.state,
+        state=TaskState(value.state),
         execution_cluster_id=value.execution_cluster_id,
         backend_id=value.backend_id,
         node=_node_identity_from_proto(value.node) if value.HasField("node") else None,
@@ -611,7 +612,18 @@ def log_query_to_proto(value: LogQuery) -> resource_pb2.LogQuery:
 
 def log_page_from_proto(value: resource_pb2.FetchLogsResponse) -> LogPage:
     return LogPage(
-        entries=tuple(value.entries),
+        entries=tuple(
+            LogEntry(
+                timestamp=timestamp_from_proto(entry.timestamp) if entry.HasField("timestamp") else None,
+                source=entry.source,
+                data=entry.data,
+                attempt_id=entry.attempt_id,
+                level=LogLevel(entry.level),
+                key=entry.key,
+                sequence=entry.seq,
+            )
+            for entry in value.entries
+        ),
         next_cursor=value.next_cursor,
         source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )

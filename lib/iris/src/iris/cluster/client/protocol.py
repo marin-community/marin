@@ -29,13 +29,13 @@ from iris.cluster.resources.identity import (
     TaskIdentity,
 )
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
-from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.log import LogEntry, LogPage, LogQuery
 from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
-from iris.rpc import iris_logging_pb2, job_pb2
+from iris.rpc import job_pb2
 
 
 class ResourceClientProtocol(Protocol):
@@ -85,19 +85,19 @@ class ResourceClientProtocol(Protocol):
         self,
         identity: JobIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
+    ) -> Iterator[LogEntry]: ...
 
     def stream_task_logs(
         self,
         identity: TaskIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
+    ) -> Iterator[LogEntry]: ...
 
     def stream_attempt_logs(
         self,
         identity: AttemptIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]: ...
+    ) -> Iterator[LogEntry]: ...
 
     def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt: ...
 

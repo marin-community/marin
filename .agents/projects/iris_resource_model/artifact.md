@@ -1,5 +1,9 @@
 # Iris resource model: implemented shape
 
+The package and protobuf boundaries are mapped in
+[architecture.md](architecture.md), including the current checkpoint and the
+protobuf-free target.
+
 ## Decision
 
 Land the resource model in one forward-only pull request, using the original

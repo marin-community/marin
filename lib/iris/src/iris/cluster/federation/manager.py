@@ -18,8 +18,8 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 
 import logging
 import threading
-from collections.abc import Callable, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from connectrpc.code import Code
@@ -71,6 +71,28 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
 _TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+
+
+@dataclass(frozen=True, slots=True)
+class FederationBackendObservation:
+    """Backend placement facts observed through a federation heartbeat."""
+
+    backend_id: str
+    kind: str
+    worker_count: int
+    advertised_attributes: Mapping[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class FederationPeerObservation:
+    """Current native health observation for a configured federation peer."""
+
+    peer_id: str
+    controller_address: str
+    reachable: bool
+    last_contact_ms: int
+    active_federated_jobs: int
+    backends: tuple[FederationBackendObservation, ...]
 
 
 def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
@@ -179,8 +201,12 @@ class FederationManager:
         return peer.controller_address if peer is not None else None
 
     def peer_summaries(self) -> list[controller_pb2.Controller.PeerSummary]:
-        """A ``PeerSummary`` for every configured peer, ordered by peer id."""
+        """Encode every configured peer for the retired ControllerService boundary."""
         return [self._build_summary(peer) for _, peer in sorted(self._peers.items())]
+
+    def peer_observations(self) -> tuple[FederationPeerObservation, ...]:
+        """Return current peer health observations ordered by peer id."""
+        return tuple(self._build_observation(peer) for _, peer in sorted(self._peers.items()))
 
     # -- queue admission (parent side) ---------------------------------------
 
@@ -489,4 +515,26 @@ class FederationManager:
             last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
             backends=heartbeat.backends,
+        )
+
+    def _build_observation(self, peer: FederationPeer) -> FederationPeerObservation:
+        heartbeat = peer.heartbeat()
+        active = self._store.active_federated_job_count(peer.peer_id) if self._store is not None else 0
+        return FederationPeerObservation(
+            peer_id=peer.peer_id,
+            controller_address=peer.controller_address,
+            reachable=heartbeat.reachable,
+            last_contact_ms=heartbeat.last_contact_ms,
+            active_federated_jobs=active,
+            backends=tuple(
+                FederationBackendObservation(
+                    backend_id=backend.backend_id,
+                    kind=backend.kind,
+                    worker_count=backend.worker_count,
+                    advertised_attributes={
+                        key: tuple(values.values) for key, values in backend.advertised_attributes.items()
+                    },
+                )
+                for backend in heartbeat.backends
+            ),
         )

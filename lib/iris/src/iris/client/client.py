@@ -68,10 +68,11 @@ from iris.cluster.resources.identity import (
     TaskIdentity,
 )
 from iris.cluster.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
-from iris.cluster.resources.log import LogPage, LogQuery
+from iris.cluster.resources.log import LogEntry, LogLevel, LogPage, LogQuery
 from iris.cluster.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.cluster.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.cluster.resources.source import Page
+from iris.cluster.resources.state import JobState, TaskState
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
@@ -87,7 +88,7 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
-from iris.rpc import iris_logging_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ class Task:
         return self.describe().summary
 
     @property
-    def state(self) -> job_pb2.TaskState:
+    def state(self) -> TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
@@ -238,12 +239,12 @@ class Job:
         """Return the current typed Job summary."""
         return self.describe().summary
 
-    def state_only(self) -> job_pb2.JobState:
+    def state_only(self) -> JobState:
         """Return the current state of this exact Job incarnation."""
         return self.status().state
 
     @property
-    def state(self) -> job_pb2.JobState:
+    def state(self) -> JobState:
         """Return the current state of this exact Job incarnation."""
         return self.state_only()
 
@@ -284,11 +285,7 @@ class Job:
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=0.1, maximum=max(0.1, poll_interval))
         cursor = 0
-        minimum_level = (
-            iris_logging_pb2.LogLevel.Value(f"LOG_LEVEL_{min_level.upper()}")
-            if min_level
-            else iris_logging_pb2.LOG_LEVEL_UNKNOWN
-        )
+        minimum_level = LogLevel[min_level.upper()] if min_level else LogLevel.UNKNOWN
         while True:
             status = self.status()
             if stream_logs:
@@ -897,21 +894,21 @@ class IrisClient:
         self,
         identity: JobIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._cluster_client.stream_job_logs(identity, query)
 
     def stream_task_logs(
         self,
         identity: TaskIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._cluster_client.stream_task_logs(identity, query)
 
     def stream_attempt_logs(
         self,
         identity: AttemptIdentity,
         query: LogQuery = LogQuery(),
-    ) -> Iterator[iris_logging_pb2.LogEntry]:
+    ) -> Iterator[LogEntry]:
         return self._cluster_client.stream_attempt_logs(identity, query)
 
     def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:

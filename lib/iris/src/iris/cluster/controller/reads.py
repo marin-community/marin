@@ -1318,6 +1318,7 @@ WORKER_DETAIL_COLS = (
     workers_table.c.total_tpu_count,
     workers_table.c.device_type,
     workers_table.c.device_variant,
+    workers_table.c.slice_id,
     workers_table.c.md_hostname,
     workers_table.c.md_ip_address,
     workers_table.c.md_cpu_count,
