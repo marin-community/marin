@@ -23,22 +23,26 @@ The planner rejects an item with no reader, incomparable terminal readers,
 duplicate `(slot, generation)` identities, or non-contiguous generations within
 one reused slot. The workload does not annotate a last-consumer task.
 
-For the streaming Contract/Fold graph, the exact dependences are:
+For the generic resident/streamed Contract/Fold graph, the exact dependences
+are:
 
 ```text
-key_value_stage[row, partition] -> qk_contract[row, partition]
-key_value_stage[row, partition] -> pv_contract[row, partition]
-qk_contract[row, partition]     -> fold_update[row, partition]
-fold_update[row, partition]     -> pv_contract[row, partition]
-pv_contract[row, partition]     -> fold_finalize[row]
+first_streamed_input_stage[row, partition]  -> first_contract[row, partition]
+second_streamed_input_stage[row, partition] -> second_contract[row, partition]
+resident_input_stage[row]                   -> first_contract[row, partition]
+first_contract[row, partition]              -> fold_update[row, partition]
+fold_update[row, partition]                 -> second_contract[row, partition]
+second_contract[row, partition]             -> fold_finalize[row]
 ```
 
-The finite K/V buffer maps partition `p` to slot `p % depth` and generation
-`p // depth`, independently per row tile. Reachability proves that PV is the
-last K/V consumer. Reuse therefore adds:
+Each finite streamed-input buffer maps partition `p` to slot `p % depth` and
+generation `p // depth`, independently per row tile. Reachability proves that
+each Contract is the last consumer of its corresponding streamed input. Reuse
+therefore adds:
 
 ```text
-pv_contract[row, p] -> key_value_stage[row, p + depth]
+first_contract[row, p]  -> first_streamed_input_stage[row, p + depth]
+second_contract[row, p] -> second_streamed_input_stage[row, p + depth]
 ```
 
 ## Event realization audit
@@ -85,6 +89,16 @@ logical event and select a physical device/system readiness primitive instead.
 
 ## Streaming Contract/Fold lowering
 
+The schedule consumes a backend-neutral descriptor containing one resident
+input, two independently buffered streamed inputs, two Contracts, and one
+ordered Fold. It does not name attention operands or select a workload by name.
+
+### Attention adapter
+
+The current typed-FFI example is an attention adapter. This is the only layer
+in this path that binds the generic resident, first-streamed, and
+second-streamed inputs to Q, K, and V, respectively.
+
 Typed FFI inputs:
 
 ```text
@@ -105,15 +119,16 @@ skeleton, not a tensor-core performance kernel. It executes real QK and PV
 contractions and the exact online normalized-exponential Fold. A finite
 multi-slot shared K/V buffer carries explicit generation state.
 
-Realization choices:
+After that adapter binding, the generic realization choices are:
 
-- `key_value_stage -> QK` and `key_value_stage -> PV` remain physical CTA
-  acquire barriers;
-- `QK -> Fold` and `Fold -> PV` erase to source order within one query-row
-  owner;
-- `PV -> finalize` erases to completion of that owner's partition loop;
-- `PV(last consumer) -> next key_value_stage` remains a physical CTA release
-  barrier plus slot-generation advance.
+- each `streamed_input_stage -> Contract` edge remains a physical CTA acquire
+  barrier;
+- `first Contract -> Fold` and `Fold -> second Contract` erase to source order
+  within one resident-row owner;
+- `second Contract -> finalize` erases to completion of that owner's partition
+  loop;
+- each `Contract(last consumer) -> next streamed_input_stage` edge remains a
+  physical CTA release barrier plus slot-generation advance.
 
 Generated source contains the shared stage, barriers, slot-generation check,
 online max/sum/weighted-state update, and final division. Changing pipeline
@@ -130,8 +145,9 @@ An SM100 emitter can retain the same audit while replacing physical bodies:
 
 - segmented Contract: generic grouped/ragged tcgen05 mainloop, with a transport
   completion event instead of erased in-task gather when DeepEP is asynchronous;
-- streaming Contract/Fold: TMA K/V producer, tcgen05 QK/PV consumers, mbarrier
-  acquire/release, and the same derived circular-slot generations;
+- streaming Contract/Fold: TMA streamed-input producer, tcgen05 Contract
+  consumers, mbarrier acquire/release, and the same derived circular-slot
+  generations;
 - same-owner edges remain erased rather than allocated as global counters.
 
 This boundary keeps event semantics independent of mbarrier, semaphores,

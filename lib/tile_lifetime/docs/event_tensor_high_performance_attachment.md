@@ -10,11 +10,13 @@ still owns the placement of its barrier arrival and wait instructions.
 
 ## Boundary
 
-Event Tensors remain schedule objects. Tensor semantics determine the QK
-Contract, normalized-exponential Fold, PV Contract, and final Map. Task
-decomposition then induces exact producer/consumer relations. The attachment
-derives bounded-buffer lifetimes and synchronization parameters from those
-relations before the CuTe backend allocates concrete barriers.
+Event Tensors remain schedule objects. Tensor semantics determine two
+Contracts, the intervening Fold, and final Map. Task decomposition then induces
+exact producer/consumer relations. The attachment derives bounded-buffer
+lifetimes and synchronization parameters from those relations before the CuTe
+backend allocates concrete barriers. An attention adapter may bind this generic
+body to QK, normalized-exponential state, and PV, but the schedule itself does
+not know those names.
 
 The current attachment does not synthesize CUDA barrier instructions. It gives
 the existing generic tensor-core skeleton a verified synchronization contract:
@@ -22,7 +24,7 @@ the existing generic tensor-core skeleton a verified synchronization contract:
 ```text
 Contract / Fold program
   -> task relations
-  -> separate Q, K, and V BoundedBufferPlans
+  -> separate resident, first-streamed, and second-streamed BoundedBufferPlans
   -> EventTensorPlans and realization audit
   -> pipeline depths, barrier storage, worker counts, transaction bytes
   -> CuTe full/empty mbarrier allocation
@@ -38,8 +40,8 @@ The high-throughput implementation is
 
 | Quantity or edge | Previous source | Derivation | Attachment status |
 | --- | --- | --- | --- |
-| K/V pipeline depth | `StreamingTileSchedule.pipeline_depth` passed as `num_stages` | Capacity of separate K and V `BoundedBufferPlan`s | Derived and checked |
-| Q pipeline depth | Literal one stage | Q remains resident for one scheduled work tile; next tile is a new generation | Derived and checked |
+| Streamed-input pipeline depth | `StreamingTileSchedule.pipeline_depth` passed as `num_stages` | Capacity of separate first- and second-streamed `BoundedBufferPlan`s | Derived and checked |
+| Resident-input pipeline depth | Literal one stage | The resident input remains resident for one scheduled work tile; the next tile is a new generation | Derived and checked |
 | Barrier storage per stage | Literal two entries | One full and one empty event realization per bounded-buffer slot | Derived and used by shared-storage construction |
 | TMA producer participants | Literal one cooperative warp | Selected transfer-worker assignment | Derived and checked |
 | Matrix consumer participants | Tiled-MMA size | `resident_tile / 64` matrix warpgroups, four warps each | Derived independently and checked against the tiled MMA |
@@ -160,7 +162,7 @@ Three limitations remain explicit:
 
 CPU tests currently establish:
 
-- Q, K, and V last-consumer derivation;
+- resident and independently streamed input last-consumer derivation;
 - independent bounded-buffer generations;
 - pipeline-depth mutation;
 - one- versus two-matrix-warpgroup mutation;
