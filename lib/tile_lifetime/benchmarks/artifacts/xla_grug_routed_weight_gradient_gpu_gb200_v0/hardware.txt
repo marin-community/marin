@@ -1,0 +1,1 @@
+NVIDIA GB200, 595.71.05, 189471, 1200.00, Enabled, Default

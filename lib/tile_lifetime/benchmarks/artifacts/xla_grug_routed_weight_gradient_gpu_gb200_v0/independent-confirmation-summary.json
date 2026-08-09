@@ -1,0 +1,663 @@
+{
+  "architecture": "sm_100a",
+  "baseline_median_ms": 0.6816490204073489,
+  "baseline_unique_output_hashes": [
+    "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d",
+    "06bf389ce4f121f8e9b738f47efc867beece7d64757eb7ee3469c7ff283d1e91",
+    "1e77f195b3e9fa000ef9f4f14d121086ae96acccea3a680406df0b2282b6dcb6",
+    "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e",
+    "3c772a74814bb0126a581450fb7afc2b14de91a6ba7bcea85b6f5ef91a3200c0",
+    "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd",
+    "97a9884abe68491a2e07535cdec552c10a22087d856ecb5e3ba447fb61c96d4e",
+    "981e9bbcf6979d0266d5e4a2f8435614b3c7fcd81f08bb9c4be4bd544b230f6c",
+    "ae451e793d660fef89eacf9724d8a78cc738a95e1b927c5d4b638eb59f4ea21e",
+    "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21",
+    "bc9fe950abc9acc7fea6c06920553f9c6dd7861e8a38eca4f22cde59595ef577",
+    "e3f0c7a0414da94a153ffe8a316040f4d802525bbade39b3c5dba7ff9401fe7b"
+  ],
+  "bitwise_equal_leaf_count": 49,
+  "custom_call_handler_executions": [
+    35,
+    35
+  ],
+  "custom_call_occurrences_in_transformed_hlo": 2,
+  "custom_call_target_prefix": "shuttle.group_batched_contract.weight_adjoint.v1",
+  "device_kind": "NVIDIA GB200",
+  "external_collectives": [
+    [
+      "psum.52"
+    ],
+    [
+      "psum.53"
+    ]
+  ],
+  "generated_median_ms": 0.7445930095855147,
+  "generated_over_baseline": 1.092340760851605,
+  "generated_semantic_sha256": [
+    "30a724f7eb5be7c81137ef3243025b67fe2d6245a93359320d9a1576e849883d",
+    "20367dc747d027bb997546068d31f1b8a91ca995480714b944e596c52fdb4619"
+  ],
+  "generated_source_sha256": [
+    "ca29d9211c0315db9381d8fd826a11e4b1c605db1cc7aa4741c24a414c87637b",
+    "ae15fd8fd1af21b8f624b43f6379f70d41727d0f71dab0de2f27193ce5cd28eb"
+  ],
+  "generated_unique_output_hashes": [
+    "00418deedd3fb9d39a0013ca3477777b12e493ff886d6fdca9b03dd95173b021",
+    "34c6dca690c7f0ce1ab6808ff941bc2661ff1bc9b3c5efd2bb15f778e3ac418b",
+    "3c3179a7fdc45c90bf3bdd61ccbf1ecb3ea2cbb6de7da14052141d3352b11a1f",
+    "41e13bc18a409529ed7d0eeadad46f93e7d04ccc40efbc6732705172541de29d",
+    "559d4f8467f17147ac0c8d863d9862cf9c8a2147f82df33db54ed113b0a1ef72",
+    "980871dd198b0257f6c803cde9839ee73f4ebcd10c488e193d38c4bc3223ad7a",
+    "ab211ed0a6d8bb12528e5121b700d24226ac51f10d02cebcc86da716bc1782da",
+    "d3ab59900db88df1cb872f5376bcd545215cc3310cdb18cab39af8b65776e26a",
+    "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df",
+    "f26936f2aeca1b7ae7246f00ae13d9335e0c4551c6eccc9c0529e9d0287d7fca",
+    "f2ee7a355fd6954656eec69a48e79220c58956ae1d8e4ad2a36743d122ee619c"
+  ],
+  "jax_version": "0.11.0",
+  "jaxlib_version": "0.11.0",
+  "kind": "xla_grug_generated_group_batched_weight_adjoint_ffi",
+  "maximum_absolute_error": 3.725290298461914e-09,
+  "mean_absolute_error": 1.1949373099582648e-12,
+  "natural_frontend": "ordinary one-layer Grug train step with JAX-owned differentiation",
+  "numerical_contracts": [
+    {
+      "accumulation_dtype": "f32",
+      "effect": "Each output element has one group-batched Contract owner. BF16 operands are accumulated in FP32 and rounded once to BF16 before the external placement collective; no atomic or cross-task accumulation is introduced.",
+      "input_dtype": "bf16",
+      "numerical_policy": "allow_rounding_reorder",
+      "output_dtype": "bf16",
+      "output_rounding": "round_to_nearest_even"
+    },
+    {
+      "accumulation_dtype": "f32",
+      "effect": "Each output element has one group-batched Contract owner. BF16 operands are accumulated in FP32 and rounded once to BF16 before the external placement collective; no atomic or cross-task accumulation is introduced.",
+      "input_dtype": "bf16",
+      "numerical_policy": "allow_rounding_reorder",
+      "output_dtype": "bf16",
+      "output_rounding": "round_to_nearest_even"
+    }
+  ],
+  "operand_bindings": [
+    [
+      {
+        "instruction": "select.6",
+        "parameter_ancestors": [
+          "batch_loss_weight.1",
+          "batch_tokens.1",
+          "state_params_blocks_0__attn_attn_gate.1",
+          "state_params_blocks_0__attn_gated_norm_w_down.1",
+          "state_params_blocks_0__attn_gated_norm_w_up.1",
+          "state_params_blocks_0__attn_w_k.1",
+          "state_params_blocks_0__attn_w_o.1",
+          "state_params_blocks_0__attn_w_q.1",
+          "state_params_blocks_0__attn_w_v.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+          "state_params_blocks_0__mlp_gated_norm_w_down.1",
+          "state_params_blocks_0__mlp_gated_norm_w_up.1",
+          "state_params_blocks_0__mlp_router.1",
+          "state_params_blocks_0__rms_attn_weight.1",
+          "state_params_blocks_0__rms_mlp_weight.1",
+          "state_params_blocks_0__shared_w_down.1",
+          "state_params_blocks_0__shared_w_gate.1",
+          "state_params_blocks_0__shared_w_up.1",
+          "state_params_embed_gated_norm_w_down.1",
+          "state_params_embed_gated_norm_w_up.1",
+          "state_params_embed_norm_weight.1",
+          "state_params_final_gated_norm_w_down.1",
+          "state_params_final_gated_norm_w_up.1",
+          "state_params_final_norm_weight.1",
+          "state_params_output_proj.1",
+          "state_params_token_embed.1",
+          "state_pending_qb_betas.1"
+        ],
+        "role": "lhs",
+        "shape": "bf16[4,512,32]{2,1,0}"
+      },
+      {
+        "instruction": "select.7",
+        "parameter_ancestors": [
+          "batch_loss_weight.1",
+          "batch_tokens.1",
+          "state_params_blocks_0__attn_attn_gate.1",
+          "state_params_blocks_0__attn_gated_norm_w_down.1",
+          "state_params_blocks_0__attn_gated_norm_w_up.1",
+          "state_params_blocks_0__attn_w_k.1",
+          "state_params_blocks_0__attn_w_o.1",
+          "state_params_blocks_0__attn_w_q.1",
+          "state_params_blocks_0__attn_w_v.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+          "state_params_blocks_0__mlp_gated_norm_w_down.1",
+          "state_params_blocks_0__mlp_gated_norm_w_up.1",
+          "state_params_blocks_0__mlp_router.1",
+          "state_params_blocks_0__rms_attn_weight.1",
+          "state_params_blocks_0__rms_mlp_weight.1",
+          "state_params_blocks_0__shared_w_down.1",
+          "state_params_blocks_0__shared_w_gate.1",
+          "state_params_blocks_0__shared_w_up.1",
+          "state_params_embed_gated_norm_w_down.1",
+          "state_params_embed_gated_norm_w_up.1",
+          "state_params_embed_norm_weight.1",
+          "state_params_final_gated_norm_w_down.1",
+          "state_params_final_gated_norm_w_up.1",
+          "state_params_final_norm_weight.1",
+          "state_params_output_proj.1",
+          "state_params_token_embed.1",
+          "state_pending_qb_betas.1"
+        ],
+        "role": "rhs",
+        "shape": "bf16[4,512,64]{2,1,0}"
+      }
+    ],
+    [
+      {
+        "instruction": "select.5",
+        "parameter_ancestors": [
+          "batch_loss_weight.1",
+          "batch_tokens.1",
+          "state_params_blocks_0__attn_attn_gate.1",
+          "state_params_blocks_0__attn_gated_norm_w_down.1",
+          "state_params_blocks_0__attn_gated_norm_w_up.1",
+          "state_params_blocks_0__attn_w_k.1",
+          "state_params_blocks_0__attn_w_o.1",
+          "state_params_blocks_0__attn_w_q.1",
+          "state_params_blocks_0__attn_w_v.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+          "state_params_blocks_0__mlp_gated_norm_w_down.1",
+          "state_params_blocks_0__mlp_gated_norm_w_up.1",
+          "state_params_blocks_0__mlp_router.1",
+          "state_params_blocks_0__rms_attn_weight.1",
+          "state_params_blocks_0__rms_mlp_weight.1",
+          "state_params_blocks_0__shared_w_down.1",
+          "state_params_blocks_0__shared_w_gate.1",
+          "state_params_blocks_0__shared_w_up.1",
+          "state_params_embed_gated_norm_w_down.1",
+          "state_params_embed_gated_norm_w_up.1",
+          "state_params_embed_norm_weight.1",
+          "state_params_final_gated_norm_w_down.1",
+          "state_params_final_gated_norm_w_up.1",
+          "state_params_final_norm_weight.1",
+          "state_params_output_proj.1",
+          "state_params_token_embed.1",
+          "state_pending_qb_betas.1"
+        ],
+        "role": "lhs",
+        "shape": "bf16[4,512,32]{2,1,0}"
+      },
+      {
+        "instruction": "select.3",
+        "parameter_ancestors": [
+          "batch_loss_weight.1",
+          "batch_tokens.1",
+          "state_params_blocks_0__attn_attn_gate.1",
+          "state_params_blocks_0__attn_gated_norm_w_down.1",
+          "state_params_blocks_0__attn_gated_norm_w_up.1",
+          "state_params_blocks_0__attn_w_k.1",
+          "state_params_blocks_0__attn_w_o.1",
+          "state_params_blocks_0__attn_w_q.1",
+          "state_params_blocks_0__attn_w_v.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_down.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_gate.1",
+          "state_params_blocks_0__mlp_expert_mlp_w_up.1",
+          "state_params_blocks_0__mlp_gated_norm_w_down.1",
+          "state_params_blocks_0__mlp_gated_norm_w_up.1",
+          "state_params_blocks_0__mlp_router.1",
+          "state_params_blocks_0__rms_attn_weight.1",
+          "state_params_blocks_0__rms_mlp_weight.1",
+          "state_params_blocks_0__shared_w_down.1",
+          "state_params_blocks_0__shared_w_gate.1",
+          "state_params_blocks_0__shared_w_up.1",
+          "state_params_embed_gated_norm_w_down.1",
+          "state_params_embed_gated_norm_w_up.1",
+          "state_params_embed_norm_weight.1",
+          "state_params_final_gated_norm_w_down.1",
+          "state_params_final_gated_norm_w_up.1",
+          "state_params_final_norm_weight.1",
+          "state_params_output_proj.1",
+          "state_params_token_embed.1",
+          "state_pending_qb_betas.1"
+        ],
+        "role": "rhs",
+        "shape": "bf16[4,512,32]{2,1,0}"
+      }
+    ]
+  ],
+  "output_alias_operands": [
+    null,
+    null
+  ],
+  "outputs_match": true,
+  "platform": "cuda",
+  "raw_samples": [
+    {
+      "baseline": {
+        "latency_ms": 0.6995850126259029,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7860810146667063,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.811617006547749,
+        "output_hash": "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.837920990306884,
+        "output_hash": "00418deedd3fb9d39a0013ca3477777b12e493ff886d6fdca9b03dd95173b021"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7339210133068264,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7561940001323819,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6832010112702847,
+        "output_hash": "97a9884abe68491a2e07535cdec552c10a22087d856ecb5e3ba447fb61c96d4e"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7532169693149626,
+        "output_hash": "f2ee7a355fd6954656eec69a48e79220c58956ae1d8e4ad2a36743d122ee619c"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7135369814932346,
+        "output_hash": "06bf389ce4f121f8e9b738f47efc867beece7d64757eb7ee3469c7ff283d1e91"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7422409835271537,
+        "output_hash": "559d4f8467f17147ac0c8d863d9862cf9c8a2147f82df33db54ed113b0a1ef72"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7018579635769129,
+        "output_hash": "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7989769801497459,
+        "output_hash": "980871dd198b0257f6c803cde9839ee73f4ebcd10c488e193d38c4bc3223ad7a"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7428170065395534,
+        "output_hash": "bc9fe950abc9acc7fea6c06920553f9c6dd7861e8a38eca4f22cde59595ef577"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7509129936806858,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7032009889371693,
+        "output_hash": "ae451e793d660fef89eacf9724d8a78cc738a95e1b927c5d4b638eb59f4ea21e"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7427210221067071,
+        "output_hash": "d3ab59900db88df1cb872f5376bcd545215cc3310cdb18cab39af8b65776e26a"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7321289740502834,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7573770126327872,
+        "output_hash": "559d4f8467f17147ac0c8d863d9862cf9c8a2147f82df33db54ed113b0a1ef72"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.8272010018117726,
+        "output_hash": "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.9704020339995623,
+        "output_hash": "980871dd198b0257f6c803cde9839ee73f4ebcd10c488e193d38c4bc3223ad7a"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6706569693051279,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7704659947194159,
+        "output_hash": "34c6dca690c7f0ce1ab6808ff941bc2661ff1bc9b3c5efd2bb15f778e3ac418b"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.748993013985455,
+        "output_hash": "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7820490282028913,
+        "output_hash": "00418deedd3fb9d39a0013ca3477777b12e493ff886d6fdca9b03dd95173b021"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7085769902914762,
+        "output_hash": "981e9bbcf6979d0266d5e4a2f8435614b3c7fcd81f08bb9c4be4bd544b230f6c"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7464649970643222,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6800970295444131,
+        "output_hash": "94aae2b7dcaf58c6c9c1d7856b144df536589098a7764360a1b58befc3b749cd"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7423689821735024,
+        "output_hash": "f2ee7a355fd6954656eec69a48e79220c58956ae1d8e4ad2a36743d122ee619c"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6638090126216412,
+        "output_hash": "3c772a74814bb0126a581450fb7afc2b14de91a6ba7bcea85b6f5ef91a3200c0"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7275209645740688,
+        "output_hash": "34c6dca690c7f0ce1ab6808ff941bc2661ff1bc9b3c5efd2bb15f778e3ac418b"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 1.0341140441596508,
+        "output_hash": "97a9884abe68491a2e07535cdec552c10a22087d856ecb5e3ba447fb61c96d4e"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.7541769882664084,
+        "output_hash": "f26936f2aeca1b7ae7246f00ae13d9335e0c4551c6eccc9c0529e9d0287d7fca"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7491210126318038,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 1.1025299900211394,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6405769963748753,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6829450139775872,
+        "output_hash": "00418deedd3fb9d39a0013ca3477777b12e493ff886d6fdca9b03dd95173b021"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6190729909576476,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6745609571225941,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6165769882500172,
+        "output_hash": "97a9884abe68491a2e07535cdec552c10a22087d856ecb5e3ba447fb61c96d4e"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6624010275118053,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.624032982159406,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6593929720111191,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6103370105847716,
+        "output_hash": "04b6ac5b00d591283822b959aded0eab0cc15a31296ec0f2f2094b293eef925d"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6592010031454265,
+        "output_hash": "3c3179a7fdc45c90bf3bdd61ccbf1ecb3ea2cbb6de7da14052141d3352b11a1f"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5906889564357698,
+        "output_hash": "bc9fe950abc9acc7fea6c06920553f9c6dd7861e8a38eca4f22cde59595ef577"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6955210119485855,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.7573770126327872,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.9777619852684438,
+        "output_hash": "41e13bc18a409529ed7d0eeadad46f93e7d04ccc40efbc6732705172541de29d"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5920649855397642,
+        "output_hash": "26fe3bebeca0eda9a868652ae54c25ee93518f0d14c67de1c5096a78d17dc11e"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6961289909668267,
+        "output_hash": "d6414693565e5743e36837142f14e38f12b3a7044a031516954001c3b44ea6df"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6612809957005084,
+        "output_hash": "97a9884abe68491a2e07535cdec552c10a22087d856ecb5e3ba447fb61c96d4e"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6593290017917752,
+        "output_hash": "00418deedd3fb9d39a0013ca3477777b12e493ff886d6fdca9b03dd95173b021"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5995529936626554,
+        "output_hash": "e3f0c7a0414da94a153ffe8a316040f4d802525bbade39b3c5dba7ff9401fe7b"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.7882570498622954,
+        "output_hash": "f2ee7a355fd6954656eec69a48e79220c58956ae1d8e4ad2a36743d122ee619c"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.601920997723937,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6516809808090329,
+        "output_hash": "ab211ed0a6d8bb12528e5121b700d24226ac51f10d02cebcc86da716bc1782da"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5845450214110315,
+        "output_hash": "1e77f195b3e9fa000ef9f4f14d121086ae96acccea3a680406df0b2282b6dcb6"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6686739507131279,
+        "output_hash": "34c6dca690c7f0ce1ab6808ff941bc2661ff1bc9b3c5efd2bb15f778e3ac418b"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.6121289916336536,
+        "output_hash": "b1f39186512f56866d1eb4b2c02be879ce0c8c58ac726dbe9b33d657ba29aa21"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6326729780994356,
+        "output_hash": "f2ee7a355fd6954656eec69a48e79220c58956ae1d8e4ad2a36743d122ee619c"
+      }
+    }
+  ],
+  "recovered_structure": "two independent group-batched Contracts before external all-reduces",
+  "remaining_ownership_gap": "The input-adjoint replacement, forward routed chain, relation index plane, and all placement collectives are separate boundaries; this proof replaces only the two recovered weight Contracts.",
+  "result_leaf_count": 53,
+  "uses_atomic_accumulation": false
+}

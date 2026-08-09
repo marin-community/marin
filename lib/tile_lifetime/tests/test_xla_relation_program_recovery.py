@@ -62,6 +62,9 @@ _NATURAL_TRAIN_GPU_ARTIFACT = (
 _INPUT_ADJOINT_GPU_ARTIFACT = (
     Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_routed_input_adjoint_gpu_gb200_v0"
 )
+_WEIGHT_GRADIENT_GPU_ARTIFACT = (
+    Path(__file__).parents[1] / "benchmarks/artifacts/xla_grug_routed_weight_gradient_gpu_gb200_v0"
+)
 
 
 def _frozen_hlo() -> str:
@@ -349,6 +352,65 @@ def test_routed_weight_gradient_rejects_bitwise_reduction_claim() -> None:
             _natural_train_gpu_hlo(),
             numerical_policy=NumericalPolicy.BITWISE_EXACT,
         )
+
+
+def test_routed_weight_gradient_gb200_artifact_preserves_acceptance_evidence() -> None:
+    checksums = (_WEIGHT_GRADIENT_GPU_ARTIFACT / "SHA256SUMS").read_text().splitlines()
+    assert len(checksums) == 13
+    for record in checksums:
+        expected, relative_path = record.split("  ", maxsplit=1)
+        payload = (_WEIGHT_GRADIENT_GPU_ARTIFACT / relative_path).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == expected
+
+    summary = json.loads((_WEIGHT_GRADIENT_GPU_ARTIFACT / "summary.json").read_text())
+    assert summary["device_kind"] == "NVIDIA GB200"
+    assert summary["architecture"] == "sm_100a"
+    assert summary["custom_call_occurrences_in_transformed_hlo"] == 2
+    assert summary["custom_call_handler_executions"] == [35, 35]
+    assert summary["external_collectives"] == [["psum.52"], ["psum.53"]]
+    assert not summary["uses_atomic_accumulation"]
+    assert summary["output_alias_operands"] == [None, None]
+    assert all(operand["parameter_ancestors"] for plan in summary["operand_bindings"] for operand in plan)
+    assert summary["outputs_match"]
+    assert summary["maximum_absolute_error"] < 4e-9
+    assert summary["mean_absolute_error"] < 2e-12
+    samples = summary["raw_samples"]
+    assert len(samples) == 30
+    assert sum(sample["order"][0] == "baseline" for sample in samples) == 15
+    assert sum(sample["order"][0] == "transformed" for sample in samples) == 15
+    baseline_median = statistics.median(sample["baseline"]["latency_ms"] for sample in samples)
+    generated_median = statistics.median(sample["transformed"]["latency_ms"] for sample in samples)
+    assert baseline_median == summary["baseline_median_ms"]
+    assert generated_median == summary["generated_median_ms"]
+    assert generated_median / baseline_median == summary["generated_over_baseline"]
+    assert summary["generated_over_baseline"] < 1.2
+
+    confirmation = json.loads((_WEIGHT_GRADIENT_GPU_ARTIFACT / "independent-confirmation-summary.json").read_text())
+    assert confirmation["device_kind"] == "NVIDIA GB200"
+    assert len(confirmation["raw_samples"]) == 30
+    assert confirmation["custom_call_handler_executions"] == [35, 35]
+    assert confirmation["outputs_match"]
+    assert confirmation["generated_over_baseline"] < 1.2
+
+    original_hlo = gzip.decompress(
+        (_WEIGHT_GRADIENT_GPU_ARTIFACT / "original-gpu-pre-scheduler-hlo.txt.gz").read_bytes()
+    ).decode()
+    transformed_hlo = gzip.decompress(
+        (_WEIGHT_GRADIENT_GPU_ARTIFACT / "transformed-gpu-pre-scheduler-hlo.txt.gz").read_bytes()
+    ).decode()
+    assert transformed_hlo.count(summary["custom_call_target_prefix"]) == 2
+    assert "%psum.52 = bf16[4,32,64]{2,1,0} all-reduce(%dot.6)" in transformed_hlo
+    assert "%psum.53 = bf16[4,32,32]{2,1,0} all-reduce(%dot.7)" in transformed_hlo
+    assert transformed_hlo.count(" copy(") == original_hlo.count(" copy(")
+    assert transformed_hlo.count(" transpose(") == original_hlo.count(" transpose(")
+
+    sources = tuple(_WEIGHT_GRADIENT_GPU_ARTIFACT.glob("generated_group_batched_contract_*.cu"))
+    assert len(sources) == 2
+    for source_path in sources:
+        source = source_path.read_text()
+        assert "cublasGemmStridedBatchedEx" in source
+        assert "CUBLAS_COMPUTE_32F_PEDANTIC" in source
+        assert "atomicAdd" not in source
 
 
 def test_gpu_grug_hlo_generates_bf16_routed_forward_executor() -> None:
