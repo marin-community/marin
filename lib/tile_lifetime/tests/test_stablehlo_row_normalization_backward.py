@@ -266,3 +266,27 @@ def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo() -> Non
     assert audit.transpose_count[0] == audit.transpose_count[1]
     assert all("shuttle.axis_fold.pipeline.output" in name for name in transformed_entry.root.operands)
     assert transformed.count('custom_call_target="shuttle.row_statistic_whole_entry_v1"') == 1
+
+    call_operands = ", ".join(f"%{value.instruction}" for value in plan.inputs)
+    swapped_operands = ", ".join(f"%{value.instruction}" for value in (plan.inputs[1], plan.inputs[0], *plan.inputs[2:]))
+    wrong_operands = transformed.replace(
+        f"custom-call({call_operands})",
+        f"custom-call({swapped_operands})",
+        1,
+    )
+    with pytest.raises(ValueError, match="operands changed"):
+        audit_axis_fold_pipeline_hlo_replacement(
+            hlo,
+            wrong_operands,
+            plan,
+            target=compilation.generated.target_name,
+        )
+
+    wrong_api = transformed.replace("api_version=API_VERSION_TYPED_FFI", "api_version=API_VERSION_STATUS_RETURNING", 1)
+    with pytest.raises(ValueError, match="typed-FFI API"):
+        audit_axis_fold_pipeline_hlo_replacement(
+            hlo,
+            wrong_api,
+            plan,
+            target=compilation.generated.target_name,
+        )

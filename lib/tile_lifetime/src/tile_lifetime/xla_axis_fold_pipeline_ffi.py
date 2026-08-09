@@ -164,6 +164,18 @@ def audit_axis_fold_pipeline_hlo_replacement(
     )
     if len(calls) != 1:
         raise ValueError(f"expected one post-roundtrip axis-Fold pipeline call for {target!r}, found {len(calls)}")
+    call = calls[0]
+    expected_operands = tuple(value.instruction for value in plan.inputs)
+    if call.operands != expected_operands:
+        raise ValueError(f"axis-Fold pipeline operands changed: expected {expected_operands}, found {call.operands}")
+    expected_shape = f"({', '.join(plan.output_shapes)})"
+    if call.shape != expected_shape:
+        raise ValueError(f"axis-Fold pipeline result shape changed: expected {expected_shape}, found {call.shape}")
+    expected_constraints = f"operand_layout_constraints={{{', '.join(value.physical_shape for value in plan.inputs)}}}"
+    if expected_constraints not in call.attributes:
+        raise ValueError("axis-Fold pipeline operand layout constraints changed")
+    if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
+        raise ValueError("axis-Fold pipeline call no longer uses the typed-FFI API")
     live = _live_instructions(transformed_entry)
     remaining = tuple(name for name in plan.replaced_instructions if name in live)
     if remaining:
@@ -171,18 +183,30 @@ def audit_axis_fold_pipeline_hlo_replacement(
     root_outputs = transformed_entry.root.operands
     if len(root_outputs) != len(plan.output_shapes):
         raise ValueError("rewritten axis-Fold pipeline root has the wrong arity")
+    transformed_instructions = {instruction.name: instruction for instruction in transformed_entry.instructions}
+    for index, (output_name, expected_output_shape) in enumerate(zip(root_outputs, plan.output_shapes, strict=True)):
+        output = transformed_instructions[output_name]
+        if output.shape != expected_output_shape:
+            raise ValueError(
+                f"axis-Fold pipeline output {index} shape changed: "
+                f"expected {expected_output_shape}, found {output.shape}"
+            )
+        if output.opcode != "get-tuple-element" or output.operands != (call.name,):
+            raise ValueError(f"axis-Fold pipeline output {index} is not extracted from the generated call")
+        if f"index={index}" not in output.attributes:
+            raise ValueError(f"axis-Fold pipeline output {index} has the wrong tuple index")
 
     def count(entry: HloComputation, opcode: str) -> int:
         return sum(instruction.opcode == opcode for instruction in entry.instructions)
 
     copy_count = (count(original_entry, "copy"), count(transformed_entry, "copy"))
     transpose_count = (count(original_entry, "transpose"), count(transformed_entry, "transpose"))
-    if copy_count[1] != copy_count[0]:
-        raise ValueError(f"axis-Fold replacement changed copy count: {copy_count[0]} -> {copy_count[1]}")
-    if transpose_count[1] != transpose_count[0]:
-        raise ValueError(f"axis-Fold replacement changed transpose count: {transpose_count[0]} -> {transpose_count[1]}")
+    if copy_count[1] > copy_count[0]:
+        raise ValueError(f"axis-Fold replacement added copies: {copy_count[0]} -> {copy_count[1]}")
+    if transpose_count[1] > transpose_count[0]:
+        raise ValueError(f"axis-Fold replacement added transposes: {transpose_count[0]} -> {transpose_count[1]}")
     return AxisFoldPipelineHloReplacementAudit(
-        call_instruction=calls[0].name,
+        call_instruction=call.name,
         dead_internal_instructions=plan.replaced_instructions,
         root_outputs=root_outputs,
         copy_count=copy_count,
