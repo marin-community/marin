@@ -3197,3 +3197,27 @@ author: dlwh
   tests. Scoped pre-commit, including Pyrefly, and `git diff --check` pass.
 - This is a structural typed-FFI checkpoint. No GPU body was generated or run,
   and it makes no latency or launch-count claim.
+
+### 2026-08-09 16:10 PDT - TLTC-XLA-056 command-buffer replay bootstrap failure
+
+- Revision `e5ec17f21c` marks only the generated normalized-exponential
+  forward/reverse pair command-buffer compatible. Local 17-test and in-pod
+  audits confirm both sources are free of scratch/runtime allocation, lazy
+  handles, autotuning, status queries, and synchronization. JAX, JAXLIB, the
+  CUDA plugin, and PJRT were all 0.11.0 on one physical H100.
+- The only authorized benchmark invocation failed before warmup or timing. The
+  fresh environment did not contain Triton, so the existing generated
+  attention-backward path failed at `python -m triton.tools.compile`. No timed
+  samples, correctness/determinism result, target-multiplicity audit, or
+  capture-aware handler counts exist. The candidate remains unaccepted and
+  unmeasured; it was not retried and no profiler was invoked.
+- Before another allocation, require a CPU compile preflight of the complete
+  composition: `triton.tools.compile` and the pinned Torch/Triton dependency
+  set for the FA4-derived AOT path must import and execute a minimal compile in
+  the exact environment. Checking only the newly eligible handlers was too
+  narrow.
+- The one-H100, one-CPU, 32-GB, 50-GB batch allocation was released after the
+  failure artifact was copied. Iris reports the job killed by explicit
+  release; the local session and Kubernetes pod are absent.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_command_buffer_h100_unaccepted_e5ec17f2_v0/`.

@@ -1,0 +1,22 @@
+{
+  "status": "unaccepted_bootstrap_failure",
+  "benchmark_invocations": 1,
+  "benchmark_process_exit_code": 1,
+  "warmup_samples_completed": 0,
+  "timed_samples_completed": 0,
+  "correctness_available": false,
+  "determinism_available": false,
+  "target_multiplicity_available": false,
+  "capture_aware_handler_evidence_available": false,
+  "performance_available": false,
+  "composition_mode": "shared_map_fused_reverses",
+  "command_buffer_candidate": "normalized_exp_pair",
+  "requested_warmups": 4,
+  "requested_counterbalanced_samples": 30,
+  "failure_stage": "streaming_attention_backward_triton_aot_compile",
+  "failure_type": "ModuleNotFoundError",
+  "failure_message": "No module named 'triton'",
+  "retry_count": 0,
+  "profiler_invocations": 0
+}
+
