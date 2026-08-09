@@ -13,6 +13,7 @@ from tile_lifetime.xla_routed_forward_ffi import generate_cuda_routed_forward_ff
 from tile_lifetime.xla_routed_input_adjoint_ffi import generate_cuda_routed_input_adjoint_ffi
 from tile_lifetime.xla_routed_training_ffi import (
     RoutedTrainingFfiTargets,
+    audit_routed_training_replacement,
     entry_parameter_ancestors,
     plan_routed_training_typed_ffi,
     replace_routed_training_regions_with_custom_calls,
@@ -62,6 +63,7 @@ def test_routed_training_replacement_preserves_wiring_and_collectives() -> None:
     hlo = _hlo()
     plan = plan_routed_training_typed_ffi(hlo)
     rewritten = replace_routed_training_regions_with_custom_calls(hlo, plan, targets=_TARGETS)
+    audit = audit_routed_training_replacement(hlo, rewritten, plan, targets=_TARGETS)
 
     assert all(rewritten.count(target) == 1 for target in (_TARGETS.forward, _TARGETS.input_adjoint))
     assert all(rewritten.count(target) == 1 for target in _TARGETS.weight_gradients)
@@ -71,6 +73,16 @@ def test_routed_training_replacement_preserves_wiring_and_collectives() -> None:
     assert "%psum.53 = bf16[4,32,32]{2,1,0} all-reduce(%dot.7)" in rewritten
     assert rewritten.count(" copy(") <= hlo.count(" copy(")
     assert rewritten.count(" transpose(") <= hlo.count(" transpose(")
+    assert audit.target_instructions == (
+        "shuttle_generated_routed_forward_region",
+        "shuttle_generated_routed_input_adjoint_region",
+        "dot.6",
+        "dot.7",
+    )
+    assert audit.weight_gradient_collectives == ("psum.52", "psum.53")
+    assert audit.input_adjoint_auxiliary == "select.7"
+    assert audit.copy_count[1] <= audit.copy_count[0]
+    assert audit.transpose_count[1] <= audit.transpose_count[0]
     parse_hlo_module_text(rewritten)
 
 
