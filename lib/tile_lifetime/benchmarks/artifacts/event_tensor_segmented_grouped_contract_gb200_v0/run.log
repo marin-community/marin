@@ -1,0 +1,276 @@
+cuBLAS < 13.2 (130100 found) has a known issue where many kernels free TMEM buffers multiple times. Executing a cuBLAS kernel concurrently with another kernel (e.g. on another stream) can lead to silent data corruption.
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_AttrType)’:
+/app/.venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:179:1: warning: control reaches end of non-void function [-Wreturn-type]
+  179 | }
+      | ^
+{
+  "benchmark": "shuttle_jax_segmented_grouped_contract_event_gb200_v0",
+  "status": "ok",
+  "scope": "one bounded linkage replay; no overlap or tuning claim",
+  "hardware": {
+    "device": "cuda:0",
+    "device_kind": "NVIDIA GB200",
+    "physical_target": "GB200"
+  },
+  "resource_request": {
+    "cpu": 2.0,
+    "priority": "batch"
+  },
+  "shuttle_revision": "1f846b5baa7a606574b4a2082f8d9b7f088ea944",
+  "source": {
+    "mok_commit": "3e1cf43ab93ad040afed52a45ab03cb490ffe4be",
+    "mok_dirty": false,
+    "thunderkittens_commit": "1c3920d993404dd49a6d4c7267ea11d583bd5c68",
+    "thunderkittens_dirty": false
+  },
+  "build": {
+    "command": [
+      "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+      "/tmp/marin/lib/tile_lifetime/backends/sm100/grouped_contract_ffi/grouped_contract_ffi.cu",
+      "-std=c++20",
+      "-O3",
+      "--use_fast_math",
+      "--expt-extended-lambda",
+      "--expt-relaxed-constexpr",
+      "-forward-unknown-to-host-compiler",
+      "-ftemplate-backtrace-limit=0",
+      "-shared",
+      "-Xcompiler=-fPIC",
+      "-Xcompiler=-Wno-psabi",
+      "-Xcompiler=-fno-strict-aliasing",
+      "-DKITTENS_SM100",
+      "-D__CUDA_NO_HALF_OPERATORS__",
+      "-D__CUDA_NO_HALF_CONVERSIONS__",
+      "-D__CUDA_NO_BFLOAT16_CONVERSIONS__",
+      "-D__CUDA_NO_HALF2_OPERATORS__",
+      "-gencode",
+      "arch=compute_100a,code=sm_100a",
+      "-I/app/.venv/lib/python3.12/site-packages/jaxlib/include",
+      "-I/usr/local/include/python3.12",
+      "-I/app/.venv/lib/python3.12/site-packages/torch/include",
+      "-I/app/.venv/lib/python3.12/site-packages/torch/include/torch/csrc/api/include",
+      "-I/tmp/mixture-of-kittens/csrc",
+      "-I/tmp/mixture-of-kittens/third_party/ThunderKittens/include",
+      "-I/tmp/marin/lib/tile_lifetime/backends/sm100/mok_gmm_probe",
+      "-L",
+      "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib",
+      "-lcuda",
+      "-lcudadevrt",
+      "-lcudart_static",
+      "-lrt",
+      "-lpthread",
+      "-ldl",
+      "-o",
+      "/tmp/shuttle-event-gmm-build/libshuttle_segmented_contract_ffi.so"
+    ],
+    "library": "/tmp/shuttle-event-gmm-build/libshuttle_segmented_contract_ffi.so",
+    "library_sha256": "9520c0e783cbc1fdfe9fbda27e13740a04a1b8905ef3e2e8e195851a0618908a",
+    "dynamic_dependencies": [
+      "\tlinux-vdso.so.1 (0x0000ed6d167c0000)",
+      "\tlibcuda.so.1 => /lib/aarch64-linux-gnu/libcuda.so.1 (0x0000000000400000)",
+      "\tlibstdc++.so.6 => /lib/aarch64-linux-gnu/libstdc++.so.6 (0x0000ed6d163c0000)",
+      "\tlibgcc_s.so.1 => /lib/aarch64-linux-gnu/libgcc_s.so.1 (0x0000ed6d16380000)",
+      "\tlibc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x0000ed6d161c0000)",
+      "\tlibpthread.so.0 => /lib/aarch64-linux-gnu/libpthread.so.0 (0x0000ed6d16190000)",
+      "\tlibm.so.6 => /lib/aarch64-linux-gnu/libm.so.6 (0x0000ed6d160e0000)",
+      "\t/lib/ld-linux-aarch64.so.1 (0x0000ed6d167d0000)",
+      "\tlibdl.so.2 => /lib/aarch64-linux-gnu/libdl.so.2 (0x0000ed6d160b0000)",
+      "\tlibrt.so.1 => /lib/aarch64-linux-gnu/librt.so.1 (0x0000ed6d16080000)"
+    ],
+    "bounded_shape_inner_event_fingerprint": "44b67467ee5b66ba2e2f0064b0b45e36c716fedded5000745054696a5f97128a"
+  },
+  "torch_free_runtime": {
+    "torch_in_sys_modules": false,
+    "runtime_library_has_torch_dependency": false
+  },
+  "handler_counts": {
+    "relation_plan_pack": 28,
+    "grouped_contract": 28
+  },
+  "expected_handler_count": 28,
+  "records": {
+    "primary": {
+      "relation_counts": [
+        64,
+        80,
+        48,
+        0
+      ],
+      "empty_segments": [
+        3
+      ],
+      "program_fingerprint": "33865261c485458918515d4ed7a9e286b52f68ed4612928a155951c370959bda",
+      "runtime_fingerprint": "7950c7e09d0b27b42d1b2ab8ca2c3d79d76db8bacb974d86f165378165eb05a6",
+      "inner_event_fingerprint": "44b67467ee5b66ba2e2f0064b0b45e36c716fedded5000745054696a5f97128a",
+      "outer_realization": [
+        "erased_stream_order"
+      ],
+      "correctness": {
+        "maximum_absolute_error": 0.01407623291015625,
+        "mean_absolute_error": 0.00027917115949094296,
+        "p99_absolute_error": 0.0036566173657774925,
+        "finite": true
+      },
+      "bitwise_deterministic": true,
+      "output_sha256": "00fd99aeca6752ce4259fe0a01aea0f7d962cdd7c1eb5ade718f4c1a86e870c4",
+      "padded_counts": [
+        256,
+        256,
+        256,
+        0
+      ],
+      "samples_ms": [
+        0.24224002845585346,
+        0.21808012388646603,
+        0.21609594114124775,
+        0.2154880203306675,
+        0.22358400747179985,
+        0.21878397092223167,
+        0.2149438951164484,
+        0.21571200340986252,
+        0.22099213674664497,
+        0.23827305994927883
+      ],
+      "median_ms": 0.21843204740434885,
+      "hlo": {
+        "pack_target_occurrences": 1,
+        "contract_target_occurrences": 1,
+        "sha256": "2bcd79dcadba734a6ca09ba350efedcdaf00abcd6f86a070a7659ccbdf078ea2"
+      }
+    },
+    "mutation": {
+      "relation_counts": [
+        72,
+        56,
+        64,
+        0
+      ],
+      "empty_segments": [
+        3
+      ],
+      "program_fingerprint": "33865261c485458918515d4ed7a9e286b52f68ed4612928a155951c370959bda",
+      "runtime_fingerprint": "f6926e7d9c9e824a4ecccf3a201458618c66d0a1b6b2455f1579a9bfb558d9ef",
+      "inner_event_fingerprint": "44b67467ee5b66ba2e2f0064b0b45e36c716fedded5000745054696a5f97128a",
+      "outer_realization": [
+        "erased_stream_order"
+      ],
+      "correctness": {
+        "maximum_absolute_error": 0.01407623291015625,
+        "mean_absolute_error": 0.00027905937167815864,
+        "p99_absolute_error": 0.003656337270513177,
+        "finite": true
+      },
+      "bitwise_deterministic": true,
+      "output_sha256": "6cfd12918566499569fc2913608a43550e36b49f7184587b43d81f28e50a0f84",
+      "padded_counts": [
+        256,
+        256,
+        256,
+        0
+      ],
+      "samples_ms": [
+        0.2272641286253929,
+        0.22518401965498924,
+        0.23644790053367615,
+        0.235231826081872,
+        0.22543990053236485,
+        0.2259518951177597,
+        0.22287992760539055,
+        0.23366394452750683,
+        0.22534397430717945,
+        0.2253770362585783
+      ],
+      "median_ms": 0.22569589782506227,
+      "hlo": {
+        "pack_target_occurrences": 1,
+        "contract_target_occurrences": 1,
+        "sha256": "2bcd79dcadba734a6ca09ba350efedcdaf00abcd6f86a070a7659ccbdf078ea2"
+      }
+    }
+  },
+  "runtime_primitive_event_fingerprint": "e0af3d638f53163912c8a0a6834db8c8905c5280dff4287fcbfb9f8a3dfa60cf",
+  "bounded_shape_inner_event_fingerprint": "44b67467ee5b66ba2e2f0064b0b45e36c716fedded5000745054696a5f97128a",
+  "ownership": {
+    "outer_relation_readiness": "Shuttle EventTensorPlan, erased by verified same JAX stream order",
+    "grouping_and_padding": "generic Shuttle typed-FFI handler",
+    "grouped_contract_wrapper_abi": "Shuttle generated synchronization ABI",
+    "internal_mbarrier_sites": "primitive-owned; not generated by Shuttle",
+    "ad": "JAX-owned; this forward-only component replay does not define AD"
+  }
+}

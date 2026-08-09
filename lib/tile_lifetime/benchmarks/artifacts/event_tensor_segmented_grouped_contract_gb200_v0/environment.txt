@@ -1,0 +1,44 @@
+Date: 2026-08-09
+Iris job: /dlwh/dev-gpu-shuttle-event-gmm-linkage-v4
+Iris config: lib/iris/config/cw-us-east-08a.yaml
+Resource request: 4x GB200 tray, batch priority, 2 CPU, 64 GiB host memory
+Measured device: CUDA_VISIBLE_DEVICES=0 only
+
+GPU: NVIDIA GB200
+GPU UUID: GPU-4858a3bb-5976-f906-0d1d-91a34ba87ef4
+Driver: 595.71.05
+nvidia-smi CUDA compatibility: 13.2
+Power limit: 1200 W
+Observed idle P-state after run: P0
+Observed idle SM clock after run: 120 MHz
+Observed memory clock after run: 3996 MHz
+
+Shuttle source revision: 1f846b5baa7a606574b4a2082f8d9b7f088ea944
+MoK revision: 3e1cf43ab93ad040afed52a45ab03cb490ffe4be
+ThunderKittens revision: 1c3920d993404dd49a6d4c7267ea11d583bd5c68
+
+Python: 3.12.13
+JAX: 0.10.1
+jaxlib: 0.10.1
+Torch headers: 2.10.0+cu130
+nvidia-nvvm: 13.0.88
+nvidia-cuda-crt: 13.0.88
+nvidia-cuda-nvcc: 13.0.88
+nvidia-cuda-runtime: 13.0.96
+NVCC: CUDA 13.0, V13.0.88
+PTXAS: CUDA 13.0, V13.0.88
+
+Generated library SHA256:
+9520c0e783cbc1fdfe9fbda27e13740a04a1b8905ef3e2e8e195851a0618908a
+
+Dynamic library dependencies:
+libcuda.so.1
+libstdc++.so.6
+libgcc_s.so.1
+libc.so.6
+libpthread.so.0
+libm.so.6
+libdl.so.2
+librt.so.1
+
+No Torch or C10 library is present in the runtime dependency list.

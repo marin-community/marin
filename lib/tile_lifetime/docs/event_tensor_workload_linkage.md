@@ -141,6 +141,14 @@ The payload kernels are deliberately simple FP32 CUDA. They validate the
 EventTensorPlan-to-execution boundary and Torch-free JAX typed FFI, but do not
 claim useful GEMM or attention throughput.
 
+A second GB200 path connects runtime RelationPlan tables to a generic SM100
+grouped Contract. Generic grouping/padding and the grouped Contract are separate
+typed-FFI handlers on one JAX stream, so the outer Event Tensor erases to
+verified stream order. Uneven relation and empty-segment mutations execute
+without changing the event construction or Contract body. This closes the
+physical relation-to-GMM linkage gap, but not asynchronous transport overlap or
+the primitive-owned internal `mbarrier` instruction sites.
+
 An SM100 emitter can retain the same audit while replacing physical bodies:
 
 - segmented Contract: generic grouped/ragged tcgen05 mainloop, with a transport
@@ -173,3 +181,6 @@ realization, not expert grouped-GEMM or tensor-core attention throughput. Raw
 distributions, generated CUDA, HLO records, hashes, the
 event-realization audit, and exact environment are preserved in
 `benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
+
+The generic SM100 linkage result and its raw distributions are preserved in
+`benchmarks/artifacts/event_tensor_segmented_grouped_contract_gb200_v0/`.

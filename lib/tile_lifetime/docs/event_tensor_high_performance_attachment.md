@@ -6,7 +6,9 @@ The SM100 grouped-Contract wrapper now consumes a generated synchronization ABI
 whose ownership, logical counts, buffer stages, transaction bytes, and release
 points are derived from a generic task graph. That wrapper compiled and passed
 correctness on a physical NVIDIA GB200. The external grouped-GEMM primitive
-still owns the placement of its barrier arrival and wait instructions.
+still owns the placement of its barrier arrival and wait instructions. Runtime
+RelationPlan readiness now also executes into that wrapper through a Torch-free
+JAX typed-FFI chain on GB200.
 
 ## Boundary
 
@@ -112,6 +114,13 @@ Runtime `RelationPlan` indegrees still derive when a segmented Contract becomes
 eligible. They do not determine the internal TMA/WGMMA semaphore counts once a
 Contract tile has been launched. Those are distinct event domains.
 
+The first physical linkage realizes the outer relation edge by verified same
+JAX-stream order. Generic grouping/padding and the grouped Contract are separate
+typed-FFI handlers. Two uneven relation tables with one empty segment execute
+correctly and deterministically; mutating the relation changes only the runtime
+fingerprint. This establishes the outer-to-inner linkage without claiming
+asynchronous transport overlap.
+
 Shuttle now owns the synchronization ABI and counts at the grouped-Contract
 wrapper boundary. The remaining ownership gap is narrower: the external
 primitive still contains the actual mbarrier arrival/wait operations, phase-bit
@@ -210,3 +219,9 @@ claim that Shuttle yet emits the primitive's internal barrier instructions.
 The exact five-sample result and provenance are preserved under
 `benchmarks/artifacts/event_tensor_grouped_contract_sm100_gb200_v0/`. B200 is a
 separate hardware target and must not be labeled as GB200 evidence.
+
+The relation-to-grouped-Contract linkage replay is preserved under
+`benchmarks/artifacts/event_tensor_segmented_grouped_contract_gb200_v0/`. The
+recorded dynamic library has no Torch/C10 dependency, and Torch never enters
+the Python runtime. MoK and ThunderKittens contribute the generic physical
+primitive and build headers only; the complete MoE kernel is not invoked.

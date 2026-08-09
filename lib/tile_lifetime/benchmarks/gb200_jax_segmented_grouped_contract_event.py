@@ -365,7 +365,7 @@ def main() -> None:
             "program_fingerprint": schedule.program_fingerprint,
             "runtime_fingerprint": schedule.runtime_fingerprint,
             "inner_event_fingerprint": schedule.contract_pipeline.fingerprint,
-            "outer_realization": [item.kind.value for item in schedule.segment_realization.items],
+            "outer_realization": [item.kind.value for item in schedule.segment_realization.entries],
             "correctness": metrics,
             "bitwise_deterministic": True,
             "output_sha256": hashlib.sha256(actual.tobytes()).hexdigest(),

@@ -490,3 +490,21 @@ The distributed extension is deferred. Relation ownership and coalescing transfe
 - Natural BF16 JAX-VJP differences remain an explicit numerical-order caveat;
   source-ordered BF16 equivalence is not claimed. Evidence is under
   `benchmarks/artifacts/jax_row_normalization_backward_h100_components_corrected_v1`.
+
+## 2026-08-09: Event Tensor relation-to-grouped-Contract linkage on GB200
+
+- Added a Torch-free JAX typed-FFI chain from runtime RelationPlan tables through
+  generic grouping/padding into the generic SM100 grouped Contract.
+- The outer Event Tensor is erased by verified same-stream order. Its runtime
+  counts remain separate from the grouped primitive's internal transaction and
+  release counts.
+- Uneven relation counts `[64,80,48,0]` and mutation `[72,56,64,0]` both include
+  an empty segment. They keep the program and inner synchronization fingerprints
+  stable while changing the runtime fingerprint.
+- Both cases match the segmented-Contract reference, are bitwise deterministic,
+  and execute exactly 28 calls to each of the two FFI handlers. Median component
+  times are 0.218432 and 0.225696 ms.
+- This is one bounded linkage replay, not an overlap or tuning result. The
+  external grouped-Contract primitive still owns its internal `mbarrier`
+  instruction sites. Evidence is under
+  `benchmarks/artifacts/event_tensor_segmented_grouped_contract_gb200_v0/`.

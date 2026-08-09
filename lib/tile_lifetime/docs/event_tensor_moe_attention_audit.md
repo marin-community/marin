@@ -81,12 +81,26 @@ module contains two, and none contains a semantic custom call. This establishes
 real multi-GPU execution of the recovered collective/Event Tensor contract; it
 is not a communication-performance claim.
 
-The performance-bearing grouped-GEMM primitive remains the high-throughput MoE
-gap. Its load/output semaphore storage is visible, but producer ownership,
-consumer ownership, arrival cardinalities, and per-stage release points remain
-internal. Runtime relation indegrees establish when a segmented Contract may
-start; they do not prove the primitive's internal TMA/WGMMA semaphore counts.
-Copying those literal counts would encode the oracle schedule.
+The performance-bearing grouped-GEMM primitive is now linked to runtime
+relation readiness on one physical GB200. A Torch-free JAX typed-FFI chain
+consumes runtime RelationPlan tables, performs generic grouping and padding,
+and launches the generic SM100 grouped Contract on the same device stream. The
+outer Event Tensor is erased by verified stream order. Runtime relation
+indegrees establish when a segmented Contract may start; they remain separate
+from the primitive's internal TMA/WGMMA synchronization domain.
+
+Two uneven relations, `[64,80,48,0]` and `[72,56,64,0]`, both include an empty
+segment. They preserve the Event Tensor program and inner-Contract fingerprints
+while changing the runtime fingerprint. Both match the reference, are bitwise
+deterministic, and contain one pack and one Contract FFI target in compiled HLO.
+The exact handler counts are 28 for each target. Median end-to-end component
+times are 0.218432 and 0.225696 ms. These are bounded linkage measurements, not
+an overlap or tuning result.
+
+Shuttle owns the outer readiness plan and generated wrapper ABI. The external
+primitive still owns its internal `mbarrier` arrival/wait sites, phase advance,
+TMA issue, and accumulator release instructions. The linkage result does not
+claim those sites are generated from Event Tensors.
 
 DeepEP or another ragged transport can remain a generic payload transport. Its
 asynchronous completion has not yet been connected to the segmented-Contract
@@ -106,24 +120,21 @@ The current GPU evidence establishes:
 
 It does not establish:
 
-- Event-derived internal synchronization for the high-throughput grouped GEMM;
+- Event-derived internal `mbarrier` instruction placement for the grouped GEMM;
 - Event-driven overlap between asynchronous ragged transport and expert
   Contracts;
 - a high-throughput routed sparse-attention Event Tensor backend;
 - Shuttle-owned all-reduce, reduce-scatter, or communication AD.
 
-The next high-performance MoE step is to connect runtime RelationPlan
-eligibility to the existing grouped-Contract synchronization descriptor in a
-Torch-free executable path. The next routed-attention step is to attach the
-existing RelationPlan orientation and partial-state merge tasks to the
+The next high-performance MoE step is asynchronous transport completion into
+the grouped-Contract Event Tensor. The next routed-attention step is to attach
+the existing RelationPlan orientation and partial-state merge tasks to the
 tensor-core streaming skeleton without adding a sparse-attention workload
 switch.
 
-## Smallest next GPU experiment
+## Completed bounded GB200 linkage experiment
 
-Do not spend the next allocation retiming the reference payloads. The smallest
-missing execution proof is a Torch-free JAX typed-FFI chain on one physical
-GB200:
+The completed proof is a Torch-free JAX typed-FFI chain on one physical GB200:
 
 ```text
 runtime RelationPlan tables
@@ -132,31 +143,29 @@ runtime RelationPlan tables
   -> generic SM100 grouped Contract
 ```
 
-The first bounded version should realize the outer readiness edge by verified
-same-stream order. This legally coarsens the per-edge relation without claiming
-transport overlap. It must use uneven runtime segment counts with at least one
-empty segment, then mutate the relation while keeping the event construction
-and grouped-Contract body unchanged. The result must compare against the same
-segmented Contract reference, be deterministic, record handler invocations,
-and preserve the generated outer Event Tensor and inner synchronization
-fingerprints. JAX owns the entry point and any differentiation. Torch may be
-used in a separate build/oracle process, but the measured runtime must import
-neither Torch nor a complete MoE kernel.
+The bounded version realizes the outer readiness edge by verified same-stream
+order. This legally coarsens the per-edge relation without claiming transport
+overlap. It uses uneven runtime segment counts with an empty segment, then
+mutates the relation while keeping the event construction and grouped-Contract
+body unchanged. JAX owns the entry point and any differentiation. The measured
+runtime imports neither Torch nor a complete MoE kernel.
 
-This experiment would prove relation-to-grouped-Contract GPU linkage. It would
-not prove fine-grained asynchronous transport overlap, and it would not close
-the internal grouped-Contract ownership gap: the external primitive would
-still place its mbarrier arrive/wait operations. Those claims must remain
-separate.
+This experiment now proves relation-to-grouped-Contract GPU linkage. It does
+not prove fine-grained asynchronous transport overlap, and it does not close
+the internal grouped-Contract ownership gap: the external primitive still
+places its `mbarrier` arrive/wait operations. Those claims remain separate.
 
-The CPU-side schedule boundary is prepared. A
-`SegmentedGroupedContractEventSchedule` composes runtime segment readiness with
-the independently derived grouped-Contract pipeline, realizes the outer edge
+The schedule boundary uses a `SegmentedGroupedContractEventSchedule` that
+composes runtime segment readiness with the independently derived
+grouped-Contract pipeline, realizes the outer edge
 by verified device-stream order, and keeps program and runtime fingerprints
 separate. A relation mutation changes only runtime tables and their fingerprint;
 a cluster-worker mutation changes only the inner physical schedule and program
 fingerprint. Empty segments are represented by zero-count ready events. This
-has not been replayed through the SM100 typed-FFI path yet.
+was replayed through the SM100 typed-FFI path on GB200. Raw samples, hashes,
+exact HLO target counts, source pins, dynamic dependencies, and toolchain
+provenance are under
+`benchmarks/artifacts/event_tensor_segmented_grouped_contract_gb200_v0/`.
 
 For attention, another dense H100 replay is not presently informative: the
 real TMA/WGMMA attachment is already correct, deterministic, and 1.001x the
