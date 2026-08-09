@@ -202,28 +202,34 @@ def compile_stablehlo_row_normalization_backward_ffi(
     feature_groups_per_block: int = 1,
     pipeline_schedule: AxisFoldPipelineSchedule = AxisFoldPipelineSchedule.SEPARATE_STAGES,
 ) -> StableHLORowNormalizationBackwardFfiCompilation:
-    """Replace one natural uncentered row-statistic VJP with generated Folds.
+    """Replace one natural row-statistic VJP with generated Folds.
 
     The frontend name is only a recovery boundary. The physical generator sees
-    a three-stage generic dataflow pipeline: row reduction, row reduction plus
-    element Map, and feature reduction. Centered statistics remain supported by
-    the generic semantic recovery path but are not optimized by this bounded
-    executable composition.
+    generic row reductions, element Maps, and a feature reduction. Centered
+    statistics add a row-mean Fold before the variance Fold; they do not select
+    a different workload kernel.
     """
     recovered = recover_stablehlo_row_normalization_backward(graph)
-    if recovered.statistic_kind is not RowStatisticKind.UNCENTERED_SECOND_MOMENT:
-        raise StableHLORowNormalizationBackwardError(
-            "typed-FFI composition currently requires an uncentered second-moment Fold"
-        )
     if numerical_policy is NumericalPolicy.BITWISE_EXACT:
         raise StableHLORowNormalizationBackwardError(
             "parallel axis-Fold replacement changes source reduction association; " "ALLOW_ROUNDING_REORDER is required"
         )
-    pipeline = _uncentered_second_moment_backward_pipeline(
-        recovered,
-        threads=threads,
-        feature_groups_per_block=feature_groups_per_block,
-    )
+    if recovered.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT:
+        if pipeline_schedule is not AxisFoldPipelineSchedule.SEPARATE_STAGES:
+            raise StableHLORowNormalizationBackwardError(
+                "centered row statistics currently require the separate-stage Fold schedule"
+            )
+        pipeline = _centered_second_moment_backward_pipeline(
+            recovered,
+            threads=threads,
+            feature_groups_per_block=feature_groups_per_block,
+        )
+    else:
+        pipeline = _uncentered_second_moment_backward_pipeline(
+            recovered,
+            threads=threads,
+            feature_groups_per_block=feature_groups_per_block,
+        )
     generated = generate_cuda_axis_fold_pipeline_ffi(
         pipeline,
         target_name=target_name,
@@ -343,6 +349,137 @@ def _uncentered_second_moment_backward_pipeline(
     )
     return AxisFoldPipeline(
         stages=(
+            AxisFoldPipelineStage("inverse_scale", inverse_program, expose_output=False),
+            AxisFoldPipelineStage("input_cotangent", input_cotangent_program, expose_output=True),
+            AxisFoldPipelineStage(
+                "feature_scale_cotangent",
+                feature_scale_cotangent_program,
+                expose_output=True,
+            ),
+        )
+    )
+
+
+def _centered_second_moment_backward_pipeline(
+    recovered: RecoveredStableHLORowNormalizationBackward,
+    *,
+    threads: int,
+    feature_groups_per_block: int,
+) -> AxisFoldPipeline:
+    source_dtype = recovered.source_dtype
+    output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
+    scale_output_dtype = recovered.graph.value(recovered.feature_scale_cotangent).dtype
+    primal = scalar_input("primal")
+    feature_scale = scalar_input("feature_scale")
+    output_cotangent = scalar_input("output_cotangent")
+    row_mean = scalar_input("row_mean")
+    inverse_scale = scalar_input("inverse_scale")
+    hidden = scalar_constant(float(recovered.hidden))
+    centered = _subtract(primal, row_mean)
+    standardized = _multiply(centered, inverse_scale)
+    local = _multiply(output_cotangent, feature_scale)
+
+    row_mean_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),),
+        reductions=(AxisFoldReduction("row_sum", primal),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=_divide(scalar_input("row_sum"), hidden),
+        output_dtype=DType.FP32,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    inverse_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(
+            AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("row_mean", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("centered_sum_square", _multiply(centered, centered)),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_unary(
+            ScalarExpressionKind.RSQRT,
+            _add(
+                _divide(scalar_input("centered_sum_square"), hidden),
+                scalar_constant(recovered.epsilon),
+            ),
+        ),
+        output_dtype=DType.FP32,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    input_cotangent_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(
+            AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput(
+                "feature_scale",
+                recovered.graph.value(recovered.feature_scale).dtype,
+                AxisFoldInputLayout.COLUMN,
+            ),
+            AxisFoldInput(
+                "output_cotangent",
+                recovered.graph.value(recovered.output_cotangent).dtype,
+                AxisFoldInputLayout.ELEMENT,
+            ),
+            AxisFoldInput("row_mean", DType.FP32, AxisFoldInputLayout.ROW),
+            AxisFoldInput("inverse_scale", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(
+            AxisFoldReduction("correlation", _multiply(local, standardized)),
+            AxisFoldReduction("local_sum", local),
+        ),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=_multiply(
+            inverse_scale,
+            _subtract(
+                _subtract(
+                    local,
+                    _multiply(standardized, _divide(scalar_input("correlation"), hidden)),
+                ),
+                _divide(scalar_input("local_sum"), hidden),
+            ),
+        ),
+        output_dtype=output_dtype,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    feature_scale_cotangent_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(
+            AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput(
+                "output_cotangent",
+                recovered.graph.value(recovered.output_cotangent).dtype,
+                AxisFoldInputLayout.ELEMENT,
+            ),
+            AxisFoldInput("row_mean", DType.FP32, AxisFoldInputLayout.ROW),
+            AxisFoldInput("inverse_scale", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(
+            AxisFoldReduction(
+                "scale_cotangent_sum",
+                _multiply(output_cotangent, standardized),
+            ),
+        ),
+        reduction_axis=AxisFoldDirection.ROWS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("scale_cotangent_sum"),
+        output_dtype=scale_output_dtype,
+        threads=threads,
+        groups_per_block=feature_groups_per_block,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    return AxisFoldPipeline(
+        stages=(
+            AxisFoldPipelineStage("row_mean", row_mean_program, expose_output=False),
             AxisFoldPipelineStage("inverse_scale", inverse_program, expose_output=False),
             AxisFoldPipelineStage("input_cotangent", input_cotangent_program, expose_output=True),
             AxisFoldPipelineStage(

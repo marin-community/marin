@@ -221,9 +221,9 @@ def test_natural_scalar_mutation_changes_generated_pipeline_without_physical_swi
     assert original.generated.outputs == mutated.generated.outputs
 
 
-def test_bounded_ffi_path_fails_closed_for_source_order_and_centered_statistics() -> None:
+def test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_statistics() -> None:
+    centered_reverse, centered_graph = _natural_jax_vjp(centered=True)
     _, uncentered_graph = _natural_jax_vjp(centered=False)
-    _, centered_graph = _natural_jax_vjp(centered=True)
 
     with pytest.raises(StableHLORowNormalizationBackwardError, match="ALLOW_ROUNDING_REORDER"):
         compile_stablehlo_row_normalization_backward_ffi(
@@ -232,20 +232,58 @@ def test_bounded_ffi_path_fails_closed_for_source_order_and_centered_statistics(
             numerical_policy=NumericalPolicy.BITWISE_EXACT,
             threads=8,
         )
-    with pytest.raises(StableHLORowNormalizationBackwardError, match="uncentered second-moment"):
+    centered = compile_stablehlo_row_normalization_backward_ffi(
+        centered_graph,
+        target_name="shuttle.row_statistic_centered_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+        feature_groups_per_block=8,
+    )
+    assert centered.recovered.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT
+    assert tuple(stage.output_name for stage in centered.pipeline.stages) == (
+        "row_mean",
+        "inverse_scale",
+        "input_cotangent",
+        "feature_scale_cotangent",
+    )
+    assert centered.generated.semantic_fingerprints == tuple(
+        stage.program.semantic_fingerprint for stage in centered.pipeline.stages
+    )
+    assert "ShuttleAxisFoldKernel3" in centered.generated.source
+    assert "layernorm" not in centered.generated.source.lower()
+
+    rng = np.random.default_rng(31)
+    x = jnp.asarray(rng.normal(size=(4, 8)), dtype=jnp.bfloat16)
+    feature_scale = jnp.asarray(rng.normal(size=(8,)), dtype=jnp.bfloat16)
+    cotangent = jnp.asarray(rng.normal(size=(4, 8)), dtype=jnp.bfloat16)
+    expected_input, expected_scale = centered_reverse(x, feature_scale, cotangent)
+    actual_input, actual_scale = evaluate_axis_fold_pipeline(
+        centered.pipeline,
+        {
+            "primal": np.asarray(x, dtype=np.float32),
+            "feature_scale": np.asarray(feature_scale, dtype=np.float32),
+            "output_cotangent": np.asarray(cotangent, dtype=np.float32),
+        },
+    )
+    actual_input_bf16 = np.asarray(jnp.asarray(actual_input, dtype=jnp.bfloat16), dtype=np.float32)
+    actual_scale_bf16 = np.asarray(jnp.asarray(actual_scale, dtype=jnp.bfloat16), dtype=np.float32)
+    np.testing.assert_allclose(actual_input_bf16, np.asarray(expected_input, dtype=np.float32), rtol=0, atol=0.015625)
+    np.testing.assert_allclose(actual_scale_bf16, np.asarray(expected_scale, dtype=np.float32), rtol=0, atol=0.03125)
+
+    with pytest.raises(StableHLORowNormalizationBackwardError, match="separate-stage"):
         compile_stablehlo_row_normalization_backward_ffi(
             centered_graph,
-            target_name="shuttle.row_statistic_centered_v1",
+            target_name="shuttle.row_statistic_centered_coalesced_v1",
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
             threads=8,
+            pipeline_schedule=AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES,
         )
 
-    centered_generic = compile_stablehlo_row_normalization_backward(centered_graph, threads=8)
-    assert centered_generic.recovered.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT
 
-
-def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo() -> None:
-    reverse, graph = _natural_jax_vjp(centered=False)
+@pytest.mark.parametrize("centered", [False, True])
+def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo(centered: bool) -> None:
+    reverse, graph = _natural_jax_vjp(centered=centered)
+    target = f"shuttle.row_statistic_whole_entry_{'centered' if centered else 'uncentered'}_v1"
     arguments = (
         jnp.zeros((4, 8), dtype=jnp.bfloat16),
         jnp.ones((8,), dtype=jnp.bfloat16),
@@ -254,7 +292,7 @@ def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo() -> Non
     hlo = jax.jit(reverse).lower(*arguments).compiler_ir("hlo").as_hlo_text()
     compilation = compile_stablehlo_row_normalization_backward_ffi(
         graph,
-        target_name="shuttle.row_statistic_whole_entry_v1",
+        target_name=target,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         threads=8,
     )
@@ -283,7 +321,7 @@ def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo() -> Non
     assert audit.copy_count[0] == audit.copy_count[1]
     assert audit.transpose_count[0] == audit.transpose_count[1]
     assert all("shuttle.axis_fold.pipeline.output" in name for name in transformed_entry.root.operands)
-    assert transformed.count('custom_call_target="shuttle.row_statistic_whole_entry_v1"') == 1
+    assert transformed.count(f'custom_call_target="{target}"') == 1
 
     call_operands = ", ".join(f"%{value.instruction}" for value in plan.inputs)
     swapped_operands = ", ".join(f"%{value.instruction}" for value in (plan.inputs[1], plan.inputs[0], *plan.inputs[2:]))
