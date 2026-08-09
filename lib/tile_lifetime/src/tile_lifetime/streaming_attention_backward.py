@@ -11,7 +11,9 @@ from enum import StrEnum
 import numpy as np
 
 from tile_lifetime.autodiff import differentiate_scalar_expression
+from tile_lifetime.event_dataflow import TaskAxis, TaskFamily, TaskRelation
 from tile_lifetime.ir import DType
+from tile_lifetime.shared_reverse_fusion import SharedReverseFusionPlan, plan_shared_producer_reverse_fusion
 from tile_lifetime.streaming_attention import (
     AttentionScoreAxis,
     StreamingAttentionExecution,
@@ -280,6 +282,75 @@ def estimate_streaming_attention_backward_work(
         peak_score_tile_elements=packed_query_rows * schedule.key_value_tile_size,
         peak_query_tile_elements=packed_query_rows * query_feature.extent,
         key_value_gradient_accumulator_elements=2 * schedule.key_value_tile_size * query_feature.extent,
+    )
+
+
+def derive_streaming_attention_backward_fusion_plan(
+    program: StreamingAttentionBackwardProgram,
+    schedule: StreamingAttentionBackwardTileSchedule,
+    *,
+    local_capacity_bytes: int,
+) -> SharedReverseFusionPlan:
+    """Test a five-Contract owner-computes traversal over the reverse tile relation.
+
+    The relation connects query-gradient and key/value-gradient owners. The
+    generic fusion planner rejects a connected component when its deterministic
+    accumulator frontier cannot remain local; it never inserts atomics or
+    partial-gradient materialization implicitly.
+    """
+    query, key = program.forward.qk.inputs
+    query_axis = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.QUERY.value)
+    key_axis = next(axis for axis in key.axes if axis.label == AttentionScoreAxis.KEY.value)
+    batch_axis = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.BATCH.value)
+    query_feature = next(axis for axis in query.axes if axis.label == "key_feature")
+    key_value_head = next(axis for axis in key.axes if axis.label == "key_value_head")
+    if program.accumulation_dtype is not DType.FP32:
+        raise ValueError("the first fused reverse ownership model requires FP32 accumulators")
+    if query_axis.extent % schedule.query_tile_size or key_axis.extent % schedule.key_value_tile_size:
+        raise ValueError("fused reverse ownership requires tile-aligned query and key domains")
+
+    query_tiles = query_axis.extent // schedule.query_tile_size
+    key_tiles = key_axis.extent // schedule.key_value_tile_size
+    query_owners = TaskFamily(
+        "query-gradient owners",
+        (
+            TaskAxis("batch", batch_axis.extent),
+            TaskAxis("key_value_head", key_value_head.extent),
+            TaskAxis("query_tile", query_tiles),
+        ),
+    )
+    key_value_owners = TaskFamily(
+        "key/value-gradient owners",
+        (
+            TaskAxis("batch", batch_axis.extent),
+            TaskAxis("key_value_head", key_value_head.extent),
+            TaskAxis("key_value_tile", key_tiles),
+        ),
+    )
+    pairs = []
+    for batch in range(batch_axis.extent):
+        for head in range(key_value_head.extent):
+            for query_tile in range(query_tiles):
+                query_stop = (query_tile + 1) * schedule.query_tile_size
+                for key_value_tile in range(key_tiles):
+                    key_start = key_value_tile * schedule.key_value_tile_size
+                    if (
+                        schedule.domain_traversal is StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR
+                        and key_start >= query_stop
+                    ):
+                        continue
+                    pairs.append(((batch, head, query_tile), (batch, head, key_value_tile)))
+    relation = TaskRelation.from_pairs(query_owners, key_value_owners, tuple(pairs))
+    packed_query_rows = schedule.query_tile_size * schedule.query_heads_per_key_value_tile
+    return plan_shared_producer_reverse_fusion(
+        relation,
+        source_accumulator_elements=packed_query_rows * query_feature.extent,
+        target_accumulator_elements=2 * schedule.key_value_tile_size * query_feature.extent,
+        transient_edge_elements=4 * packed_query_rows * schedule.key_value_tile_size,
+        accumulator_bytes_per_element=4,
+        local_capacity_bytes=local_capacity_bytes,
+        baseline_contracts_per_edge=7,
+        fused_contracts_per_edge=5,
     )
 
 

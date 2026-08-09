@@ -70,6 +70,48 @@ the dQ and dK/dV traversals and lacks the TMA/WGMMA producer-consumer overlap of
 an expert Hopper pipeline. The next physical experiment should profile the
 fixed packed schedule before introducing another candidate dimension.
 
+## Fused reverse ownership experiment
+
+A fused reverse edge would compute QK, probability, dP, and dS once, then feed
+dQ, dK, and dV. This reduces the packed schedule from seven to five physical
+Contracts per query/KV tile pair. The ownership relation prevents a direct
+local implementation for the primary dense shape:
+
+```text
+query-gradient owner  -- Q/K tile edge --  key/value-gradient owner
+       Fold over K                               Fold over Q
+```
+
+Without atomics or external partial Folds, one fused task must own every output
+vertex in a connected component of this bipartite relation. Shuttle now builds
+that relation from the Contract head index map, tiled DomainRestriction, and
+the two gradient Fold domains. A generic planner evaluates deterministic
+source-major and target-major traversals. It tracks when each endpoint
+accumulator becomes live and when its last incident edge permits finalization.
+
+For the primary causal shape, the relation has eight connected components, one
+per K/V head. Each component contains 64 query owners, 64 K/V owners, and 2,080
+edges. The smaller source-major frontier requires 2,195,456 bytes:
+
+```text
+one packed dQ accumulator:            16,384 FP32 elements
+up to 63 live dK/dV accumulators: 63 * 8,192 FP32 elements
+conservative score/P/dP/dS tile state: 16,384 FP32 elements
+```
+
+This exceeds a 227 KiB local-capacity candidate by 9.44x. Fusing would reduce
+physical Contract invocations from 116,480 to 83,200, or 28.57%, but splitting
+the connected component requires a partial-gradient buffer, ordered cross-task
+updates, or atomics. The bounded planner rejects the candidate instead of
+inserting any of those mechanisms implicitly. A block-diagonal or sufficiently
+small sparse relation can pass the same generic ownership test and expose the
+five-Contract traversal.
+
+The rejection is stable under score-Map VJP mutation. Changing the causal
+DomainRestriction changes the edge set and Contract count, while changing a
+softcap derivative with the same domain leaves ownership unchanged. No
+attention-name dispatch participates in either decision.
+
 ## Accepted frontend boundary
 
 JAX owns model differentiation. The accepted training path is:
