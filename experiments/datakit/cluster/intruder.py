@@ -452,6 +452,12 @@ class IntruderTestResult:
     chance_level: float
     per_model_accuracy: dict[str, dict[str, float]]  # model -> {lhs, rhs}
     n_abstained: int
+    # Abstentions split by side. A total on its own cannot distinguish harmless
+    # flakiness from a bias: if a judge fails disproportionately on one side's
+    # trials, that side is scored on an easier, self-selected subset and the
+    # comparison is void. A previous run abstained 33 times on one side and zero
+    # on the other and had to be discarded, which the total alone did not reveal.
+    abstained_by_side: dict[str, int]
 
 
 def _vote_correct(panelist: Panelist, trial: IntruderTrial, max_doc_chars: int) -> bool | None:
@@ -482,6 +488,7 @@ class _RoundScores:
     detection_rates: list[float]  # one per trial that drew >= 1 vote
     model_hits: dict[str, list[bool]]  # model name -> per-vote correctness this batch
     n_abstained: int
+    abstained_by_side: dict[str, int]
 
 
 def _score_round(
@@ -503,15 +510,17 @@ def _score_round(
     per_trial: dict[int, list[bool]] = {id(t): [] for t in trials}
     model_hits: dict[str, list[bool]] = {j.name: [] for j in judges}
     n_abstained = 0
+    abstained_by_side: dict[str, int] = {}
     for trial, panelist, correct in results:
         if correct is None:
             n_abstained += 1
+            abstained_by_side[trial.side] = abstained_by_side.get(trial.side, 0) + 1
             continue
         model_hits[panelist.name].append(correct)
         per_trial[id(trial)].append(correct)
 
     detection_rates = [sum(hits) / len(hits) for t in trials if (hits := per_trial[id(t)])]
-    return _RoundScores(detection_rates, model_hits, n_abstained)
+    return _RoundScores(detection_rates, model_hits, n_abstained, abstained_by_side)
 
 
 def run_intruder_test(
@@ -557,6 +566,7 @@ def run_intruder_test(
         j.name: {lhs_name: _ModelTally(), rhs_name: _ModelTally()} for j in judges
     }
     abstained = 0
+    abstained_by_side: dict[str, int] = {}
     decision: Decision = Decision.INCONCLUSIVE
     # Bound by *attempted* trials, not completed ones: a trial where every
     # panelist abstains never advances cs.n, so a completed-count guard could
@@ -569,6 +579,8 @@ def run_intruder_test(
                 trials = [bucketing.sample_trial(rng) for _ in range(batch_size)]
                 scores = _score_round(trials, judges, pool, max_doc_chars)
                 abstained += scores.n_abstained
+                for side, n in scores.abstained_by_side.items():
+                    abstained_by_side[side] = abstained_by_side.get(side, 0) + n
                 for rate in scores.detection_rates:
                     cs.update(rate)
                 for name, hits in scores.model_hits.items():
@@ -617,6 +629,7 @@ def run_intruder_test(
         chance_level=CHANCE_LEVEL,
         per_model_accuracy={name: {bn: t.accuracy for bn, t in sides.items()} for name, sides in tallies.items()},
         n_abstained=abstained,
+        abstained_by_side=abstained_by_side,
     )
 
 
