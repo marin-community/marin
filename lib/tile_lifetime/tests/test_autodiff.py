@@ -17,6 +17,7 @@ from tile_lifetime import (
     TensorProgram,
     differentiate_tensor_program,
     execute_tensor_program,
+    extract_backward_tensor_program,
     scalar_expression_vjp,
 )
 from tile_lifetime.cuda_map_fold_codegen import evaluate_scalar_expression
@@ -158,3 +159,70 @@ def test_generic_contract_map_fold_reverse_mode_matches_rmsnorm_gemm_adjoint() -
     generated_backward = differentiated.program.operations[len(source.operations) :]
     assert sum(isinstance(operation, ContractPrimitive) for operation in generated_backward) == 2
     assert any(isinstance(operation, FoldPrimitive) for operation in generated_backward)
+
+
+def _linear_swiglu_program() -> TensorProgram:
+    row = TensorAxis(1, 2, "row")
+    hidden = TensorAxis(2, 3, "hidden")
+    intermediate = TensorAxis(3, 4, "intermediate")
+    x = ProgramValue("x", (row, hidden), DType.FP32)
+    gate_weight = ProgramValue("gate_weight", (hidden, intermediate), DType.FP32)
+    up_weight = ProgramValue("up_weight", (hidden, intermediate), DType.FP32)
+    gate = ProgramValue("gate", (row, intermediate), DType.FP32)
+    up = ProgramValue("up", (row, intermediate), DType.FP32)
+    output = ProgramValue("output", (row, intermediate), DType.FP32)
+    return TensorProgram(
+        inputs=(x, gate_weight, up_weight),
+        operations=(
+            ContractPrimitive("gate projection", (x, gate_weight), gate, (hidden,), DType.FP32),
+            ContractPrimitive("up projection", (x, up_weight), up, (hidden,), DType.FP32),
+            MapPrimitive("SwiGLU scalar map", (gate, up), output, _silu_product("gate", "up")),
+        ),
+        outputs=(output,),
+    )
+
+
+def test_backward_extraction_makes_swiglu_save_or_recompute_policy_explicit() -> None:
+    source = _linear_swiglu_program()
+    differentiated = differentiate_tensor_program(
+        source,
+        with_respect_to=("x", "gate_weight", "up_weight"),
+    )
+    saved = extract_backward_tensor_program(differentiated, saved_values=("gate", "up"))
+    recomputed = extract_backward_tensor_program(differentiated)
+
+    assert saved.recomputed_operations == ()
+    assert tuple(value.name for value in saved.saved_values) == ("gate", "up")
+    assert tuple(operation.name for operation in recomputed.recomputed_operations) == (
+        "gate projection",
+        "up projection",
+    )
+
+    rng = np.random.default_rng(19)
+    x = rng.normal(size=(2, 3)).astype(np.float32)
+    gate_weight = rng.normal(size=(3, 4)).astype(np.float32)
+    up_weight = rng.normal(size=(3, 4)).astype(np.float32)
+    cotangent = rng.normal(size=(2, 4)).astype(np.float32)
+    gate = x @ gate_weight
+    up = x @ up_weight
+    common = {
+        "x": x,
+        "gate_weight": gate_weight,
+        "up_weight": up_weight,
+        "cotangent.output": cotangent,
+    }
+    saved_result = execute_tensor_program(saved.program, {**common, "gate": gate, "up": up})
+    recomputed_result = execute_tensor_program(recomputed.program, common)
+    for gradient in differentiated.input_gradients:
+        np.testing.assert_allclose(saved_result[gradient.name], recomputed_result[gradient.name], rtol=1e-6, atol=1e-6)
+
+
+def test_backward_extraction_rejects_unknown_or_duplicate_saved_values() -> None:
+    differentiated = differentiate_tensor_program(
+        _linear_swiglu_program(),
+        with_respect_to=("x",),
+    )
+    with np.testing.assert_raises_regex(ValueError, "forward intermediates"):
+        extract_backward_tensor_program(differentiated, saved_values=("not-a-value",))
+    with np.testing.assert_raises_regex(ValueError, "must be unique"):
+        extract_backward_tensor_program(differentiated, saved_values=("gate", "gate"))

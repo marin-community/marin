@@ -15,9 +15,11 @@ from tile_lifetime.attention import (
     summarize_attention_partial,
 )
 from tile_lifetime.autodiff import (
+    BackwardTensorProgram,
     DifferentiatedTensorProgram,
     differentiate_scalar_expression,
     differentiate_tensor_program,
+    extract_backward_tensor_program,
     scalar_expression_vjp,
 )
 from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
@@ -72,6 +74,15 @@ from tile_lifetime.kimi_delta_scan import (
     compile_kimi_delta_scan,
     recurrent_kimi_delta_reference,
     summarize_kimi_delta_chunk,
+)
+from tile_lifetime.linear_pair_map import (
+    LinearPairMapTrainingProgram,
+    PairMapSavePolicy,
+    PairMapVjpProgram,
+    build_linear_pair_map_program,
+    compile_linear_pair_map_training,
+    pair_silu_product_expression,
+    pair_tanh_product_expression,
 )
 from tile_lifetime.moe import (
     MoELegalityError,

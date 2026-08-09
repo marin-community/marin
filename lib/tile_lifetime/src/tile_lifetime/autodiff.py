@@ -17,7 +17,9 @@ from tile_lifetime.tensor_program import (
     ScalarExpression,
     ScalarExpressionKind,
     TensorAxis,
+    TensorPrimitive,
     TensorProgram,
+    primitive_inputs,
     scalar_binary,
     scalar_constant,
     scalar_expression_inputs,
@@ -35,6 +37,16 @@ class DifferentiatedTensorProgram:
     program: TensorProgram
     output_cotangents: tuple[ProgramValue, ...]
     input_gradients: tuple[ProgramValue, ...]
+
+
+@dataclass(frozen=True)
+class BackwardTensorProgram:
+    """A standalone reverse program plus its explicit save/recompute policy."""
+
+    source: DifferentiatedTensorProgram
+    program: TensorProgram
+    saved_values: tuple[ProgramValue, ...]
+    recomputed_operations: tuple[TensorPrimitive, ...]
 
 
 def differentiate_scalar_expression(expression: ScalarExpression, input_name: str) -> ScalarExpression:
@@ -216,6 +228,85 @@ def differentiate_tensor_program(
         program=differentiated,
         output_cotangents=output_cotangents,
         input_gradients=tuple(input_gradients),
+    )
+
+
+def extract_backward_tensor_program(
+    differentiated: DifferentiatedTensorProgram,
+    *,
+    saved_values: tuple[str, ...] = (),
+) -> BackwardTensorProgram:
+    """Extract a standalone reverse program under an explicit saved-value policy.
+
+    Forward intermediates named in ``saved_values`` become reverse-program
+    inputs. Any other forward intermediate required by the generated adjoint is
+    recomputed from source inputs. This keeps save-versus-recompute as an
+    inspectable compiler decision instead of embedding it in a workload
+    backward kernel.
+    """
+
+    source = differentiated.source
+    source_value_by_name = {value.name: value for value in source.inputs}
+    producer_by_name: dict[str, TensorPrimitive] = {}
+    for operation in source.operations:
+        source_value_by_name[operation.output.name] = operation.output
+        producer_by_name[operation.output.name] = operation
+
+    duplicate_saved_values = sorted(name for name in set(saved_values) if saved_values.count(name) > 1)
+    if duplicate_saved_values:
+        raise ValueError(f"saved values must be unique: {duplicate_saved_values}")
+    unknown_saved_values = sorted(set(saved_values) - set(producer_by_name))
+    if unknown_saved_values:
+        raise ValueError(f"saved values must be forward intermediates: {unknown_saved_values}")
+    saved = tuple(source_value_by_name[name] for name in saved_values)
+    saved_names = set(saved_values)
+
+    backward_operations = differentiated.program.operations[len(source.operations) :]
+    required_recompute_names: set[str] = set()
+
+    def require_forward_value(value: ProgramValue) -> None:
+        if value.name in saved_names or value.name not in producer_by_name:
+            return
+        if value.name in required_recompute_names:
+            return
+        required_recompute_names.add(value.name)
+        for operand in primitive_inputs(producer_by_name[value.name]):
+            require_forward_value(operand)
+
+    source_names = set(source_value_by_name)
+    for operation in backward_operations:
+        for operand in primitive_inputs(operation):
+            if operand.name in source_names:
+                require_forward_value(operand)
+
+    recomputed_operations = tuple(
+        operation for operation in source.operations if operation.output.name in required_recompute_names
+    )
+    operations = (*recomputed_operations, *backward_operations)
+    produced_names = {operation.output.name for operation in operations}
+    required_input_names = {
+        value.name
+        for operation in operations
+        for value in primitive_inputs(operation)
+        if value.name not in produced_names
+    }
+    candidate_inputs = (*source.inputs, *saved, *differentiated.output_cotangents)
+    inputs = tuple(value for value in candidate_inputs if value.name in required_input_names)
+    supplied_names = {value.name for value in inputs}
+    if supplied_names != required_input_names:
+        missing = sorted(required_input_names - supplied_names)
+        raise ValueError(f"backward extraction left unavailable values {missing}")
+
+    program = TensorProgram(
+        inputs=inputs,
+        operations=operations,
+        outputs=differentiated.input_gradients,
+    )
+    return BackwardTensorProgram(
+        source=differentiated,
+        program=program,
+        saved_values=saved,
+        recomputed_operations=recomputed_operations,
     )
 
 

@@ -330,12 +330,16 @@ class _SourceBuilder:
         outputs: list[str] = []
         main_returns: list[str] = []
         auxiliary_returns: list[str] = []
-        if pairwise:
-            self.writes_main_output = False
+        pairwise_outputs = {
+            output
+            for operation in self.program.finalization
+            if operation.primitive in {TilePrimitive.PAIRWISE_MAP, TilePrimitive.PAIRWISE_SWIGLU}
+            for output in operation.outputs
+        }
         for destination, value in store_values.items():
             if destination in reduction_values:
                 continue
-            if destination == self.program.output and not pairwise:
+            if destination == self.program.output and destination not in pairwise_outputs:
                 main_returns.append(f"'D': {value}")
                 continue
             parameter = f"output_{len(outputs)}"
@@ -348,6 +352,12 @@ class _SourceBuilder:
             reduction_entries.append(f"{parameter!r}: ColVecReduce({parameter!r}, scaled=True)")
             self.outputs.append(QuackOutput(parameter, destination, reduction=True))
             auxiliary_returns.append(f"{parameter!r}: ({value}, {value})")
+        if pairwise:
+            # Gated inference commonly stores only the half-width pairwise
+            # result. Training may additionally retain the full-width
+            # accumulator as D for a generated reverse Map. Whether D exists
+            # is a property of the tile dataflow, not of acc-pair mode itself.
+            self.writes_main_output = bool(main_returns)
         returns = [*main_returns, *auxiliary_returns]
         if not returns:
             returns.append("'D': acc")
