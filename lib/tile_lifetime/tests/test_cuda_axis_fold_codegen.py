@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
@@ -11,6 +12,7 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldInputLayout,
     AxisFoldOutputKind,
     AxisFoldPipeline,
+    AxisFoldPipelineSchedule,
     AxisFoldPipelineStage,
     AxisFoldProgram,
     AxisFoldReassociation,
@@ -252,3 +254,105 @@ def test_axis_fold_pipeline_scalar_mutation_regenerates_same_physical_family() -
     assert original_source.semantic_fingerprints != changed_source.semantic_fingerprints
     assert original_source.source_sha256 != changed_source.source_sha256
     assert "ShuttleAxisFoldKernel0" in changed_source.source
+
+
+def test_axis_fold_pipeline_coalesces_compatible_row_stages_without_changing_semantics() -> None:
+    value = scalar_input("value")
+    row_total = scalar_input("row_total")
+    first = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),),
+        reductions=(AxisFoldReduction("total", value),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("total"),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    second = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(
+            AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("row_total", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("local_total", value),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=scalar_binary(ScalarExpressionKind.ADD, row_total, scalar_input("local_total")),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    pipeline = AxisFoldPipeline(
+        (
+            AxisFoldPipelineStage("row_total", first, expose_output=False),
+            AxisFoldPipelineStage("result", second, expose_output=True),
+        )
+    )
+
+    separate = generate_cuda_axis_fold_pipeline_ffi(
+        pipeline,
+        target_name="shuttle.axis_fold_coalescing_v1",
+    )
+    coalesced = generate_cuda_axis_fold_pipeline_ffi(
+        pipeline,
+        target_name="shuttle.axis_fold_coalescing_v1",
+        schedule=AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES,
+    )
+    values = np.arange(15, dtype=np.float32).reshape(5, 3)
+    (actual,) = evaluate_axis_fold_pipeline(pipeline, {"value": values})
+
+    assert coalesced.semantic_fingerprints == separate.semantic_fingerprints
+    assert coalesced.source_sha256 != separate.source_sha256
+    assert coalesced.pipeline_schedule is AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES
+    assert "ShuttleAxisFoldKernel0And1" in coalesced.source
+    assert "ShuttleAxisFoldKernel0<<<" not in coalesced.source
+    assert "ShuttleAxisFoldKernel1<<<" not in coalesced.source
+    assert "row_total_storage = scratch.Allocate" in coalesced.source
+    expected = np.repeat(2.0 * np.sum(values, axis=1, keepdims=True), values.shape[1], axis=1)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_axis_fold_pipeline_rejects_coalescing_when_second_reduction_uses_first_output() -> None:
+    value = scalar_input("value")
+    row_total = scalar_input("row_total")
+    first = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),),
+        reductions=(AxisFoldReduction("total", value),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("total"),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    dependent_contribution = scalar_binary(ScalarExpressionKind.MULTIPLY, value, row_total)
+    second = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(
+            AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("row_total", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("dependent", dependent_contribution),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=scalar_binary(ScalarExpressionKind.ADD, row_total, scalar_input("dependent")),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    pipeline = AxisFoldPipeline(
+        (
+            AxisFoldPipelineStage("row_total", first, expose_output=False),
+            AxisFoldPipelineStage("result", second, expose_output=True),
+        )
+    )
+
+    with pytest.raises(ValueError, match="no compatible adjacent row stages"):
+        generate_cuda_axis_fold_pipeline_ffi(
+            pipeline,
+            target_name="shuttle.axis_fold_illegal_coalescing_v1",
+            schedule=AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES,
+        )

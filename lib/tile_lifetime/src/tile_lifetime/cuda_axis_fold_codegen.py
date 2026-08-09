@@ -59,6 +59,13 @@ class AxisFoldReassociation(StrEnum):
     SOURCE_ORDERED = "source_ordered"
 
 
+class AxisFoldPipelineSchedule(StrEnum):
+    """Physical kernelization policy for a semantic axis-Fold pipeline."""
+
+    SEPARATE_STAGES = "separate_stages"
+    COALESCE_COMPATIBLE_ROW_STAGES = "coalesce_compatible_row_stages"
+
+
 @dataclass(frozen=True)
 class AxisFoldInput:
     """One typed tensor input and its logical broadcast relation."""
@@ -202,6 +209,7 @@ class GeneratedCudaAxisFoldFfi:
     inputs: tuple[CudaAxisFoldFfiBuffer, ...]
     outputs: tuple[CudaAxisFoldFfiBuffer, ...]
     semantic_fingerprints: tuple[str, ...]
+    pipeline_schedule: AxisFoldPipelineSchedule
     source_sha256: str
 
 
@@ -382,6 +390,7 @@ def generate_cuda_axis_fold_pipeline_ffi(
     pipeline: AxisFoldPipeline,
     *,
     target_name: str,
+    schedule: AxisFoldPipelineSchedule = AxisFoldPipelineSchedule.SEPARATE_STAGES,
 ) -> GeneratedCudaAxisFoldFfi:
     """Render a topological Fold pipeline with internal scratch values."""
     handler_symbol = target_name.replace(".", "_")
@@ -396,10 +405,8 @@ def generate_cuda_axis_fold_pipeline_ffi(
     )
     input_pointers = "\n".join(_ffi_input_pointer(value) for value in inputs)
     output_pointers = "\n".join(_ffi_output_pointer(value) for value in outputs)
-    kernels = "\n\n".join(
-        _ffi_axis_fold_kernel(stage.program, symbol=f"ShuttleAxisFoldKernel{index}", prefix=f"Program{index}")
-        for index, stage in enumerate(pipeline.stages)
-    )
+    kernel_groups = _axis_fold_kernel_groups(pipeline, schedule)
+    kernels = "\n\n".join(_ffi_axis_fold_kernel_group(pipeline, group) for group in kernel_groups)
     scratch_declarations = "\n".join(
         _ffi_pipeline_scratch(stage_output)
         for stage, stage_output in zip(pipeline.stages, stage_outputs, strict=True)
@@ -407,12 +414,7 @@ def generate_cuda_axis_fold_pipeline_ffi(
     )
     exposed_data = {value.name: f"{value.name}_data" for value in outputs}
     launches = "\n".join(
-        _ffi_axis_fold_launch_to_pointer(
-            stage.program,
-            index=index,
-            output_pointer=exposed_data.get(stage.output_name, stage.output_name),
-        )
-        for index, stage in enumerate(pipeline.stages)
+        _ffi_axis_fold_group_launch(pipeline, group, exposed_data=exposed_data) for group in kernel_groups
     )
     input_bindings = "\n".join(f"      .Arg<ffi::Buffer<{_ffi_dtype(value.dtype)}, {value.rank}>>()" for value in inputs)
     output_bindings = "\n".join(
@@ -476,6 +478,7 @@ extern "C" int shuttle_axis_fold_ffi_call_count() {{
         inputs=inputs,
         outputs=outputs,
         semantic_fingerprints=tuple(stage.program.semantic_fingerprint for stage in pipeline.stages),
+        pipeline_schedule=schedule,
         source_sha256=hashlib.sha256(source.encode()).hexdigest(),
     )
 
@@ -712,6 +715,270 @@ def _ffi_pipeline_scratch(value: CudaAxisFoldFfiBuffer) -> str:
   }}
   auto* {value.name} = static_cast<{cpp_type}*>(*{value.name}_storage);
 """.rstrip()
+
+
+@dataclass(frozen=True)
+class _AxisFoldKernelGroup:
+    stage_indices: tuple[int, ...]
+
+
+def _axis_fold_kernel_groups(
+    pipeline: AxisFoldPipeline,
+    schedule: AxisFoldPipelineSchedule,
+) -> tuple[_AxisFoldKernelGroup, ...]:
+    if schedule is AxisFoldPipelineSchedule.SEPARATE_STAGES:
+        return tuple(_AxisFoldKernelGroup((index,)) for index in range(len(pipeline.stages)))
+    groups: list[_AxisFoldKernelGroup] = []
+    index = 0
+    while index < len(pipeline.stages):
+        if index + 1 < len(pipeline.stages) and _can_coalesce_row_stages(
+            pipeline.stages[index], pipeline.stages[index + 1]
+        ):
+            groups.append(_AxisFoldKernelGroup((index, index + 1)))
+            index += 2
+            continue
+        groups.append(_AxisFoldKernelGroup((index,)))
+        index += 1
+    if all(len(group.stage_indices) == 1 for group in groups):
+        raise ValueError("axis-Fold pipeline has no compatible adjacent row stages to coalesce")
+    return tuple(groups)
+
+
+def _can_coalesce_row_stages(first: AxisFoldPipelineStage, second: AxisFoldPipelineStage) -> bool:
+    first_program = first.program
+    second_program = second.program
+    if (
+        first_program.rows != second_program.rows
+        or first_program.columns != second_program.columns
+        or first_program.threads != second_program.threads
+        or first_program.groups_per_block != 1
+        or second_program.groups_per_block != 1
+        or first_program.reassociation is not second_program.reassociation
+        or first_program.reduction_axis is not AxisFoldDirection.COLUMNS
+        or second_program.reduction_axis is not AxisFoldDirection.COLUMNS
+        or first_program.output_kind is not AxisFoldOutputKind.REDUCED
+        or second_program.output_kind is not AxisFoldOutputKind.ELEMENT
+    ):
+        return False
+    first_input = next((value for value in second_program.inputs if value.name == first.output_name), None)
+    if first_input is None or first_input.layout is not AxisFoldInputLayout.ROW:
+        return False
+    if any(
+        first.output_name in scalar_expression_inputs(reduction.contribution) for reduction in second_program.reductions
+    ):
+        return False
+    return first.output_name in scalar_expression_inputs(second_program.output_expression)
+
+
+def _ffi_axis_fold_kernel_group(pipeline: AxisFoldPipeline, group: _AxisFoldKernelGroup) -> str:
+    if len(group.stage_indices) == 1:
+        index = group.stage_indices[0]
+        return _ffi_axis_fold_kernel(
+            pipeline.stages[index].program,
+            symbol=f"ShuttleAxisFoldKernel{index}",
+            prefix=f"Program{index}",
+        )
+    first_index, second_index = group.stage_indices
+    return _ffi_coalesced_row_axis_fold_kernel(
+        pipeline.stages[first_index],
+        pipeline.stages[second_index],
+        first_index=first_index,
+        second_index=second_index,
+    )
+
+
+def _ffi_axis_fold_group_launch(
+    pipeline: AxisFoldPipeline,
+    group: _AxisFoldKernelGroup,
+    *,
+    exposed_data: dict[str, str],
+) -> str:
+    if len(group.stage_indices) == 1:
+        index = group.stage_indices[0]
+        stage = pipeline.stages[index]
+        return _ffi_axis_fold_launch_to_pointer(
+            stage.program,
+            index=index,
+            output_pointer=exposed_data.get(stage.output_name, stage.output_name),
+        )
+    first_index, second_index = group.stage_indices
+    first = pipeline.stages[first_index]
+    second = pipeline.stages[second_index]
+    inputs = _coalesced_stage_inputs(first, second)
+    arguments = ",\n      ".join(
+        (
+            *(value.name for value in inputs),
+            exposed_data.get(first.output_name, first.output_name),
+            exposed_data.get(second.output_name, second.output_name),
+        )
+    )
+    symbol = f"ShuttleAxisFoldKernel{first_index}And{second_index}"
+    return f"""
+  {symbol}<<<kProgram{first_index}And{second_index}Rows, kProgram{first_index}And{second_index}Threads, 0, stream>>>(
+      {arguments});
+  if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {{
+    return ffi::Error::Internal(
+        std::string("{symbol}: ") + cudaGetErrorString(status));
+  }}
+""".rstrip()
+
+
+def _coalesced_stage_inputs(
+    first: AxisFoldPipelineStage,
+    second: AxisFoldPipelineStage,
+) -> tuple[AxisFoldInput, ...]:
+    ordered: list[AxisFoldInput] = []
+    by_name: dict[str, AxisFoldInput] = {}
+    for value in (*first.program.inputs, *second.program.inputs):
+        if value.name == first.output_name:
+            continue
+        previous = by_name.get(value.name)
+        if previous is not None and previous != value:
+            raise ValueError(f"coalesced axis-Fold input {value.name!r} has incompatible uses")
+        if previous is None:
+            ordered.append(value)
+            by_name[value.name] = value
+    return tuple(ordered)
+
+
+def _ffi_coalesced_row_axis_fold_kernel(
+    first: AxisFoldPipelineStage,
+    second: AxisFoldPipelineStage,
+    *,
+    first_index: int,
+    second_index: int,
+) -> str:
+    if not _can_coalesce_row_stages(first, second):
+        raise ValueError("axis-Fold stages are not compatible for one-pass row coalescing")
+    first_program = first.program
+    second_program = second.program
+    prefix = f"Program{first_index}And{second_index}"
+    rows = f"k{prefix}Rows"
+    columns = f"k{prefix}Columns"
+    threads = f"k{prefix}Threads"
+    symbol = f"ShuttleAxisFoldKernel{first_index}And{second_index}"
+    inputs = _coalesced_stage_inputs(first, second)
+    parameters = ", ".join(
+        (
+            *(_kernel_parameter(value) for value in inputs),
+            f"{_ffi_output_type(first_program)} {first.output_name}",
+            f"{_ffi_output_type(second_program)} {second.output_name}",
+        )
+    )
+    first_locals = "\n".join(
+        f"  float local_stage{first_index}_{value.name} = 0.0f;" for value in first_program.reductions
+    )
+    second_locals = "\n".join(
+        f"  float local_stage{second_index}_{value.name} = 0.0f;" for value in second_program.reductions
+    )
+    first_shared = "\n".join(
+        f"  __shared__ float shared_stage{first_index}_{value.name}[{threads}];" for value in first_program.reductions
+    )
+    second_shared = "\n".join(
+        f"  __shared__ float shared_stage{second_index}_{value.name}[{threads}];" for value in second_program.reductions
+    )
+    first_aliases = _ffi_input_aliases(first_program.inputs, "row", "column", columns)
+    second_aliases = _ffi_input_aliases(second_program.inputs, "row", "column", columns)
+    second_aliases.pop(first.output_name, None)
+    first_updates = "\n".join(
+        f"    local_stage{first_index}_{value.name} = __fadd_rn(local_stage{first_index}_{value.name}, "
+        f"{_cuda_expression(value.contribution, first_aliases)});"
+        for value in first_program.reductions
+    )
+    second_updates = "\n".join(
+        f"    local_stage{second_index}_{value.name} = __fadd_rn(local_stage{second_index}_{value.name}, "
+        f"{_cuda_expression(value.contribution, second_aliases)});"
+        for value in second_program.reductions
+    )
+    first_initialization = "\n".join(
+        f"  shared_stage{first_index}_{value.name}[threadIdx.x] = local_stage{first_index}_{value.name};"
+        for value in first_program.reductions
+    )
+    second_initialization = "\n".join(
+        f"  shared_stage{second_index}_{value.name}[threadIdx.x] = local_stage{second_index}_{value.name};"
+        for value in second_program.reductions
+    )
+    first_reduction_updates = "\n".join(
+        f"      shared_stage{first_index}_{value.name}[threadIdx.x] = __fadd_rn("
+        f"shared_stage{first_index}_{value.name}[threadIdx.x], "
+        f"shared_stage{first_index}_{value.name}[threadIdx.x + stride]);"
+        for value in first_program.reductions
+    )
+    second_reduction_updates = "\n".join(
+        f"      shared_stage{second_index}_{value.name}[threadIdx.x] = __fadd_rn("
+        f"shared_stage{second_index}_{value.name}[threadIdx.x], "
+        f"shared_stage{second_index}_{value.name}[threadIdx.x + stride]);"
+        for value in second_program.reductions
+    )
+    first_reduction_aliases = {
+        value.name: f"shared_stage{first_index}_{value.name}[0]" for value in first_program.reductions
+    }
+    first_output_aliases = (
+        _ffi_reduced_output_aliases(first_program.inputs, first_program.reduction_axis, "group")
+        | first_reduction_aliases
+    )
+    first_expression = _cuda_expression(first_program.output_expression, first_output_aliases)
+    first_value = (
+        first_expression
+        if first_program.output_dtype is DType.FP32
+        else f"__bfloat162float(__float2bfloat16_rn({first_expression}))"
+    )
+    first_store = _output_store_to(first.output_name, first_program.output_dtype, "group", "first_value")
+    second_reduction_aliases = {
+        value.name: f"shared_stage{second_index}_{value.name}[0]" for value in second_program.reductions
+    }
+    second_output_aliases = _ffi_input_aliases(second_program.inputs, "row", "column", columns)
+    second_output_aliases[first.output_name] = "first_value"
+    second_expression = _cuda_expression(
+        second_program.output_expression,
+        second_output_aliases | second_reduction_aliases,
+    )
+    second_store = _output_store_to(
+        second.output_name,
+        second_program.output_dtype,
+        f"row * {columns} + column",
+        second_expression,
+    )
+    return f"""
+constexpr int {rows} = {first_program.rows};
+constexpr int {columns} = {first_program.columns};
+constexpr int {threads} = {first_program.threads};
+
+__global__ __launch_bounds__({threads}) void {symbol}({parameters}) {{
+{first_shared}
+{second_shared}
+  const int group = blockIdx.x;
+  if (group >= {rows}) return;
+{first_locals}
+{second_locals}
+  for (int reduction_index = threadIdx.x; reduction_index < {columns};
+       reduction_index += {threads}) {{
+    const int row = group;
+    const int column = reduction_index;
+{first_updates}
+{second_updates}
+  }}
+{first_initialization}
+{second_initialization}
+  __syncthreads();
+  for (int stride = {threads} / 2; stride > 0; stride /= 2) {{
+    if (threadIdx.x < stride) {{
+{first_reduction_updates}
+{second_reduction_updates}
+    }}
+    __syncthreads();
+  }}
+  const float first_value = {first_value};
+  if (threadIdx.x == 0) {{
+    {first_store}
+  }}
+  for (int element = threadIdx.x; element < {columns}; element += blockDim.x) {{
+    const int row = group;
+    const int column = element;
+    {second_store}
+  }}
+}}
+""".strip()
 
 
 def _ffi_axis_fold_kernel(program: AxisFoldProgram, *, symbol: str, prefix: str) -> str:
@@ -1099,9 +1366,13 @@ def _reduced_output_body(program: AxisFoldProgram, reduction_aliases: dict[str, 
 
 
 def _output_store(dtype: DType, index: str, expression: str) -> str:
+    return _output_store_to("output", dtype, index, expression)
+
+
+def _output_store_to(pointer: str, dtype: DType, index: str, expression: str) -> str:
     if dtype is DType.BF16:
-        return f"output[{index}] = __float2bfloat16_rn({expression});"
-    return f"output[{index}] = {expression};"
+        return f"{pointer}[{index}] = __float2bfloat16_rn({expression});"
+    return f"{pointer}[{index}] = {expression};"
 
 
 def _cuda_expression(expression: ScalarExpression, aliases: dict[str, str]) -> str:

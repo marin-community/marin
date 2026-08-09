@@ -11,6 +11,7 @@ from tile_lifetime import (
     compile_stablehlo_row_normalization_backward,
 )
 from tile_lifetime.cuda_axis_fold_codegen import (
+    AxisFoldPipelineSchedule,
     evaluate_axis_fold_pipeline,
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
@@ -176,6 +177,23 @@ def test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline() -> 
 
     np.testing.assert_allclose(actual_input, np.asarray(expected_input, dtype=np.float32), atol=0.016, rtol=0.01)
     np.testing.assert_allclose(actual_scale, np.asarray(expected_scale, dtype=np.float32), atol=0.032, rtol=0.01)
+
+
+def test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing() -> None:
+    _, graph = _natural_jax_vjp(centered=False)
+
+    compilation = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name="shuttle.row_statistic_backward_coalesced_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=8,
+        pipeline_schedule=AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES,
+    )
+
+    assert compilation.generated.pipeline_schedule is AxisFoldPipelineSchedule.COALESCE_COMPATIBLE_ROW_STAGES
+    assert "ShuttleAxisFoldKernel0And1" in compilation.generated.source
+    assert "ShuttleAxisFoldKernel2" in compilation.generated.source
+    assert "inverse_scale_storage = scratch.Allocate" in compilation.generated.source
 
 
 def test_natural_scalar_mutation_changes_generated_pipeline_without_physical_switch() -> None:

@@ -14,6 +14,7 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldInputLayout,
     AxisFoldOutputKind,
     AxisFoldPipeline,
+    AxisFoldPipelineSchedule,
     AxisFoldPipelineStage,
     AxisFoldProgram,
     AxisFoldReassociation,
@@ -199,6 +200,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
     numerical_policy: NumericalPolicy,
     threads: int = 256,
     feature_groups_per_block: int = 1,
+    pipeline_schedule: AxisFoldPipelineSchedule = AxisFoldPipelineSchedule.SEPARATE_STAGES,
 ) -> StableHLORowNormalizationBackwardFfiCompilation:
     """Replace one natural uncentered row-statistic VJP with generated Folds.
 
@@ -222,7 +224,11 @@ def compile_stablehlo_row_normalization_backward_ffi(
         threads=threads,
         feature_groups_per_block=feature_groups_per_block,
     )
-    generated = generate_cuda_axis_fold_pipeline_ffi(pipeline, target_name=target_name)
+    generated = generate_cuda_axis_fold_pipeline_ffi(
+        pipeline,
+        target_name=target_name,
+        schedule=pipeline_schedule,
+    )
     return StableHLORowNormalizationBackwardFfiCompilation(
         recovered=recovered,
         pipeline=pipeline,

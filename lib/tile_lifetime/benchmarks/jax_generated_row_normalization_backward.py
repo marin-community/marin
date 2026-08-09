@@ -23,7 +23,7 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
-from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
+from tile_lifetime.cuda_axis_fold_codegen import AxisFoldPipelineSchedule, generate_cuda_axis_fold_ffi
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
 from tile_lifetime.jax_axis_fold_ffi import call_cuda_axis_fold_ffi, register_cuda_axis_fold_ffi
 from tile_lifetime.plan import NumericalPolicy
@@ -155,6 +155,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         threads=args.threads,
         feature_groups_per_block=args.column_groups_per_block,
+        pipeline_schedule=AxisFoldPipelineSchedule(args.pipeline_schedule),
     )
     generated = compilation.generated
     library = _compile_generated_source(generated.source, args.artifact_directory, args.nvcc, args.architecture)
@@ -417,6 +418,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "target": generated.target_name,
             "source_sha256": generated.source_sha256,
             "semantic_fingerprints": list(generated.semantic_fingerprints),
+            "pipeline_schedule": generated.pipeline_schedule.value,
             "handler_executions": _handler_call_count(library),
         },
         "numerical_contract": {
@@ -460,6 +462,11 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--profile-components", action="store_true")
+    parser.add_argument(
+        "--pipeline-schedule",
+        choices=tuple(schedule.value for schedule in AxisFoldPipelineSchedule),
+        default=AxisFoldPipelineSchedule.SEPARATE_STAGES.value,
+    )
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", choices=("sm_90a", "sm_100a"), required=True)
