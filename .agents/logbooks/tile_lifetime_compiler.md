@@ -3062,3 +3062,45 @@ author: dlwh
   acceptance result. The batch-priority one-H100/four-CPU allocation was
   released, and both session status and pod lookup verified it absent. Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/jax_normalized_exp_contract_forward_h100_v0/`.
+
+### 2026-08-09 - TLTC-XLA-052 thirteen-call natural Grug replay
+
+- Hypothesis: the `shared_map_fused_reverses` composition can own the compact
+  normalized-exp forward/reverse in addition to the routed, weighted,
+  attention-reverse, and axis-Fold regions while preserving the natural JAX
+  train step and remaining within the `1.20x` whole-step target.
+- Measured source: `e34116793d`; holder source: current Iris
+  `eafa4d49f7`. A local and in-pod `require_hlo_rewrite_runtime()` preflight
+  passed on JAX/JAXLIB 0.11.0 with public compiler-IR proto roundtrip,
+  `jaxlib._hlo.hlo_module_from_text`, and `jax.extend.xla` transformation
+  registration/clear. The benchmark command is preserved in the artifact.
+- Config: one NVIDIA H100 80GB HBM3, compute capability 9.0, driver 595.71.05,
+  700 W power limit, batch priority, one requested CPU, 32 GB memory, 50 GB
+  disk, four warmups, and 30 counterbalanced samples. Clocks were not pinned.
+  The benchmark was invoked once with no retries or schedule tuning.
+- Structural result: all thirteen selected targets occur exactly once, and
+  every handler executes exactly 35 times. The generated normalized-exp
+  reverse consumes the generated forward saved state; audits report the old
+  normalized-exp forward/reverse arithmetic dead. Six placement all-reduces
+  remain external. Runtime source/linkage is Torch/Triton-free and contains no
+  semantic atomic accumulation.
+- Correctness: all 53 output leaves match the ordered-FP policy with maximum
+  absolute error `9.760260582e-7`, mean absolute error `7.977541458e-11`, and
+  38 bitwise-equal leaves. Generated and stock XLA paths each retain one stable
+  whole-tree hash over all samples.
+- Performance: generated median `0.731302 ms`; stock XLA median `0.591416 ms`;
+  ratio `1.236525x`; absolute gap `0.139885 ms`. The structural and numerical
+  ownership proof passes, but the performance result is unaccepted because it
+  exceeds `1.20x`.
+- Interpretation: the remaining result is a connected-region launch/schedule
+  problem rather than an ownership or semantic-boundary failure. The simple
+  gap-per-call quotient is `10.760 us` across thirteen calls, but it is not a
+  causal attribution. Do not tune the normalized-exp components in isolation;
+  the next bounded experiment should reduce generic region boundaries or
+  attach compatible stages while retaining the exact generated semantics.
+- Allocation cleanup: earlier holder-submission attempts failed before job
+  creation because of a large dirty bundle and stale Iris client protocol, so
+  they consumed no GPU time. The successful one-H100 holder was released after
+  artifact copy; Iris reports it killed and Kubernetes reports no pod.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_fused_reverses_unaccepted_e3411679_v0/`.

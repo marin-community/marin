@@ -1,0 +1,7 @@
+Session: grug-13call-h100
+Job: /dlwh/dev-gpu-grug-13call-h100
+Final Iris state: killed
+Reason: Terminated by user
+Local session state: absent
+Kubernetes pod lookup: No resources found in iris namespace.
+

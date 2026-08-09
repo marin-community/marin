@@ -1,0 +1,32 @@
+{
+  "audit": {
+    "compiler_ir_module_type": "jaxlib._hlo.HloModule",
+    "compiler_ir_proto_roundtrip": true,
+    "jax_version": "0.11.0",
+    "jaxlib_version": "0.11.0",
+    "text_parser_backend": "jaxlib._hlo.hlo_module_from_text",
+    "transformation_api": "jax.extend.xla",
+    "unavailable_reasons": []
+  },
+  "benchmark_sha256": "007bcf03074ef4bcf38e5f48d944e196798f4952e9c7f0f903f6fd9e616d4be3",
+  "devices": [
+    {
+      "id": 0,
+      "kind": "NVIDIA H100 80GB HBM3",
+      "platform": "gpu"
+    }
+  ],
+  "packages": {
+    "jax": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jaxlib": "0.11.0",
+    "nvidia-cublas": "13.6.1.10",
+    "nvidia-cuda-nvcc": "13.3.73"
+  },
+  "runtime": {
+    "hlo_module_type": "jaxlib._hlo.HloModule",
+    "text_parser_backend": "jaxlib._hlo.hlo_module_from_text",
+    "transformation_api": "jax.extend.xla"
+  }
+}

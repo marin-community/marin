@@ -1,0 +1,13 @@
+{
+  "accepted": false,
+  "acceptance_threshold": 1.2,
+  "baseline_median_ms": 0.591416497627506,
+  "composition_mode": "shared_map_fused_reverses",
+  "generated_median_ms": 0.731301504856674,
+  "generated_over_baseline": 1.2365253722043992,
+  "maximum_absolute_error": 9.760260581970215e-07,
+  "mean_absolute_error": 7.977541457944071e-11,
+  "reason": "The exact thirteen-call generated boundary passes structural, numerical, determinism, and runtime-dependency audits but exceeds the 1.20x full-step performance threshold.",
+  "source_revision": "e34116793d63f8d1a2c61c21c02b1ff37d44f0d6"
+}
+

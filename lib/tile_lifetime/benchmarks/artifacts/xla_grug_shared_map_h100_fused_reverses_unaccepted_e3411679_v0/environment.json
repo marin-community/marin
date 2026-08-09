@@ -1,0 +1,46 @@
+{
+  "allocation": {
+    "disk": "50GB",
+    "gpu_count": 1,
+    "gpu_variant": "H100",
+    "job": "/dlwh/dev-gpu-grug-13call-h100",
+    "memory": "32GB",
+    "pod": "iris-dlwh-dev-gpu-grug-13call-h100-20fe7231-0-cf67e793077ab02e",
+    "priority": "batch",
+    "requested_cpu": 1
+  },
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": null,
+    "XLA_FLAGS": null
+  },
+  "protocol": {
+    "benchmark_replay_count": 1,
+    "composition_mode": "shared_map_fused_reverses",
+    "repeats": 30,
+    "schedule_tuning": false,
+    "warmup": 4
+  },
+  "source": {
+    "branch": "research/shuttle-clean-helper-boundaries",
+    "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+    "shuttle_revision": "e34116793d63f8d1a2c61c21c02b1ff37d44f0d6"
+  },
+  "toolchain": {
+    "packages": {
+      "flash-attn-4": "4.0.0b16",
+      "jax": "0.11.0",
+      "jax-cuda13-pjrt": "0.11.0",
+      "jax-cuda13-plugin": "0.11.0",
+      "jaxlib": "0.11.0",
+      "numpy": "2.5.2",
+      "nvidia-cublas": "13.6.1.10",
+      "nvidia-cuda-nvcc": "13.3.73",
+      "nvidia-cutlass-dsl": "4.5.2",
+      "quack-kernels": "0.5.0",
+      "scipy": "1.18.0",
+      "torch": "2.11.0+cu128",
+      "triton": "3.6.0"
+    },
+    "python": "3.12.13"
+  }
+}
