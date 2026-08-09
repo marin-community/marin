@@ -24,6 +24,23 @@ from marin.execution.lazy import StepContext
 from experiments.grug.moe_hero_ep import grugmuon_hero, jax_runtime, launch, model, small_scale_abl_launch, train
 
 
+def _grug_run_config(
+    *,
+    watch_interval: int = 1,
+    watch_mode: train.WatchMode = train.WatchMode.INLINE,
+    processes_per_task: int = 1,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        resources=object(),
+        processes_per_task=processes_per_task,
+        worker_pip_packages=(),
+    )
+
+
 def test_hero_run_without_shape_overrides_uses_the_selected_model():
     step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -138,15 +155,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-        worker_pip_packages=(),
-    )
+    config = _grug_run_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -163,21 +172,23 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "true")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-        worker_pip_packages=(),
-    )
+    config = _grug_run_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
 
     assert os.environ["JAX_ENABLE_PGLE"] == "true"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+
+
+def test_run_grug_disables_pgle_for_multiple_processes_per_task(monkeypatch):
+    monkeypatch.delenv("JAX_ENABLE_PGLE", raising=False)
+    config = _grug_run_config(watch_interval=0, processes_per_task=4)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
 
 
 @pytest.mark.parametrize(
@@ -192,15 +203,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
     monkeypatch, watch_mode, watch_interval, expected_overlap_limit
 ):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
-            watch_mode=watch_mode,
-        ),
-        resources=object(),
-        processes_per_task=1,
-        worker_pip_packages=(),
-    )
+    config = _grug_run_config(watch_interval=watch_interval, watch_mode=watch_mode)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)

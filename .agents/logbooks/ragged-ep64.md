@@ -334,3 +334,281 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Runtime controls: ragged one-shot disabled, `NCCL_BUFFSIZE=1048576`, no grouped launch override, watch interval 0, profiler disabled, eval interval 1000, and no expected periodic checkpoint before completion.
 - Serialization: launch one EP16 baseline only. It may occupy the currently free four nodes, but no second small arm launches until it terminates. The EP64 job remains queued at interactive priority.
 - Source commit, command, output root, W&B identity, and Iris jobs: pending snapshot and submission.
+
+### 2026-08-09 01:25 UTC - Retire the full-rack run and launch the EP16 screen
+
+- `RA2A-005` topology result: every worker started four JAX processes with one visible GB200 each, for 64 one-device processes. An on-demand thread profile during attempt 0 placed the sampled main thread in `backend_compile_and_load`, with idle GPUs, distinguishing normal compilation from the executable-dispatch spin in `RA2A-003/004`.
+- Capacity result: production repeatedly preempted or gated the interactive full-rack job. Iris recorded 19 task preemptions across the 16-worker gang by its final attempt. Attempt 3 obtained all 16 nodes at 01:19 UTC, but no optimizer step completed before the run was retired.
+- Terminal state: at user direction, stop coordinator `/power/ra2a-005-process-per-gpu-20260808-coord` at 01:22:50 UTC and continue only with the four-node screen. Iris reports the child killed, all 16 tasks terminal, and `Terminated by user`; it no longer consumes GPUs. This is an operational retirement, not evidence that process-per-GPU failed.
+- EP16 source: commit `eb3a2c1d20` adds the four-node GB200 target and ragged EP flavor to the small-scale launcher. The model is explicitly d768 rather than auto-sized: 8 layers, hidden size 768, E192, and expert intermediate size 384. It preserves 65,536 tokens per EP shard but is approximately 30 times lighter per GPU than the d6144 hero model.
+- EP16 jobs: coordinator `/power/ra2a-s01-ep16-baseline-20260809-coord`; child `/power/ra2a-s01-ep16-baseline-20260809-coord/grug-train-ra2a-s01-ep16-baseline-20260809`; submitted at 01:13:43 UTC. The four workers remain Kueue-gated pending four whole nodes.
+- EP16 output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s01-ep16-baseline-20260809/2026.08.09`; W&B entity `marin-community`, project `marin_moe`, group `moe-hero-ep-small-abl`, run `ra2a-s01-ep16-baseline-20260809`.
+- Placement control: before accepting any timing window, record the assigned worker nodes and their rack/topology labels. Compare treatments only under the same in-rack or cross-rack condition. Rerun or report separately when placement changes, because a cross-rack baseline is not exchangeable with an in-rack treatment.
+- Next action: wait for the serialized EP16 baseline to admit, verify four processes per node and placement, then score steps 5-24. Future experiments use this four-node screen; no full-rack relaunch is queued.
+
+### 2026-08-09 01:30 UTC - EP16 baseline admits in one rack
+
+- Kueue admitted the four-worker gang at 01:26:48 UTC. The workload requested `required: ds.coreweave.com/nvlink.domain`, as Fray derives for a GB200 gang that fits one rack.
+- Nodes: `s3bsxs64`, `s3jtxs64`, `s1mwxs64`, and `s1nrxs64`. All four report NVLink domain `DH1-392-US-EAST-08A`, leafgroup `14052417914232`, and superpod `0`. This baseline is explicitly single-rack.
+- Process topology: logs show process IDs 0-15, four per worker, with one `IRIS_MULTIGPU_LOCAL_DEVICE_IDS` value and one visible device per process. No task failure or preemption occurred during admission.
+- Initialization observation: at 01:29 UTC, a sampled worker's four GPUs were idle with 143,255 MiB allocated. An on-demand thread dump placed the sampled main process waiting for the background data loader; its active loader thread was inside the first JIT-backed `get_batch`. This is data initialization rather than the prior training-executable spin.
+- PGLE observation: all sampled ranks warned that PGLE collected an empty trace. This makes PGLE-off a concrete early treatment after a stable baseline, not merely a generic knob.
+- Next action: continue monitoring through the first optimizer step and score steps 5-24 if the run completes.
+
+### 2026-08-09 01:32 UTC - EP16 attempt 0 is preempted during initialization
+
+- Event: at 01:30:49 UTC, one process disappeared while ranks were compiling the first data-loader batch. The remaining processes reported lost coordination-service RPCs and aborted as expected when a distributed peer vanished.
+- Classification: Iris recorded one preemption and recreated the four-worker gang as workload attempt 1. It did not record a task failure. The fatal Python abort and segmentation-fault dumps are teardown fallout, not evidence of a ragged collective or model failure.
+- Progress: no optimizer step completed. The single-rack placement and one-process-per-GPU topology checks from attempt 0 remain valid, but no timing sample exists.
+- Next action: wait for attempt 1 at interactive priority without changing the model, rack placement, or NCCL controls.
+
+### 2026-08-09 01:45 UTC - EP16 remains production-preempted
+
+- Attempts: Iris now records three preemptions. One later admission launched all 16 local ranks at 01:36:30-32 UTC and received SIGTERM at 01:36:46 UTC, before JAX initialization completed. The other admission was also too short to emit a training marker.
+- Metrics: none of attempts 0-2 completed an optimizer step. No NCCL, CUDA, allocator, or model error precedes their termination signals.
+- Capacity: attempt 3 is Kueue-gated. Its current diagnosis excludes 200 of 202 nodes on CPU and the other two on memory. No request-shape change can create four same-domain nodes while production holds them.
+- Decision: retain the same interactive EP16 baseline and retry budget. Do not downsize further or change performance controls before a clean baseline.
+- Next action: continue the single monitor at the normal babysitting cadence.
+
+### 2026-08-09 02:06 UTC - EP16 retry budget remains healthy
+
+- State: Iris records seven production preemptions, zero failures, and attempt 7 Kueue-gated.
+- Retry semantics: the coordinator's launch-time `--max-retries 10` controls failure retries. The Fray child request separately defaults `max_retries_preemption` to 100. The current churn is therefore not near the child retry ceiling.
+- Decision: no relaunch or retry-budget change. Continue waiting with the exact baseline.
+
+### 2026-08-09 02:26 UTC - EP16 process-per-GPU baseline reproduces the first-step stall
+
+- Run: `ra2a-s01-ep16-baseline-20260809`; source commit `eb3a2c1d20`; one-shot fallback enabled by setting the one-shot kernel flag false; `NCCL_BUFFSIZE=1048576`; latency hiding enabled; collective overlap limit 4.
+- Surviving attempt: after eight production-preempted gang attempts, attempt 8 ran on `s45txs64`, `s5xm6j84`, `s6htxs64`, and `s6rrxs64`. All four share NVLink domain `DH1-125-US-EAST-08A` and leafgroup `3799780806351`.
+- Reachability: all 16 one-device JAX processes initialized, loaded NCCL 2.30.7, completed first-batch JIT, and traced/compiled the training step. This rules out startup compilation and the discarded four-device-process topology as the sole cause.
+- Result: failed before step 0 by loss of progress. Multiple on-demand thread samples placed rank main threads at JAX 0.11 `pxla.py:420`, the `execute_sharded` call. Three GPU samples during the confirmation window were stable at 100% utilization, 149,435-149,447 MiB allocated, and 211-232 W. No step metric, NCCL warning, CUDA error, OOM, or traceback preceded the stall.
+- Terminal state: stopped coordinator `/power/ra2a-s01-ep16-baseline-20260809-coord` at 02:25:44 UTC under the no-progress contract. Iris reports all four child tasks killed by user; the run no longer consumes GPUs.
+- Interpretation: one process per GPU avoids the multi-device-process ambiguity but does not by itself make ragged fallback progress, even at EP16. The remaining high-signal hypothesis is an XLA scheduling deadlock or incompatible overlap schedule around the ragged private send/recv fallback.
+- Next action: test latency hiding off as the first one-variable reachability treatment.
+
+### 2026-08-09 02:27 UTC - EP16 latency-hiding-off launch contract
+
+- Hypothesis: disabling XLA's latency-hiding scheduler prevents the low-power first-executable stall by avoiding an invalid or circular overlap schedule around ragged private send/recv.
+- Controlled change: add only `--xla_gpu_enable_latency_hiding_scheduler=false`. `_apply_hero_ep_runtime_defaults` recognizes the explicit flag name and does not append its `true` default. Process-per-GPU, one-shot off, 1 MiB FIFO, overlap limit 4, disabled command buffers, PGLE, allocator, d768 EP16 model, E192 top-4 routing, batch, and metric schedule remain fixed.
+- Jobs: coordinator `/power/ra2a-s02-ep16-lhs-off-20260809-coord`; child `/power/ra2a-s02-ep16-lhs-off-20260809-coord/grug-train-ra2a-s02-ep16-lhs-off-20260809`; submitted at 02:26:09 UTC. The child had all four tasks assigned at 02:26:59 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s02-ep16-lhs-off-20260809/2026.08.09`; W&B entity `marin-community`, project `marin_moe`, group `moe-hero-ep-small-abl`, run `ra2a-s02-ep16-lhs-off-20260809`.
+- Stop and score: stop on allocator/CUDA/NCCL failure or the same confirmed low-power no-progress signature. If it progresses, score steps 5-24 before any step-20-adjacent periodic work; watch interval is 0, profiler off, and eval interval 1000.
+- Next action: verify the assigned rack and effective XLA flag, then monitor to the first step.
+
+### 2026-08-09 02:48 UTC - Latency-hiding attempt is confounded by preemption and stale bootstrap state
+
+- Placement and flags: the first S02 attempt used `s2zpxs64`, `s5trxs64`, `s5wvxs64`, and `s1wvxs64`, all in NVLink domain `DH1-394-US-EAST-08A`. The pod carried one-shot false, latency hiding false, collective overlap limit 4, disabled command buffers, and `NCCL_BUFFSIZE=1048576`.
+- Partial reachability result: attempt 1 completed training-step compilation and entered `pxla.py:420` on sampled ranks. All four GPUs on task 2 were at 100% utilization, 150,477-150,489 MiB allocated, and 207-233 W. No step, warning, error, or traceback appeared before production preempted the gang roughly one minute later. This matches the baseline signature but is shorter than the no-progress window, so it is not a completed treatment result.
+- Retry confounder: attempt 2 was preempted during JAX initialization. On attempt 3, the fifteen nonzero processes resolved coordinator port `27055`, while process 0 selected and started the new service on `47647`. Thread dumps put all processes in `jax.distributed.initialize`; this generation could never form a JAX world and says nothing about ragged all-to-all.
+- Decision: stop S02 at 02:47:37 UTC and relaunch the identical treatment under a fresh job identity instead of allowing the stale endpoint generation to consume GPUs.
+- Fresh job: coordinator `/power/ra2a-s02b-ep16-lhs-off-20260809-coord`; child `/power/ra2a-s02b-ep16-lhs-off-20260809-coord/grug-train-ra2a-s02b-ep16-lhs-off-20260809`; submitted at 02:47:57 UTC. The output and W&B run ID are `ra2a-s02b-ep16-lhs-off-20260809`.
+- Next action: verify S02b placement and bootstrap port agreement, then require the full no-progress window or steps 5-24 before classifying latency hiding.
+
+### 2026-08-09 02:59 UTC - Disabling latency hiding does not restore ragged progress
+
+- Clean run: `ra2a-s02b-ep16-lhs-off-20260809`. Attempt 0 was production-preempted during pod initialization. Attempt 1 ran on `s1nrxs64`, `s3bsxs64`, `s3jtxs64`, and `s1mwxs64`, all in NVLink domain `DH1-392-US-EAST-08A`.
+- Bootstrap control: process 0 selected and started coordinator port `21765`; all 16 processes used `10.186.213.65:21765`. This removes the stale-endpoint confounder found in S02.
+- Result: no optimizer step completed. Repeated thread samples placed the main threads at JAX 0.11 `pxla.py:420`. GPU samples over the confirmation interval remained at 100% utilization, 150,461-150,469 MiB allocated, and 210-240 W. No NCCL warning, CUDA error, OOM, traceback, or step metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s02b-ep16-lhs-off-20260809-coord` at 02:59:16 UTC after more than three minutes in the stable execute signature.
+- Interpretation: XLA latency hiding is not the necessary cause of the ragged fallback stall. S02 and S02b also confirm that the empty PGLE warnings are not merely masking a latency-hiding schedule that would progress with the scheduler disabled.
+- Next arm: restore latency hiding and change only `--xla_gpu_experimental_parallel_collective_overlap_limit` from 4 to 1.
+
+### 2026-08-09 03:00 UTC - EP16 overlap-limit-one launch contract
+
+- Hypothesis: limiting XLA to one parallel collective prevents the ragged send/receive fallback from oversubscribing or circularly ordering concurrent NCCL work.
+- Controlled change: relative to S01, set `--xla_gpu_experimental_parallel_collective_overlap_limit=1`. Retain latency hiding true, one-shot false, process-per-GPU, the 1 MiB FIFO, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s03-ep16-overlap1-20260809-coord`; child `/power/ra2a-s03-ep16-overlap1-20260809-coord/grug-train-ra2a-s03-ep16-overlap1-20260809`; submitted at 02:59:31 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s03-ep16-overlap1-20260809/2026.08.09`; W&B run `ra2a-s03-ep16-overlap1-20260809`.
+- Next action: verify one-rack placement, effective flags, and coordinator-port agreement before accepting reachability or timing evidence.
+
+### 2026-08-09 03:11 UTC - Collective overlap limit one reduces memory but not the stall
+
+- Run: `ra2a-s03-ep16-overlap1-20260809`; nodes `s1mwxs64`, `s1nrxs64`, `s3bsxs64`, and `s3jtxs64`; all in NVLink domain `DH1-392-US-EAST-08A`; no preemption or task retry.
+- Effective control: the pod carried overlap limit 1, latency hiding true, one-shot false, disabled command buffers, and the 1 MiB NCCL FIFO. Resident memory fell to 149,443-149,455 MiB, approximately 1 GiB below S02b, confirming that the treatment changed the compiled/runtime footprint.
+- Result: no optimizer step completed. Main-thread samples remained at `pxla.py:420` for more than three minutes after compilation. GPUs held 100% utilization and 210-240 W. No NCCL warning, CUDA error, OOM, traceback, or metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s03-ep16-overlap1-20260809-coord` at 03:11:11 UTC.
+- Interpretation: reducing XLA's parallel collective overlap does not restore progress. The stable memory delta suggests the flag is effective, so this is not a no-op negative.
+- Next arm: restore overlap limit 4 and enable `NCCL_LAUNCH_ORDER_IMPLICIT=1`, which NCCL 2.30 documents as ordering operations from different communicators on the same device to prevent deadlock while permitting overlap on CUDA 12.3 and newer.
+
+### 2026-08-09 03:12 UTC - EP16 implicit NCCL ordering launch contract
+
+- Hypothesis: host-program ordering across NCCL communicators prevents an inconsistent ragged send/receive launch order from deadlocking the GPU.
+- Controlled change: relative to S01, add only `NCCL_LAUNCH_ORDER_IMPLICIT=1`. Restore overlap limit 4; retain latency hiding, one-shot false, process-per-GPU, the 1 MiB FIFO, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s04-ep16-implicit-order-20260809-coord`; child `/power/ra2a-s04-ep16-implicit-order-20260809-coord/grug-train-ra2a-s04-ep16-implicit-order-20260809`; submitted at 03:11:31 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s04-ep16-implicit-order-20260809/2026.08.09`; W&B run `ra2a-s04-ep16-implicit-order-20260809`.
+- Next action: verify placement, effective environment, and clean bootstrap, then apply the same reachability contract.
+
+### 2026-08-09 03:21 UTC - Implicit NCCL launch ordering does not restore progress
+
+- Run: `ra2a-s04-ep16-implicit-order-20260809`; nodes `s1nrxs64`, `s3bsxs64`, `s1mwxs64`, and `s3jtxs64`; all in NVLink domain `DH1-392-US-EAST-08A`; no preemption or task retry.
+- Effective control: the pod carried `NCCL_LAUNCH_ORDER_IMPLICIT=1`, one-shot false, overlap limit 4, latency hiding true, disabled command buffers, and the 1 MiB FIFO.
+- Result: no optimizer step completed. Main-thread samples stayed at `pxla.py:420` for more than three minutes. GPUs remained at 100% utilization, 149,435-149,447 MiB allocated, and 210-235 W. No NCCL warning, CUDA error, OOM, traceback, or metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s04-ep16-implicit-order-20260809-coord` at 03:21:09 UTC.
+- Interpretation: NCCL's implicit ordering across communicators does not resolve this stall. Either the problematic operations do not span separately ordered communicators, or the loss of progress is below/elsewhere than this host launch-order safeguard.
+- Next arm: disable multi-node NVLink with `NCCL_MNNVL_ENABLE=0`. NCCL documents MNNVL as requiring cuMem support, and the earliest ragged fallback attempt failed in `ncclCuMemAlloc`, so this isolates the transport family most directly implicated by prior evidence.
+
+### 2026-08-09 03:22 UTC - EP16 MNNVL-off launch contract
+
+- Hypothesis: the ragged fallback stalls specifically on the cuMem-backed multi-node NVLink send/receive path; forcing another transport restores progress.
+- Controlled change: relative to S01, add only `NCCL_MNNVL_ENABLE=0`. Retain one-shot false, process-per-GPU, the 1 MiB FIFO, overlap limit 4, latency hiding, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s05-ep16-mnnvl-off-20260809-coord`; child `/power/ra2a-s05-ep16-mnnvl-off-20260809-coord/grug-train-ra2a-s05-ep16-mnnvl-off-20260809`; submitted at 03:21:24 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s05-ep16-mnnvl-off-20260809/2026.08.09`; W&B run `ra2a-s05-ep16-mnnvl-off-20260809`.
+- Next action: verify placement, effective environment, and clean bootstrap, then apply the same reachability contract.
+
+### 2026-08-09 03:30 UTC - Disabling MNNVL changes memory but not progress
+
+- Run: `ra2a-s05-ep16-mnnvl-off-20260809`; nodes `s69vxs64`, `s38vxs64`, `s5xvxs64`, and `s45sxs64`; all in NVLink domain `DH1-129-US-EAST-08A`; no preemption or task retry.
+- Effective control: the pod carried `NCCL_MNNVL_ENABLE=0`, one-shot false, overlap limit 4, latency hiding true, disabled command buffers, and the 1 MiB FIFO.
+- Result: no optimizer step completed. Main-thread samples remained at `pxla.py:420` for more than three minutes. GPUs held 100% utilization, 145,011-145,023 MiB allocated, and 195-231 W. No NCCL warning, CUDA error, OOM, traceback, or metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s05-ep16-mnnvl-off-20260809-coord` at 03:30:22 UTC.
+- Interpretation: the approximately 4.4 GiB memory reduction confirms the transport control is effective, but progress remains lost. The stall is therefore not specific to the cuMem-backed MNNVL path.
+- Next arm: set `NCCL_RUNTIME_CONNECT=0` so NCCL establishes peer connections during communicator initialization rather than lazily on first send/receive.
+
+### 2026-08-09 03:31 UTC - EP16 eager-connect launch contract
+
+- Hypothesis: first-use lazy peer connection interacts badly with the ragged send/receive launch set; establishing all peers during communicator initialization avoids the first-step stall.
+- Controlled change: relative to S01, add only `NCCL_RUNTIME_CONNECT=0`. Retain one-shot false, process-per-GPU, the 1 MiB FIFO, overlap limit 4, latency hiding, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s06-ep16-eager-connect-20260809-coord`; child `/power/ra2a-s06-ep16-eager-connect-20260809-coord/grug-train-ra2a-s06-ep16-eager-connect-20260809`; submitted at 03:30:38 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s06-ep16-eager-connect-20260809/2026.08.09`; W&B run `ra2a-s06-ep16-eager-connect-20260809`.
+- Next action: verify placement, effective environment, and clean bootstrap, then apply the same reachability contract.
+
+### 2026-08-09 03:42 UTC - Re-rank the queue from the JAX 0.11 ragged lowering
+
+- Exact source: the GPU environment resolves JAX/jaxlib 0.11.0, whose pinned OpenXLA revision is `131bf41acb46`. Its defaults leave the dense ragged decomposer off, enable one-shot, enable the NCCL-backed one-shot barrier, and select private ragged memory. The current fallback arms override only one-shot to false.
+- Fallback mechanics: JAX copies the four metadata arrays to the host, performs a dense all-to-all on sender-side output offsets, then launches one grouped send and receive for every `(local update, peer)` pair. E192/EP16 has 12 local expert updates per peer and 16 peers, or 192 send/receive pairs per ragged call. The three-minute signature is operationally unusable, but a Python frame at `execute_sharded` cannot distinguish a hard deadlock from catastrophic serialized progress.
+- Next reachability arm: after S06, enable `--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true` while retaining one-shot false. This XLA pass rewrites dispatch into an inter-host all-gather plus an intra-host ragged all-to-all, directly reducing cross-host P2P launch fanout and affecting only graphs that contain ragged all-to-all.
+- Following arms: disable async wrapping specifically with `--xla_gpu_disable_async_collectives=RAGGEDALLTOALL`; restore one-shot at EP16 under process-per-GPU to test whether the EP64 device-32 illegal address is size-specific; use the dense ragged decomposer only as a correctness diagnostic.
+- Performance gate: the completed fixed-EP64 ladder run `mhep-ladder-20260808c-ep64-d768` reports 6.5845% p50 MFU over 500 samples, so d768 is too small to be a credible absolute 20% target. Once a treatment reaches steps, repeat it on the same four-node domain with a d6144/L48, E48, top-4, latent-3072, i6272, batch-256 EP16 proxy. Dividing both hero experts and global batch by four preserves three resident experts, 65,536 tokens, and 16 sequences per GPU, plus pooled ragged receiver load; this makes per-GPU model memory, active compute, and routing load representative. Only then tune FIFO size, `NCCL_PROTO=Simple`, P2P channels, and any NVLS/SHARP setting relevant to ordinary collectives introduced by decomposition.
+- Queue state: S06 remains Kueue-gated with zero preemptions. Its workload excludes 200 of 202 nodes on CPU and the remaining two on memory. A direct join of live GB200 nodes and pod GPU requests finds only five fully idle nodes: at most two in `DH1-125` and two in `DH1-126`, plus one in `DH1-122`; one additional `DH1-393` node has one of four GPUs occupied. No rack has four whole idle nodes, so reducing the inherited 120-CPU/850-GiB request would not admit the gang.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229621669
+- MFU calibration update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229650847
+
+### 2026-08-09 04:09 UTC - Eager peer connection does not restore useful progress
+
+- Run: `ra2a-s06-ep16-eager-connect-20260809`; nodes `s5trxs64`, `s1wvxs64`, `s5wvxs64`, and `s2zpxs64`; all in NVLink domain `DH1-394-US-EAST-08A`.
+- Bootstrap control: all 16 one-device JAX processes used coordinator `10.186.213.145:64279`. The pod carried `NCCL_RUNTIME_CONNECT=0`, `NCCL_BUFFSIZE=1048576`, one-shot false, overlap limit 4, latency hiding true, disabled command buffers, PGLE, and the `cuda_async` allocator.
+- Result: no optimizer step completed during approximately eight minutes after the first training execute began. The sampled worker main thread remained at JAX 0.11 `pxla.py:420`; GPUs stayed at 100% utilization, 150,583-150,603 MiB allocated, and 207-232 W. Two samples 30 seconds apart of every NVLink counter on GPU 0 showed zero transmitted and received byte delta despite the 100% busy reading. No NCCL warning, CUDA error, OOM, traceback, or W&B step metric appeared.
+- Terminal state: production preempted the gang at 04:07:00 UTC, before the planned ten-minute extended observation ended. The coordinator was explicitly stopped at 04:09:38 UTC so the currently deployed Iris controller could not retry this job through the stale JAX endpoint bug.
+- Interpretation: eager NCCL connection setup does not produce useful first-step progress. The production preemption prevents calling this a treatment-originated terminal failure, but eight minutes of invariant GPU state and zero NVLink payload movement is stronger evidence of a fixed device-side spin than the earlier three-minute observations.
+- Next arm: enable the JAX 0.11 multi-host ragged decomposer while retaining the non-one-shot path. This is the first treatment that changes the collective graph rather than scheduling or transport around the same 192-pair-per-call fallback.
+
+### 2026-08-09 04:10 UTC - EP16 multi-host ragged decomposition launch contract
+
+- Hypothesis: JAX 0.11's multi-host ragged decomposer restores progress by replacing the fallback's cross-host peer fanout with an inter-host all-gather followed by intra-host ragged all-to-all.
+- Controlled change: relative to S01, add only `--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true`. Retain one-shot false, process-per-GPU, `NCCL_BUFFSIZE=1048576`, overlap limit 4, latency hiding, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s07-ep16-multihost-decomp-20260809-coord`; expected child `/power/ra2a-s07-ep16-multihost-decomp-20260809-coord/grug-train-ra2a-s07-ep16-multihost-decomp-20260809`; submitted at 04:10:44 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s07-ep16-multihost-decomp-20260809/2026.08.09`; W&B run `ra2a-s07-ep16-multihost-decomp-20260809`.
+- Next action: verify one-domain placement, exact flags, all 16 bootstrap endpoints, and whether the rewritten graph reaches the first step.
+
+### 2026-08-09 04:20 UTC - Exact-shape four-node hero gate is ready
+
+- Launcher: `experiments.grug.moe_hero_ep.launch` now accepts an explicit `ep_nodes` value for expert-parallel flavors. It derives both the expert axis and requested node replicas from that value while retaining the existing 16-node default and four processes per task.
+- Proxy contract: `--ep-nodes 4 --batch-size 256 --num-experts 48 --num-steps 25 --flavor ep-ragged`. Relative to the EP64 hero, dividing nodes, global batch, and routed experts by four preserves d6144/L48, intermediate 6272, latent 3072, top-4, capacity 1.33, three resident experts per GPU, 65,536 tokens and 16 sequences per GPU, and pooled receiver load.
+- Metric hygiene: default watch interval, eval, profiler, and checkpoint saving are all zero/off. Score steps 5-24. The W&B tag records the EP node count.
+- Verification: all 23 focused EP hero tests pass; the required changed-file Ruff, Black, Pyrefly, header, AST, conflict, whitespace, and Markdown checks pass.
+- Queue: S07 remains Kueue-gated. Kueue currently reports CPU as the first exclusion on all 202 nodes, but the most recent direct GPU/rack inventory found only five whole idle GB200 nodes split 2+2+1 across domains, so reducing CPU would not admit a same-domain four-node gang.
+- Recheck at 04:43 UTC: the live node/pod join is unchanged in substance. `DH1-126` and `DH1-125` each have two whole idle nodes, `DH1-122` has one, and `DH1-393` has only three free GPUs on a partially occupied node. No domain can fit S07, independent of its CPU request.
+- Next action: launch this exact-shape gate only after a reachability treatment completes optimizer steps on d768.
+
+### 2026-08-09 04:24 UTC - Attempt-scoped JAX coordinator endpoint fix merged
+
+- Resolution: https://github.com/marin-community/marin/pull/8079 merged. Iris now includes the task attempt ID in the JAX coordinator endpoint key, preventing a retry from resolving the prior attempt's port before rank 0 publishes the replacement.
+- Verification: the regression injects stale port 27055 and fresh port 47647 and verifies all ranks resolve 47647. Fifteen focused tests and the full Iris suite passed; required CI was green at merge.
+- Durable record: https://echo.oa.dev/wiki/100
+- Deployment caveat: merge does not imply that today's controller has rolled out. Continue stopping preempted experiment parents and using fresh job identities until deployment is verified.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229748426
+
+### 2026-08-09 05:05 UTC - Multi-host decomposition does not restore progress
+
+- Run: `ra2a-s07-ep16-multihost-decomp-20260809`; nodes `s3bsxs64`, `s3jtxs64`, `s4lqxs64`, and `s62pys64`; all in NVLink domain `DH1-392-US-EAST-08A`; no preemption or retry.
+- Effective control: the pod carried `--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true`, one-shot false, overlap limit 4, latency hiding true, disabled command buffers, `NCCL_BUFFSIZE=1048576`, PGLE, and `cuda_async`.
+- Bootstrap: all 16 one-device processes covered global process IDs 0-15 and used coordinator `10.186.213.59:42079`. NCCL was 2.30.7.
+- Compile control: the first 05:00 UTC thread sample put all task-0 worker mains in `backend_compile_and_load` at `compiler.py:350`. The apparent loader warning came from the separate prefetch thread compiling its batch transform. By 05:02 UTC the worker mains had moved to `pxla.py:420`, establishing the first-execute boundary.
+- Result: no optimizer step completed in more than three minutes of execute. The 05:05 thread sample still placed worker mains at `pxla.py:420`; GPUs remained at 100%, 149,467-149,475 MiB, and 211-235 W. All 36 Tx/Rx counters for GPU 0 had exactly zero delta from the first-execute sample. No NCCL warning, CUDA error, OOM, traceback, or W&B step metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s07-ep16-multihost-decomp-20260809-coord` at 05:05:26 UTC under the no-progress contract.
+- Interpretation: the JAX 0.11 multi-host decomposer changes compilation but does not change the fixed execute signature. Either the decomposed graph still reaches a broken intra-host ragged thunk, or the loss of progress occurs in a shared schedule/runtime layer before payload movement.
+- Next arm: retain the baseline graph and disable async wrapping specifically for `RAGGEDALLTOALL`.
+
+### 2026-08-09 05:06 UTC - EP16 synchronous-ragged launch contract
+
+- Hypothesis: XLA's async collective schedule wraps ragged all-to-all in a dependency cycle or unsupported execution path; keeping ragged synchronous restores progress without disabling async handling for other collective kinds.
+- Controlled change: relative to S01, add only `--xla_gpu_disable_async_collectives=RAGGEDALLTOALL`. Retain one-shot false, process-per-GPU, `NCCL_BUFFSIZE=1048576`, overlap limit 4, latency hiding, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s08-ep16-sync-ragged-20260809-coord`; expected child `/power/ra2a-s08-ep16-sync-ragged-20260809-coord/grug-train-ra2a-s08-ep16-sync-ragged-20260809`; submitted at 05:06:13 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s08-ep16-sync-ragged-20260809/2026.08.09`; W&B run `ra2a-s08-ep16-sync-ragged-20260809`.
+- Next action: verify one-domain placement, exact flags, and bootstrap agreement, then distinguish compile from execute with thread samples.
+
+### 2026-08-09 05:18 UTC - Synchronous ragged scheduling does not restore progress
+
+- Run: `ra2a-s08-ep16-sync-ragged-20260809`; reused S07's `s3bsxs64`, `s3jtxs64`, `s4lqxs64`, and `s62pys64` hosts in `DH1-392-US-EAST-08A`, giving a direct same-hardware comparison; no preemption or retry.
+- Effective control: the pod carried `--xla_gpu_disable_async_collectives=RAGGEDALLTOALL`, one-shot false, overlap limit 4, latency hiding true, disabled command buffers, `NCCL_BUFFSIZE=1048576`, PGLE, and `cuda_async`.
+- Bootstrap: global process IDs 0-15 were each bound to one GPU and used coordinator `10.186.213.59:21727`. NCCL was 2.30.7.
+- Compile control: worker mains progressed from initial batch wait through CuTeDSL compilation and `backend_compile_and_load`, then entered `pxla.py:420` by 05:14:07 UTC.
+- Result: no optimizer step completed in more than four minutes of execute. At the cutoff, the sampled worker main remained at `pxla.py:420`; GPUs stayed at 100%, 149,475-149,485 MiB, and 207-235 W. All 36 GPU-0 Tx/Rx counters had zero delta from the first-execute sample. No NCCL warning, CUDA error, OOM, traceback, or W&B step metric appeared.
+- Terminal state: stopped coordinator `/power/ra2a-s08-ep16-sync-ragged-20260809-coord` at 05:18:35 UTC.
+- Interpretation: ragged-specific async wrapping is not the necessary cause. The approximately 10 MiB footprint delta relative to S07 confirms a distinct executable, but it retains the same no-payload device spin.
+- Next arm: restore JAX 0.11's default one-shot ragged kernel on EP16/process-per-GPU under a bounded crash/no-progress contract. This isolates whether S01's EP64 device-32 illegal address was specific to the larger world or old multi-GPU process topology.
+
+### 2026-08-09 05:19 UTC - EP16 one-shot ragged launch contract
+
+- Hypothesis: the one-shot kernel's earlier CUDA illegal address was specific to EP64 or the discarded one-process-per-four-GPU topology; on EP16/process-per-GPU the fused implementation may be both correct and substantially faster than the send/receive fallback.
+- Controlled change: relative to S01, remove only `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`, restoring the JAX 0.11 default. Retain process-per-GPU, `NCCL_BUFFSIZE=1048576`, overlap limit 4, latency hiding, disabled command buffers, PGLE, allocator, model, routing, batch, and metric controls.
+- Jobs: coordinator `/power/ra2a-s09-ep16-oneshot-20260809-coord`; expected child `/power/ra2a-s09-ep16-oneshot-20260809-coord/grug-train-ra2a-s09-ep16-oneshot-20260809`; submitted at 05:19:32 UTC.
+- Output and tracking: `s3://marin-us-east-02a/marin/grug/ra2a-s09-ep16-oneshot-20260809/2026.08.09`; W&B run `ra2a-s09-ep16-oneshot-20260809`.
+- Stop contract: stop immediately on the prior illegal-address signature or any allocator/NCCL failure. Otherwise require an optimizer step or the same confirmed execute no-progress window.
+
+### 2026-08-09 05:27 UTC - One-shot arm preempted before model execution
+
+- Run: `ra2a-s09-ep16-oneshot-20260809`; nodes `s1wvxs64`, `s5trxs64`, `s2zpxs64`, and `s5wvxs64`; all in NVLink domain `DH1-394-US-EAST-08A`.
+- Effective control: all 16 one-device processes used coordinator `10.186.213.145:19563`. The pod omitted the one-shot override, restoring JAX 0.11's default fused ragged kernel; it retained overlap limit 4, latency hiding, disabled command buffers, `NCCL_BUFFSIZE=1048576`, PGLE, and `cuda_async`.
+- Compile boundary: training loops opened at 05:23:01 UTC, but most worker mains remained at line 677 waiting for their first batch. Background loader threads were still compiling the CPU `stack_tree` transform, with first-batch stalls of 146-161 seconds. One sampled worker reached line 688, but the distributed model execute could not begin before all ranks supplied a batch.
+- Result: production preempted the gang at 05:25:31 UTC. No optimizer step, CUDA illegal address, NCCL error, OOM, or confirmed model-execute window occurred, so S09 is not evidence for or against one-shot.
+- Terminal state: stopped coordinator `/power/ra2a-s09-ep16-oneshot-20260809-coord` at 05:26:56 UTC to prevent retries while the merged attempt-scoped endpoint fix remains undeployed.
+- Source refinement: pinned OpenXLA names the dense diagnostic `--xla_gpu_unsupported_enable_ragged_all_to_all_decomposer=true`. In process-per-GPU mode, multi-host one-shot depends on the NCCL-backed barrier to obtain clique-wide symmetric memory; disabling that barrier would fall through to the already-stalled generic path rather than provide an independent one-shot implementation.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229949762
+- Next action: wait behind production and rerun the one-shot arm under a fresh job identity. Do not infer a treatment result from this scheduling interruption.
+
+### 2026-08-09 05:30 UTC - Fresh EP16 one-shot retry queued
+
+- Controlled retry: `ra2a-s09b-ep16-oneshot-20260809` repeats S09 under a fresh identity with no treatment change: d768/L8, E192, expert width 384, top-4, capacity 1.33, EP16, 1,048,576 tokens per step, 52 steps, process-per-GPU, the default one-shot kernel, and `NCCL_BUFFSIZE=1048576`.
+- Metric controls: watch and profiling are disabled; eval remains outside the 52-step screen at interval 1000; checkpoints cannot reach their 30-minute interval before the bounded reachability decision. Score steps 5-24 if it progresses.
+- Jobs: coordinator `/power/ra2a-s09b-ep16-oneshot-20260809-coord`; child `/power/ra2a-s09b-ep16-oneshot-20260809-coord/grug-train-ra2a-s09b-ep16-oneshot-20260809`; submitted at 05:29:45 UTC. The child was pending on `cw-us-east-08a` at 05:30:27 UTC with no failure or preemption.
+- Scheduling contract: keep interactive priority and the hard single-NVLink-domain gang constraint. Wait behind production rather than lowering CPU or accepting cross-rack placement. No other experiment is queued.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229960988
+
+### 2026-08-09 05:34 UTC - A post-0.11 device kernel outranks generic NCCL tuning
+
+- Version boundary: jaxlib 0.11.0 pins OpenXLA `131bf41acb46` from 2026-07-16. PyPI has no newer stable JAX release as of this check.
+- Upstream change: OpenXLA PR [#46116](https://github.com/openxla/xla/pull/46116), merged 2026-07-24 as `acb5aaffe`, adds an opt-in device-initiated RA2A kernel using NCCL 2.29 LSA/GIN. Its stated design is one CUDA launch, no per-call host coordination, local LSA copies plus GIN put/signal for remote peers, and vectorized transfers. This directly replaces both pinned paths implicated here: the illegal-address one-shot LSA path and the host-synchronized send/receive fallback.
+- Required pair: the new path needs both `--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true` and `--xla_gpu_experimental_enable_nccl_symmetric_buffers=true`. The first flag alone is a silent no-op under private memory because `FindSymmetricMemory` returns null. This was independently recorded in [#7891](https://github.com/marin-community/marin/issues/7891#issuecomment-5174781337), and an OpenXLA contributor confirmed the pair in the [follow-up](https://github.com/marin-community/marin/issues/7891#issuecomment-5175507921).
+- Delivery: official JAX documentation publishes CUDA 13 nightlies through its non-PyPI index, but warns nightlies may not pass the full suite. A nightly dependency snapshot and focused compatibility test are therefore required before spending the four-node allocation.
+- Revised queue: finish the current pinned one-shot retry; if it does not progress, test the pinned dense decomposer as the last no-version-change reachability diagnostic. Then prioritize a post-2026-07-24 nightly with the device-kernel/symmetric-buffer pair over PGLE, protocol, channel, user-buffer, or SHARP tuning.
+- Scope exclusions: SHARP and NVLS optimize reductions and do not directly accelerate either ragged peer copies or NCCL send/receive. FSDP combine thresholds affect AG/RS/AR rather than RA2A. `CUDA_DEVICE_MAX_CONNECTIONS=1` is explicitly slower on Blackwell, and local memcpy P2P does not apply when every process owns one device.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5229980232
+
+### 2026-08-09 05:43 UTC - Pinned nightly worker runtime is ready
+
+- Implementation: EP run configs can now carry explicit worker pip packages through the shared Grug dispatcher. Both the small-screen and exact hero launchers accept `--jax-nightly-version`; omitted retains the locked stable environment.
+- Reproducibility: the selected runtime is `0.11.1.dev20260808` for `jax`, `jaxlib`, `jax-cuda13-plugin[with-cuda]`, and `jax-cuda13-pjrt`, resolved from JAX's official nightly-only index. The generated worker setup installs all four after the locked GPU sync, so the coordinator remains on the repository environment and every training process gets one coherent nightly.
+- Verification: all 25 focused `tests/test_moe_hero_ep.py` tests pass. The required changed-file Ruff, Black, Pyrefly, license, AST, conflict, whitespace, and Markdown checks pass. Tests cover the stable no-override default, the exact four-package nightly set, and rejection of non-dated nightly names.
+- Experimental contract: when this arm launches, pair the runtime with `--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true --xla_gpu_experimental_enable_nccl_symmetric_buffers=true`. Do not launch it concurrently with S09b.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5230007264
+
+### 2026-08-09 05:54 UTC - Auto-PGLE invalidates the process-per-GPU baseline
+
+- Run: `ra2a-s09b-ep16-oneshot-20260809`; all 16 one-device processes bootstrapped with a fresh coordinator and entered their first-batch compile. The model execute was not reached cleanly.
+- Failure: concurrent workers raised `jax.errors.JaxRuntimeError: ALREADY_EXISTS: Another profiling session active` from the first compiled training call. The grug loop reported a fatal error and Iris recorded a task failure before the parent was stopped.
+- Root cause: the EP runtime unconditionally defaulted `JAX_ENABLE_PGLE=true`. In process-per-GPU mode this starts four concurrent auto-PGLE/CUPTI sessions on each node even though the explicit experiment profiler is disabled. The single-process-per-node FSDP topology does not have the same intra-node profiler collision.
+- Consequence: S01-S08 all inherited auto-PGLE. Their no-progress observations remain useful signatures, but none is a clean process-per-GPU ragged result. Do not rank NCCL treatments from them until the baseline is repeated without auto-PGLE.
+- Runtime fix: multi-process tasks now default `JAX_ENABLE_PGLE=false`; single-process tasks retain the existing true default, and explicit settings are preserved. The focused suite passes with 26 tests.
+- Terminal state: stopped coordinator `/power/ra2a-s09b-ep16-oneshot-20260809-coord`; the summary records one failure and four later preemptions/killed attempts. No optimizer step or ragged treatment result was scored.
+- Clean retry: submitted `/power/ra2a-s09c-ep16-oneshot-pgle-off-20260809-coord` at 05:54:18 UTC with an explicit `JAX_ENABLE_PGLE=false`. Every model, routing, one-shot, NCCL, allocator, metric, and scheduling parameter is otherwise unchanged.
+- Next action: wait behind production, verify the retry's one-domain placement and effective environment, then distinguish compile from execute. Only after this clean baseline should the pinned dense decomposer or nightly device kernel run.
+
+### 2026-08-09 06:00 UTC - PGLE-off restores ragged one-shot progress
+
+- Run: `ra2a-s09c-ep16-oneshot-pgle-off-20260809`; initial training hosts `s2grxs64`, `s1zsxs64`, `s33xxs64`, and `s24qxs64`, all in `DH1-137-US-EAST-08A`. The coordinator ran separately on `s2rsxs64`; the GPU gang itself was not cross-rack. No production preemption affected the first attempt.
+- Compile boundary: a 05:58:47 UTC thread profile showed all four process-per-GPU worker mains on task 0 in `backend_compile_and_load` at `compiler.py:350`, confirming the earlier `pxla.py:420` samples represented later execution rather than compile.
+- Reachability result: with `JAX_ENABLE_PGLE=false`, every rank completed the first optimizer step. Logs report finite loss 11.8 and one displayed iteration at about 91.8 seconds including compilation. This is the first process-per-GPU ragged one-shot progress in the investigation and reverses the contaminated S01-S08 no-progress result.
+- Numerical result: the second attempted step produced `Non-finite loss (nan) at step 2` on all ranks, so the run cannot supply steady-state timing. The 52-step screen used `tokens_per_active_param=1`; the optimizer heuristic therefore hit its maximum MuonH rate on an intentionally abbreviated schedule.
+- Terminal state: stopped `/power/ra2a-s09c-ep16-oneshot-pgle-off-20260809-coord` at 06:00:01 UTC to prevent retries. No communication failure, OOM, CUDA illegal address, or NCCL error appeared.
+- Interpretation: pinned JAX 0.11's one-shot path is reachable on EP16/process-per-GPU when auto-PGLE is disabled. The immediate next baseline should keep communication identical and use the standard 60-token-per-active-parameter optimizer schedule, then stop manually after step 25.

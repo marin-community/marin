@@ -52,9 +52,9 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
-    "JAX_ENABLE_PGLE": "true",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
+JAX_ENABLE_PGLE_ENV = "JAX_ENABLE_PGLE"
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
@@ -71,9 +71,10 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int) -> None:
     for name, value in HERO_EP_RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
+    os.environ.setdefault(JAX_ENABLE_PGLE_ENV, "false" if processes_per_task > 1 else "true")
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
@@ -757,7 +758,10 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=inline_watch_enabled,
+        processes_per_task=config.processes_per_task,
+    )
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
