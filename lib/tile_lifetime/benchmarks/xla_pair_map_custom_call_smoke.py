@@ -39,6 +39,7 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
+from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags
 from tile_lifetime.xla_hlo_recovery import (
     HloModuleGraph,
     InlinedHloGraph,
@@ -1442,6 +1443,7 @@ def _compile_cuda_ffi_handler(
             str(source_path),
             "-o",
             str(library_path),
+            *cuda_toolkit_link_flags(nvcc, runtime_search_path=True),
             "-lcublas",
         ],
         check=True,
