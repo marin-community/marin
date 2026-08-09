@@ -69,6 +69,24 @@ label_with_glm52.py serve the grader, label with checkpointing → labels.parque
 gate_labels.py      decide whether the result is fit to train on (run this before train.py)
 ```
 
+Give the driver real resources. It holds the whole label set in memory to feed
+chunks — measured at 0.9 GB as an Arrow table and 1.8 GB once materialized as
+Python rows — while `iris job run` defaults to 0.1 CPU and a small memory request.
+Under-requesting does not fail cleanly: the task is SIGKILLed (exit 137) partway
+through the read, before the module logs anything, which reads as a mysterious
+startup crash rather than as an OOM.
+
+```bash
+iris --cluster=cw-rno2a job run --cpu 4 --memory 16g --disk 64g \
+    -- python -m experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 \
+    --label-set  s3://.../label_set_100k \
+    --out        s3://.../glm52_labels.parquet \
+    --run-id <tag> --fleet h100 --object-store-endpoint https://cwobject.com
+```
+
+Reruns resume from `<out>.chunks/`, skipping ids already labeled, so an
+interrupted run costs only its startup.
+
 **Documents are excerpted, not cut.** A hard cut at the character cap left text
 ending mid-token, which the rubric correctly reads as damage — so the grader marked
 those documents invalid and scored them 1. That put 85% of the bottom bucket at the
