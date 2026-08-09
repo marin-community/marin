@@ -19,6 +19,7 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
+    ContractMapChainFfiPhysicalCandidate,
     audit_cuda_contract_map_chain_source,
     generate_cuda_contract_map_chain_ffi,
 )
@@ -149,12 +150,20 @@ def test_contract_map_chain_reference_matches_natural_jax_forward_and_vjp() -> N
 
 
 def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries() -> None:
+    program = _program()
     generated = generate_cuda_contract_map_chain_ffi(
-        _program(),
+        program,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
     )
+    capture_safe = generate_cuda_contract_map_chain_ffi(
+        program,
+        forward_target="shuttle.generic.contract_map_chain.forward",
+        reverse_target="shuttle.generic.contract_map_chain.reverse",
+        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+    )
     audit = audit_cuda_contract_map_chain_source(generated)
+    capture_safe_audit = audit_cuda_contract_map_chain_source(capture_safe)
 
     assert (generated.rows, generated.input_features, generated.rank) == (8, 32, 128)
     assert generated.kernel_count == 2
@@ -166,6 +175,17 @@ def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries
     assert audit.has_generated_forward_maps
     assert audit.has_generated_reverse_maps
     assert audit.has_handler_counters
+    assert audit.has_launch_status_query
+    assert not audit.has_command_buffer_traits
+    assert not audit.command_buffer_eligible
+    assert audit.forbidden_command_buffer_operations == ("runtime launch-status query",)
+    assert capture_safe.semantic_digest == generated.semantic_digest
+    assert capture_safe.source_digest != generated.source_digest
+    assert capture_safe.command_buffer_compatible
+    assert capture_safe_audit.command_buffer_eligible
+    assert capture_safe_audit.has_command_buffer_traits
+    assert not capture_safe_audit.has_launch_status_query
+    assert not capture_safe_audit.forbidden_command_buffer_operations
     assert not audit.has_atomics
     assert not audit.opaque_semantic_dependencies
     assert generated.external_dependencies == ("CUDA BF16/runtime primitives", "XLA typed FFI")
@@ -190,13 +210,17 @@ def test_hidden_map_mutation_regenerates_the_same_physical_family() -> None:
         program,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
+        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
     )
     mutated_source = generate_cuda_contract_map_chain_ffi(
         mutated,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
+        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
     )
 
+    baseline_audit = audit_cuda_contract_map_chain_source(baseline_source)
+    mutated_audit = audit_cuda_contract_map_chain_source(mutated_source)
     assert baseline_source.kernel_count == mutated_source.kernel_count
     assert baseline_source.forward_shared_bytes == mutated_source.forward_shared_bytes
     assert baseline_source.reverse_shared_bytes == mutated_source.reverse_shared_bytes
@@ -204,6 +228,14 @@ def test_hidden_map_mutation_regenerates_the_same_physical_family() -> None:
     assert baseline_source.reverse_handler_symbol == mutated_source.reverse_handler_symbol
     assert baseline_source.semantic_digest != mutated_source.semantic_digest
     assert baseline_source.source_digest != mutated_source.source_digest
+    assert baseline_source.command_buffer_compatible
+    assert mutated_source.command_buffer_compatible
+    assert baseline_audit.command_buffer_eligible
+    assert mutated_audit.command_buffer_eligible
+    assert baseline_audit.has_command_buffer_traits
+    assert mutated_audit.has_command_buffer_traits
+    assert not baseline_audit.has_launch_status_query
+    assert not mutated_audit.has_launch_status_query
     assert "tanhf" in mutated_source.source
 
     rng = np.random.default_rng(1)

@@ -35,6 +35,7 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
+    ContractMapChainFfiPhysicalCandidate,
     ContractMapChainSourceAudit,
     GeneratedCudaContractMapChainFfi,
     audit_cuda_contract_map_chain_source,
