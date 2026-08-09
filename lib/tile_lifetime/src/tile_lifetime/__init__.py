@@ -409,3 +409,11 @@ from tile_lifetime.tiled_fold_finalize import (
     evaluate_tiled_fold_finalize,
     normalized_exponential_fold_program,
 )
+from tile_lifetime.xla_streaming_attention_backward_ffi import (
+    StreamingReverseHloProvenance,
+    StreamingReverseHloReplacementPlan,
+    StreamingReverseHloRole,
+    StreamingReverseHloValue,
+    plan_streaming_attention_backward_hlo_replacement,
+    replace_streaming_attention_backward_entry_with_custom_call,
+)
