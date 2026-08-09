@@ -72,6 +72,11 @@ class StreamingAttentionBackwardFfiBuffer:
         """Return logical-axis strides implied by the physical layout."""
         return _layout_strides(self.shape, self.layout)
 
+    @property
+    def jax_layout(self) -> tuple[int, ...]:
+        """Return JAX FFI's major-to-minor spelling of this XLA layout."""
+        return tuple(reversed(self.layout))
+
 
 @dataclass(frozen=True)
 class StreamingAttentionBackwardFfiBufferLayout:
@@ -302,8 +307,8 @@ def call_streaming_attention_backward_ffi(
         generated.target_name,
         result_shapes,
         vmap_method="broadcast_all",
-        input_layouts=tuple(specification.layout for specification in generated.inputs),
-        output_layouts=tuple(specification.layout for specification in generated.outputs),
+        input_layouts=tuple(specification.jax_layout for specification in generated.inputs),
+        output_layouts=tuple(specification.jax_layout for specification in generated.outputs),
     )(*ordered)
     query_cotangent, key_cotangent, value_cotangent = tuple(results)
     return query_cotangent, key_cotangent, value_cotangent
