@@ -307,11 +307,18 @@ from tile_lifetime.streaming_attention import (
     streaming_attention_from_semantic_operation,
 )
 from tile_lifetime.streaming_attention_backward import (
+    StreamingAttentionBackwardDomainTraversal,
     StreamingAttentionBackwardExecution,
+    StreamingAttentionBackwardFoldOrder,
     StreamingAttentionBackwardProgram,
+    StreamingAttentionBackwardProvenance,
     StreamingAttentionBackwardReassociation,
     StreamingAttentionBackwardStage,
+    StreamingAttentionBackwardTileSchedule,
+    StreamingAttentionBackwardWorkEstimate,
     derive_streaming_attention_backward,
+    derive_streaming_attention_backward_tile_schedule,
+    estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
 )
 from tile_lifetime.swiglu import compile_swiglu_region

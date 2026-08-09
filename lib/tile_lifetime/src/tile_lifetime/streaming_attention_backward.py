@@ -45,9 +45,85 @@ class StreamingAttentionBackwardReassociation(StrEnum):
     DETERMINISTIC_TREE = "deterministic_tree"
 
 
+class StreamingAttentionBackwardProvenance(StrEnum):
+    """Origin of the visible generic reverse algebra."""
+
+    REFERENCE_SYMBOLIC_VJP = "reference_symbolic_vjp"
+    JAX_VJP_HLO_RECOVERY = "jax_vjp_hlo_recovery"
+
+
+class StreamingAttentionBackwardDomainTraversal(StrEnum):
+    """Physical traversal selected from the score-domain restriction."""
+
+    FULL = "full"
+    LOWER_TRIANGULAR = "lower_triangular"
+
+
+class StreamingAttentionBackwardFoldOrder(StrEnum):
+    """Explicit finite-precision order for the key/value gradient Fold."""
+
+    QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE = "query_row_major_mapped_head_minor_tree"
+
+
+@dataclass(frozen=True)
+class StreamingAttentionBackwardTileSchedule:
+    """A deterministic reverse schedule over generic Contract/Fold axes.
+
+    ``query_heads_per_key_value_tile`` is derived from the QK input index map.
+    It coalesces all query rows that consume the same K/V tile into one physical
+    Contract.  This is an axis-relation transformation, not an attention-name
+    dispatch.
+    """
+
+    query_tile_size: int
+    key_value_tile_size: int
+    query_heads_per_key_value_tile: int
+    domain_traversal: StreamingAttentionBackwardDomainTraversal
+    key_value_fold_order: StreamingAttentionBackwardFoldOrder
+
+    def __post_init__(self) -> None:
+        extents = (
+            self.query_tile_size,
+            self.key_value_tile_size,
+            self.query_heads_per_key_value_tile,
+        )
+        if any(extent <= 0 for extent in extents):
+            raise ValueError("streaming backward tile extents must be positive")
+
+
+@dataclass(frozen=True)
+class StreamingAttentionBackwardWorkEstimate:
+    """Static Contract counts and temporary footprint for one reverse schedule."""
+
+    logical_query_key_tile_pairs: int
+    fully_restricted_tile_pairs: int
+    query_gradient_contract_invocations: int
+    full_domain_query_gradient_contract_invocations: int
+    key_value_gradient_contract_invocations: int
+    scalar_head_key_value_contract_invocations: int
+    full_domain_scalar_head_key_value_contract_invocations: int
+    packed_query_rows: int
+    peak_score_tile_elements: int
+    peak_query_tile_elements: int
+    key_value_gradient_accumulator_elements: int
+
+    @property
+    def key_value_contract_invocation_reduction(self) -> float:
+        return self.scalar_head_key_value_contract_invocations / self.key_value_gradient_contract_invocations
+
+    @property
+    def key_value_contract_invocation_reduction_from_full_scalar(self) -> float:
+        return self.full_domain_scalar_head_key_value_contract_invocations / self.key_value_gradient_contract_invocations
+
+
 @dataclass(frozen=True)
 class StreamingAttentionBackwardProgram:
-    """A generated reverse stream with visible scalar and contraction algebra."""
+    """A reverse stream with visible scalar and contraction algebra.
+
+    Accepted end-to-end paths recover this structure from JAX VJP HLO.  The
+    local symbolic derivation remains a component oracle for physical schedule
+    work until that recovery boundary is connected.
+    """
 
     forward: StreamingAttentionProgram
     output_cotangent: ProgramValue
@@ -55,6 +131,7 @@ class StreamingAttentionBackwardProgram:
     output_scale: float
     stages: tuple[StreamingAttentionBackwardStage, ...]
     materialized_values: tuple[ProgramValue, ...]
+    provenance: StreamingAttentionBackwardProvenance
     accumulation_dtype: DType = DType.FP32
     reassociation: StreamingAttentionBackwardReassociation = StreamingAttentionBackwardReassociation.DETERMINISTIC_TREE
 
@@ -71,7 +148,7 @@ class StreamingAttentionBackwardExecution:
 def derive_streaming_attention_backward(
     forward: StreamingAttentionProgram,
 ) -> StreamingAttentionBackwardProgram:
-    """Differentiate a streamed normalized-exp Fold without a workload name."""
+    """Build a reference reverse program used to validate JAX-VJP recovery."""
     query, key = forward.qk.inputs
     value = forward.pv.inputs[1]
     output_cotangent = ProgramValue(
@@ -103,6 +180,91 @@ def derive_streaming_attention_backward(
         output_scale=output_scale,
         stages=tuple(StreamingAttentionBackwardStage),
         materialized_values=cotangents,
+        provenance=StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP,
+    )
+
+
+def derive_streaming_attention_backward_tile_schedule(
+    program: StreamingAttentionBackwardProgram,
+    *,
+    query_tile_size: int,
+    key_value_tile_size: int,
+    domain_traversal: StreamingAttentionBackwardDomainTraversal,
+) -> StreamingAttentionBackwardTileSchedule:
+    """Coalesce query heads that share one operand through a Contract index map."""
+    query, key = program.forward.qk.inputs
+    query_head = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.HEAD.value)
+    key_value_head = next(axis for axis in key.axes if axis.label == "key_value_head")
+    matching_maps = tuple(
+        index_map
+        for index_map in program.forward.qk.index_maps_for_input(1)
+        if index_map.domain_axis == query_head and index_map.operand_axis == key_value_head
+    )
+    if len(matching_maps) != 1:
+        raise ValueError("streaming backward requires one query-head to K/V-head index relation")
+    index_map = matching_maps[0]
+    if query_head.extent != key_value_head.extent * index_map.divisor:
+        raise ValueError("query-head index relation must partition query heads evenly")
+    return StreamingAttentionBackwardTileSchedule(
+        query_tile_size=query_tile_size,
+        key_value_tile_size=key_value_tile_size,
+        query_heads_per_key_value_tile=index_map.divisor,
+        domain_traversal=domain_traversal,
+        key_value_fold_order=StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE,
+    )
+
+
+def estimate_streaming_attention_backward_work(
+    program: StreamingAttentionBackwardProgram,
+    schedule: StreamingAttentionBackwardTileSchedule,
+) -> StreamingAttentionBackwardWorkEstimate:
+    """Count physical reverse Contracts without executing a target backend."""
+    query, key = program.forward.qk.inputs
+    query_axis = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.QUERY.value)
+    key_axis = next(axis for axis in key.axes if axis.label == AttentionScoreAxis.KEY.value)
+    batch_axis = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.BATCH.value)
+    query_head = next(axis for axis in query.axes if axis.label == AttentionScoreAxis.HEAD.value)
+    query_feature = next(axis for axis in query.axes if axis.label == "key_feature")
+    key_value_head = next(axis for axis in key.axes if axis.label == "key_value_head")
+    expected_head_group = query_head.extent // key_value_head.extent
+    if schedule.query_heads_per_key_value_tile != expected_head_group:
+        raise ValueError("work estimate schedule disagrees with the Contract head index relation")
+    if query_axis.extent % schedule.query_tile_size or key_axis.extent % schedule.key_value_tile_size:
+        raise ValueError("work estimates require tile-aligned query and key domains")
+    query_tiles = query_axis.extent // schedule.query_tile_size
+    key_tiles = key_axis.extent // schedule.key_value_tile_size
+    all_tile_pairs = query_tiles * key_tiles
+    if schedule.domain_traversal is StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR:
+        valid_tile_pairs = sum(
+            max(0, query_tiles - (key_start // schedule.query_tile_size))
+            for key_start in range(0, key_axis.extent, schedule.key_value_tile_size)
+        )
+    else:
+        valid_tile_pairs = all_tile_pairs
+    if valid_tile_pairs <= 0 or valid_tile_pairs > all_tile_pairs:
+        raise ValueError("domain traversal produced an invalid Q/K tile count")
+
+    batch_count = batch_axis.extent
+    logical_tile_pairs = batch_count * query_head.extent * valid_tile_pairs
+    fully_restricted = batch_count * query_head.extent * (all_tile_pairs - valid_tile_pairs)
+    query_contracts = logical_tile_pairs * 3
+    full_domain_query_contracts = batch_count * query_head.extent * all_tile_pairs * 3
+    grouped_key_value_contracts = batch_count * key_value_head.extent * valid_tile_pairs * 4
+    scalar_key_value_contracts = logical_tile_pairs * 4
+    full_domain_scalar_key_value_contracts = batch_count * query_head.extent * all_tile_pairs * 4
+    packed_query_rows = schedule.query_tile_size * schedule.query_heads_per_key_value_tile
+    return StreamingAttentionBackwardWorkEstimate(
+        logical_query_key_tile_pairs=logical_tile_pairs,
+        fully_restricted_tile_pairs=fully_restricted,
+        query_gradient_contract_invocations=query_contracts,
+        full_domain_query_gradient_contract_invocations=full_domain_query_contracts,
+        key_value_gradient_contract_invocations=grouped_key_value_contracts,
+        scalar_head_key_value_contract_invocations=scalar_key_value_contracts,
+        full_domain_scalar_head_key_value_contract_invocations=full_domain_scalar_key_value_contracts,
+        packed_query_rows=packed_query_rows,
+        peak_score_tile_elements=packed_query_rows * schedule.key_value_tile_size,
+        peak_query_tile_elements=packed_query_rows * query_feature.extent,
+        key_value_gradient_accumulator_elements=2 * schedule.key_value_tile_size * query_feature.extent,
     )
 
 

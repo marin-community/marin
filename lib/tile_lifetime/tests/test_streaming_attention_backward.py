@@ -10,12 +10,17 @@ import pytest
 
 from tile_lifetime import (
     DType,
+    StreamingAttentionBackwardDomainTraversal,
+    StreamingAttentionBackwardFoldOrder,
+    StreamingAttentionBackwardProvenance,
     StreamingTileSchedule,
     apply_causal_score_mask,
     apply_tanh_softcap,
     build_attention_tensor_program,
     derive_streaming_attention,
     derive_streaming_attention_backward,
+    derive_streaming_attention_backward_tile_schedule,
+    estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
     scaled_score_map,
@@ -136,3 +141,57 @@ def test_score_map_mutation_reuses_one_backward_stage_family() -> None:
         "cotangent.key",
         "cotangent.value",
     )
+
+
+def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() -> None:
+    backward = derive_streaming_attention_backward(_program(causal=True))
+    recovered = replace(backward, provenance=StreamingAttentionBackwardProvenance.JAX_VJP_HLO_RECOVERY)
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        recovered,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    work = estimate_streaming_attention_backward_work(recovered, schedule)
+
+    assert schedule.query_heads_per_key_value_tile == 2
+    assert schedule.key_value_fold_order is StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE
+    assert work.logical_query_key_tile_pairs == 60
+    assert work.fully_restricted_tile_pairs == 40
+    assert work.query_gradient_contract_invocations == 180
+    assert work.full_domain_query_gradient_contract_invocations == 300
+    assert work.key_value_gradient_contract_invocations == 120
+    assert work.scalar_head_key_value_contract_invocations == 240
+    assert work.full_domain_scalar_head_key_value_contract_invocations == 400
+    assert work.key_value_contract_invocation_reduction == 2.0
+    assert work.key_value_contract_invocation_reduction_from_full_scalar == 10 / 3
+    assert work.packed_query_rows == 2
+    assert work.peak_score_tile_elements == 2
+    assert work.peak_query_tile_elements == 6
+    assert work.key_value_gradient_accumulator_elements == 6
+
+
+def test_score_map_mutation_changes_domain_work_without_changing_grouped_schedule() -> None:
+    causal = derive_streaming_attention_backward(_program(causal=True))
+    softcap = derive_streaming_attention_backward(_program(causal=False, softcap=1.3))
+    causal_schedule = derive_streaming_attention_backward_tile_schedule(
+        causal,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    softcap_schedule = derive_streaming_attention_backward_tile_schedule(
+        softcap,
+        query_tile_size=1,
+        key_value_tile_size=1,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.FULL,
+    )
+
+    causal_work = estimate_streaming_attention_backward_work(causal, causal_schedule)
+    softcap_work = estimate_streaming_attention_backward_work(softcap, softcap_schedule)
+    assert causal_schedule.query_heads_per_key_value_tile == softcap_schedule.query_heads_per_key_value_tile
+    assert causal_work.logical_query_key_tile_pairs == 60
+    assert softcap_work.logical_query_key_tile_pairs == 100
+    assert softcap_work.fully_restricted_tile_pairs == 0
+    assert causal.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
+    assert softcap.provenance is StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP
