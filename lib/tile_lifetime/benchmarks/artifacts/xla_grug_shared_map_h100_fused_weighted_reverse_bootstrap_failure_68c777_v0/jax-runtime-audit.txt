@@ -1,0 +1,4 @@
+jax 0.10.1 /app/.venv/lib/python3.12/site-packages/jax/__init__.py
+jaxlib 0.10.1 /app/.venv/lib/python3.12/site-packages/jaxlib/__init__.py
+jaxlib._hlo None
+devices [CudaDevice(id=0)]
