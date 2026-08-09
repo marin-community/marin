@@ -19,6 +19,7 @@ from tile_lifetime.event_dataflow import (
 )
 from tile_lifetime.event_dataflow_adapters import (
     relation_segmented_contract_task_dataflow,
+    streaming_contract_fold_event_descriptor,
     streaming_fold_task_dataflow,
 )
 from tile_lifetime.event_dataflow_examples import relation_segment_dependence
@@ -31,9 +32,10 @@ from tile_lifetime.streaming_attention import (
     derive_streaming_attention,
     scaled_score_map,
 )
+from tile_lifetime.streaming_event_schedule import derive_streaming_physical_event_schedule
 
 
-def _streaming_program(*, key_length: int = 9):
+def _streaming_program(*, key_length: int = 9, query_tile_size: int = 3):
     source = build_attention_tensor_program(
         batch_size=2,
         query_length=7,
@@ -47,7 +49,11 @@ def _streaming_program(*, key_length: int = 9):
     )
     return derive_streaming_attention(
         source,
-        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
+        schedule=StreamingTileSchedule(
+            query_tile_size=query_tile_size,
+            key_value_tile_size=4,
+            pipeline_depth=2,
+        ),
     )
 
 
@@ -90,6 +96,22 @@ def test_fold_domain_mutation_changes_events_without_a_workload_dispatch() -> No
     )
     assert primary_finalize.initial_count.counts[0].value == 3
     assert mutated_finalize.initial_count.counts[0].value == 5
+
+
+def test_attention_program_erases_to_generic_streaming_event_descriptor() -> None:
+    semantic_program = _streaming_program(key_length=9, query_tile_size=64)
+    descriptor = streaming_contract_fold_event_descriptor(semantic_program)
+    schedule = derive_streaming_physical_event_schedule(descriptor)
+
+    assert descriptor.fold_extent == 9
+    assert descriptor.resident_tile_size == 64
+    assert descriptor.streamed_tile_size == 4
+    assert descriptor.resident_reduction_dimension == 8
+    assert descriptor.streamed_reduction_dimension == 8
+    assert descriptor.output_dimension == 8
+    assert descriptor.element_bytes == 2
+    assert schedule.dataflow.partition_count == 3
+    assert all("attention" not in family.name for family in schedule.dataflow.program.task_families)
 
 
 def test_moe_style_relation_plan_directly_drives_runtime_event_readiness() -> None:

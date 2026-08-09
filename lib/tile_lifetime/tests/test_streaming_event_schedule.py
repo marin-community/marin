@@ -4,39 +4,27 @@
 import pytest
 
 from tile_lifetime.event_buffering import EventRealizationKind
-from tile_lifetime.ir import DType
-from tile_lifetime.streaming_attention import (
-    StreamingTileSchedule,
-    apply_causal_score_mask,
-    build_attention_tensor_program,
-    derive_streaming_attention,
-    scaled_score_map,
-)
 from tile_lifetime.streaming_event_schedule import (
+    StreamingContractFoldDescriptor,
     derive_streaming_physical_event_schedule,
     verify_streaming_event_backend_parameters,
 )
 
 
 def _program(*, query_tile: int = 128, key_length: int = 512, pipeline_depth: int = 3):
-    semantic = build_attention_tensor_program(
-        batch_size=1,
-        query_length=256,
-        key_length=key_length,
-        query_heads=4,
-        key_value_heads=2,
-        key_dimension=128,
-        value_dimension=128,
-        score_map=apply_causal_score_mask(scaled_score_map(128**-0.5)),
-        input_dtype=DType.BF16,
-    )
-    return derive_streaming_attention(
-        semantic,
-        schedule=StreamingTileSchedule(
-            query_tile_size=query_tile,
-            key_value_tile_size=64,
-            pipeline_depth=pipeline_depth,
-        ),
+    return StreamingContractFoldDescriptor(
+        first_contract_name="first_contract",
+        fold_update_name="state_update",
+        second_contract_name="second_contract",
+        finalize_name="finalize",
+        fold_extent=key_length,
+        resident_tile_size=query_tile,
+        streamed_tile_size=64,
+        pipeline_depth=pipeline_depth,
+        resident_reduction_dimension=128,
+        streamed_reduction_dimension=128,
+        output_dimension=128,
+        element_bytes=2,
     )
 
 
@@ -55,9 +43,9 @@ def test_streaming_event_schedule_derives_distinct_q_k_v_lifetimes() -> None:
     query_last_consumers = dict(schedule.dataflow.query_buffer.last_consumers)
     key_last_consumers = dict(schedule.dataflow.key_buffer.last_consumers)
     value_last_consumers = dict(schedule.dataflow.value_buffer.last_consumers)
-    assert {consumer.family for consumer in query_last_consumers.values()} == {schedule.dataflow.qk_contract.name}
-    assert {consumer.family for consumer in key_last_consumers.values()} == {schedule.dataflow.qk_contract.name}
-    assert {consumer.family for consumer in value_last_consumers.values()} == {schedule.dataflow.pv_contract.name}
+    assert {consumer.family for consumer in query_last_consumers.values()} == {schedule.dataflow.first_contract.name}
+    assert {consumer.family for consumer in key_last_consumers.values()} == {schedule.dataflow.first_contract.name}
+    assert {consumer.family for consumer in value_last_consumers.values()} == {schedule.dataflow.second_contract.name}
     assert query_last_consumers[(0,)].coordinate == (0, 7)
 
     physical_mechanisms = {entry.mechanism for entry in schedule.audit.physical}
@@ -95,8 +83,18 @@ def test_worker_mutation_changes_scheduler_event_realization() -> None:
     assert two_warpgroups.workers.matrix_warpgroups == 2
     assert two_warpgroups.workers.cta_threads == 384
     assert two_warpgroups.workers.scheduler_arrival_threads == 256
-    one_scheduler_edges = tuple(entry for entry in one_warpgroup.audit.entries if entry.plan_name.endswith("pv_to_qk"))
-    two_scheduler_edges = tuple(entry for entry in two_warpgroups.audit.entries if entry.plan_name.endswith("pv_to_qk"))
+
+    def scheduler_edges(schedule):
+        plan_names = {
+            plan.name
+            for plan in schedule.dataflow.program.event_plans
+            if plan.notify_relation.source == schedule.dataflow.second_contract
+            and plan.trigger_relation.target == schedule.dataflow.first_contract
+        }
+        return tuple(entry for entry in schedule.audit.entries if entry.plan_name in plan_names)
+
+    one_scheduler_edges = scheduler_edges(one_warpgroup)
+    two_scheduler_edges = scheduler_edges(two_warpgroups)
     assert len(one_scheduler_edges) == len(two_scheduler_edges) == 1
     assert one_scheduler_edges[0].kind is EventRealizationKind.ERASED_PROGRAM_ORDER
     assert two_scheduler_edges[0].kind is EventRealizationKind.PHYSICAL

@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from tile_lifetime.event_dataflow_adapters import streaming_contract_fold_event_descriptor
 from tile_lifetime.ir import DType
 from tile_lifetime.sm100_grouped_contract_event_codegen import sm100_bf16_grouped_contract_event_schedule
 from tile_lifetime.streaming_attention import (
@@ -49,7 +50,7 @@ def test_sm90_streaming_attachment_artifact_matches_the_derived_schedule_boundar
             pipeline_depth=result["schedule"]["stages"],
         ),
     )
-    schedule = derive_streaming_physical_event_schedule(program)
+    schedule = derive_streaming_physical_event_schedule(streaming_contract_fold_event_descriptor(program))
 
     assert result["environment"]["hardware"] == "NVIDIA H100 80GB HBM3"
     assert schedule.key_stages == schedule.value_stages == result["schedule"]["stages"]

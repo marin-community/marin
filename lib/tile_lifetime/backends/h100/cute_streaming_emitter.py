@@ -19,6 +19,7 @@ import cutlass.cute as cute
 import torch
 from flash_attn.cute.cute_dsl_utils import to_cute_tensor
 
+from tile_lifetime.event_dataflow_adapters import streaming_contract_fold_event_descriptor
 from tile_lifetime.h100_streaming_lowering import (
     H100StreamingSchedule,
     LoweredScoreMap,
@@ -101,7 +102,7 @@ def compile_h100_streaming_program(
     head_group_size = lowering.head_group_size
     score_map = lowering.score_map
     schedule = lowering.schedule
-    event_schedule = derive_streaming_physical_event_schedule(program)
+    event_schedule = derive_streaming_physical_event_schedule(streaming_contract_fold_event_descriptor(program))
     if event_schedule.key_stages != schedule.stages or event_schedule.value_stages != schedule.stages:
         raise ValueError("Event Tensor buffer depth disagrees with the legalized streaming schedule")
     verify_streaming_event_backend_parameters(

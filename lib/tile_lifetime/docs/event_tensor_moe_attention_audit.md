@@ -6,6 +6,15 @@ an expert kernel's internal semaphore constants as compiler-derived evidence.
 
 ## Attention
 
+The high-throughput readiness derivation now consumes a generic
+`StreamingContractFoldDescriptor`. The descriptor contains only two Contract
+task names, one Fold-update task name, one finalizer task name, logical
+extents, physical tile sizes, payload widths, and pipeline depth. The adapter
+from the current normalized-attention program erases the semantic operation
+before `derive_streaming_physical_event_schedule` constructs any task relation
+or Event Tensor. The Event Tensor module no longer imports an attention
+program, score-axis enum, mask, or normalized-exponential implementation.
+
 The generated correctness-oriented streaming body executes these edges on a
 GB200 through JAX typed FFI:
 
@@ -103,9 +112,45 @@ It does not establish:
 - a high-throughput routed sparse-attention Event Tensor backend;
 - Shuttle-owned all-reduce, reduce-scatter, or communication AD.
 
-The next high-performance MoE step is an explicit generic synchronization
-descriptor from the grouped-Contract primitive. It must expose task owners,
-buffer stages, producer/consumer cardinalities, and release points. The next
-routed-attention step is to attach the existing RelationPlan orientation and
-partial-state merge tasks to the tensor-core streaming skeleton without adding
-a sparse-attention workload switch.
+The next high-performance MoE step is to connect runtime RelationPlan
+eligibility to the existing grouped-Contract synchronization descriptor in a
+Torch-free executable path. The next routed-attention step is to attach the
+existing RelationPlan orientation and partial-state merge tasks to the
+tensor-core streaming skeleton without adding a sparse-attention workload
+switch.
+
+## Smallest next GPU experiment
+
+Do not spend the next allocation retiming the reference payloads. The smallest
+missing execution proof is a Torch-free JAX typed-FFI chain on one physical
+GB200:
+
+```text
+runtime RelationPlan tables
+  -> generated grouping/padding Contract preparation
+  -> device-visible EventTensorPlan completion
+  -> generic SM100 grouped Contract
+```
+
+The first bounded version should realize the outer readiness edge by verified
+same-stream order. This legally coarsens the per-edge relation without claiming
+transport overlap. It must use uneven runtime segment counts with at least one
+empty segment, then mutate the relation while keeping the event construction
+and grouped-Contract body unchanged. The result must compare against the same
+segmented Contract reference, be deterministic, record handler invocations,
+and preserve the generated outer Event Tensor and inner synchronization
+fingerprints. JAX owns the entry point and any differentiation. Torch may be
+used in a separate build/oracle process, but the measured runtime must import
+neither Torch nor a complete MoE kernel.
+
+This experiment would prove relation-to-grouped-Contract GPU linkage. It would
+not prove fine-grained asynchronous transport overlap, and it would not close
+the internal grouped-Contract ownership gap: the external primitive would
+still place its mbarrier arrive/wait operations. Those claims must remain
+separate.
+
+For attention, another dense H100 replay is not presently informative: the
+real TMA/WGMMA attachment is already correct, deterministic, and 1.001x the
+matched pre-attachment body. The next attention allocation should instead be a
+routed relation mutation whose generic right-resource staging feeds the same
+streaming descriptor and whose partial Fold states return to a generated merge.

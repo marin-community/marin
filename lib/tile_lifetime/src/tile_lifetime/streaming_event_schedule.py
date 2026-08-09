@@ -37,7 +37,54 @@ from tile_lifetime.event_dataflow import (
     derive_event_tensor_plan,
     verify_event_dataflow_program,
 )
-from tile_lifetime.streaming_attention import AttentionScoreAxis, StreamingAttentionProgram
+
+
+@dataclass(frozen=True)
+class StreamingContractFoldDescriptor:
+    """Target-independent facts for one resident-left streaming skeleton.
+
+    This descriptor is produced after tensor semantics have been decomposed
+    into two Contracts around an ordered Fold.  It deliberately carries no
+    attention operation, mask, normalized-exponential, or model identity.
+    Those semantics determine the task graph before this schedule boundary;
+    Event Tensor construction only needs task names, extents, payload widths,
+    and the selected bounded pipeline shape.
+    """
+
+    first_contract_name: str
+    fold_update_name: str
+    second_contract_name: str
+    finalize_name: str
+    fold_extent: int
+    resident_tile_size: int
+    streamed_tile_size: int
+    pipeline_depth: int
+    resident_reduction_dimension: int
+    streamed_reduction_dimension: int
+    output_dimension: int
+    element_bytes: int
+
+    def __post_init__(self) -> None:
+        names = (
+            self.first_contract_name,
+            self.fold_update_name,
+            self.second_contract_name,
+            self.finalize_name,
+        )
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ValueError("streaming task-family names must be non-empty and distinct")
+        dimensions = (
+            self.fold_extent,
+            self.resident_tile_size,
+            self.streamed_tile_size,
+            self.pipeline_depth,
+            self.resident_reduction_dimension,
+            self.streamed_reduction_dimension,
+            self.output_dimension,
+            self.element_bytes,
+        )
+        if any(value <= 0 for value in dimensions):
+            raise ValueError("streaming extents, tile sizes, dimensions, and element width must be positive")
 
 
 @dataclass(frozen=True)
@@ -73,9 +120,9 @@ class StreamingPipelineDataflow:
     query_stage: TaskFamily
     key_stage: TaskFamily
     value_stage: TaskFamily
-    qk_contract: TaskFamily
+    first_contract: TaskFamily
     fold_update: TaskFamily
-    pv_contract: TaskFamily
+    second_contract: TaskFamily
     finalize: TaskFamily
     partition_count: int
     generation_count: int
@@ -158,24 +205,22 @@ def verify_streaming_event_backend_parameters(
         raise ValueError("streaming Event Tensor/backend mismatch: " + "; ".join(mismatches))
 
 
-def derive_streaming_physical_event_schedule(program: StreamingAttentionProgram) -> StreamingPhysicalEventSchedule:
+def derive_streaming_physical_event_schedule(
+    descriptor: StreamingContractFoldDescriptor,
+) -> StreamingPhysicalEventSchedule:
     """Derive the synchronization contract for a Q-resident streaming skeleton.
 
     The task graph is a kernel-local template.  Two query-tile generations are
     sufficient to expose Q reuse, while every K/V partition is represented so
     pipeline-slot generations and the final producer tail are exact.
     """
-    _axis_extent(program, AttentionScoreAxis.QUERY)
-    key_axis = _axis_extent(program, AttentionScoreAxis.KEY)
-    query_tile = program.schedule.query_tile_size
-    key_tile = program.schedule.key_value_tile_size
-    partition_count = ceil(key_axis / key_tile)
-    pipeline_depth = program.schedule.pipeline_depth
-    if pipeline_depth <= 0:
-        raise ValueError("streaming pipeline depth must be positive")
+    query_tile = descriptor.resident_tile_size
+    key_tile = descriptor.streamed_tile_size
+    partition_count = ceil(descriptor.fold_extent / key_tile)
+    pipeline_depth = descriptor.pipeline_depth
 
     dataflow = _derive_pipeline_dataflow(
-        program,
+        descriptor,
         partition_count=partition_count,
         pipeline_depth=pipeline_depth,
         generation_count=2,
@@ -190,10 +235,6 @@ def derive_streaming_physical_event_schedule(program: StreamingAttentionProgram)
         threads_per_warpgroup=128,
     )
     audit = _realization_audit(dataflow, workers)
-    query_dimension = program.qk.inputs[0].shape[-1]
-    key_dimension = program.qk.inputs[1].shape[-1]
-    value_dimension = program.pv.inputs[1].shape[-1]
-    element_bytes = 2
     payload = {
         "partition_count": partition_count,
         "pipeline_depth": pipeline_depth,
@@ -220,15 +261,15 @@ def derive_streaming_physical_event_schedule(program: StreamingAttentionProgram)
         key_stages=pipeline_depth,
         value_stages=pipeline_depth,
         barriers_per_stage=2,
-        query_transaction_bytes=query_tile * query_dimension * element_bytes,
-        key_transaction_bytes=key_tile * key_dimension * element_bytes,
-        value_transaction_bytes=key_tile * value_dimension * element_bytes,
+        query_transaction_bytes=query_tile * descriptor.resident_reduction_dimension * descriptor.element_bytes,
+        key_transaction_bytes=key_tile * descriptor.streamed_reduction_dimension * descriptor.element_bytes,
+        value_transaction_bytes=key_tile * descriptor.output_dimension * descriptor.element_bytes,
         fingerprint=fingerprint,
     )
 
 
 def _derive_pipeline_dataflow(
-    program: StreamingAttentionProgram,
+    descriptor: StreamingContractFoldDescriptor,
     *,
     partition_count: int,
     pipeline_depth: int,
@@ -241,10 +282,10 @@ def _derive_pipeline_dataflow(
     query_stage = TaskFamily("query_stage", generation_domain, placement="transfer_workers")
     key_stage = TaskFamily("key_stage", partition_domain, placement="transfer_workers")
     value_stage = TaskFamily("value_stage", partition_domain, placement="transfer_workers")
-    qk_contract = TaskFamily(program.qk.name, partition_domain, placement="matrix_workers")
-    fold_update = TaskFamily("normalized_exp_fold_update", partition_domain, placement="matrix_workers")
-    pv_contract = TaskFamily(program.pv.name, partition_domain, placement="matrix_workers")
-    finalize = TaskFamily(program.finalize.name, generation_domain, placement="matrix_workers")
+    first_contract = TaskFamily(descriptor.first_contract_name, partition_domain, placement="matrix_workers")
+    fold_update = TaskFamily(descriptor.fold_update_name, partition_domain, placement="matrix_workers")
+    second_contract = TaskFamily(descriptor.second_contract_name, partition_domain, placement="matrix_workers")
+    finalize = TaskFamily(descriptor.finalize_name, generation_domain, placement="matrix_workers")
     visibility = MemoryVisibility(EventMemoryScope.CTA)
 
     pointwise = tuple(
@@ -252,10 +293,10 @@ def _derive_pipeline_dataflow(
         for generation in range(generation_count)
         for partition in range(partition_count)
     )
-    query_to_qk = TaskDependence(
+    query_to_first_contract = TaskDependence(
         TaskRelation.from_pairs(
             query_stage,
-            qk_contract,
+            first_contract,
             tuple(
                 ((generation,), (generation, partition))
                 for generation in range(generation_count)
@@ -264,14 +305,18 @@ def _derive_pipeline_dataflow(
         ),
         visibility,
     )
-    key_to_qk = TaskDependence(TaskRelation.from_pairs(key_stage, qk_contract, pointwise), visibility)
-    qk_to_fold = TaskDependence(TaskRelation.from_pairs(qk_contract, fold_update, pointwise), visibility)
-    fold_to_pv = TaskDependence(TaskRelation.from_pairs(fold_update, pv_contract, pointwise), visibility)
-    value_to_pv = TaskDependence(TaskRelation.from_pairs(value_stage, pv_contract, pointwise), visibility)
-    pv_to_next_qk = TaskDependence(
+    key_to_first_contract = TaskDependence(TaskRelation.from_pairs(key_stage, first_contract, pointwise), visibility)
+    first_contract_to_fold = TaskDependence(TaskRelation.from_pairs(first_contract, fold_update, pointwise), visibility)
+    fold_to_second_contract = TaskDependence(
+        TaskRelation.from_pairs(fold_update, second_contract, pointwise), visibility
+    )
+    value_to_second_contract = TaskDependence(
+        TaskRelation.from_pairs(value_stage, second_contract, pointwise), visibility
+    )
+    second_contract_to_next_first_contract = TaskDependence(
         TaskRelation.from_pairs(
-            pv_contract,
-            qk_contract,
+            second_contract,
+            first_contract,
             tuple(
                 ((generation, partition), (generation, partition + 1))
                 for generation in range(generation_count)
@@ -280,31 +325,31 @@ def _derive_pipeline_dataflow(
         ),
         visibility,
     )
-    pv_to_finalize = TaskDependence(
+    second_contract_to_finalize = TaskDependence(
         TaskRelation.from_pairs(
-            pv_contract,
+            second_contract,
             finalize,
             tuple(((generation, partition_count - 1), (generation,)) for generation in range(generation_count)),
         ),
         visibility,
     )
     initial_dependences = (
-        query_to_qk,
-        key_to_qk,
-        qk_to_fold,
-        fold_to_pv,
-        value_to_pv,
-        pv_to_next_qk,
-        pv_to_finalize,
+        query_to_first_contract,
+        key_to_first_contract,
+        first_contract_to_fold,
+        fold_to_second_contract,
+        value_to_second_contract,
+        second_contract_to_next_first_contract,
+        second_contract_to_finalize,
     )
-    families = (query_stage, key_stage, value_stage, qk_contract, fold_update, pv_contract, finalize)
+    families = (query_stage, key_stage, value_stage, first_contract, fold_update, second_contract, finalize)
     initial_program = _event_program(families, initial_dependences)
 
     query_buffer = derive_bounded_buffer_plan(
         name="query_pipeline",
         program=initial_program,
         producer=query_stage,
-        uses=(query_to_qk.relation,),
+        uses=(query_to_first_contract.relation,),
         capacity=1,
         slot_for={(generation,): 0 for generation in range(generation_count)},
         generation_for={(generation,): generation for generation in range(generation_count)},
@@ -322,7 +367,7 @@ def _derive_pipeline_dataflow(
         name="key_pipeline",
         program=initial_program,
         producer=key_stage,
-        uses=(key_to_qk.relation,),
+        uses=(key_to_first_contract.relation,),
         capacity=pipeline_depth,
         slot_for=slots,
         generation_for=generations,
@@ -332,7 +377,7 @@ def _derive_pipeline_dataflow(
         name="value_pipeline",
         program=initial_program,
         producer=value_stage,
-        uses=(value_to_pv.relation,),
+        uses=(value_to_second_contract.relation,),
         capacity=pipeline_depth,
         slot_for=slots,
         generation_for=generations,
@@ -351,9 +396,9 @@ def _derive_pipeline_dataflow(
         query_stage=query_stage,
         key_stage=key_stage,
         value_stage=value_stage,
-        qk_contract=qk_contract,
+        first_contract=first_contract,
         fold_update=fold_update,
-        pv_contract=pv_contract,
+        second_contract=second_contract,
         finalize=finalize,
         partition_count=partition_count,
         generation_count=generation_count,
@@ -421,7 +466,7 @@ def _realization_audit(
                     reason="matrix consumers require acquire visibility after asynchronous tile movement",
                 )
             )
-        elif endpoints == (dataflow.pv_contract, dataflow.qk_contract) and workers.matrix_warpgroups > 1:
+        elif endpoints == (dataflow.second_contract, dataflow.first_contract) and workers.matrix_warpgroups > 1:
             realizations.append(
                 physical_event_realization(
                     plan,
@@ -439,10 +484,3 @@ def _realization_audit(
                 )
             )
     return verify_event_realizations(dataflow.program, tuple(realizations))
-
-
-def _axis_extent(program: StreamingAttentionProgram, label: AttentionScoreAxis) -> int:
-    axes = tuple(axis for axis in program.qk.output.axes if axis.label == label.value)
-    if len(axes) != 1:
-        raise ValueError(f"streaming program must contain exactly one {label.value} axis")
-    return axes[0].extent

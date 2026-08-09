@@ -22,8 +22,16 @@ from tile_lifetime.event_dataflow import (
     TaskRelation,
     derive_event_tensor_plan,
 )
+from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
 from tile_lifetime.streaming_attention import AttentionScoreAxis, StreamingAttentionProgram
+from tile_lifetime.streaming_event_schedule import StreamingContractFoldDescriptor
+
+_DTYPE_BYTES = {
+    DType.BF16: 2,
+    DType.FP32: 4,
+    DType.FP64: 8,
+}
 
 
 @dataclass(frozen=True)
@@ -83,6 +91,39 @@ class CollectiveCompletionTaskDataflow:
     fold_tile: TaskFamily
     contribution_devices: tuple[int, ...]
     contribution_groups: tuple[int, ...]
+
+
+def streaming_contract_fold_event_descriptor(
+    program: StreamingAttentionProgram,
+) -> StreamingContractFoldDescriptor:
+    """Erase normalized-attention names into a generic physical descriptor."""
+    query_axes = tuple(axis for axis in program.qk.output.axes if axis.label == AttentionScoreAxis.QUERY.value)
+    fold_axes = tuple(axis for axis in program.qk.output.axes if axis.label == AttentionScoreAxis.KEY.value)
+    if len(query_axes) != 1 or len(fold_axes) != 1:
+        raise ValueError("streaming Contract/Fold adaptation requires one resident and one Fold axis")
+    query, key = program.qk.inputs
+    value = program.pv.inputs[1]
+    dtypes = (query.dtype, key.dtype, value.dtype)
+    if len(set(dtypes)) != 1:
+        raise ValueError("streaming Contract/Fold operands must share one physical element type")
+    try:
+        element_bytes = _DTYPE_BYTES[query.dtype]
+    except KeyError as error:
+        raise ValueError(f"streaming Contract/Fold has unsupported physical dtype {query.dtype.value}") from error
+    return StreamingContractFoldDescriptor(
+        first_contract_name=program.qk.name,
+        fold_update_name="streaming_fold_update",
+        second_contract_name=program.pv.name,
+        finalize_name=program.finalize.name,
+        fold_extent=fold_axes[0].extent,
+        resident_tile_size=program.schedule.query_tile_size,
+        streamed_tile_size=program.schedule.key_value_tile_size,
+        pipeline_depth=program.schedule.pipeline_depth,
+        resident_reduction_dimension=query.shape[-1],
+        streamed_reduction_dimension=key.shape[-1],
+        output_dimension=value.shape[-1],
+        element_bytes=element_bytes,
+    )
 
 
 def streaming_fold_task_dataflow(
