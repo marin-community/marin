@@ -1,0 +1,1043 @@
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_AttrType)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:179:1: warning: control reaches end of non-void function [-Wreturn-type]
+  179 | }
+      | ^
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(166): warning #940-D: missing return statement at end of non-void function "operator<<"
+  }
+  ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(179): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_AttrType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h(193): warning #940-D: missing return statement at end of non-void function "operator<<(std::ostream &, XLA_FFI_ExecutionStage)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(189): warning #940-D: missing return statement at end of non-void function "xla::ffi::ByteWidth"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(766): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) bool IsaBuffer(XLA_FFI_Buffer* buf) {
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(772): warning #2473-D: the "always_inline" attribute is ignored on non-inline functions
+  __attribute__((always_inline)) std::optional<Buffer<dtype, rank>> DecodeBuffer(
+                 ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(840): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_ArgType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/ffi.h(927): warning #940-D: missing return statement at end of non-void function "xla::ffi::operator<<(std::ostream &, XLA_FFI_RetType)"
+  }
+  ^
+
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_ExecutionStage)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:193:1: warning: control reaches end of non-void function [-Wreturn-type]
+  193 | }
+      | ^
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_DataType)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:166:1: warning: control reaches end of non-void function [-Wreturn-type]
+  166 | }
+      | ^
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h: In function ‘std::ostream& operator<<(std::ostream&, XLA_FFI_AttrType)’:
+/tmp/event-venv/lib/python3.12/site-packages/jaxlib/include/xla/ffi/api/api.h:179:1: warning: control reaches end of non-void function [-Wreturn-type]
+  179 | }
+      | ^
+{
+  "allocation": {
+    "cpu": 1.0,
+    "disk": "50GB",
+    "gb200_used": true,
+    "gpu_count": 1,
+    "gpu_variant": "GB200",
+    "memory": "32GB",
+    "priority": "batch"
+  },
+  "command": {
+    "argv": [
+      "lib/tile_lifetime/benchmarks/h100_jax_event_tensor_ffi.py",
+      "--json-output",
+      "/tmp/event-tensor-jax-gb200/summary.json",
+      "--build-directory",
+      "/tmp/event-tensor-jax-build",
+      "--shuttle-revision",
+      "1a04930ecd4008588e215703688a390042e1b9d4",
+      "--holder-revision",
+      "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+      "--nvcc",
+      "/tmp/event-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+      "--architecture",
+      "sm_100a",
+      "--expected-gpu-substring",
+      "GB200",
+      "--allocation-gpu-variant",
+      "GB200",
+      "--allocation-gpus",
+      "1",
+      "--allocation-cpu",
+      "1",
+      "--allocation-memory",
+      "32GB",
+      "--allocation-disk",
+      "50GB",
+      "--allocation-priority",
+      "batch"
+    ],
+    "environment": {
+      "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    },
+    "shell": "lib/tile_lifetime/benchmarks/h100_jax_event_tensor_ffi.py --json-output /tmp/event-tensor-jax-gb200/summary.json --build-directory /tmp/event-tensor-jax-build --shuttle-revision 1a04930ecd4008588e215703688a390042e1b9d4 --holder-revision eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb --nvcc /tmp/event-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc --architecture sm_100a --expected-gpu-substring GB200 --allocation-gpu-variant GB200 --allocation-gpus 1 --allocation-cpu 1 --allocation-memory 32GB --allocation-disk 50GB --allocation-priority batch",
+    "working_directory": "/tmp/shuttle-event-jax-run"
+  },
+  "determinism": {
+    "phased_mutation": {
+      "bitwise": true,
+      "hashes": [
+        [
+          "02447861c4ee0c89a900d3e19361fa06675fcf2b2402c46f92e0e6f13a496bc6"
+        ],
+        [
+          "02447861c4ee0c89a900d3e19361fa06675fcf2b2402c46f92e0e6f13a496bc6"
+        ],
+        [
+          "02447861c4ee0c89a900d3e19361fa06675fcf2b2402c46f92e0e6f13a496bc6"
+        ],
+        [
+          "02447861c4ee0c89a900d3e19361fa06675fcf2b2402c46f92e0e6f13a496bc6"
+        ],
+        [
+          "02447861c4ee0c89a900d3e19361fa06675fcf2b2402c46f92e0e6f13a496bc6"
+        ]
+      ],
+      "repeats": 5
+    },
+    "phased_primary": {
+      "bitwise": true,
+      "hashes": [
+        [
+          "66cdc70894101d045a8a6fe57213f1430fe430b4efddc813abe0a38ec1eed389"
+        ],
+        [
+          "66cdc70894101d045a8a6fe57213f1430fe430b4efddc813abe0a38ec1eed389"
+        ],
+        [
+          "66cdc70894101d045a8a6fe57213f1430fe430b4efddc813abe0a38ec1eed389"
+        ],
+        [
+          "66cdc70894101d045a8a6fe57213f1430fe430b4efddc813abe0a38ec1eed389"
+        ],
+        [
+          "66cdc70894101d045a8a6fe57213f1430fe430b4efddc813abe0a38ec1eed389"
+        ]
+      ],
+      "repeats": 5
+    },
+    "runtime_mutation": {
+      "bitwise": true,
+      "hashes": [
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "f14e9fb4a1e7a6ceb9a8feca337461d27b65f4c263f29525c4100e98447953c0"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "f14e9fb4a1e7a6ceb9a8feca337461d27b65f4c263f29525c4100e98447953c0"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "f14e9fb4a1e7a6ceb9a8feca337461d27b65f4c263f29525c4100e98447953c0"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "f14e9fb4a1e7a6ceb9a8feca337461d27b65f4c263f29525c4100e98447953c0"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "f14e9fb4a1e7a6ceb9a8feca337461d27b65f4c263f29525c4100e98447953c0"
+        ]
+      ],
+      "repeats": 5
+    },
+    "runtime_primary": {
+      "bitwise": true,
+      "hashes": [
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "e461038cffaef5be20ca137d5cda08462d9d8a4167ccdc777c2ec690ce96e05a"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "e461038cffaef5be20ca137d5cda08462d9d8a4167ccdc777c2ec690ce96e05a"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "e461038cffaef5be20ca137d5cda08462d9d8a4167ccdc777c2ec690ce96e05a"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "e461038cffaef5be20ca137d5cda08462d9d8a4167ccdc777c2ec690ce96e05a"
+        ],
+        [
+          "05d2276b4a9859b82b8aba5be69ded4b5c45153521e96896de711c06cfdc9e89",
+          "e461038cffaef5be20ca137d5cda08462d9d8a4167ccdc777c2ec690ce96e05a"
+        ]
+      ],
+      "repeats": 5
+    }
+  },
+  "gpu": {
+    "after": {
+      "field_errors": {},
+      "gpus": [
+        {
+          "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+          "clocks.applications.memory": "[Requested functionality has been deprecated]",
+          "clocks.current.graphics": "1950",
+          "clocks.current.memory": "3996",
+          "clocks.current.sm": "1950",
+          "clocks.max.graphics": "2062",
+          "clocks.max.memory": "3996",
+          "clocks.max.sm": "2062",
+          "driver_version": "595.71.05",
+          "index": "0",
+          "name": "NVIDIA GB200",
+          "pci.bus_id": "00000009:01:00.0",
+          "persistence_mode": "Enabled",
+          "power.draw": "210.33",
+          "power.limit": "1200.00",
+          "pstate": "P0",
+          "temperature.gpu": "36",
+          "uuid": "GPU-578a30b8-753f-0180-8e0e-64d9dafa8aa9"
+        }
+      ],
+      "topology": {
+        "arguments": [
+          "nvidia-smi",
+          "topo",
+          "-m"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t0-71\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC1\tNODE\tNODE\t X \tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC2\tSYS\tSYS\tSYS\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tSYS\tSYS\tSYS\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tNODE\tNODE\tNODE\tSYS\tSYS\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC6\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC7\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC8\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC11\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC12\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: mlx5_0\n  NIC5: mlx5_1\n  NIC6: mlx5_2\n  NIC7: mlx5_3\n  NIC8: mlx5_4\n  NIC9: mlx5_5\n  NIC10: mlx5_6\n  NIC11: mlx5_7\n  NIC12: mlx5_8"
+      }
+    },
+    "before": {
+      "field_errors": {},
+      "gpus": [
+        {
+          "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+          "clocks.applications.memory": "[Requested functionality has been deprecated]",
+          "clocks.current.graphics": "1950",
+          "clocks.current.memory": "3996",
+          "clocks.current.sm": "1950",
+          "clocks.max.graphics": "2062",
+          "clocks.max.memory": "3996",
+          "clocks.max.sm": "2062",
+          "driver_version": "595.71.05",
+          "index": "0",
+          "name": "NVIDIA GB200",
+          "pci.bus_id": "00000009:01:00.0",
+          "persistence_mode": "Enabled",
+          "power.draw": "206.45",
+          "power.limit": "1200.00",
+          "pstate": "P0",
+          "temperature.gpu": "36",
+          "uuid": "GPU-578a30b8-753f-0180-8e0e-64d9dafa8aa9"
+        }
+      ],
+      "topology": {
+        "arguments": [
+          "nvidia-smi",
+          "topo",
+          "-m"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "\u001b[4mGPU0\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNODE\tNODE\tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t0-71\t0\t\tN/A\nNIC0\tNODE\t X \tNODE\tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC1\tNODE\tNODE\t X \tSYS\tSYS\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC2\tSYS\tSYS\tSYS\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tSYS\tSYS\tSYS\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tNODE\tNODE\tNODE\tSYS\tSYS\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC6\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC7\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC8\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC11\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC12\tNODE\tNODE\tNODE\tSYS\tSYS\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: mlx5_0\n  NIC5: mlx5_1\n  NIC6: mlx5_2\n  NIC7: mlx5_3\n  NIC8: mlx5_4\n  NIC9: mlx5_5\n  NIC10: mlx5_6\n  NIC11: mlx5_7\n  NIC12: mlx5_8"
+      }
+    },
+    "family": "NVIDIA GB200",
+    "gb200_or_b200": true
+  },
+  "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "jax": {
+    "device_kind": "NVIDIA GB200",
+    "platform_version": "PJRT C API\ncuda 13000",
+    "version": "0.10.1"
+  },
+  "kind": "jax_typed_ffi_event_tensor_gpu_replay",
+  "observed_shuttle_revision": "1a04930ecd4008588e215703688a390042e1b9d4",
+  "optimized_hlo": {
+    "phased_mutation": {
+      "audit": "FFI operands remain executable parameters; constants and copies are counted, not hidden",
+      "constant_lines": 0,
+      "copy_lines": 0,
+      "ffi_target_occurrences": 1,
+      "parameter_occurrences": 3,
+      "path": "/tmp/event-tensor-jax-gb200/phased_mutation_optimized_hlo.txt",
+      "sha256": "e14ba755e7c38ee74c9d20b668fbb870f43e7a3c63f951993f6efbc799db128d"
+    },
+    "phased_primary": {
+      "audit": "FFI operands remain executable parameters; constants and copies are counted, not hidden",
+      "constant_lines": 0,
+      "copy_lines": 0,
+      "ffi_target_occurrences": 1,
+      "parameter_occurrences": 3,
+      "path": "/tmp/event-tensor-jax-gb200/phased_primary_optimized_hlo.txt",
+      "sha256": "947fed9584fc599c4fccda1f7b5dc76debb05b2a3af8eeb6e5551889b42f3c65"
+    },
+    "runtime_mutation": {
+      "audit": "FFI operands remain executable parameters; constants and copies are counted, not hidden",
+      "constant_lines": 0,
+      "copy_lines": 0,
+      "ffi_target_occurrences": 1,
+      "parameter_occurrences": 4,
+      "path": "/tmp/event-tensor-jax-gb200/runtime_mutation_optimized_hlo.txt",
+      "sha256": "6fd3ec3f1ccd274c67c915a3ec446224ccf76a7ecc86f09676302e2955db9c71"
+    },
+    "runtime_primary": {
+      "audit": "FFI operands remain executable parameters; constants and copies are counted, not hidden",
+      "constant_lines": 0,
+      "copy_lines": 0,
+      "ffi_target_occurrences": 1,
+      "parameter_occurrences": 4,
+      "path": "/tmp/event-tensor-jax-gb200/runtime_primary_optimized_hlo.txt",
+      "sha256": "94c8d57cdbfc64a087831371908af013ad1bb00ef269e3f77ca40e7527f1966d"
+    }
+  },
+  "phased_pipeline": {
+    "audit": {
+      "full_attention_performance_claim": false,
+      "physical_payload": "scalar_reference_pipeline",
+      "physical_plan_source": "generic pipelined_contract_fold_program",
+      "semantic_adapter": "StreamingAttentionProgram structural adapter (not physically linked in this replay)",
+      "tensor_core_execution": false
+    },
+    "ffi_handler_call_count": 6032,
+    "generated_source": {
+      "device_source_sha256": "5ca5155f0edf5a3fbde69cfe4dbcc219b4c7b0567b4759b64afdb58050bf348f",
+      "path": "/tmp/event-tensor-jax-gb200/generated_phased_event_ffi.cu",
+      "source_sha256": "bea94592c6ba253145fbac3cc2d01906e7c8508bcc2d20f8d83fd97de7ac338a"
+    },
+    "mutation": {
+      "dimension": 128,
+      "generations": 33,
+      "maximum_absolute_error": 1.1920928955078125e-07,
+      "mean_absolute_error": 2.805256471560824e-08,
+      "pipeline_depth": 4
+    },
+    "mutation_plan_fingerprint": "7c292902e3b5935bd59f0f242e770d5211c9a84b40673fdf29e539b7938d9c36",
+    "primary": {
+      "dimension": 128,
+      "generations": 32,
+      "maximum_absolute_error": 8.940696716308594e-08,
+      "mean_absolute_error": 2.0954757928848267e-08,
+      "pipeline_depth": 8
+    },
+    "primary_plan_fingerprint": "4d55395aa24cd7c07339608634dbeec439d6fba370bc62ad4cc9141c4a8a5c37",
+    "same_source_after_schedule_mutation": true
+  },
+  "requested_shuttle_revision": "1a04930ecd4008588e215703688a390042e1b9d4",
+  "runtime_relation": {
+    "ffi_handler_call_count": 6032,
+    "generated_source": {
+      "device_source_sha256": "34e38d979c7d918a7f825e5c2f1cf700f028a4a9c65d06e730f6ebaa5323d70f",
+      "path": "/tmp/event-tensor-jax-gb200/generated_runtime_event_ffi.cu",
+      "source_sha256": "ffc266e8f2380f4db3691d1b077384e8db8bb76b17dc42ae88e40f4f0e7e4aa8"
+    },
+    "mutation_bitwise_reference": true,
+    "mutation_counts": [
+      83,
+      82,
+      99,
+      70,
+      85,
+      80,
+      87,
+      0,
+      86,
+      82,
+      104,
+      82,
+      0,
+      90,
+      88,
+      88,
+      85,
+      73,
+      84,
+      0,
+      0,
+      81,
+      79,
+      87,
+      79,
+      88,
+      84,
+      0,
+      95,
+      95,
+      97,
+      0,
+      94,
+      73,
+      0,
+      0,
+      89,
+      76,
+      0,
+      0,
+      87,
+      0,
+      94,
+      87,
+      84,
+      0,
+      75,
+      82,
+      80,
+      85,
+      78,
+      90,
+      0,
+      0,
+      98,
+      89,
+      81,
+      0,
+      74,
+      90,
+      0,
+      84,
+      95,
+      78
+    ],
+    "mutation_empty_events": 16,
+    "mutation_plan_fingerprint": "1806521d6c2dbf5f1c0c9b65b60c4a0d7a680607945dc1e2807b25cffb8db75c",
+    "primary_bitwise_reference": true,
+    "primary_counts": [
+      90,
+      83,
+      103,
+      95,
+      95,
+      69,
+      0,
+      108,
+      88,
+      0,
+      85,
+      0,
+      86,
+      86,
+      90,
+      81,
+      0,
+      79,
+      0,
+      0,
+      81,
+      0,
+      0,
+      78,
+      77,
+      83,
+      0,
+      82,
+      78,
+      93,
+      81,
+      69,
+      83,
+      78,
+      0,
+      0,
+      82,
+      86,
+      0,
+      76,
+      80,
+      87,
+      104,
+      78,
+      0,
+      0,
+      85,
+      94,
+      77,
+      107,
+      91,
+      83,
+      91,
+      72,
+      94,
+      83,
+      0,
+      86,
+      88,
+      0,
+      92,
+      81,
+      81,
+      77
+    ],
+    "primary_empty_events": 16,
+    "primary_plan_fingerprint": "3886ac0c9b193d1e9b3a9399922b621c0732125be4992545726afea60c31c65e",
+    "same_source_after_relation_mutation": true
+  },
+  "timing": {
+    "execution_order": [
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ],
+      [
+        "runtime_primary",
+        "runtime_mutation",
+        "phased_primary",
+        "phased_mutation"
+      ],
+      [
+        "phased_mutation",
+        "phased_primary",
+        "runtime_mutation",
+        "runtime_primary"
+      ]
+    ],
+    "iterations_per_repeat": 100,
+    "method": "host enqueue interval followed by jax.block_until_ready",
+    "repeats": 30,
+    "variants": {
+      "phased_mutation": {
+        "maximum_ms": 0.14677654020488262,
+        "mean_ms": 0.14650104908893505,
+        "median_ms": 0.14647654024884105,
+        "minimum_ms": 0.1463630935177207,
+        "samples_ms": [
+          0.1465502893552184,
+          0.14636981766670942,
+          0.14643733389675617,
+          0.14648022130131721,
+          0.14656118117272854,
+          0.14654902275651693,
+          0.1465154206380248,
+          0.14658581931144,
+          0.14646132942289114,
+          0.14643446076661348,
+          0.14659957960247993,
+          0.1464043790474534,
+          0.14650422148406506,
+          0.14643926173448563,
+          0.14643380884081125,
+          0.14645942021161318,
+          0.14655444771051407,
+          0.14646166004240513,
+          0.14664790127426386,
+          0.14647285919636488,
+          0.14651733916252851,
+          0.1463630935177207,
+          0.14646485913544893,
+          0.14646966010332108,
+          0.1465771673247218,
+          0.14636789914220572,
+          0.14677654020488262,
+          0.1465848507359624,
+          0.1465925294905901,
+          0.14639509841799736
+        ]
+      },
+      "phased_primary": {
+        "maximum_ms": 0.17071422189474106,
+        "mean_ms": 0.1697004921734333,
+        "median_ms": 0.16969710122793913,
+        "minimum_ms": 0.1687699044123292,
+        "samples_ms": [
+          0.1687699044123292,
+          0.1700473390519619,
+          0.16921214293688536,
+          0.16926398035138845,
+          0.16986205708235502,
+          0.1703641377389431,
+          0.1705747004598379,
+          0.16883580945432186,
+          0.16941949725151062,
+          0.16964349895715714,
+          0.1696684630587697,
+          0.16984126064926386,
+          0.16914622392505407,
+          0.17071422189474106,
+          0.17004734836518764,
+          0.17031485680490732,
+          0.16982717905193567,
+          0.17043389845639467,
+          0.16938685905188322,
+          0.16972573939710855,
+          0.1694646244868636,
+          0.16997789964079857,
+          0.16892124898731709,
+          0.16944670118391514,
+          0.16964221838861704,
+          0.16956862062215805,
+          0.16986814327538013,
+          0.1702271867543459,
+          0.1689436612650752,
+          0.16985534224659204
+        ]
+      },
+      "runtime_mutation": {
+        "maximum_ms": 0.06482392083853483,
+        "mean_ms": 0.06164193293079734,
+        "median_ms": 0.061151906847953796,
+        "minimum_ms": 0.05950390361249447,
+        "samples_ms": [
+          0.05950390361249447,
+          0.06016726139932871,
+          0.05986453965306282,
+          0.06066037807613611,
+          0.05969718098640442,
+          0.06026933901011944,
+          0.05994486156851053,
+          0.06482392083853483,
+          0.06382583174854517,
+          0.06297015119343996,
+          0.0629986310377717,
+          0.06143094040453434,
+          0.06102070212364197,
+          0.060949018225073814,
+          0.06074165925383568,
+          0.06267351098358631,
+          0.06199511233717203,
+          0.06149879191070795,
+          0.060507417656481266,
+          0.06360726896673441,
+          0.06318870931863785,
+          0.06360791623592377,
+          0.06056374870240688,
+          0.060805659741163254,
+          0.06073431111872196,
+          0.06112982053309679,
+          0.06280791014432907,
+          0.06416502874344587,
+          0.0611739931628108,
+          0.06193046923726797
+        ]
+      },
+      "runtime_primary": {
+        "maximum_ms": 0.06656344048678875,
+        "mean_ms": 0.061735361659278475,
+        "median_ms": 0.06131398491561413,
+        "minimum_ms": 0.05903477780520916,
+        "samples_ms": [
+          0.06061142310500145,
+          0.06086454726755619,
+          0.06082069594413042,
+          0.05903477780520916,
+          0.05945845041424036,
+          0.05959605798125267,
+          0.059794140979647636,
+          0.0643624784424901,
+          0.06656344048678875,
+          0.062760547734797,
+          0.06381879094988108,
+          0.0607864698395133,
+          0.06132693961262703,
+          0.06130103021860123,
+          0.060654301196336746,
+          0.061940387822687626,
+          0.0628344714641571,
+          0.06140182260423899,
+          0.06221462972462177,
+          0.06380759179592133,
+          0.06380344275385141,
+          0.061152540147304535,
+          0.06079861894249916,
+          0.06105110049247742,
+          0.06048373878002167,
+          0.06286582909524441,
+          0.06308247335255146,
+          0.062295589596033096,
+          0.061737820506095886,
+          0.06083670072257519
+        ]
+      }
+    },
+    "warmups": 10
+  },
+  "toolchain": {
+    "nvcc": {
+      "arguments": [
+        "/tmp/event-venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:45:27_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0"
+    },
+    "platform": {
+      "arguments": [
+        "uname",
+        "-a"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Linux s53txs64 6.17.13-155-gdec5393c-coreweave-arm64 #1 SMP PREEMPT_DYNAMIC Thu Jun 25 20:54:25 UTC 2026 aarch64 GNU/Linux"
+    },
+    "ptxas": {
+      "arguments": [
+        "/tmp/event-venv/lib/python3.12/site-packages/nvidia/cu13/bin/ptxas",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "ptxas: NVIDIA (R) Ptx optimizing assembler\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:45:27_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0"
+    },
+    "python": "3.12.13 (main, Aug  5 2026, 01:16:26) [GCC 14.2.0]"
+  }
+}
