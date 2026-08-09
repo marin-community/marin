@@ -2331,3 +2331,23 @@ author: dlwh
   copying its literal counts into a generated header.
 - Design note:
   `lib/tile_lifetime/docs/event_tensor_high_performance_attachment.md`.
+
+### 2026-08-09 - TLTC-EVENT-023 H100 replay stopped at canonical Fold helper
+
+- Goal: establish whether the structural Event Tensor attachment preserves the
+  existing SM90 TMA/WGMMA payload's correctness and latency.
+- Environment: one H100 80GB HBM3 at compute capability 9.0, driver 595.71.05,
+  PyTorch 2.11.0+cu128, CUTLASS DSL 4.5.2, QuACK 0.5.0, and
+  FlashAttention 4.0.0b16. The allocation used two CPUs and 64 GB host memory.
+- Result: both canonical source `31e673a1a9` and Event Tensor source
+  `e57397b0dd` fail during CuTe IR verification in the same
+  `NormalizedExpFoldState.finalize` operation. The normalized-exponential
+  helper has identical SHA-256 in both source trees. No warmup or measured
+  iteration executed, so this is not a performance result.
+- Decision: stop rather than spend reserved H100 time debugging an unrelated
+  canonical helper regression. Preserve the structural attachment and exact
+  sanitized replay record; do not infer latency neutrality.
+- Resource status: the H100 reservation was released and its session state was
+  verified inactive.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_compile_blocker_h100_v0/`.
