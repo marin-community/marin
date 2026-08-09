@@ -59,13 +59,22 @@ concatenation remain inside both scalar ASTs. Mutating one HLO scalar operation
 changes only the affected output's semantic and CUDA-source digests; neither
 the importer nor generator contains an activation or model switch.
 
+The two source-keyed scatter Folds now expose generated scalar programs as
+well. The forward contribution imports the routed output and its separate
+route-weight input, while the input-adjoint contribution imports only the
+routed cotangent. Their reducer is independently imported as source-ordered
+FP32 add followed by the original BF16-to-FP32 round trip. Mutating the
+weighted contribution changes only its semantic and generated-source digests;
+the reducer program is unchanged.
+
 This identifies what a Shuttle-owned training region must replace while
 allowing communication to remain external. It is not yet an executable GPU
 replacement. In particular, the generated scalar bodies have not yet been
-plugged into a grouped-Contract epilogue, and the input/weight-gradient
-Contracts have not been replaced. Scalar import currently supports rank-two
-sources, unit-stride slices, scalar broadcasts, and feature-axis
-concatenation—not arbitrary affine indexing. The captured XLA implementation
+plugged into a grouped-Contract epilogue or deterministic scatter-Fold executor,
+and the input/weight-gradient Contracts have not been replaced. Scalar import
+currently supports rank-two sources, unit-stride slices, scalar broadcasts,
+feature-axis concatenation, and scalar Fold computations—not arbitrary affine
+indexing. The captured XLA implementation
 pads 16 logical edges to a physical 512-row Contract domain. That 32-times
 amplification is an artifact of this tiny CPU fixture, but it makes the required
 segmented-GMM replacement boundary concrete. The HLO scatter does not establish

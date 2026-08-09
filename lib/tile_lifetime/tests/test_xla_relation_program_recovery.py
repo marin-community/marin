@@ -98,6 +98,16 @@ def test_grug_hlo_recovers_generic_routed_forward_and_backward_program() -> None
     assert {fold.output_shape for fold in report.folds} == {"f32[8,32]{1,0}"}
     assert all(fold.reducer_opcodes == ("add", "convert", "convert") for fold in report.folds)
     assert any("multiply" in fold.contribution_opcodes for fold in report.folds)
+    weighted_fold = next(fold for fold in report.folds if "multiply" in fold.contribution_opcodes)
+    plain_fold = next(fold for fold in report.folds if "multiply" not in fold.contribution_opcodes)
+    assert len(weighted_fold.contribution_inputs) == 2
+    assert len(plain_fold.contribution_inputs) == 1
+    assert _count_kind(weighted_fold.contribution_scalar_program.expression, CastScalarKind.MULTIPLY) == 1
+    assert _count_kind(plain_fold.contribution_scalar_program.expression, CastScalarKind.MULTIPLY) == 0
+    assert all(_count_kind(fold.reducer_scalar_program.expression, CastScalarKind.ADD) == 1 for fold in report.folds)
+    assert all(_count_kind(fold.reducer_scalar_program.expression, CastScalarKind.CONVERT) == 2 for fold in report.folds)
+    assert all("__float2bfloat16_rn" in fold.generated_reducer_cuda.source for fold in report.folds)
+    assert all("MoE" not in fold.generated_contribution_cuda.source for fold in report.folds)
 
     assert {gradient.contract.output_shape for gradient in report.weight_gradients} == {
         "f32[4,32,64]{2,1,0}",
@@ -198,6 +208,29 @@ def test_grug_hlo_input_adjoint_mutation_regenerates_only_affected_scalar_output
     assert mutated.map.scalar_outputs[1].generated_cuda.source_digest != (
         baseline.map.scalar_outputs[1].generated_cuda.source_digest
     )
+
+
+def test_grug_hlo_fold_contribution_mutation_regenerates_only_contribution_body() -> None:
+    baseline = next(
+        fold for fold in recover_relation_programs(_frozen_hlo()).folds if "multiply" in fold.contribution_opcodes
+    )
+    mutated_hlo = _frozen_hlo().replace(
+        "multiply(%convert.3742, %broadcast.964)",
+        "add(%convert.3742, %broadcast.964)",
+        1,
+    )
+    mutated = next(
+        fold for fold in recover_relation_programs(mutated_hlo).folds if fold.source_contract == baseline.source_contract
+    )
+
+    assert mutated.contribution_scalar_program.digest != baseline.contribution_scalar_program.digest
+    assert mutated.generated_contribution_cuda.source_digest != baseline.generated_contribution_cuda.source_digest
+    assert mutated.reducer_scalar_program.digest == baseline.reducer_scalar_program.digest
+    assert mutated.generated_reducer_cuda.source_digest == baseline.generated_reducer_cuda.source_digest
+    assert _count_kind(mutated.contribution_scalar_program.expression, CastScalarKind.ADD) == (
+        _count_kind(baseline.contribution_scalar_program.expression, CastScalarKind.ADD) + 1
+    )
+    assert _count_kind(mutated.contribution_scalar_program.expression, CastScalarKind.MULTIPLY) == 0
 
 
 def _count_kind(expression: CastScalarExpression, kind: CastScalarKind) -> int:

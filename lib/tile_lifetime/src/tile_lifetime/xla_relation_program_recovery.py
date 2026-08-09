@@ -34,7 +34,7 @@ from tile_lifetime.xla_hlo_recovery import (
     inline_elementwise_fusions,
     parse_hlo_module_text,
 )
-from tile_lifetime.xla_scalar_map_import import import_hlo_scalar_map
+from tile_lifetime.xla_scalar_map_import import import_hlo_scalar_computation, import_hlo_scalar_map
 
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
 _CALLED_COMPUTATION = re.compile(r"to_apply=%([A-Za-z0-9_.-]+)")
@@ -130,11 +130,16 @@ class FoldRecord:
     """A source-keyed scatter Fold derived from a routed Contract output."""
 
     source_contract: str
+    contribution_inputs: tuple[str, ...]
+    contribution_scalar_program: CastScalarProgram
+    generated_contribution_cuda: GeneratedCudaScalarBody
     contribution_opcodes: tuple[str, ...]
     fold: str
     output_shape: str
     reducer: str
     reducer_opcodes: tuple[str, ...]
+    reducer_scalar_program: CastScalarProgram
+    generated_reducer_cuda: GeneratedCudaScalarBody
 
 
 @dataclass(frozen=True)
@@ -208,11 +213,16 @@ class RelationProgramRecoveryReport:
             "folds": [
                 {
                     "source_contract": fold.source_contract,
+                    "contribution_inputs": list(fold.contribution_inputs),
+                    "contribution_scalar_program": fold.contribution_scalar_program.to_dict(),
+                    "generated_contribution_cuda": fold.generated_contribution_cuda.to_dict(),
                     "contribution_opcodes": list(fold.contribution_opcodes),
                     "fold": fold.fold,
                     "output_shape": fold.output_shape,
                     "reducer": fold.reducer,
                     "reducer_opcodes": list(fold.reducer_opcodes),
+                    "reducer_scalar_program": fold.reducer_scalar_program.to_dict(),
+                    "generated_reducer_cuda": fold.generated_reducer_cuda.to_dict(),
                 }
                 for fold in self.folds
             ],
@@ -610,12 +620,19 @@ def _recover_scatter_folds(
         if path is None:
             continue
         fold = analysis.nodes[path[-1]]
-        reducer, reducer_opcodes = _scatter_reducer_program(analysis.module, fold)
+        reducer, reducer_opcodes, reducer_program = _scatter_reducer_program(analysis.module, fold)
         if reducer != "add":
             continue
+        contribution_inputs, contribution_program = _import_fold_contribution_scalar_map(analysis, path)
         records.append(
             FoldRecord(
                 source_contract=chain.second.node,
+                contribution_inputs=contribution_inputs,
+                contribution_scalar_program=contribution_program,
+                generated_contribution_cuda=generate_cuda_scalar_body(
+                    contribution_program,
+                    symbol="generated_fold_contribution",
+                ),
                 contribution_opcodes=tuple(
                     analysis.nodes[node_id].opcode
                     for node_id in path[1:-1]
@@ -625,9 +642,53 @@ def _recover_scatter_folds(
                 output_shape=fold.shape,
                 reducer=reducer,
                 reducer_opcodes=reducer_opcodes,
+                reducer_scalar_program=reducer_program,
+                generated_reducer_cuda=generate_cuda_scalar_body(
+                    reducer_program,
+                    symbol="generated_fold_update",
+                ),
             )
         )
     return tuple(records)
+
+
+def _import_fold_contribution_scalar_map(
+    analysis: _GraphAnalysis,
+    path: tuple[str, ...],
+) -> tuple[tuple[str, ...], CastScalarProgram]:
+    """Import the scalar contribution before a source-keyed Fold.
+
+    The physical scatter may add singleton update dimensions. Import the last
+    rank-two value before those wrappers and expose any rank-two off-path value
+    as an ordinary Map input. This covers weighted and unweighted routed
+    contributions without assigning workload-specific roles.
+    """
+    path_without_fold = path[:-1]
+    rank_two_nodes = tuple(
+        node_id
+        for node_id in path_without_fold
+        if (shape := _parse_array_shape(analysis.nodes[node_id].shape)) is not None and len(shape[1]) == 2
+    )
+    if not rank_two_nodes:
+        raise ValueError(f"Fold path {path[-1]!r} has no rank-two contribution value")
+    target = rank_two_nodes[-1]
+    target_shape = _parse_array_shape(analysis.nodes[target].shape)
+    assert target_shape is not None
+    path_nodes = set(path_without_fold)
+    side_inputs: list[str] = []
+    for node_id in path_without_fold:
+        for operand in analysis.nodes[node_id].operands:
+            if operand in path_nodes or analysis.nodes[operand].opcode == "constant" or operand in side_inputs:
+                continue
+            shape = _parse_array_shape(analysis.nodes[operand].shape)
+            if shape is not None and len(shape[1]) == 2 and shape[1] == target_shape[1]:
+                side_inputs.append(operand)
+    source_nodes = (path_without_fold[0], *side_inputs)
+    return source_nodes, import_hlo_scalar_map(
+        analysis.graph,
+        source_nodes=source_nodes,
+        target_node=target,
+    )
 
 
 def _recover_weight_gradients(
@@ -769,17 +830,20 @@ def _nearest_float_scatter(analysis: _GraphAnalysis, node_id: str) -> tuple[str,
     return None
 
 
-def _scatter_reducer_program(module: HloModuleGraph, node: InlinedHloNode) -> tuple[str, tuple[str, ...]]:
+def _scatter_reducer_program(
+    module: HloModuleGraph,
+    node: InlinedHloNode,
+) -> tuple[str, tuple[str, ...], CastScalarProgram]:
     match = _CALLED_COMPUTATION.search(node.attributes)
     if match is None:
-        return "unknown", ()
+        raise ValueError(f"scatter Fold {node.id!r} has no reducer computation")
     computation = module.computation(match.group(1))
     instructions = {instruction.name: instruction for instruction in computation.instructions}
     current = computation.root
     while current.opcode in {"bitcast", "convert", "copy", "reshape"} and len(current.operands) == 1:
         current = instructions[current.operands[0]]
     opcodes = tuple(instruction.opcode for instruction in computation.instructions if instruction.opcode != "parameter")
-    return current.opcode, opcodes
+    return current.opcode, opcodes, import_hlo_scalar_computation(computation)
 
 
 def _parse_array_shape(shape: str) -> tuple[str, tuple[int, ...]] | None:

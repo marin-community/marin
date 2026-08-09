@@ -14,7 +14,7 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarProgram,
     ScalarIndexRelation,
 )
-from tile_lifetime.xla_hlo_recovery import InlinedHloGraph
+from tile_lifetime.xla_hlo_recovery import HloComputation, InlinedHloGraph
 
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
 _SLICE_RANGES = re.compile(r"slice=\{(?P<ranges>[^}]*)\}")
@@ -138,6 +138,79 @@ def import_hlo_scalar_map(
         return result
 
     return CastScalarProgram(import_node(target_node, 0, 0))
+
+
+def import_hlo_scalar_computation(computation: HloComputation) -> CastScalarProgram:
+    """Import a scalar HLO computation such as a Fold reducer.
+
+    Parameter names are replaced with stable positional names. This keeps the
+    generated program independent of frontend or HLO instruction spelling
+    while preserving every explicit conversion in the reducer body.
+    """
+    nodes = {instruction.name: instruction for instruction in computation.instructions}
+    parameters = tuple(instruction for instruction in computation.instructions if instruction.opcode == "parameter")
+    parameter_indices = {instruction.name: index for index, instruction in enumerate(parameters)}
+    memo: dict[str, CastScalarExpression] = {}
+
+    def import_node(node_id: str) -> CastScalarExpression:
+        if node_id in memo:
+            return memo[node_id]
+        node = nodes[node_id]
+        dtype = _scalar_dtype(node.shape)
+        if node.opcode == "parameter":
+            index = parameter_indices[node.name]
+            result = CastScalarExpression(
+                kind=CastScalarKind.INPUT,
+                dtype=dtype,
+                input_name=f"input{index}",
+                input_index=ScalarIndexRelation(row_offset=0, feature_offset=0),
+            )
+        elif node.opcode == "constant":
+            result = CastScalarExpression(
+                kind=CastScalarKind.CONSTANT,
+                dtype=dtype,
+                constant=_constant_value(node.attributes),
+            )
+        elif node.opcode in {"bitcast", "copy", "reshape", "convert"}:
+            if len(node.operands) != 1:
+                raise ValueError(f"scalar wrapper {node.name!r} must have one operand")
+            operand = import_node(node.operands[0])
+            result = (
+                CastScalarExpression(kind=CastScalarKind.CONVERT, dtype=dtype, operands=(operand,))
+                if node.opcode == "convert"
+                else operand
+            )
+        elif node.opcode in {"negate", "exponential", "tanh"}:
+            kind = {
+                "negate": CastScalarKind.NEGATE,
+                "exponential": CastScalarKind.EXP,
+                "tanh": CastScalarKind.TANH,
+            }[node.opcode]
+            result = CastScalarExpression(kind=kind, dtype=dtype, operands=(import_node(node.operands[0]),))
+        elif node.opcode in {"add", "subtract", "multiply", "divide"}:
+            kind = {
+                "add": CastScalarKind.ADD,
+                "subtract": CastScalarKind.SUBTRACT,
+                "multiply": CastScalarKind.MULTIPLY,
+                "divide": CastScalarKind.DIVIDE,
+            }[node.opcode]
+            result = CastScalarExpression(
+                kind=kind,
+                dtype=dtype,
+                operands=tuple(import_node(operand) for operand in node.operands),
+            )
+        elif node.opcode == "select":
+            result = CastScalarExpression(
+                kind=CastScalarKind.SELECT,
+                dtype=dtype,
+                operands=tuple(import_node(operand) for operand in node.operands),
+            )
+        else:
+            raise ValueError(f"unsupported scalar computation HLO opcode {node.opcode!r} at {node.name!r}")
+        memo[node_id] = result
+        return result
+
+    return CastScalarProgram(import_node(computation.root.name))
 
 
 def _array_shape(shape: str) -> tuple[str, tuple[int, ...]] | None:
