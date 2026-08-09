@@ -77,6 +77,22 @@ linear pair-Map forward/backward proof, then replace the same region inside the
 Grug capture. Do not round-trip the complete Grug module through edited HLO
 text; that risks dropping proto fields and donation metadata.
 
+The captured post-scheduler graph retains the linear pair-Map structure, but
+XLA has split it across physical fusions. Two dot-root fusions share the same
+activation operand. Their results pass through convert fusions, a generated
+normalized scalar Map represented by negate/exponential/add/divide, and a
+multiply fusion before the down Contract. The reverse graph contains the same
+saved values, the scalar VJP fusions, dX Contracts, and dW Contracts. Recovery
+therefore needs to inline ordinary elementwise fusion bodies and strip physical
+bitcast/copy wrappers before applying the existing generic
+Contract+Contract+Map analysis. It does not need a model-name recognizer.
+
+BF16 convert boundaries remain visible between scalar operations in the toy
+Grug HLO. The current CODA comparison evaluates the scalar Map from FP32 GEMM
+accumulators and is only `real_algebra_equivalent` to that source ordering.
+Region replacement must either preserve the HLO cast graph or require the same
+explicit numerical policy used by the standalone generator.
+
 ## Required implementation sequence
 
 1. The pinned JAX/JAXLIB 0.11 CPU probe is complete without changing Marin's
