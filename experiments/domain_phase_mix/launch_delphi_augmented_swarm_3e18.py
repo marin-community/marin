@@ -161,6 +161,8 @@ class DelphiSwarmTrainingConfig:
     run_spec: DelphiSwarmRunSpec
     validation_configs: dict[str, DatasetComponent] | None
     wandb_tags: tuple[str, ...]
+    steps_per_eval: int
+    permanent_checkpoint_interval: int | None
 
 
 @dataclass(frozen=True)
@@ -168,10 +170,12 @@ class SaveDelphiSwarmManifestConfig:
     """Configuration for writing the resolved swarm manifest."""
 
     output_path: str
+    experiment_name: str
     source_panel: str
     source_panel_sha256: str
     analysis_output_path: str
     run_specs_json: str
+    architecture_target_flops: float
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,24 @@ def _candidate_for_budget(*, scaling_fits: dict[str, ScalingFit]):
         candidate,
         batch_size=TARGET_BATCH_SIZE,
         train_steps=train_steps,
+        optimizer_config=optimizer_config,
+    )
+
+
+def _candidate_for_run_spec(*, scaling_fits: dict[str, ScalingFit], run_spec: DelphiSwarmRunSpec):
+    """Resolve the fixed architecture with a token-aware optimizer for one horizon."""
+    candidate = _candidate_for_budget(scaling_fits=scaling_fits)
+    expected_tokens = run_spec.train_steps * run_spec.batch_size * SEQ_LEN_DELPHI
+    if expected_tokens != run_spec.realized_train_tokens:
+        raise ValueError("Run-spec token accounting changed: " f"{expected_tokens} != {run_spec.realized_train_tokens}")
+    optimizer_config = completed_adamh_heuristic.build_optimizer_config(
+        run_spec.batch_size,
+        run_spec.realized_train_tokens,
+    )
+    return replace(
+        candidate,
+        batch_size=run_spec.batch_size,
+        train_steps=run_spec.train_steps,
         optimizer_config=optimizer_config,
     )
 
@@ -449,12 +471,10 @@ def _build_mixture_data(run_spec: DelphiSwarmRunSpec):
 
 
 def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
-    """Train one row using the exact Delphi 3e18 configuration."""
+    """Train one row using the fixed Delphi architecture and declared horizon."""
     run_spec = config.run_spec
     scaling_fits = _read_scaling_fits(config.analysis_output_path)
-    candidate = _candidate_for_budget(scaling_fits=scaling_fits)
-    if candidate.train_steps != run_spec.train_steps:
-        raise ValueError(f"Resolved train steps changed: {candidate.train_steps} != {run_spec.train_steps}")
+    candidate = _candidate_for_run_spec(scaling_fits=scaling_fits, run_spec=run_spec)
     params = candidate.model_config.total_trainable_params(completed_adamh_heuristic.vocab_size)
     tensor_parallel_size = _tensor_parallel_size(candidate.model_config.hidden_dim, run_spec.tpu_type)
     if int(params) != run_spec.total_trainable_params:
@@ -490,10 +510,14 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
             train_batch_size=run_spec.batch_size,
             per_device_parallelism=-1,
             num_train_steps=run_spec.train_steps,
-            steps_per_eval=1000,
+            steps_per_eval=config.steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=5000)],
+                keep=(
+                    None
+                    if config.permanent_checkpoint_interval is None
+                    else [dict(every=config.permanent_checkpoint_interval)]
+                ),
             ),
             mesh=MeshConfig(
                 axes={"data": -1, "replica": 1, "model": tensor_parallel_size},
@@ -571,14 +595,18 @@ def save_delphi_swarm_manifest(config: SaveDelphiSwarmManifestConfig) -> None:
         handle.write(weights_buffer.getvalue())
 
     summary: dict[str, Any] = {
-        "experiment_name": EXPERIMENT_NAME,
+        "experiment_name": config.experiment_name,
         "source_panel": config.source_panel,
         "source_panel_sha256": config.source_panel_sha256,
         "analysis_output_path": config.analysis_output_path,
         "n_runs": len(run_specs),
         "panel_counts": dict(Counter(spec.panel_source for spec in run_specs)),
         "source_experiment_counts": dict(Counter(spec.source_experiment for spec in run_specs)),
-        "target_flops": TARGET_FLOPS,
+        "architecture_target_flops": config.architecture_target_flops,
+        "actual_approximate_flops": sorted({spec.target_flops for spec in run_specs}),
+        "total_tokens_per_parameter": sorted(
+            {spec.realized_train_tokens / spec.total_trainable_params for spec in run_specs}
+        ),
         "phase_boundary": PHASE_BOUNDARIES[0],
         "phase_fractions": PHASE_FRACTIONS,
         "simulated_epoch_target_budget": SIMULATED_EPOCH_TARGET_BUDGET,
@@ -595,6 +623,14 @@ def build_launch_artifacts(
     analysis_output_path: str,
     source_panel: str,
     validation_configs: dict[str, DatasetComponent],
+    experiment_name: str = EXPERIMENT_NAME,
+    architecture_target_flops: float = TARGET_FLOPS,
+    wandb_tags: tuple[str, ...] = ("delphi-3e18-augmented-swarm", "fit-panel", "two-phase"),
+    table9_wandb_group: str = "olmo_base_eval_table9_delphi_3e18_augmented_swarm",
+    provenance_panel: str = "delphi_3e18_augmented_fit_swarm",
+    provenance_scale: str = "3e18",
+    steps_per_eval: int = 1000,
+    permanent_checkpoint_interval: int | None = 5000,
 ) -> LaunchArtifacts:
     """Build the full 280-train plus 280-native-eval graph."""
     training_steps: list[ExecutorStep] = []
@@ -606,7 +642,7 @@ def build_launch_artifacts(
             zone=run_spec.tpu_zone,
         )
         training_step = ExecutorStep(
-            name=f"{EXPERIMENT_NAME}/{run_spec.run_name}",
+            name=f"{experiment_name}/{run_spec.run_name}",
             fn=remote(
                 run_delphi_swarm_training,
                 resources=training_resources,
@@ -618,7 +654,9 @@ def build_launch_artifacts(
                 output_path=this_output_path(),
                 run_spec=run_spec,
                 validation_configs=validation_configs,
-                wandb_tags=("delphi-3e18-augmented-swarm", "fit-panel", "two-phase"),
+                wandb_tags=wandb_tags,
+                steps_per_eval=steps_per_eval,
+                permanent_checkpoint_interval=permanent_checkpoint_interval,
             ),
         )
         training_steps.append(training_step)
@@ -628,11 +666,11 @@ def build_launch_artifacts(
                 checkpoint=training_step / f"hf/step-{run_spec.expected_checkpoint_step}",
                 request_set_dir=TABLE9_REQUEST_SET_DIR,
                 resource_config=TABLE9_EVAL_RESOURCES,
-                wandb_group="olmo_base_eval_table9_delphi_3e18_augmented_swarm",
+                wandb_group=table9_wandb_group,
                 provenance={
                     "evaluator": "marin-native-table9-bpb",
-                    "panel": "delphi_3e18_augmented_fit_swarm",
-                    "scale": "3e18",
+                    "panel": provenance_panel,
+                    "scale": provenance_scale,
                     "source_run_name": run_spec.source_run_name,
                     "swarm_run_name": run_spec.run_name,
                     "panel_source": run_spec.panel_source,
@@ -641,14 +679,16 @@ def build_launch_artifacts(
         )
 
     manifest_step = ExecutorStep(
-        name=f"{EXPERIMENT_NAME}/manifest",
+        name=f"{experiment_name}/manifest",
         fn=save_delphi_swarm_manifest,
         config=SaveDelphiSwarmManifestConfig(
             output_path=this_output_path(),
+            experiment_name=experiment_name,
             source_panel=source_panel,
             source_panel_sha256=SOURCE_PANEL_SHA256,
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
+            architecture_target_flops=architecture_target_flops,
         ),
     )
     return LaunchArtifacts(
@@ -668,10 +708,12 @@ def _write_local_dry_run(
     save_delphi_swarm_manifest(
         SaveDelphiSwarmManifestConfig(
             output_path=str(LOCAL_ARTIFACT_DIR),
+            experiment_name=EXPERIMENT_NAME,
             source_panel=str(source_panel),
             source_panel_sha256=SOURCE_PANEL_SHA256,
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
+            architecture_target_flops=TARGET_FLOPS,
         )
     )
 
