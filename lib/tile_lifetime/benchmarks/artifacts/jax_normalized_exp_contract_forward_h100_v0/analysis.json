@@ -1,0 +1,14 @@
+{
+  "generated_ffi_first_15_median_ms": 0.05517364700062899,
+  "generated_ffi_last_15_median_ms": 0.038805304997367784,
+  "generated_ffi_mean_ms": 0.0481133068666774,
+  "generated_ffi_median_ms": 0.05500352949820808,
+  "matched_jax_first_15_median_ms": 0.06021730799693614,
+  "matched_jax_last_15_median_ms": 0.044889980999869294,
+  "matched_jax_mean_ms": 0.053456482366406516,
+  "matched_jax_median_ms": 0.0580333644975326,
+  "paired_generated_to_matched_jax_mean": 0.8966448738523382,
+  "paired_generated_to_matched_jax_median": 0.9006883098192764,
+  "ratio_of_path_medians": 0.9477914984671733,
+  "sample_count_per_path": 30
+}

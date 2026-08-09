@@ -1,0 +1,30 @@
+{
+  "environment": {
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1"
+  },
+  "gpu_execution": false,
+  "identity": {
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_forward_h100_identity",
+    "handler_symbol_resolved": true,
+    "semantic_digest": "00ca09d957969c8782a1d56ad2345d20bb1240c2d16ed3cd3a90c537472d290a",
+    "source_digest": "48b5b8bcf49f72f3071efbfcf98a7a3e691a63d0ab1069494f9092f62397b673",
+    "target": "shuttle.generic.normalized_exp_contract_forward.h100_identity"
+  },
+  "mode": "compile_and_load_only",
+  "revision": "0cfc5d2e81",
+  "shape": {
+    "fold_extent": 128,
+    "reduction": 32,
+    "rows": 8
+  },
+  "tanh_softcap_mutation": {
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_forward_preflight_softcap",
+    "handler_symbol_resolved": true,
+    "same_physical_extents": true,
+    "semantic_digest": "8b4dc0b3d38bdc128dc1c879250f5cf63c06695099f8fe6e128208e56a37aa5c",
+    "source_contains_tanh": true,
+    "source_digest": "efa671ca4ecf20e0fba8e2c2c24e147d0f78db230efb180ec53ff4727f4ff399",
+    "target": "shuttle.generic.normalized_exp_contract_forward.preflight_softcap"
+  }
+}

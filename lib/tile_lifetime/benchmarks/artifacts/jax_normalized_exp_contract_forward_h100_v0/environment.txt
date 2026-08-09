@@ -1,0 +1,32 @@
+revision=0cfc5d2e81
+branch=research/shuttle-normalized-exp-forward-h100
+date_utc=2026-08-09T22:13:14Z
+
+jax=0.10.1
+jaxlib=0.10.1
+
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2026 NVIDIA Corporation
+Built on Thu_Mar_19_11:12:51_PM_PDT_2026
+Cuda compilation tools, release 13.2, V13.2.78
+Build cuda_13.2.r13.2/compiler.37668154_0
+
+NVIDIA H100 80GB HBM3, GPU-7cf3cc97-9a2b-6f82-aaa0-35a9b1d41f0e, 595.71.05, 700.00 W, 345 MHz, 2619 MHz
+
+jax                                       0.10.1
+jaxlib                                    0.10.1
+numpy                                     2.3.5
+nvidia-cuda-cccl                          13.3.3.4.1
+nvidia-cuda-nvcc                          13.2.78
+nvidia-cuda-runtime                       13.0.96
+
+	linux-vdso.so.1 (0x00007ffce999c000)
+	libcudart.so.13 => /app/.venv/lib/python3.12/site-packages/nvidia/cu13/lib/libcudart.so.13 (0x00007c5a9b400000)
+	libstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007c5a9b19a000)
+	libgcc_s.so.1 => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007c5a9b6e0000)
+	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007c5a9afa6000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007c5a9b72d000)
+	libdl.so.2 => /usr/lib/x86_64-linux-gnu/libdl.so.2 (0x00007c5a9b6db000)
+	libpthread.so.0 => /usr/lib/x86_64-linux-gnu/libpthread.so.0 (0x00007c5a9b6d6000)
+	librt.so.1 => /usr/lib/x86_64-linux-gnu/librt.so.1 (0x00007c5a9b6d1000)
+	libm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007c5a9aeb6000)
