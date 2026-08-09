@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 
 from tile_lifetime.cuda_map_fold_codegen import CudaMapFoldProgram, CudaScalarFunction, render_cuda_map_fold_include
+from tile_lifetime.ffi_command_buffer import finalize_ffi_handler_source
 from tile_lifetime.tensor_program import (
     ScalarExpression,
     scalar_expression_inputs,
@@ -37,6 +38,7 @@ class GeneratedCudaNormalizedExpContractForwardFfi:
     fold_extent: int
     threads: int
     shared_bytes: int
+    command_buffer_compatible: bool
 
 
 def generate_cuda_normalized_exp_contract_forward_ffi(
@@ -45,6 +47,7 @@ def generate_cuda_normalized_exp_contract_forward_ffi(
     target: str,
     score_expression: ScalarExpression | None = None,
     threads: int = 256,
+    command_buffer_compatible: bool = False,
 ) -> GeneratedCudaNormalizedExpContractForwardFfi:
     """Generate one CTA from compact Contract, Maps, Folds, and selection."""
     if threads not in {128, 256, 512}:
@@ -73,7 +76,18 @@ def generate_cuda_normalized_exp_contract_forward_ffi(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     handler_symbol = _target_symbol(target)
-    source = f"""// Generated from generic Contract/Map/Fold forward semantics; do not edit.
+    launch_status_check = (
+        ""
+        if command_buffer_compatible
+        else """
+  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return ffi::Error::Internal(
+        "normalized-exp Contract forward launch failed: " + std::string(cudaGetErrorString(status)));
+  }
+"""
+    )
+    source_template = f"""// Generated from generic Contract/Map/Fold forward semantics; do not edit.
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -165,11 +179,7 @@ ffi::Error ShuttleNormalizedExpContractForward(
       selected_indices_buffer.typed_data(),
       output_buffer->typed_data(),
       saved_state_buffer->typed_data());
-  const cudaError_t status = cudaPeekAtLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal(
-        "normalized-exp Contract forward launch failed: " + std::string(cudaGetErrorString(status)));
-  }}
+{launch_status_check}
   call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
@@ -189,12 +199,16 @@ auto ShuttleNormalizedExpContractForwardBinding() {{
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {handler_symbol},
     ShuttleNormalizedExpContractForward,
-    ShuttleNormalizedExpContractForwardBinding());
+    ShuttleNormalizedExpContractForwardBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" int shuttle_normalized_exp_contract_forward_call_count() {{
   return call_count.load(std::memory_order_relaxed);
 }}
 """
+    source = finalize_ffi_handler_source(
+        source_template,
+        command_buffer_compatible=command_buffer_compatible,
+    )
     return GeneratedCudaNormalizedExpContractForwardFfi(
         target,
         handler_symbol,
@@ -206,6 +220,7 @@ extern "C" int shuttle_normalized_exp_contract_forward_call_count() {{
         fold_extent,
         threads,
         shared_bytes,
+        command_buffer_compatible,
     )
 
 

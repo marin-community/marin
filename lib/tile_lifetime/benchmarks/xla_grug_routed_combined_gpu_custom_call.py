@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -45,6 +46,7 @@ from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
     GeneratedCudaNormalizedExpContractReverseFfi,
     generate_cuda_normalized_exp_contract_reverse_ffi,
 )
+from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
 from tile_lifetime.jax_hlo_rewrite_runtime import require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
@@ -224,6 +226,23 @@ class RoutedTrainingCompositionMode(StrEnum):
         if self.generates_normalized_exp_pair:
             return 13
         return 11 if self.fuses_weighted_reverse else 12
+
+
+class CommandBufferCandidateMode(StrEnum):
+    """Bounded generated-handler set offered to XLA command-buffer conversion."""
+
+    DISABLED = "disabled"
+    NORMALIZED_EXP_PAIR = "normalized_exp_pair"
+
+    @property
+    def compatible_targets(self) -> tuple[str, ...]:
+        """Return handlers whose host callbacks are capture-only instrumentation."""
+        if self is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR:
+            return (
+                _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+            )
+        return ()
 
 
 @dataclass(frozen=True)
@@ -542,10 +561,21 @@ def run_smoke(
     composition_mode: RoutedTrainingCompositionMode,
     repository: Path,
     triton_target: str | None,
+    command_buffer_candidate: CommandBufferCandidateMode = CommandBufferCandidateMode.DISABLED,
     warmup: int = 4,
     repeats: int = 30,
 ) -> dict[str, Any]:
     """Compile, execute, and time the combined routed-plus-attention transform."""
+    if (
+        command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
+        and not composition_mode.generates_normalized_exp_pair
+    ):
+        raise ValueError("the normalized-exp command-buffer candidate requires the generated forward/reverse pair")
+    command_buffer_flag_audit = (
+        require_custom_call_command_buffers_enabled(os.environ.get("XLA_FLAGS", ""))
+        if command_buffer_candidate is not CommandBufferCandidateMode.DISABLED
+        else None
+    )
     hlo_runtime = require_hlo_rewrite_runtime()
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the combined routed training replacement requires a CUDA JAX device")
@@ -738,10 +768,16 @@ def run_smoke(
                         normalized_exp_contract_forward = generate_cuda_normalized_exp_contract_forward_ffi(
                             plan.normalized_exp_contract_forward,
                             target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                            command_buffer_compatible=(
+                                command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
+                            ),
                         )
                         normalized_exp_contract_reverse = generate_cuda_normalized_exp_contract_reverse_ffi(
                             plan.normalized_exp_contract_reverse,
                             target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                            command_buffer_compatible=(
+                                command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
+                            ),
                         )
                     routed_weight_targets = _SHARED_ROUTED_TARGETS.weight_gradients
                 weights = tuple(
@@ -1259,12 +1295,21 @@ def run_smoke(
             )
         )
         if composition_mode.generates_normalized_exp_pair:
-            observed_calls.extend(
-                (
-                    call_counts["normalized_exp_contract_forward"],
-                    call_counts["normalized_exp_contract_reverse"],
+            if command_buffer_candidate is CommandBufferCandidateMode.DISABLED:
+                observed_calls.extend(
+                    (
+                        call_counts["normalized_exp_contract_forward"],
+                        call_counts["normalized_exp_contract_reverse"],
+                    )
                 )
-            )
+    capture_only_calls = (
+        (
+            call_counts["normalized_exp_contract_forward"],
+            call_counts["normalized_exp_contract_reverse"],
+        )
+        if command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
+        else ()
+    )
 
     def write_execution_evidence(status: str, reason: str | None) -> None:
         if artifact_directory is None:
@@ -1310,6 +1355,7 @@ def run_smoke(
             normalized_exp_evidence = {
                 "forward": {
                     "target": _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                    "command_buffer_compatible": normalized_exp_contract_forward.command_buffer_compatible,
                     "semantic_sha256": normalized_exp_contract_forward.semantic_digest,
                     "source_sha256": normalized_exp_contract_forward.source_digest,
                     "inputs": [
@@ -1328,6 +1374,7 @@ def run_smoke(
                 },
                 "reverse": {
                     "target": _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                    "command_buffer_compatible": normalized_exp_contract_reverse.command_buffer_compatible,
                     "semantic_sha256": normalized_exp_contract_reverse.semantic_digest,
                     "source_sha256": normalized_exp_contract_reverse.source_digest,
                     "inputs": [
@@ -1354,7 +1401,19 @@ def run_smoke(
         evidence = {
             "status": status,
             "reason": reason,
+            "command_buffer_candidate": command_buffer_candidate.value,
+            "command_buffer_compatible_targets": command_buffer_candidate.compatible_targets,
+            "xla_command_buffer_startup_selection": (
+                {
+                    "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
+                    "selected_entries": command_buffer_flag_audit.selected_entries,
+                }
+                if command_buffer_flag_audit is not None
+                else None
+            ),
             "minimum_custom_call_handler_executions": minimum_calls,
+            "capture_only_handler_minimum_executions": 1 if capture_only_calls else None,
+            "capture_only_handler_targets": command_buffer_candidate.compatible_targets,
             "custom_call_occurrences_in_transformed_hlo": target_occurrences,
             "custom_call_handler_executions": call_counts,
             "generated_runtime_dependencies": runtime_dependencies,
@@ -1375,6 +1434,8 @@ def run_smoke(
 
     if any(count < minimum_calls for count in observed_calls):
         fail_after_execution(f"custom-call handler evidence mismatch: minimum={minimum_calls}, calls={observed_calls}")
+    if any(count < 1 for count in capture_only_calls):
+        fail_after_execution(f"command-buffer capture handler did not execute: calls={capture_only_calls}")
     weighted_relation_inputs: tuple[str, ...] = ()
     normalized_exp_inputs: tuple[str, ...] = ()
     if composition_mode.uses_shared_map:
@@ -1661,6 +1722,18 @@ def run_smoke(
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
+        "custom_call_handler_count_contract": {
+            "logical_execution_minimum": minimum_calls,
+            "capture_only_targets": command_buffer_candidate.compatible_targets,
+            "capture_only_minimum": 1 if capture_only_calls else None,
+            "note": (
+                "Command-buffer-compatible host handlers run while XLA records a graph; graph replay does not "
+                "increment their host counters. Target occurrence and profiler evidence replace logical call-count "
+                "accounting for those handlers."
+                if capture_only_calls
+                else "Every selected handler counter covers logical benchmark executions."
+            ),
+        },
         "input_adjoint_auxiliary": input_adjoint_auxiliary,
         "retained_input_adjoint_wrappers": retained_input_adjoint_wrappers,
         "target_instruction_names": (
@@ -1719,6 +1792,16 @@ def run_smoke(
         "generated_over_baseline": transformed_median / baseline_median,
         "generated_minus_baseline_ms": transformed_median - baseline_median,
         "independent_custom_call_count": composition_mode.independent_custom_call_count,
+        "command_buffer_candidate": command_buffer_candidate.value,
+        "command_buffer_compatible_targets": command_buffer_candidate.compatible_targets,
+        "xla_command_buffer_startup_selection": (
+            {
+                "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
+                "selected_entries": command_buffer_flag_audit.selected_entries,
+            }
+            if command_buffer_flag_audit is not None
+            else None
+        ),
         "latency_delta_per_custom_call_us": (
             (transformed_median - baseline_median) * 1e3 / composition_mode.independent_custom_call_count
         ),
@@ -1765,6 +1848,12 @@ def main() -> None:
         choices=tuple(RoutedTrainingCompositionMode),
         default=RoutedTrainingCompositionMode.SHARED_MAP_XLA_REMAINDER,
     )
+    parser.add_argument(
+        "--command-buffer-candidate",
+        type=CommandBufferCandidateMode,
+        choices=tuple(CommandBufferCandidateMode),
+        default=CommandBufferCandidateMode.DISABLED,
+    )
     parser.add_argument("--warmup", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=30)
     args = parser.parse_args()
@@ -1773,6 +1862,7 @@ def main() -> None:
         args.architecture,
         args.artifact_directory,
         composition_mode=args.composition_mode,
+        command_buffer_candidate=args.command_buffer_candidate,
         repository=args.repository,
         triton_target=args.triton_target,
         warmup=args.warmup,
