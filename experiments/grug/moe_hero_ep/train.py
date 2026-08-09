@@ -6,7 +6,8 @@ import functools
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -51,22 +52,38 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
-    "JAX_ENABLE_PGLE": "false",
+    "JAX_ENABLE_PGLE": "true",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-)
+_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
+INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
-def _apply_hero_ep_runtime_defaults() -> None:
-    os.environ.update(HERO_EP_RUNTIME_ENV)
+class WatchMode(StrEnum):
+    """Where a watched training step computes gradient and parameter statistics."""
+
+    INLINE = "inline"
+    DIAGNOSTIC = "diagnostic"
+
+
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, enable_pgle: bool = True) -> None:
+    if not enable_pgle:
+        # Force it off before the setdefault below so PGLE cannot open its (conflicting) profiler.
+        os.environ["JAX_ENABLE_PGLE"] = "false"
+    for name, value in HERO_EP_RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    flag_defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
+    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    flag_defaults = (
+        f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        *_XLA_FLAG_DEFAULTS,
+        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+    )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
@@ -84,6 +101,14 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # Inline watch computes statistics on every step and uses the watch interval only for logging.
+    # This keeps one training executable resident. A diagnostic watch repeats forward and backward
+    # in a separate executable, which costs compute but shortens gradient liveness.
+    watch_mode: WatchMode = WatchMode.INLINE
+    # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
+    # restores from the latest committed checkpoint, so without a writer an interrupted run
+    # restarts at step 0.
+    save_checkpoints: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -95,6 +120,10 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+    # PGLE runs a profiling pass whose profiler session collides with the watch/eval instrumentation
+    # ("ALREADY_EXISTS: Another profiling session active"). On for the hero throughput run; turn it
+    # off for watched comparison runs where the +MFU is not worth the crash.
+    enable_pgle: bool = True
 
 
 @dataclass(frozen=True)
@@ -120,6 +149,10 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+    # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
+    # long schedule requires the two to differ. None runs the whole schedule.
+    stop_after_steps: int | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -177,6 +210,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -196,6 +230,11 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # Evaluate at the compute dtype, as the train step does at `mp.cast_to_compute(params)`.
+        # Parameters are stored float32, and `gpu_fa4_cute` accepts only bf16/fp16, so without this
+        # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
+        # reference attention path takes float32, which hid this on H100.
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -243,6 +282,17 @@ def _compute_flops(
         local_kv_heads=model_config.local_kv_heads,
         global_kv_heads=model_config.global_kv_heads,
     )
+    # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
+    # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
+    # or MFU is overstated by roughly the compression ratio.
+    if model_config.latent_dim is not None:
+        latent, hidden = model_config.latent_dim, model_config.hidden_dim
+        # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
+        routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+        # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
+        projection = 2 * 2 * hidden * latent
+        flops_per_token += model_config.num_layers * (routed_delta + projection)
+
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
@@ -346,6 +396,55 @@ def _drop_metrics(
     }
 
 
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+    def loss_fn(model):
+        compute_params = mp.cast_to_compute(model)
+        return compute_params.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=z_loss,
+            return_router_metrics=True,
+        )
+
+    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+
+def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
+    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss)
+    return compute_watch_stats(
+        watch_targets=watch_config.watch_targets,
+        include_norms=watch_config.include_norms,
+        include_per_parameter_norms=watch_config.include_per_parameter_norms,
+        include_histogram=watch_config.include_histograms,
+        split_scan_layers=watch_config.split_scan_layers,
+        params=params,
+        grads=grads,
+        model_tree_type=type(params),
+    )
+
+
+def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
+    watch_targets = (
+        tuple(t.strip() for t in watch_config.watch_targets.split(","))
+        if isinstance(watch_config.watch_targets, str)
+        else tuple(watch_config.watch_targets)
+    )
+    unsupported_targets = set(watch_targets) - {"grads", "params"}
+    if unsupported_targets:
+        raise ValueError(f"diagnostic watch does not support targets {sorted(unsupported_targets)}")
+    diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @jax.jit
+    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
+        params = _apply_qb_betas(params, pending_qb_betas)
+        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
+
+    return diagnostic_watch_step
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -365,8 +464,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -375,18 +474,7 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
-                batch.tokens,
-                batch.loss_weight,
-                mask=batch.attn_mask,
-                reduction="mean",
-                logsumexp_weight=z_loss,
-                return_router_metrics=True,
-            )
-
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -406,7 +494,7 @@ def _make_train_step(
             )
 
         watch_stats = None
-        if watch_config is not None and compute_watch:
+        if watch_config is not None:
             watch_stats = compute_watch_stats(
                 watch_targets=watch_targets,
                 include_norms=watch_config.include_norms,
@@ -449,12 +537,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    diagnostic_watch_step = None
+    inline_watch_config = watch_config if watch_config.is_enabled else None
+    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
+        diagnostic_watch_step = _make_diagnostic_watch_step(
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            watch_config=watch_config,
+        )
+        inline_watch_config = None
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
-        watch_config=watch_config if watch_config.is_enabled else None,
+        watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
     )
 
@@ -498,6 +595,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -525,6 +623,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
@@ -533,6 +632,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+
+        # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
+        # both use it so a head-of-schedule run reports against the steps it will actually take.
+        stop_step = min(config.stop_after_steps or trainer.num_train_steps, trainer.num_train_steps)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -544,8 +647,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
             every=log_every,
         )
-        state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
-        state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
+        state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
@@ -575,16 +678,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            while int(state.step) < trainer.num_train_steps:
+            while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
-                compute_watch = (
+                watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                if watch_due and diagnostic_watch_step is not None:
+                    watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+                    jax.block_until_ready(watch_stats)
+                else:
+                    watch_stats = None
+                state, metrics, inline_watch_stats = train_step(state, batch)
+                if inline_watch_stats is not None and watch_due:
+                    watch_stats = inline_watch_stats
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
@@ -625,12 +734,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                if checkpointer is not None:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+
         except BaseException:
-            logger.exception("Fatal error in grug training loop; skipping final callbacks to preserve root cause")
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if checkpointer is not None:
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 
@@ -642,7 +759,8 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    _apply_hero_ep_runtime_defaults()
+    inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
+    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled, enable_pgle=config.trainer.enable_pgle)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

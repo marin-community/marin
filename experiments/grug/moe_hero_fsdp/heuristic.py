@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling LR heuristic (May Recipe MuonH refit) and the FSDP hero config builder.
+"""Compute-scaling LR heuristic (Aug hero MuonH refit) and the FSDP hero config builder.
 
-``MoeHeuristic`` is the May Recipe refit (issue #5951, R^2=0.996): it sets compute-optimal MuonH /
+``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
@@ -18,17 +18,22 @@ from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 
 @dataclass(frozen=True)
 class MoeHeuristic:
-    """May Recipe MuonH LR-scaling refit (issue #5951, seq_len=4096 fits).
+    """Aug hero LR-sweep MuonH refit (issues #7856 / #8003, seq_len=8192, R^2=0.978).
 
     adam_lr  = lr_coeff * tokens^lr_tokens_exp * hidden_dim^lr_dim_exp * sqrt(tokens_per_batch)
     muonh_lr = muonh_ratio * adam_lr
     epsilon  = epsilon_coeff * sqrt(tokens / tokens_per_batch)
     beta2    = clip(beta2_base^(tokens_per_batch / beta2_reference_tpb), min_beta2, max_beta2)
+
+    LR exponents/coefficient are the per-cell paloma-optimal fit: muonh_lr =
+    34.35 * tokens^-0.346 * hidden^-0.345 * batch^0.5 at seq_len=8192, folded into the
+    sqrt(tokens_per_batch) form (lr_coeff = 34.35 / (muonh_ratio * sqrt(8192))). Prior
+    May-Recipe fit (#5951): lr_coeff=0.06602, lr_tokens_exp=-0.395, lr_dim_exp=-0.150.
     """
 
-    lr_coeff: float = 0.06602
-    lr_tokens_exp: float = -0.395
-    lr_dim_exp: float = -0.150
+    lr_coeff: float = 0.087571
+    lr_tokens_exp: float = -0.3461
+    lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
     beta1: float = 0.9062
@@ -73,8 +78,14 @@ class MoeHeuristic:
         )
 
 
-def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer."""
+def build_hero_configs(
+    *, num_train_steps: int, batch_size: int, expert_chunks: int = 4
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer.
+
+    ``expert_chunks`` splits the expert bank for the local ``sonic_cute`` path. The hero default of
+    4 drops about 1.9 percent of assignments; 1 computes every assignment and is the dropless arm.
+    """
     model = GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=6144,
@@ -90,15 +101,15 @@ def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugMo
         global_kv_heads=6,
         head_dim=128,
         max_seq_len=4096,
-        sliding_window=512,
-        global_every=6,
+        sliding_window=2048,
+        global_every=4,
         capacity_factor=1.0,
         initializer_std=0.5 / math.sqrt(6144),
         qk_mult=1.3,
         sconv=True,
         attention_implementation="gpu_fa4_cute",
         moe_implementation="sonic_cute",
-        expert_chunks=4,
+        expert_chunks=expert_chunks,
         report_capacity_overflow=True,
         rope_fused=True,
         # Folds the router, attn_gate, and GatedNorm gradients into the existing reduce-scatter

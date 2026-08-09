@@ -148,6 +148,10 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+    # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
+    # long schedule requires the two to differ. None runs the whole schedule.
+    stop_after_steps: int | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -206,6 +210,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -225,6 +230,9 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # Cast params to compute dtype (bf16): the FA4/CuTe attention path requires bf16 inputs, and eval
+        # runs the f32 master weights unless cast (the train step casts via compute_params).
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -569,6 +577,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
@@ -577,6 +586,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+
+        # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
+        # both use it so a head-of-schedule run reports against the steps it will actually take.
+        stop_step = min(config.stop_after_steps or trainer.num_train_steps, trainer.num_train_steps)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -594,8 +607,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
             every=log_every,
         )
-        state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
-        state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
+        state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
@@ -626,7 +639,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            while int(state.step) < trainer.num_train_steps:
+            while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()

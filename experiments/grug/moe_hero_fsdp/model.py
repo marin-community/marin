@@ -484,9 +484,12 @@ class CausalSelfAttention(eqx.Module):
             stored_kv_heads = self.cfg.stored_kv_heads
 
             def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
-                if num_kv_heads == stored_kv_heads:
-                    return projection
-                return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                if num_kv_heads != stored_kv_heads:
+                    projection = align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                # Both cond branches must carry the same PartitionSpec. align_kv_heads drops the head-dim
+                # "model" annotation when it broadcasts a single head (global_kv=1), so pin both branches
+                # back to the stored K/V spec. model_axis_size is 1 here, so the reshard moves nothing.
+                return reshard(projection, P(_BATCH_AXES, None, "model", None))
 
             k, v = jax.lax.cond(
                 jnp.asarray(is_global, dtype=jnp.bool_),
@@ -920,8 +923,10 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
+    # not a multiple of global_every still ends on a global-context layer.
     layer_indices = jnp.arange(num_layers)
-    return ((layer_indices + 1) % global_every) == 0
+    return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
 class Transformer(eqx.Module):

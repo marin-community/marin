@@ -12,18 +12,28 @@ Launch:
 python -m experiments.grug.moe_hero_fsdp.launch \
   --run-id moe-hero-fsdp-test-1rack --dp-racks 1 --num-steps 25 --version dev
 
-# submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
+# submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024. The `iris job run`
+# call is a tiny coordinator pod that builds the plan and submits the training gang; the gang
+# inherits the coordinator's priority band. This is the shape a real launch request takes.
 RID="moe-hero-fsdp-test-2rack"
-iris --cluster=marin job run --no-wait --enable-extra-resources \
-  --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority production \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 2 \
+  --job-name "${RID}-coord" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT marin_moe -e WANDB_ENTITY marin-community \
+  -e IRIS_PORT_JAX 32747 \
   -- python -m experiments.grug.moe_hero_fsdp.launch \
     --run-id "$RID" --dp-racks 2 --num-steps 200 --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
-`-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
+`--priority` is one of `production`, `interactive`, or `batch`; `production` preempts the others.
+Give every concurrently running gang its own `IRIS_PORT_JAX` (rank 0 binds it for the JAX
+coordinator; the default 8476 is shared clusterwide), and raise `--timeout` past the run's expected
+wall-clock. `uv run iris --config lib/iris/config/marin.yaml` and `uv run iris --cluster=marin` are
+equivalent.
+
+W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass a different
+`-e WANDB_PROJECT <project>` to the coordinator to send metrics elsewhere.
 
 Pass `--mode supervised` for NCCL diagnostics. Each GPU task runs training in a child process with
 XLA's 600-second per-execution deadman and no in-pod restart. The supervisor allows one hour for the
@@ -78,7 +88,7 @@ Entries are content-addressed, so runs share them and a launcher edit invalidate
   parallel to `v`), and a **headwise sigmoid attention gate** — all structural / always-on, no flags.
 - **SConv** — Inkling-style depthwise causal 1-D conv at all four sites (`k`, `v`, `attn`, `mlp`),
   identity-init so it's inert at step 0.
-- **Sliding-window attention (512)** with **every 6th layer global** (full-causal). Short layers use
+- **Sliding-window attention (2048)** with **every 4th layer global** (full-causal). Short layers use
   half-RoPE; global layers run **rope-free**. RoPE is the fused single-pass form (`rope_fused`).
 - **Always array-stacked**: all blocks run through one compiled `lax.scan` body (the unrolled
   program OOMs). The per-layer sliding window rides in as precomputed FA4 bound arrays selected in
