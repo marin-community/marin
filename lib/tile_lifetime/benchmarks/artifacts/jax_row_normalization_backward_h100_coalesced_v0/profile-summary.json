@@ -1,0 +1,262 @@
+{
+  "benchmark": {
+    "counterbalanced": true,
+    "cuda_profiler_range": true,
+    "iterations_per_sample": 1,
+    "repeats": 6,
+    "timing": "host enqueue interval followed by jax.block_until_ready",
+    "warmups": 0
+  },
+  "component_profile": null,
+  "correctness": {
+    "deterministic_hashes": [
+      "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+      "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+    ],
+    "independent_natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    },
+    "natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_separate_stages",
+      "generated_coalesce_compatible_row_stages",
+      "matched_xla"
+    ],
+    [
+      "generated_separate_stages",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages",
+      "generated_separate_stages",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages",
+      "matched_xla",
+      "generated_separate_stages"
+    ],
+    [
+      "matched_xla",
+      "generated_separate_stages",
+      "generated_coalesce_compatible_row_stages"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages",
+      "generated_separate_stages"
+    ]
+  ],
+  "frontend": {
+    "jax_owns_ad": true,
+    "named_semantics_erased": true,
+    "operation_kinds": {
+      "add": 2,
+      "broadcast_in_dim": 11,
+      "constant": 5,
+      "convert": 5,
+      "divide": 3,
+      "multiply": 10,
+      "reduce": 5,
+      "reshape": 2,
+      "rsqrt": 1
+    },
+    "source": "ordinary JAX function differentiated by jax.vjp and exported to StableHLO",
+    "stablehlo_sha256": "352f0bf76137394e065ed8fedff4c6fd2192fad808a8bd92578c0e23f4059624"
+  },
+  "generated": {
+    "handler_executions": 9,
+    "pipeline_schedule": "separate_stages",
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_fingerprints": [
+      "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+      "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+      "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+    ],
+    "source_sha256": "3a852c415f9463f58feb072ad12f5caba17075ac5dfd81b128305bdf137742c6",
+    "target": "shuttle.axis_fold_reverse_v1.separate_stages"
+  },
+  "generated_schedule_comparison": {
+    "coalesce_compatible_row_stages": {
+      "correctness": {
+        "independent_natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        },
+        "natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        }
+      },
+      "deterministic_hashes": [
+        "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+        "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+      ],
+      "handler_executions": 9,
+      "measurements": {
+        "median_ms": 0.1785929998732172,
+        "minimum_ms": 0.1734850011416711,
+        "samples_ms": [
+          0.21390400070231408,
+          0.17972899513551965,
+          0.17833099991548806,
+          0.17885499983094633,
+          0.1734850011416711,
+          0.17724300414556637
+        ]
+      },
+      "ratio_to_matched_xla": 1.2609294312091661,
+      "semantic_fingerprints": [
+        "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+        "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+        "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+      ],
+      "source_sha256": "af4793b15010e8427ffd96ed066659661736515acd1b63d243344f0f2ad96705",
+      "target": "shuttle.axis_fold_reverse_v1.coalesce_compatible_row_stages"
+    },
+    "separate_stages": {
+      "correctness": {
+        "independent_natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        },
+        "natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        }
+      },
+      "deterministic_hashes": [
+        "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+        "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+      ],
+      "handler_executions": 9,
+      "measurements": {
+        "median_ms": 0.18461949730408378,
+        "minimum_ms": 0.18057599663734436,
+        "samples_ms": [
+          0.4235439992044121,
+          0.19248099852120504,
+          0.18057599663734436,
+          0.18325499695492908,
+          0.18598399765323848,
+          0.1809129971661605
+        ]
+      },
+      "ratio_to_matched_xla": 1.3034786239719318,
+      "semantic_fingerprints": [
+        "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+        "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+        "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+      ],
+      "source_sha256": "3a852c415f9463f58feb072ad12f5caba17075ac5dfd81b128305bdf137742c6",
+      "target": "shuttle.axis_fold_reverse_v1.separate_stages"
+    }
+  },
+  "measurements": {
+    "generated_coalesce_compatible_row_stages": {
+      "median_ms": 0.1785929998732172,
+      "minimum_ms": 0.1734850011416711,
+      "samples_ms": [
+        0.21390400070231408,
+        0.17972899513551965,
+        0.17833099991548806,
+        0.17885499983094633,
+        0.1734850011416711,
+        0.17724300414556637
+      ]
+    },
+    "generated_separate_stages": {
+      "median_ms": 0.18461949730408378,
+      "minimum_ms": 0.18057599663734436,
+      "samples_ms": [
+        0.4235439992044121,
+        0.19248099852120504,
+        0.18057599663734436,
+        0.18325499695492908,
+        0.18598399765323848,
+        0.1809129971661605
+      ]
+    },
+    "matched_xla": {
+      "median_ms": 0.14163599917083047,
+      "minimum_ms": 0.13827400107402354,
+      "samples_ms": [
+        0.174066997715272,
+        0.14151999494060874,
+        0.13827400107402354,
+        0.1417520034010522,
+        0.14184600149746984,
+        0.13841799955116585
+      ]
+    }
+  },
+  "numerical_contract": {
+    "accepted_reference": "natural JAX VJP with BF16 inputs and outputs",
+    "generated_reassociation": [
+      "deterministic_tree",
+      "deterministic_tree",
+      "deterministic_tree"
+    ],
+    "natural_jax_vjp": "source-ordered equivalence is not established because generated and XLA reductions may select different deterministic trees",
+    "policy": "allow_rounding_reorder"
+  },
+  "ratio_generated_to_matched_xla": 1.3034786239719318,
+  "revisions": {
+    "shuttle": "d267adf9c3"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}
