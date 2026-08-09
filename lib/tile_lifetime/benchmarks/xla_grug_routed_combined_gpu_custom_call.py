@@ -38,6 +38,10 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     write_gzip_text,
 )
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
+from tile_lifetime.cuda_contract_map_chain_codegen import (
+    GeneratedCudaContractMapChainFfi,
+    generate_cuda_contract_map_chain_ffi,
+)
 from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
     GeneratedCudaNormalizedExpContractForwardFfi,
     generate_cuda_normalized_exp_contract_forward_ffi,
@@ -47,6 +51,7 @@ from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
     generate_cuda_normalized_exp_contract_reverse_ffi,
 )
 from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
+from tile_lifetime.jax_contract_map_chain_ffi import register_cuda_contract_map_chain_ffi
 from tile_lifetime.jax_hlo_rewrite_runtime import require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
@@ -85,6 +90,13 @@ from tile_lifetime.xla_contract_relation_fold_ffi import (
     replace_contract_relation_fold_with_custom_call,
 )
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
+from tile_lifetime.xla_low_rank_gated_product_ffi import (
+    GeneratedLowRankContractMapTrainingAudit,
+    GeneratedLowRankContractMapTrainingPlan,
+    audit_generated_low_rank_contract_map_training,
+    plan_generated_low_rank_contract_map_training,
+    replace_generated_low_rank_contract_map_training,
+)
 from tile_lifetime.xla_normalized_exp_contract_forward import (
     NormalizedExpContractForwardHloReplacementAudit,
     NormalizedExpContractForwardHloReplacementPlan,
@@ -190,6 +202,8 @@ _WEIGHTED_RELATION_FOLD_TARGET = "shuttle.routed_training.weighted_relation.fold
 _WEIGHTED_RELATION_FUSED_TARGET = "shuttle.routed_training.weighted_relation.contract_fold.v1"
 _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET = "shuttle.routed_training.normalized_exp_contract_forward.v1"
 _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET = "shuttle.routed_training.normalized_exp_contract_reverse.v1"
+_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET = "shuttle.routed_training.low_rank_contract_map.forward.v1"
+_LOW_RANK_CONTRACT_MAP_REVERSE_TARGET = "shuttle.routed_training.low_rank_contract_map.reverse.v1"
 
 
 class RoutedTrainingCompositionMode(StrEnum):
@@ -199,6 +213,7 @@ class RoutedTrainingCompositionMode(StrEnum):
     SHARED_MAP_XLA_REMAINDER = "shared_map_xla_remainder"
     SHARED_MAP_FUSED_WEIGHTED_REVERSE = "shared_map_fused_weighted_reverse"
     SHARED_MAP_FUSED_REVERSES = "shared_map_fused_reverses"
+    SHARED_MAP_FUSED_REVERSES_AND_GATED_PRODUCTS = "shared_map_fused_reverses_and_gated_products"
 
     @property
     def uses_shared_map(self) -> bool:
@@ -211,12 +226,21 @@ class RoutedTrainingCompositionMode(StrEnum):
         return self in {
             RoutedTrainingCompositionMode.SHARED_MAP_FUSED_WEIGHTED_REVERSE,
             RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES,
+            RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES_AND_GATED_PRODUCTS,
         }
 
     @property
     def generates_normalized_exp_pair(self) -> bool:
         """Whether generated targets own normalized-exp forward and reverse."""
-        return self is RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES
+        return self in {
+            RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES,
+            RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES_AND_GATED_PRODUCTS,
+        }
+
+    @property
+    def generates_low_rank_gated_products(self) -> bool:
+        """Whether generated Contract/Map families own six primal and four reverse chains."""
+        return self is RoutedTrainingCompositionMode.SHARED_MAP_FUSED_REVERSES_AND_GATED_PRODUCTS
 
     @property
     def independent_custom_call_count(self) -> int:
@@ -224,7 +248,7 @@ class RoutedTrainingCompositionMode(StrEnum):
         if self is RoutedTrainingCompositionMode.MONOLITHIC_INPUT_ADJOINT:
             return 7
         if self.generates_normalized_exp_pair:
-            return 13
+            return 23 if self.generates_low_rank_gated_products else 13
         return 11 if self.fuses_weighted_reverse else 12
 
 
@@ -272,10 +296,10 @@ class SharedMapTrainingAttentionAndAxisFoldAudit:
 _CUSTOM_CALL_TARGET_ATTRIBUTE = re.compile(r'(?:^|,\s*)custom_call_target="(?P<target>[^"]+)"(?=,|$)')
 
 
-def _single_custom_call_target_occurrences(hlo_text: str, targets: tuple[str, ...]) -> dict[str, int]:
-    """Count exact target attributes and require one call for every selected target."""
+def _custom_call_target_occurrences(hlo_text: str, expected: dict[str, int]) -> dict[str, int]:
+    """Count exact target attributes and enforce each selected multiplicity."""
     module = parse_hlo_module_text(hlo_text)
-    counts = dict.fromkeys(targets, 0)
+    counts = dict.fromkeys(expected, 0)
     for computation in module.computations:
         for instruction in computation.instructions:
             if instruction.opcode != "custom-call":
@@ -288,9 +312,13 @@ def _single_custom_call_target_occurrences(hlo_text: str, targets: tuple[str, ..
             target = attributes[0]
             if target in counts:
                 counts[target] += 1
-    invalid = {target: count for target, count in counts.items() if count != 1}
+    invalid = {
+        target: {"expected": expected[target], "actual": count}
+        for target, count in counts.items()
+        if count != expected[target]
+    }
     if invalid:
-        raise RuntimeError(f"expected one exact custom-call target attribute per selected target, found {invalid}")
+        raise RuntimeError(f"custom-call target multiplicities changed: {invalid}")
     return counts
 
 
@@ -607,8 +635,12 @@ def run_smoke(
     generated_programs: list[dict[str, Any]] = []
     replacement_audits: list[Any] = []
     attention_liveness_audits: list[Any] = []
+    low_rank_contract_map_plans: list[GeneratedLowRankContractMapTrainingPlan] = []
+    low_rank_contract_map_audits: list[GeneratedLowRankContractMapTrainingAudit] = []
+    low_rank_contract_map_originals: list[str] = []
     libraries: dict[str, ctypes.CDLL] = {}
     runtime_dependencies: dict[str, tuple[str, ...]] = {}
+    low_rank_library_names: list[str] = []
     attention_library_path: Path | None = None
     selected_routed_targets = (
         _SHARED_ROUTED_TARGETS if composition_mode.uses_shared_map else _TARGETS.routed_attention.routed
@@ -639,9 +671,18 @@ def run_smoke(
                 if composition_mode.generates_normalized_exp_pair
                 else ()
             ),
+            *(
+                (_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET, _LOW_RANK_CONTRACT_MAP_REVERSE_TARGET)
+                if composition_mode.generates_low_rank_gated_products
+                else ()
+            ),
             _TARGETS.routed_attention.attention_backward,
             *_TARGETS.axis_folds,
         )
+    expected_target_occurrences = dict.fromkeys(selected_targets, 1)
+    if composition_mode.generates_low_rank_gated_products:
+        expected_target_occurrences[_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET] = 6
+        expected_target_occurrences[_LOW_RANK_CONTRACT_MAP_REVERSE_TARGET] = 4
     exact_target_occurrences: dict[str, int] | None = None
     try:
         with set_mesh(_mesh()):
@@ -903,6 +944,41 @@ def run_smoke(
                         fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
                         generate_normalized_exp_pair=composition_mode.generates_normalized_exp_pair,
                     )
+                generated_low_rank_contract_maps: tuple[GeneratedCudaContractMapChainFfi, ...] = ()
+                if composition_mode.generates_low_rank_gated_products:
+                    low_rank_plan = plan_generated_low_rank_contract_map_training(
+                        rewritten,
+                        forward_target_prefix=_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET,
+                        reverse_target_prefix=_LOW_RANK_CONTRACT_MAP_REVERSE_TARGET,
+                    )
+                    generated_low_rank_contract_maps = tuple(
+                        generate_cuda_contract_map_chain_ffi(
+                            family.program,
+                            forward_target=family.forward_target,
+                            reverse_target=family.reverse_target,
+                        )
+                        for family in low_rank_plan.families
+                    )
+                    for index, generated_low_rank in enumerate(generated_low_rank_contract_maps):
+                        name = f"low_rank_contract_map_family_{index}"
+                        source_directory = directory / name
+                        source_directory.mkdir(exist_ok=True)
+                        (directory / f"generated_{name}.cu").write_text(generated_low_rank.source)
+                        library = _compile_cuda_ffi_handler(
+                            generated_low_rank.source,
+                            source_directory,
+                            nvcc,
+                            architecture,
+                        )
+                        register_cuda_contract_map_chain_ffi(generated_low_rank, library)
+                        libraries[name] = library
+                        low_rank_library_names.append(name)
+                        runtime_dependencies[name] = _runtime_dependency_audit(
+                            Path(library._name), generated_low_rank.source
+                        )
+                    low_rank_contract_map_originals.append(rewritten)
+                    rewritten = replace_generated_low_rank_contract_map_training(rewritten, low_rank_plan)
+                    low_rank_contract_map_plans.append(low_rank_plan)
                 recovered_plans.append(plan)
                 generated_programs.append(
                     {
@@ -916,6 +992,7 @@ def run_smoke(
                         "weighted_relation_fused": weighted_relation_fused,
                         "normalized_exp_contract_forward": normalized_exp_contract_forward,
                         "normalized_exp_contract_reverse": normalized_exp_contract_reverse,
+                        "low_rank_contract_maps": generated_low_rank_contract_maps,
                         "weights": weights,
                         "attention": compiled_attention,
                         "attention_source_sha256": {
@@ -945,6 +1022,14 @@ def run_smoke(
                             plan,
                             fuse_weighted_reverse=composition_mode.fuses_weighted_reverse,
                             generate_normalized_exp_pair=composition_mode.generates_normalized_exp_pair,
+                        )
+                    )
+                if composition_mode.generates_low_rank_gated_products:
+                    low_rank_contract_map_audits.append(
+                        audit_generated_low_rank_contract_map_training(
+                            low_rank_contract_map_originals[-1],
+                            transformed_text,
+                            low_rank_contract_map_plans[-1],
                         )
                     )
                 attention_liveness_audits.append(
@@ -984,9 +1069,9 @@ def run_smoke(
                     directory / "transformed-gpu-pre-scheduler-hlo.txt.gz",
                     transformed_modules[0],
                 )
-            exact_target_occurrences = _single_custom_call_target_occurrences(
+            exact_target_occurrences = _custom_call_target_occurrences(
                 transformed_modules[0],
-                selected_targets,
+                expected_target_occurrences,
             )
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
@@ -1095,6 +1180,14 @@ def run_smoke(
                         libraries["normalized_exp_contract_reverse"],
                         "shuttle_normalized_exp_contract_reverse_call_count",
                     )
+                if composition_mode.generates_low_rank_gated_products:
+                    call_counts["low_rank_contract_map_families"] = [
+                        {
+                            "forward": _call_count(libraries[name], "shuttle_contract_map_chain_forward_call_count"),
+                            "reverse": _call_count(libraries[name], "shuttle_contract_map_chain_reverse_call_count"),
+                        }
+                        for name in low_rank_library_names
+                    ]
     finally:
         if artifact_directory is not None:
             for name in (
@@ -1113,6 +1206,7 @@ def run_smoke(
                 "group_batched_weight_gradient_1",
                 "axis_fold_0",
                 "axis_fold_1",
+                *low_rank_library_names,
             ):
                 compiled_library = directory / name / "generated_pair_map_handler.so"
                 if compiled_library.exists():
@@ -1128,6 +1222,14 @@ def run_smoke(
         or len(recovered_plans) != 1
         or len(replacement_audits) != 1
         or len(attention_liveness_audits) != 1
+        or (
+            composition_mode.generates_low_rank_gated_products
+            and (len(low_rank_contract_map_plans) != 1 or len(low_rank_contract_map_audits) != 1)
+        )
+        or (
+            not composition_mode.generates_low_rank_gated_products
+            and (low_rank_contract_map_plans or low_rank_contract_map_audits)
+        )
     ):
         raise RuntimeError("expected one combined routed-plus-attention-plus-Fold replacement pass")
     original = original_modules[0]
@@ -1149,6 +1251,9 @@ def run_smoke(
     normalized_exp_contract_reverse: GeneratedCudaNormalizedExpContractReverseFfi | None = generated[
         "normalized_exp_contract_reverse"
     ]
+    generated_low_rank_contract_maps: tuple[GeneratedCudaContractMapChainFfi, ...] = generated["low_rank_contract_maps"]
+    low_rank_contract_map_plan = low_rank_contract_map_plans[0] if low_rank_contract_map_plans else None
+    low_rank_contract_map_audit = low_rank_contract_map_audits[0] if low_rank_contract_map_audits else None
     weights = generated["weights"]
     compiled_attention = generated["attention"]
     attention_source_sha256 = generated["attention_source_sha256"]
@@ -1214,6 +1319,14 @@ def run_smoke(
                 if composition_mode.generates_normalized_exp_pair
                 else ()
             ),
+            *(
+                (
+                    "six generic two-Contract scalar-Map forward/rematerialization calls",
+                    "four JAX-owned reverse Map plus input/weight-adjoint Contract calls",
+                )
+                if composition_mode.generates_low_rank_gated_products
+                else ()
+            ),
         ]
     if mode_generated is None:
         raise RuntimeError(f"composition {composition_mode.value} did not generate its routed mode body")
@@ -1271,6 +1384,16 @@ def run_smoke(
             target_occurrences["normalized_exp_contract_reverse"] = exact_target_occurrences[
                 _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET
             ]
+        if composition_mode.generates_low_rank_gated_products:
+            if low_rank_contract_map_plan is None or low_rank_contract_map_audit is None:
+                raise RuntimeError("generated low-rank Contract/Map evidence is incomplete")
+            target_occurrences["low_rank_contract_map_families"] = [
+                {
+                    "forward": exact_target_occurrences[family.forward_target],
+                    "reverse": exact_target_occurrences[family.reverse_target],
+                }
+                for family in low_rank_contract_map_plan.families
+            ]
     minimum_calls = repeats + warmup + 1
     observed_calls = [
         call_counts["forward"],
@@ -1302,6 +1425,12 @@ def run_smoke(
                         call_counts["normalized_exp_contract_reverse"],
                     )
                 )
+        if composition_mode.generates_low_rank_gated_products:
+            observed_calls.extend(
+                count
+                for family_counts in call_counts["low_rank_contract_map_families"]
+                for count in (family_counts["forward"], family_counts["reverse"])
+            )
     capture_only_calls = (
         (
             call_counts["normalized_exp_contract_forward"],
@@ -1438,6 +1567,7 @@ def run_smoke(
         fail_after_execution(f"command-buffer capture handler did not execute: calls={capture_only_calls}")
     weighted_relation_inputs: tuple[str, ...] = ()
     normalized_exp_inputs: tuple[str, ...] = ()
+    low_rank_contract_map_inputs: tuple[str, ...] = ()
     if composition_mode.uses_shared_map:
         if weighted_relation_plan is None:
             fail_after_execution("shared-Map composition lost its weighted relation reverse plan")
@@ -1461,6 +1591,29 @@ def run_smoke(
                     )
                 )
             )
+        if composition_mode.generates_low_rank_gated_products:
+            if low_rank_contract_map_plan is None:
+                fail_after_execution("generated low-rank Contract/Map plan is missing")
+            low_rank_contract_map_inputs = tuple(
+                dict.fromkeys(
+                    (
+                        *(
+                            value.instruction
+                            for boundary in low_rank_contract_map_plan.logical.forward
+                            for value in (
+                                boundary.semantics.down_contract.lhs,
+                                boundary.semantics.down_contract.rhs,
+                                boundary.semantics.up_contract.rhs,
+                            )
+                        ),
+                        *(
+                            value.instruction
+                            for boundary in low_rank_contract_map_plan.logical.reverse
+                            for value in boundary.cotangent_inputs
+                        ),
+                    )
+                )
+            )
     shared_input_operands = (
         (
             *(
@@ -1473,6 +1626,7 @@ def run_smoke(
             routed_plan.source_fold.contributions.instruction,
             *weighted_relation_inputs,
             *normalized_exp_inputs,
+            *low_rank_contract_map_inputs,
         )
         if composition_mode.uses_shared_map
         else ()
@@ -1527,6 +1681,11 @@ def run_smoke(
     normalized_exp_source_hashes: dict[str, str] = {}
     normalized_exp_target_instructions: tuple[str, ...] = ()
     normalized_exp_collectives: tuple[str, ...] = ()
+    low_rank_contract_map_report: dict[str, Any] = {}
+    low_rank_contract_map_targets: dict[str, Any] = {}
+    low_rank_contract_map_semantic_hashes: dict[str, Any] = {}
+    low_rank_contract_map_source_hashes: dict[str, Any] = {}
+    low_rank_contract_map_target_instructions: tuple[str, ...] = ()
     if composition_mode.uses_shared_map:
         if weighted_relation_plan is None or weighted_relation_audit is None:
             fail_after_execution("shared-Map weighted relation reverse evidence is incomplete")
@@ -1650,6 +1809,48 @@ def run_smoke(
                 normalized_exp_contract_reverse_audit.call_instruction,
             )
             normalized_exp_collectives = tuple(path[2] for path in normalized_exp_contract_reverse_audit.placement_paths)
+    if composition_mode.generates_low_rank_gated_products:
+        if (
+            low_rank_contract_map_plan is None
+            or low_rank_contract_map_audit is None
+            or not generated_low_rank_contract_maps
+        ):
+            fail_after_execution("generated low-rank Contract/Map evidence is incomplete")
+        low_rank_contract_map_report = {
+            "low_rank_contract_map_training": {
+                "numerical_policy": "source_ordered",
+                "generated_calls": low_rank_contract_map_audit.generated_call_count,
+                "generated_targets": low_rank_contract_map_audit.generated_target_count,
+                "removed_contracts": low_rank_contract_map_audit.removed_dot_count,
+                "removed_contract_flops": low_rank_contract_map_audit.removed_dot_flops,
+                "weight_adjoint_layouts": [
+                    {
+                        "first": family.program.first_weight_adjoint_minor_to_major,
+                        "second": family.program.second_weight_adjoint_minor_to_major,
+                    }
+                    for family in low_rank_contract_map_plan.families
+                ],
+                "target_occurrences": low_rank_contract_map_audit.target_occurrences,
+            }
+        }
+        low_rank_contract_map_targets = {
+            "low_rank_contract_map_families": [
+                {"forward": family.forward_target, "reverse": family.reverse_target}
+                for family in low_rank_contract_map_plan.families
+            ]
+        }
+        low_rank_contract_map_semantic_hashes = {
+            "low_rank_contract_map_families": [
+                generated.semantic_digest for generated in generated_low_rank_contract_maps
+            ]
+        }
+        low_rank_contract_map_source_hashes = {
+            "low_rank_contract_map_families": [generated.source_digest for generated in generated_low_rank_contract_maps]
+        }
+        low_rank_contract_map_target_instructions = tuple(
+            call.call_instruction
+            for call in (*low_rank_contract_map_audit.forward, *low_rank_contract_map_audit.reverse)
+        )
     write_execution_evidence("execution_checks_passed", None)
     return {
         "kind": "xla_grug_combined_routed_training_attention_and_axis_fold_generated_ffi",
@@ -1688,6 +1889,7 @@ def run_smoke(
             "axis_folds": _axis_fold_reassociation_report(axis_fold_plans),
             **weighted_relation_report,
             **normalized_exp_report,
+            **low_rank_contract_map_report,
         },
         "external_collectives": (
             (
@@ -1719,6 +1921,7 @@ def run_smoke(
             "axis_folds": _TARGETS.axis_folds,
             **weighted_relation_targets,
             **normalized_exp_targets,
+            **low_rank_contract_map_targets,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
         "custom_call_handler_executions": call_counts,
@@ -1740,6 +1943,7 @@ def run_smoke(
             *routed_audit.target_instructions,
             *weighted_relation_target_instructions,
             *normalized_exp_target_instructions,
+            *low_rank_contract_map_target_instructions,
             attention_instruction,
             *(axis_fold.call_instruction for axis_fold in axis_fold_audits),
         ),
@@ -1769,6 +1973,7 @@ def run_smoke(
             "axis_folds": [axis_fold.semantic_fingerprints for axis_fold in generated_axis_folds],
             **weighted_relation_semantic_hashes,
             **normalized_exp_semantic_hashes,
+            **low_rank_contract_map_semantic_hashes,
         },
         "generated_source_sha256": {
             "forward": forward.source_digest,
@@ -1786,6 +1991,7 @@ def run_smoke(
             "axis_folds": [axis_fold.source_sha256 for axis_fold in generated_axis_folds],
             **weighted_relation_source_hashes,
             **normalized_exp_source_hashes,
+            **low_rank_contract_map_source_hashes,
         },
         "baseline_median_ms": baseline_median,
         "generated_median_ms": transformed_median,
@@ -1820,7 +2026,8 @@ def run_smoke(
             "The relation index plane, placement collectives, and harmless input-adjoint view wrappers remain "
             "under XLA. Shuttle owns both input-adjoint Contracts, the input source Fold, and the weighted "
             "RelationProgram reverse through its source-slot Fold; the selected composition also owns the generic "
-            "normalized-exp Contract/Map/Fold reverse when requested. Router normalization remains under XLA."
+            "normalized-exp Contract/Map/Fold pair when requested, plus six forward/rematerialization and four "
+            "JAX-owned reverse low-rank Contract/Map chains when requested. Router normalization remains under XLA."
             if composition_mode.uses_shared_map
             else "The rematerialized routed forward chain, relation index plane, and placement collectives remain "
             "under XLA; the monolithic generated input-adjoint region owns the overlapping reverse path."

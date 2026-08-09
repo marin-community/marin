@@ -14,11 +14,19 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarProgram,
     generate_cuda_scalar_body,
 )
+from tile_lifetime.contract_map_chain import BoundCastScalarMap, ContractMapChainValue
+from tile_lifetime.cuda_contract_map_chain_codegen import (
+    audit_cuda_contract_map_chain_source,
+    generate_cuda_contract_map_chain_ffi,
+)
 from tile_lifetime.xla_low_rank_gated_product import recover_low_rank_gated_product_training
 from tile_lifetime.xla_low_rank_gated_product_ffi import (
+    audit_generated_low_rank_contract_map_training,
     audit_low_rank_contract_map_training_hlo_replacement,
     mutate_forward_hidden_scalar_program,
+    plan_generated_low_rank_contract_map_training,
     plan_low_rank_contract_map_training_hlo_replacements,
+    replace_generated_low_rank_contract_map_training,
     replace_low_rank_contract_map_training_hlo_regions_with_custom_calls,
 )
 
@@ -28,6 +36,8 @@ _ARTIFACT = (
 )
 _FORWARD_TARGET = "shuttle.generic.low_rank_contract_map.forward.test"
 _REVERSE_TARGET = "shuttle.generic.low_rank_contract_map.reverse.test"
+_GENERATED_FORWARD_TARGET = "shuttle.generic.low_rank_contract_map.generated.forward.test"
+_GENERATED_REVERSE_TARGET = "shuttle.generic.low_rank_contract_map.generated.reverse.test"
 
 
 def _current_training_hlo() -> str:
@@ -214,3 +224,73 @@ def test_low_rank_contract_map_boundary_is_independent_of_hlo_metadata() -> None
     assert tuple((plan.inputs, plan.outputs) for plan in (*original.forward, *original.reverse)) == tuple(
         (plan.inputs, plan.outputs) for plan in (*without_metadata.forward, *without_metadata.reverse)
     )
+
+
+def test_generated_low_rank_contract_map_normalizes_ten_calls_to_one_physical_family() -> None:
+    hlo = _current_training_hlo()
+    plan = plan_generated_low_rank_contract_map_training(
+        hlo,
+        forward_target_prefix=_GENERATED_FORWARD_TARGET,
+        reverse_target_prefix=_GENERATED_REVERSE_TARGET,
+    )
+    rewritten = replace_generated_low_rank_contract_map_training(hlo, plan)
+    audit = audit_generated_low_rank_contract_map_training(hlo, rewritten, plan)
+
+    assert len(plan.families) == 1
+    assert plan.expected_target_occurrences == ((_GENERATED_FORWARD_TARGET, 6), (_GENERATED_REVERSE_TARGET, 4))
+    assert plan.families[0].program.first_weight_adjoint_minor_to_major == (0, 1)
+    assert plan.families[0].program.second_weight_adjoint_minor_to_major == (0, 1)
+    assert audit.generated_call_count == 10
+    assert audit.generated_target_count == 2
+    assert audit.target_occurrences == plan.expected_target_occurrences
+    assert audit.removed_dot_count == 28
+    assert audit.removed_dot_flops == 1_835_008
+    assert not audit.live_old_arithmetic
+    assert len(audit.collective_instructions) == 10
+    assert all(len(call.inputs) == 3 and len(call.outputs) == 4 for call in audit.forward)
+    assert all(len(call.inputs) == 7 and len(call.outputs) == 3 for call in audit.reverse)
+    assert all(call.outputs[1].shape.endswith("{0,1}") for call in audit.reverse)
+    assert rewritten.count(f'custom_call_target="{_GENERATED_FORWARD_TARGET}"') == 6
+    assert rewritten.count(f'custom_call_target="{_GENERATED_REVERSE_TARGET}"') == 4
+
+
+def test_generated_low_rank_contract_map_mutation_reuses_targets_and_physical_abi() -> None:
+    plan = plan_generated_low_rank_contract_map_training(
+        _current_training_hlo(),
+        forward_target_prefix=_GENERATED_FORWARD_TARGET,
+        reverse_target_prefix=_GENERATED_REVERSE_TARGET,
+    )
+    family = plan.families[0]
+    hidden_input = family.program.hidden_map.program.inputs[0]
+    tanh_program = CastScalarProgram(
+        CastScalarExpression(
+            kind=CastScalarKind.TANH,
+            dtype=hidden_input.dtype,
+            operands=(hidden_input,),
+        )
+    )
+    mutated_program = replace(
+        family.program,
+        hidden_map=BoundCastScalarMap(tanh_program, (ContractMapChainValue.FIRST_CONTRACT_OUTPUT,)),
+    )
+    original = generate_cuda_contract_map_chain_ffi(
+        family.program,
+        forward_target=family.forward_target,
+        reverse_target=family.reverse_target,
+    )
+    mutated = generate_cuda_contract_map_chain_ffi(
+        mutated_program,
+        forward_target=family.forward_target,
+        reverse_target=family.reverse_target,
+    )
+    audit = audit_cuda_contract_map_chain_source(mutated)
+
+    assert mutated.forward_target == original.forward_target
+    assert mutated.reverse_target == original.reverse_target
+    assert mutated.forward_handler_symbol == original.forward_handler_symbol
+    assert mutated.reverse_handler_symbol == original.reverse_handler_symbol
+    assert mutated.semantic_digest != original.semantic_digest
+    assert mutated.source_digest != original.source_digest
+    assert "tanhf" in mutated.source
+    assert not audit.has_atomics
+    assert not audit.opaque_semantic_dependencies

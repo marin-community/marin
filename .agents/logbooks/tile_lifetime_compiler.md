@@ -3197,3 +3197,32 @@ author: dlwh
   tests. Scoped pre-commit, including Pyrefly, and `git diff --check` pass.
 - This is a structural typed-FFI checkpoint. No GPU body was generated or run,
   and it makes no latency or launch-count claim.
+
+### 2026-08-09 - TLTC-XLA-056 generated gated-product Grug composition
+
+- Added a selectable `shared_map_fused_reverses_and_gated_products` natural
+  Grug composition. It applies the existing thirteen replacements, then derives
+  and replaces six forward/rematerialization plus four JAX-owned reverse
+  low-rank Contract/Map boundaries from the rewritten HLO.
+- The ten logical boundaries normalize to one shape/AST physical family. Six
+  calls reuse one generated forward target and four calls reuse one generated
+  reverse target, so the final HLO has 23 calls but only two additional handler
+  implementations. Target accounting now accepts and verifies exact
+  multiplicities instead of requiring one target per call.
+- The physical forward ABI is three rank-2 BF16 inputs and four rank-2 BF16
+  outputs. The reverse ABI is seven rank-2 BF16 inputs and three outputs. XLA
+  retains the redundant rank-3 views outside typed FFI, and generated BF16 save
+  values connect each relevant forward realization directly to its JAX-owned
+  reverse.
+- Both recovered weight adjoints use `{0,1}` physical layout. The generic
+  Contract program now records output minor-to-major layouts, generated CUDA
+  writes each logical result at the corresponding physical offset, and the JAX
+  component wrapper requests the same layouts.
+- Static auditing removes all 28 old Contracts and `1,835,008` old dot FLOPs,
+  finds no live old scalar arithmetic, preserves all ten placement all-reduces,
+  and preserves every external logical output user. The generated source is
+  source-ordered, atomic-free, and Torch-free. A tanh hidden-Map mutation reuses
+  the same targets and physical ABI while changing both semantic and source
+  digests.
+- This is a CPU/static integration checkpoint. It does not claim successful
+  whole-step GPU compilation, execution, correctness, or latency yet.

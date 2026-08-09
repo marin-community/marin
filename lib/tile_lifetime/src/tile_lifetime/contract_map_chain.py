@@ -18,7 +18,7 @@ from tile_lifetime.xla_low_rank_gated_product import (
     RankTwoContractPlan,
 )
 
-_ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
+_ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\](?:\{(?P<layout>[0-9,]+)\})?")
 
 
 class ContractMapChainValue(StrEnum):
@@ -85,6 +85,8 @@ class TwoContractMapTrainingProgram:
     second_output_vjp_map: BoundCastScalarMap
     hidden_vjp_map: BoundCastScalarMap
     input_vjp_map: BoundCastScalarMap
+    first_weight_adjoint_minor_to_major: tuple[int, int] = (1, 0)
+    second_weight_adjoint_minor_to_major: tuple[int, int] = (1, 0)
     numerical_policy: str = "source_ordered"
 
     def __post_init__(self) -> None:
@@ -120,6 +122,12 @@ class TwoContractMapTrainingProgram:
         for name, bindings in actual.items():
             if bindings != expected[name]:
                 raise ValueError(f"{name} scalar Map has incompatible chain-value bindings")
+        for name, layout in (
+            ("first weight adjoint", self.first_weight_adjoint_minor_to_major),
+            ("second weight adjoint", self.second_weight_adjoint_minor_to_major),
+        ):
+            if sorted(layout) != [0, 1]:
+                raise ValueError(f"{name} layout must be a rank-two minor-to-major permutation")
         if self.numerical_policy != "source_ordered":
             raise ValueError("bounded Contract/Map chains currently preserve only source-ordered Maps")
 
@@ -207,6 +215,8 @@ def form_two_contract_map_training_program(
                 ContractMapChainValue.OUTPUT_COTANGENT,
             ),
         ),
+        first_weight_adjoint_minor_to_major=_layout(reverse.down_weight_adjoint.output.shape),
+        second_weight_adjoint_minor_to_major=_layout(reverse.up_weight_adjoint.output.shape),
     )
 
 
@@ -380,6 +390,19 @@ def _shape(shape: str) -> tuple[str, tuple[int, ...]]:
         raise ValueError(f"expected a physical array shape, found {shape!r}")
     dims = tuple(int(value) for value in match.group("dims").split(",") if value)
     return match.group("dtype"), dims
+
+
+def _layout(shape: str) -> tuple[int, int]:
+    match = _ARRAY_SHAPE.match(shape)
+    if match is None:
+        raise ValueError(f"expected a physical array shape, found {shape!r}")
+    layout = match.group("layout")
+    if layout is None:
+        raise ValueError(f"expected an explicit physical layout, found {shape!r}")
+    minor_to_major = tuple(int(value) for value in layout.split(","))
+    if len(minor_to_major) != 2 or sorted(minor_to_major) != [0, 1]:
+        raise ValueError(f"expected a rank-two physical layout, found {shape!r}")
+    return minor_to_major
 
 
 def _require_shape(name: str, value: np.ndarray, shape: tuple[int, int]) -> None:

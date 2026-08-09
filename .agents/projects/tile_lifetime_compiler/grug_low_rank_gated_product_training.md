@@ -9,10 +9,11 @@ contraction dimensions, scalar dataflow, liveness, and shared parameter
 origins. Removing all HLO metadata produces the same boundary families and
 ABIs.
 
-This is a structural replacement checkpoint. It uses placeholder generic
-typed-FFI targets and does not claim a generated GPU body, latency, or launch
-reduction. The result composes after the existing thirteen-call routed,
-normalized-exponential, attention-reverse, and axis-Fold rewrite.
+The generated physical composition now follows the existing thirteen-call
+routed, normalized-exponential, attention-reverse, and axis-Fold rewrite. It
+normalizes the ten logical boundaries onto one shape/AST-only physical family,
+then generates and registers one forward and one reverse typed-FFI handler.
+This checkpoint does not claim whole-step GPU execution or latency.
 
 ## Generic algebra
 
@@ -78,7 +79,7 @@ Contract dimensions, scalar reachability between the two input-adjoint
 Contracts, and equality of the layout-stripped scalar values consumed by the
 weight adjoints.
 
-## Exact replacement boundaries
+## Exact logical replacement boundaries
 
 The maximal bounded decomposition needs ten generic calls:
 
@@ -126,11 +127,35 @@ dot FLOPs in this small padded fixture. Its 28 Contracts split into:
 ~~~
 
 This is static HLO accounting, not a production-shape throughput estimate.
-The ten placeholder calls replace all 28 Contracts. The transformed HLO has 23
+The ten generated calls replace all 28 Contracts. The transformed HLO has 23
 generated calls in total: the existing thirteen plus six forward/rematerialized
 and four reverse calls. This is exact structural accounting, not a recommended
-physical kernelization. A later generated backend may attach compatible
-boundaries or use more than one kernel per call.
+physical kernelization.
+
+## Generated physical ABI
+
+The logical boundaries contain redundant rank-3 and rank-2 views of the same
+buffers. The generated physical ABI leaves those views under XLA and calls one
+rank-2 family:
+
+~~~
+forward(x[8,32], w0[32,128], w1[128,32])
+  -> y[8,32], h0[8,128], hidden[8,128], g0[8,32]
+
+reverse(x, w0, w1, h0, hidden, g0, dy[8,32])
+  -> dx[8,32], dw0[32,128]{0,1}, dw1[128,32]{0,1}
+~~~
+
+Six forward/rematerialization calls reuse one generated forward target. Four
+JAX-owned reverse calls reuse one generated reverse target. The rewrite restores
+the original rank-3 output and input-adjoint views outside typed FFI. It routes
+the three generated BF16 save values directly from each relevant forward call
+to its reverse call.
+
+The recovered weight-adjoint layouts are dimension-zero-minor `{0,1}`. The
+generic Contract program records these layouts, the CUDA generator writes each
+logical element to the matching physical offset, and the JAX component wrapper
+requests the same output layouts.
 
 ## Numerical and placement boundaries
 
@@ -168,10 +193,13 @@ reverse:
     + two generic weight-gradient Contracts
 ~~~
 
-The implemented structural replacement preserves JAX's existing
-saved/rematerialized values and keeps collectives outside. Every call has an
+The generated composition preserves JAX's save/rematerialization choices and
+keeps collectives outside. Every call has an
 exact multi-output ABI, every old scalar instruction is absent or dead after
-replacement, and all 28 old dot instructions cease to be live Contracts.
+replacement, and all 28 old dot instructions cease to be live Contracts. The
+source contains generated scalar ASTs, fixed ordered FP32 accumulation,
+explicit BF16 RNE boundaries, no atomics, and no opaque semantic kernel
+dependency.
 
 A tanh mutation changes the generated hidden scalar AST while retaining the
 same boundary-family digest, call target, input ABI, output ABI, and Contract
@@ -187,6 +215,6 @@ uv run --frozen --package marin-tile-lifetime --group test pytest -q \
 
 The focused tests consume the frozen thirteen-call natural Grug HLO, perform
 root-reachable accounting, remove frontend metadata, check every numerical and
-collective boundary, round-trip all ten placeholder typed-FFI calls, audit the
-23-call composition, and exercise a hidden-Map mutation through the same scalar
-generator.
+collective boundary, round-trip all ten generated typed-FFI calls, enforce the
+six-forward/four-reverse target multiplicities, audit the 23-call composition,
+and exercise a hidden-Map mutation through the same scalar generator.

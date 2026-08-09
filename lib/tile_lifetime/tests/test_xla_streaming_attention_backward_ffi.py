@@ -15,8 +15,8 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _TARGETS as _SEVEN_CALL_TARGETS,
 )
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
+    _custom_call_target_occurrences,
     _generate_axis_fold_programs,
-    _single_custom_call_target_occurrences,
 )
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
@@ -641,7 +641,8 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
         _SIX_TARGETS.routed_attention.attention_backward,
         *_SIX_TARGETS.axis_folds,
     )
-    exact_occurrences = _single_custom_call_target_occurrences(rewritten, selected_targets)
+    expected_occurrences = dict.fromkeys(selected_targets, 1)
+    exact_occurrences = _custom_call_target_occurrences(rewritten, expected_occurrences)
     assert set(exact_occurrences.values()) == {1}
     assert all(rewritten.count(target) > exact_occurrences[target] for target in _SIX_TARGETS.axis_folds)
 
@@ -649,9 +650,9 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
     axis_call_line = next(line for line in rewritten.splitlines() if f'custom_call_target="{axis_target}"' in line)
     missing_attribute_line = axis_call_line.replace(f', custom_call_target="{axis_target}"', "", 1)
     with pytest.raises(RuntimeError, match="has 0 exact custom_call_target attributes"):
-        _single_custom_call_target_occurrences(
+        _custom_call_target_occurrences(
             rewritten.replace(axis_call_line, missing_attribute_line, 1),
-            selected_targets,
+            expected_occurrences,
         )
     duplicate_attribute_line = axis_call_line.replace(
         f'custom_call_target="{axis_target}"',
@@ -659,9 +660,9 @@ def test_natural_grug_combined_plan_adds_generic_axis_fold_regions() -> None:
         1,
     )
     with pytest.raises(RuntimeError, match="has 2 exact custom_call_target attributes"):
-        _single_custom_call_target_occurrences(
+        _custom_call_target_occurrences(
             rewritten.replace(axis_call_line, duplicate_attribute_line, 1),
-            selected_targets,
+            expected_occurrences,
         )
     parse_hlo_module_text(rewritten)
 

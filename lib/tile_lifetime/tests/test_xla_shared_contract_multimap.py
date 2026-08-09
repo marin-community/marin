@@ -22,10 +22,10 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _attention_reverse_program,
     _audit_shared_map_composition,
     _axis_fold_reassociation_report,
+    _custom_call_target_occurrences,
     _generate_axis_fold_programs,
     _plan_shared_map_composition,
     _replace_shared_map_composition,
-    _single_custom_call_target_occurrences,
     _target_occurrence,
 )
 from tile_lifetime.cuda_normalized_exp_contract_forward_codegen import (
@@ -264,7 +264,7 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls(
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
     selected_targets = (*targets, *(generated.target_name for generated in axis_folds))
-    exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
+    exact_occurrences = _custom_call_target_occurrences(transformed, dict.fromkeys(selected_targets, 1))
     assert len(exact_occurrences) == expected_call_count
     assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0

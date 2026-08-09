@@ -160,6 +160,7 @@ def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries
     assert generated.kernel_count == 2
     assert generated.forward_shared_bytes == 4096
     assert generated.reverse_shared_bytes == 2560
+    assert generated.source.count("WeightAdjointDimensionZeroMinor = true") == 2
     assert audit.kernel_count == 2
     assert audit.has_explicit_bf16_contract_boundaries
     assert audit.has_generated_forward_maps
