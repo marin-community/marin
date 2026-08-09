@@ -3276,3 +3276,17 @@ author: dlwh
   the expected dependency groups (or an equivalent small holder setup). The
   unmeasured artifact and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_unmeasured_bcafcc5a_v0/`.
+
+### 2026-08-09 - TLTC-XLA-059 fail before allocation on incomplete build environments
+
+- The combined natural-Grug benchmark now has a CPU-only dependency preflight.
+  It checks the public compiler-IR roundtrip, compatible HLO text parser,
+  `jax.extend.xla` transformation hooks, installed Torch/Triton distributions,
+  and imports of `triton.tools.compile` and `triton.language` before device
+  access.
+- The build-time Torch/Triton audit is recorded separately from the generated
+  runtime dependency audit. Accepted generated DSOs remain required to link no
+  Torch or Triton runtime dependency.
+- The local macOS environment correctly fails the new preflight because its JAX
+  build lacks `jax.extend.xla`. A future H100 submission must pass the same CLI
+  preflight in its exact task environment before allocation or execution.

@@ -9,11 +9,13 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -52,7 +54,7 @@ from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
 )
 from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
 from tile_lifetime.jax_contract_map_chain_ffi import register_cuda_contract_map_chain_ffi
-from tile_lifetime.jax_hlo_rewrite_runtime import require_hlo_rewrite_runtime
+from tile_lifetime.jax_hlo_rewrite_runtime import audit_hlo_rewrite_runtime, require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
@@ -577,6 +579,46 @@ def _runtime_dependency_audit(library_path: Path, source: str) -> tuple[str, ...
     return dependencies
 
 
+def _require_attention_aot_build_dependencies() -> dict[str, str]:
+    """Fail before device access when the current attention AOT toolchain is incomplete."""
+    try:
+        versions = {distribution: importlib.metadata.version(distribution) for distribution in ("torch", "triton")}
+    except importlib.metadata.PackageNotFoundError as error:
+        raise RuntimeError(f"streaming-attention AOT build dependency is missing: {error.name}") from error
+    probe = (
+        "import importlib; "
+        "importlib.import_module('torch'); "
+        "importlib.import_module('triton'); "
+        "importlib.import_module('triton.language'); "
+        "importlib.import_module('triton.tools.compile')"
+    )
+    completed = subprocess.run(
+        (sys.executable, "-c", probe),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "dependency probe failed without output"
+        raise RuntimeError(f"streaming-attention AOT build dependency preflight failed: {detail}")
+    return versions
+
+
+def dependency_preflight() -> dict[str, Any]:
+    """Audit the complete build/runtime dependency boundary without touching a GPU."""
+    hlo = audit_hlo_rewrite_runtime()
+    if not hlo.available:
+        raise RuntimeError(f"HLO rewrite runtime preflight failed: {hlo.unavailable_reasons}")
+    return {
+        "jax_version": hlo.jax_version,
+        "jaxlib_version": hlo.jaxlib_version,
+        "compiler_ir_proto_roundtrip": hlo.compiler_ir_proto_roundtrip,
+        "text_parser_backend": hlo.text_parser_backend,
+        "transformation_api": hlo.transformation_api,
+        "attention_aot_build_dependencies": _require_attention_aot_build_dependencies(),
+    }
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -604,6 +646,7 @@ def run_smoke(
         if command_buffer_candidate is not CommandBufferCandidateMode.DISABLED
         else None
     )
+    attention_aot_build_dependencies = _require_attention_aot_build_dependencies()
     hlo_runtime = require_hlo_rewrite_runtime()
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the combined routed training replacement requires a CUDA JAX device")
@@ -2019,6 +2062,7 @@ def run_smoke(
         "generated_unique_output_hashes": sorted(set(transformed_hashes)),
         "generated_runtime_dependencies": runtime_dependencies,
         "generated_runtime_torch_triton_free": True,
+        "attention_aot_build_dependencies": attention_aot_build_dependencies,
         "raw_samples": raw_samples,
         **comparison,
         "outputs_match": True,
@@ -2063,7 +2107,11 @@ def main() -> None:
     )
     parser.add_argument("--warmup", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--dependency-preflight-only", action="store_true")
     args = parser.parse_args()
+    if args.dependency_preflight_only:
+        print(json.dumps(dependency_preflight(), indent=2, sort_keys=True))
+        return
     result = run_smoke(
         args.nvcc,
         args.architecture,
