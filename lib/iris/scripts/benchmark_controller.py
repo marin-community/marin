@@ -70,9 +70,9 @@ from iris.backends.rpc.backend import (
     RpcTaskBackend,
 )
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.admin import ControllerAdmin
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.operations import WorkerOperations
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local
@@ -96,6 +96,7 @@ from iris.cluster.controller.persistence.schema import (
     worker_attributes_table,
     workers_table,
 )
+from iris.cluster.controller.process import _CONTROLLER_KEEPALIVE
 from iris.cluster.controller.reconcile.worker import (
     KeepAttempt,
     ReconcileInputs,
@@ -105,10 +106,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
-from iris.cluster.controller.runtime import (
-    _CONTROLLER_KEEPALIVE,
-    ControllerConfig,
-)
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
@@ -129,7 +127,7 @@ from iris.resources.worker import WorkerMetadata
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
-from iris.rpc.controller_service import USER_JOB_STATES
+from iris.rpc.legacy.controller_service import USER_JOB_STATES
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory, _reconcile_request_to_proto
 from iris.rpc.worker_codec import worker_metadata_to_proto
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
@@ -921,7 +919,7 @@ def load_get_autoscaler_status(harness: RpcHarness, db: ControllerDB, rps: float
 
 
 def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    roster = ControllerAdmin(db).worker_roster()
+    roster = WorkerOperations(db).worker_roster()
     if not roster:
         return None
     worker_id = str(next(iter(roster)))
@@ -1508,12 +1506,12 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     # Worker roster + running map drives ListWorkers.
     def _list_workers():
-        roster = ControllerAdmin(db).worker_roster()
+        roster = WorkerOperations(db).worker_roster()
         if roster:
             with db.read_snapshot() as tx:
                 reads.running_tasks_by_worker(tx, {w[0].worker_id for w in roster})
 
-    bench(f"RPC: ListWorkers (n={len(ControllerAdmin(db).worker_roster())})", _list_workers)
+    bench(f"RPC: ListWorkers (n={len(WorkerOperations(db).worker_roster())})", _list_workers)
 
     # Sample job for ListTasks.
     with db.read_snapshot() as _tx:
@@ -2361,7 +2359,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         host=config.host,
         worker_token=None,
     )
-    controller = compose_controller_runtime(
+    controller = compose_controller_process(
         config=config,
         backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
         log_stack=log_stack,
@@ -2369,15 +2367,6 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         threads=threads,
     )
     controller.start()
-    try:
-        _wait_for_server_start(
-            lambda: controller._server is not None and controller._server.started,
-            "ControllerRuntime server did not start within 10s",
-        )
-    except TimeoutError as exc:
-        controller.stop()
-        raise click.ClickException(str(exc)) from exc
-
     print(f"READY port={controller.port}", flush=True)
 
     stop = threading.Event()

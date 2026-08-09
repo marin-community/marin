@@ -28,7 +28,7 @@ from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     constraint_to_proto,
     environment_to_proto,
     resource_spec_to_proto,

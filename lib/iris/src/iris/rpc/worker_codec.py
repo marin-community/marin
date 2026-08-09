@@ -26,7 +26,7 @@ from iris.resources.worker import (
     WorkerTaskStatus,
 )
 from iris.rpc import job_pb2, worker_pb2
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     attribute_value_from_proto,
     attribute_value_to_proto,
     constraint_from_proto,

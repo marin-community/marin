@@ -41,12 +41,12 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.process import ControllerProcess
 from iris.cluster.controller.runtime import (
     ControllerConfig,
-    ControllerRuntime,
 )
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
@@ -180,7 +180,7 @@ class LocalCluster:
     ):
         self._config = config
         self._threads = threads or ThreadContainer("local-cluster")
-        self._controller: ControllerRuntime | None = None
+        self._controller: ControllerProcess | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
@@ -257,7 +257,7 @@ class LocalCluster:
             autoscaler=self._autoscaler,
         )
 
-        self._controller = compose_controller_runtime(
+        self._controller = compose_controller_process(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,

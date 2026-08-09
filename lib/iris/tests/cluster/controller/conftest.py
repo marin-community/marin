@@ -57,15 +57,15 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.admin import ControllerAdmin
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process, compose_controller_runtime
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.operations import OperationalServices
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
@@ -79,6 +79,7 @@ from iris.cluster.controller.persistence.schema import (
     tasks_table,
     worker_attributes_table,
 )
+from iris.cluster.controller.process import ControllerProcess
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
@@ -110,9 +111,11 @@ from iris.resources.endpoint import ProfileRequest, ProfileResult
 from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
 from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
-from iris.rpc.legacy_codec import job_spec_from_legacy_request
-from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, resource_spec_from_proto
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.legacy.job_codec import constraint_from_proto, constraint_to_proto, resource_spec_from_proto
+from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
+from iris.rpc.log_reader import FinelogLogReader
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
@@ -306,7 +309,7 @@ def state():
 
 
 class MockController:
-    """Mock that implements the ControllerProtocol surface used by ControllerServiceImpl."""
+    """Mock implementing the operations used by LegacyControllerService."""
 
     def __init__(self):
         self.wake = Mock()
@@ -359,7 +362,7 @@ def make_controller_service(
     auth: ControllerAuth | None = None,
     user_budget_defaults: UserBudgetDefaults | None = None,
     capability_url_config=None,
-) -> ControllerServiceImpl:
+) -> LegacyControllerService:
     resolved_auth = auth or ControllerAuth()
     cluster_id = getattr(capability_url_config, "cluster_name", "") or "test"
     resource_urls = CapabilityUrlConfig(
@@ -372,7 +375,7 @@ def make_controller_service(
         db=db,
         runtime=controller,
         bundle_store=bundle_store,
-        endpoint_service=endpoint_service,
+        endpoint_registry=endpoint_service.registry,
         auth=resolved_auth,
         user_budget_defaults=user_budget_defaults or UserBudgetDefaults(),
         capability_url_config=resource_urls,
@@ -388,13 +391,13 @@ def make_controller_service(
             )
             for backend_id, backend in controller.backends.items()
         },
-        log_client=log_client,
+        log_reader=FinelogLogReader(log_client),
     )
-    return ControllerServiceImpl(
+    return LegacyControllerService(
         runtime=controller,
         bundle_store=bundle_store,
         log_client=log_client,
-        admin=ControllerAdmin(db),
+        operations=OperationalServices.from_database(db),
         endpoint_service=endpoint_service,
         controller=resources,
         auth=resolved_auth,
@@ -403,8 +406,8 @@ def make_controller_service(
 
 
 @pytest.fixture
-def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log service, and mock controller.
+def controller_service(state, log_client, mock_controller, tmp_path) -> LegacyControllerService:
+    """LegacyControllerService with fresh DB, log service, and mock controller.
 
     The service registers workers into and reads liveness through the controller's
     backend, so point the mock backend's tracker at this state's ``_health`` so
@@ -416,7 +419,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 
@@ -511,6 +514,59 @@ def make_controller(tmp_path):
     for controller in created:
         try:
             controller.stop()
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+
+
+@pytest.fixture
+def make_controller_process(tmp_path):
+    """Build hosted controller processes for tests that exercise public ingress."""
+    created: list[ControllerProcess] = []
+
+    def _factory(
+        config: ControllerConfig | None = None,
+        *,
+        provider=None,
+        backends: dict | None = None,
+        backend_configs: dict | None = None,
+        db: ControllerDB | None = None,
+        **config_kwargs,
+    ) -> ControllerProcess:
+        if config is None:
+            config_kwargs.setdefault("cluster_id", "test-cluster")
+            config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
+            config_kwargs.setdefault("local_state_dir", tmp_path / "local")
+            config = ControllerConfig(**config_kwargs)
+        elif config_kwargs:
+            raise TypeError("make_controller_process: pass either a config or config kwargs, not both")
+        log_stack = build_log_stack(
+            log_service_address="",
+            local_log_dir=config.local_state_dir / "log-server",
+            host=config.host,
+            worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
+        )
+        if backends is None:
+            backends = {DEFAULT_BACKEND_ID: provider if provider is not None else FakeProvider()}
+        for backend in backends.values():
+            if backend.health is not None:
+                backend.health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
+        process = compose_controller_process(
+            config=config,
+            backends=backends,
+            log_stack=log_stack,
+            db=db,
+            backend_configs=backend_configs,
+        )
+        created.append(process)
+        return process
+
+    yield _factory
+    errors: list[BaseException] = []
+    for process in created:
+        try:
+            process.stop()
         except BaseException as exc:
             errors.append(exc)
     if errors:

@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris-domain helpers that map iris values onto the finelog store.
+"""Iris-domain helpers for log classification and source keys.
 
-This module owns the mappings between iris-domain values (`JobName`,
-`TaskAttempt`, capture streams) and the finelog wire types: the opaque string
-keys that identify log streams, and the `LogLevel` assigned to each line.
+This module maps ``JobName``, ``TaskAttempt``, and capture streams to native log
+records. The RPC adapter owns the Finelog wire representation.
 """
 
-from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
 
 from iris.cluster.log_highlights import is_progress_bar_line
 from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.log import LogLevel, LogMatchScope
 
 CONTROLLER_LOG_KEY = "/system/controller"
 _WORKER_LOG_PREFIX = "/system/worker/"
@@ -28,12 +27,12 @@ INJECTED_ERROR_SOURCE = "error"
 # Streams not listed here (e.g. "build") fall back to UNKNOWN, which stays
 # visible under every min_level filter.
 _STREAM_DEFAULT_LEVEL = {
-    STDOUT_SOURCE: logging_pb2.LOG_LEVEL_INFO,
-    STDERR_SOURCE: logging_pb2.LOG_LEVEL_ERROR,
+    STDOUT_SOURCE: LogLevel.INFO,
+    STDERR_SOURCE: LogLevel.ERROR,
 }
 
 
-def classify_log_level(source: str, data: str) -> int:
+def classify_log_level(source: str, data: str) -> LogLevel:
     """Assign a finelog ``LogLevel`` to a captured task log line.
 
     Lines from ``INJECTED_ERROR_SOURCE`` are errors whatever they say. Otherwise
@@ -44,13 +43,13 @@ def classify_log_level(source: str, data: str) -> int:
     unrecognized stream ``UNKNOWN``, which passes every ``min_level`` filter.
     """
     if source == INJECTED_ERROR_SOURCE:
-        return logging_pb2.LOG_LEVEL_ERROR
-    parsed = str_to_log_level(parse_log_level(data))
-    if parsed != logging_pb2.LOG_LEVEL_UNKNOWN:
+        return LogLevel.ERROR
+    parsed = LogLevel(str_to_log_level(parse_log_level(data)))
+    if parsed is not LogLevel.UNKNOWN:
         return parsed
     if source == STDERR_SOURCE and is_progress_bar_line(data):
-        return logging_pb2.LOG_LEVEL_INFO
-    return _STREAM_DEFAULT_LEVEL.get(source, logging_pb2.LOG_LEVEL_UNKNOWN)
+        return LogLevel.INFO
+    return _STREAM_DEFAULT_LEVEL.get(source, LogLevel.UNKNOWN)
 
 
 def worker_log_key(worker_id: str) -> str:
@@ -64,7 +63,7 @@ def task_log_key(task_attempt: TaskAttempt) -> str:
     return task_attempt.to_wire()
 
 
-def build_log_source(target: JobName, attempt_id: int = -1) -> tuple[str, logging_pb2.MatchScope]:
+def build_log_source(target: JobName, attempt_id: int = -1) -> tuple[str, LogMatchScope]:
     """Build a (literal source, match scope) tuple for FetchLogs.
 
     The source is always a literal string — finelog matches `+`, `.`, `[` etc.
@@ -77,6 +76,6 @@ def build_log_source(target: JobName, attempt_id: int = -1) -> tuple[str, loggin
     wire = target.to_wire()
     if target.is_task:
         if attempt_id >= 0:
-            return f"{wire}:{attempt_id}", logging_pb2.MATCH_SCOPE_EXACT
-        return f"{wire}:", logging_pb2.MATCH_SCOPE_PREFIX
-    return f"{wire}/", logging_pb2.MATCH_SCOPE_PREFIX
+            return f"{wire}:{attempt_id}", LogMatchScope.EXACT
+        return f"{wire}:", LogMatchScope.PREFIX
+    return f"{wire}/", LogMatchScope.PREFIX

@@ -50,6 +50,7 @@ from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
+from iris.rpc.worker_runtime import worker_rpc_bindings
 
 logger = logging.getLogger(__name__)
 
@@ -522,6 +523,7 @@ class InMemoryGcpService:
                 auth_token=worker_config.auth_token if worker_config is not None else "",
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
+            rpc = worker_rpc_bindings(wc)
             worker = Worker(
                 wc,
                 bundle_store=bundle_store,
@@ -529,6 +531,9 @@ class InMemoryGcpService:
                 environment_provider=env_provider,
                 port_allocator=self._port_allocator,
                 threads=worker_threads,
+                log_client=rpc.log_client,
+                controller=rpc.controller,
+                server=rpc.server,
             )
             worker.start()
             workers.append(worker)

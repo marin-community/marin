@@ -13,6 +13,7 @@ full-resync set-replacement path.
 """
 
 from contextlib import ExitStack
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -22,26 +23,26 @@ from iris.cluster.bundle import BundleStore, content_id
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
+from iris.cluster.controller.job import WORKDIR_FILE_OFFLOAD_THRESHOLD
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.federation import ControllerFederationStore
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
-from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.peer import (
-    FederationPeer,
-    HandoffDelivery,
-    legacy_handoff_request,
-)
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.protocol import (
+    FederationBackendObservation,
     FederationJobDelta,
+    FederationResourceAvailability,
     FederationSyncBatch,
     HandoffAdmission,
+    HandoffDelivery,
     HandoffSpec,
     HandoffState,
+    PeerCallError,
+    PeerErrorCode,
     SyncedAttempt,
     SyncedJob,
     SyncedTask,
@@ -58,9 +59,15 @@ from iris.managed_thread import get_thread_container
 from iris.resources.execution import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
-from iris.rpc.controller_service import ControllerServiceImpl
-from iris.rpc.legacy_codec import job_spec_from_legacy_request
-from iris.rpc.legacy_job_codec import constraint_to_proto
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.federation_client import (
+    federation_batch_from_legacy,
+    handoff_to_legacy_request,
+    peer_transport_call,
+)
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.legacy.job_codec import constraint_to_proto
+from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
 
@@ -100,12 +107,12 @@ class _InProcessPeerConnection:
     parent→peer RPC (``federation_sync`` requires an identity).
     """
 
-    def __init__(self, service: ControllerServiceImpl):
+    def __init__(self, service: LegacyControllerService):
         self._service = service
         self.launch_calls = 0
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
-        return []
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
+        return ()
 
     def shutdown(self) -> None:
         pass
@@ -113,18 +120,25 @@ class _InProcessPeerConnection:
     def launch_job(self, delivery: HandoffDelivery) -> None:
         self.launch_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            self._service.launch_job(legacy_handoff_request(delivery), _WIRE_CTX)
+            peer_transport_call(lambda: self._service.launch_job(handoff_to_legacy_request(delivery), _WIRE_CTX))
 
     def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         with identity_scope(_PEER_IDENTITY):
-            response = self._service.federation_sync(
-                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+            response = peer_transport_call(
+                lambda: self._service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+                )
             )
         return federation_batch_from_legacy(response)
 
     def terminate_job(self, job_id: JobName) -> None:
         with identity_scope(_PEER_IDENTITY):
-            self._service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+            peer_transport_call(
+                lambda: self._service.terminate_job(
+                    controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()),
+                    None,
+                )
+            )
 
 
 class _UnreachablePeerConnection(_InProcessPeerConnection):
@@ -135,10 +149,10 @@ class _UnreachablePeerConnection(_InProcessPeerConnection):
 
     def launch_job(self, request):
         self.launch_calls += 1
-        raise ConnectionError("peer unreachable")
+        raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer unreachable")
 
     def terminate_job(self, job_id: JobName) -> None:
-        raise ConnectError(Code.NOT_FOUND, "no such job")
+        raise PeerCallError(PeerErrorCode.NOT_FOUND, "no such job")
 
 
 class _FullGpuPeerConnection(_InProcessPeerConnection):
@@ -149,18 +163,23 @@ class _FullGpuPeerConnection(_InProcessPeerConnection):
     nothing free, so the tick's federation pass never promotes it.
     """
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
-        summary = controller_pb2.Controller.BackendSummary(
-            backend_id="default",
-            advertised_attributes={
-                WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
-                WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=["h100"]),
-            },
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
+        return (
+            FederationBackendObservation(
+                backend_id="default",
+                advertised_attributes={
+                    WellKnownAttribute.DEVICE_TYPE: ("gpu",),
+                    WellKnownAttribute.DEVICE_VARIANT: ("h100",),
+                },
+                availability=FederationResourceAvailability(
+                    version=AVAILABILITY_METRIC_VERSION,
+                    observation_epoch_ms=1,
+                    amounts={"h100": 0},
+                    total_amounts={},
+                    held_by_band={},
+                ),
+            ),
         )
-        summary.availability.version = AVAILABILITY_METRIC_VERSION
-        summary.availability.observation_epoch_ms = 1
-        summary.availability.amounts["h100"] = 0
-        return [summary]
 
 
 class _BatchOccupiedGpuPeerConnection(_FullGpuPeerConnection):
@@ -170,10 +189,14 @@ class _BatchOccupiedGpuPeerConnection(_FullGpuPeerConnection):
     candidate's band, so the parent delegates and lets the peer's scheduler preempt.
     """
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
-        summaries = super().list_backends()
-        summaries[0].availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 8})
-        return summaries
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
+        (backend,) = super().list_backends()
+        assert backend.availability is not None
+        availability = replace(
+            backend.availability,
+            held_by_band={job_pb2.PRIORITY_BAND_BATCH: {"h100": 8}},
+        )
+        return (replace(backend, availability=availability),)
 
 
 class _RefusingPeerConnection(_InProcessPeerConnection):
@@ -184,19 +207,19 @@ class _RefusingPeerConnection(_InProcessPeerConnection):
     clear on a later attempt.
     """
 
-    def __init__(self, service: ControllerServiceImpl, code: Code, message: str = "peer says no"):
+    def __init__(self, service: LegacyControllerService, code: PeerErrorCode, message: str = "peer says no"):
         super().__init__(service)
         self.code = code
         self.message = message
 
     def launch_job(self, request):
         self.launch_calls += 1
-        raise ConnectError(self.code, self.message)
+        raise PeerCallError(self.code, self.message)
 
 
 def _make_service(
     stack: ExitStack, subdir: str, tmp_path, log_client, auth: ControllerAuth | None = None
-) -> tuple[ControllerServiceImpl, ControllerTestState]:
+) -> tuple[LegacyControllerService, ControllerTestState]:
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
@@ -205,14 +228,14 @@ def _make_service(
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
         auth=auth,
     )
     return service, state
 
 
 def _attach_federation(
-    parent_service: ControllerServiceImpl,
+    parent_service: LegacyControllerService,
     parent_state: ControllerTestState,
     connection: _InProcessPeerConnection,
 ) -> FederationManager:
@@ -261,7 +284,7 @@ def _handle(state: ControllerTestState, job_id: JobName):
         return reads.federated_handle(tx, job_id)
 
 
-def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
+def _peer_status_of(service: LegacyControllerService, job_id: JobName) -> int:
     """The ``peer_status`` GetJobStatus reports for ``job_id``."""
     return service.get_job_status(
         controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()), None
@@ -1074,7 +1097,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         assert len(query_tasks_for_job(peer_state, parent_job_id)) == 1  # idempotent re-drive — no duplicate
 
 
-@pytest.mark.parametrize("code", [Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT])
+@pytest.mark.parametrize("code", [PeerErrorCode.PERMISSION_DENIED, PeerErrorCode.INVALID_ARGUMENT])
 def test_a_handoff_the_peer_refuses_is_rejected_at_delivery_and_stops_the_redrive(code, tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
@@ -1107,7 +1130,7 @@ def test_a_refused_handoff_does_not_propagate_out_of_the_redrive(tmp_path, log_c
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        connection = _RefusingPeerConnection(peer_service, Code.UNAVAILABLE, "peer is booting")
+        connection = _RefusingPeerConnection(peer_service, PeerErrorCode.UNAVAILABLE, "peer is booting")
         manager = _attach_federation(parent_service, parent_state, connection)
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
@@ -1115,7 +1138,7 @@ def test_a_refused_handoff_does_not_propagate_out_of_the_redrive(tmp_path, log_c
         promote_queued_federation(manager, parent_state)  # promoted; a transient UNAVAILABLE leaves it pending
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
 
-        connection.code = Code.PERMISSION_DENIED
+        connection.code = PeerErrorCode.PERMISSION_DENIED
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.HANDOFF_REJECTED)
@@ -1129,7 +1152,7 @@ def test_a_handoff_the_peer_could_not_authenticate_stays_pending(tmp_path, log_c
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        connection = _RefusingPeerConnection(peer_service, Code.UNAUTHENTICATED, "bad token")
+        connection = _RefusingPeerConnection(peer_service, PeerErrorCode.UNAUTHENTICATED, "bad token")
         manager = _attach_federation(parent_service, parent_state, connection)
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
@@ -1393,7 +1416,7 @@ def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, lo
         assert query_job(parent_state, parent_job_id) is None
 
 
-def _spawn_child_on_peer(peer_service: ControllerServiceImpl, root: JobName, name: str) -> JobName:
+def _spawn_child_on_peer(peer_service: LegacyControllerService, root: JobName, name: str) -> JobName:
     """Submit ``name`` as a child of a received root, the way a coordinator job on
     the peer spawns its trainer sub-job against its own local controller."""
     request = make_direct_job_request(name, replicas=1)

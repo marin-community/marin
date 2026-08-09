@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""HTTP dashboard with Connect RPC and web UI for worker monitoring."""
+"""Hosted Connect and dashboard surface for the worker daemon."""
 
 from starlette.applications import Starlette
 from starlette.requests import Request

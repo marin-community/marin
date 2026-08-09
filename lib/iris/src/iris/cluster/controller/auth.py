@@ -56,11 +56,12 @@ from rigging.token_authority import (
     signing_key_from_private_pem,
 )
 
+from iris.cluster.authorization import FEDERATION_PEER_ROLE
 from iris.cluster.config import AuthConfig, PeerConfig
-from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
+SESSION_COOKIE = "iris_session"
 WORKER_USER = "system:worker"
 VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
 INVALID_VERIFIED_IDENTITY_REASON = "Invalid verified identity"

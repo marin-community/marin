@@ -8,27 +8,31 @@ live backends, the ListPeers view, and the submit router's decision matrix
 (prefer-local, hand off when locally infeasible, explicit ``cluster`` pin).
 """
 
+from dataclasses import replace
+
 import pydantic
 import pytest
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
+from iris.cluster.federation.protocol import (
+    FederationBackendObservation,
+    FederationResourceAvailability,
+    PeerCallError,
+    PeerErrorCode,
+)
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
 from iris.managed_thread import get_thread_container, thread_container_scope
-from iris.resources.endpoint import ExecRequest
-from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
-from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT
+from iris.resources.state import PriorityBand
 from rigging.timing import Duration, ExponentialBackoff
 
 
-def _device_backend(backend_id: str, device_type: str) -> controller_pb2.Controller.BackendSummary:
+def _device_backend(backend_id: str, device_type: str) -> FederationBackendObservation:
     return _backend(
         backend_id,
-        advertised_attributes={WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=[device_type])},
+        advertised_attributes={WellKnownAttribute.DEVICE_TYPE: (device_type,)},
     )
 
 
@@ -36,13 +40,13 @@ def _device_constraint(device_type: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type)
 
 
-def _gpu_backend(backend_id: str, variant: str) -> controller_pb2.Controller.BackendSummary:
+def _gpu_backend(backend_id: str, variant: str) -> FederationBackendObservation:
     """A peer GPU backend advertising both the device type and the variant."""
     return _backend(
         backend_id,
         advertised_attributes={
-            WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
-            WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=[variant]),
+            WellKnownAttribute.DEVICE_TYPE: ("gpu",),
+            WellKnownAttribute.DEVICE_VARIANT: (variant,),
         },
     )
 
@@ -59,8 +63,8 @@ def _config(**extra) -> dict:
     return {"name": "parent", "platform": {"local": {}}, **extra}
 
 
-def _backend(backend_id: str, **fields) -> controller_pb2.Controller.BackendSummary:
-    return controller_pb2.Controller.BackendSummary(backend_id=backend_id, **fields)
+def _backend(backend_id: str, **fields) -> FederationBackendObservation:
+    return FederationBackendObservation(backend_id=backend_id, **fields)
 
 
 # ---------------------------------------------------------------------------
@@ -109,17 +113,17 @@ def test_peers_config_rejects_unknown_field():
 class _StubConnection:
     """A peer connection whose ListBackends probe returns a canned answer."""
 
-    def __init__(self, backends: tuple[controller_pb2.Controller.BackendSummary, ...], *, fail: bool = False):
+    def __init__(self, backends: tuple[FederationBackendObservation, ...], *, fail: bool = False):
         self.backends = backends
         self.fail = fail
         self.probe_count = 0
         self.shutdown_count = 0
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
         self.probe_count += 1
         if self.fail:
-            raise ConnectionError("peer unreachable")
-        return list(self.backends)
+            raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer unreachable")
+        return self.backends
 
     def shutdown(self) -> None:
         self.shutdown_count += 1
@@ -167,14 +171,18 @@ def test_peer_observation_surfaces_current_reachability():
     )
 
 
-def _availability_backend(backend_id: str, version: int) -> controller_pb2.Controller.BackendSummary:
+def _availability_backend(backend_id: str, version: int) -> FederationBackendObservation:
     """A GPU backend reporting the capacity metric at ``version``."""
-    backend = _gpu_backend(backend_id, "h100")
-    backend.availability.version = version
-    backend.availability.observation_epoch_ms = 1000
-    backend.availability.amounts["h100"] = 8
-    backend.availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 16})
-    return backend
+    return replace(
+        _gpu_backend(backend_id, "h100"),
+        availability=FederationResourceAvailability(
+            version=version,
+            observation_epoch_ms=1000,
+            amounts={"h100": 8},
+            total_amounts={"h100": 24},
+            held_by_band={PriorityBand.BATCH: {"h100": 16}},
+        ),
+    )
 
 
 def test_availability_at_a_known_version_is_read_in_full():
@@ -184,14 +192,15 @@ def test_availability_at_a_known_version_is_read_in_full():
     ((backend,),) = [p.backends for p in manager.peer_availability()]
     assert backend.supplies_metric is True
     assert backend.amounts == {"h100": 8}
-    assert backend.held_by_band == {job_pb2.PRIORITY_BAND_BATCH: {"h100": 16}}
+    assert backend.held_by_band == {PriorityBand.BATCH: {"h100": 16}}
 
 
 def test_availability_from_an_older_metric_version_is_still_read():
     # v1 reports free amounts and no band split. Its numbers are conservative under v2
     # semantics, so a rolling upgrade keeps gating on them rather than dropping the gate.
     backend = _availability_backend("gpu", 1)
-    backend.availability.ClearField("held_by_band")
+    assert backend.availability is not None
+    backend = replace(backend, availability=replace(backend.availability, held_by_band={}))
     peer = _peer("cw", _StubConnection((backend,)))
     manager = FederationManager([peer], threads=get_thread_container())
     peer.probe()
@@ -210,42 +219,6 @@ def test_availability_from_a_newer_metric_version_is_treated_as_unsupplied():
     ((backend,),) = [p.backends for p in manager.peer_availability()]
     assert backend.supplies_metric is False
     assert (backend.amounts, backend.held_by_band, backend.generation) == ({}, {}, 0)
-
-
-class _RecordingStub:
-    """A controller stub that records the deadline each on-demand RPC was given."""
-
-    def __init__(self):
-        self.exec_timeout_ms = 0
-        self.exec_request = None
-
-    def exec_attempt(self, request, timeout_ms):
-        self.exec_timeout_ms = timeout_ms
-        self.exec_request = request
-        return resource_pb2.ExecAttemptResponse()
-
-    def close(self):
-        pass
-
-
-def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
-    """The parent->peer exec hop must give the peer at least its own exec budget.
-
-    A negative ("no caller limit") timeout is capped at EXEC_IN_CONTAINER_MAX_TIMEOUT
-    on the peer, so the parent's deadline must clear that cap rather than collapse to
-    the proxy margin; a positive timeout carries the caller's budget plus margin.
-    """
-    stub = _RecordingStub()
-    monkeypatch.setattr(peer_module, "ResourceServiceClientSync", lambda **kwargs: stub)
-    connection = peer_module._PeerRpcConnection("http://peer:10000", [])
-    attempt = AttemptIdentity(ResourceKey("parent", ResourceKind.TASK, "/u/j/0"), 0, "attempt-uid")
-
-    connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(-1)))
-    assert stub.exec_timeout_ms >= EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
-    assert stub.exec_request.attempt.attempt_uid == "attempt-uid"
-
-    connection.exec_in_container(ExecRequest(attempt, (), Duration.from_seconds(30)))
-    assert stub.exec_timeout_ms > 30 * 1000
 
 
 def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():

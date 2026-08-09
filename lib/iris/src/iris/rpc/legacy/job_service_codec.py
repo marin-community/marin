@@ -18,7 +18,7 @@ from iris.resources.job import (
 )
 from iris.resources.task import TaskDetail
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     constraint_from_proto,
     constraint_to_proto,
     environment_from_proto,

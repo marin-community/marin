@@ -19,6 +19,7 @@ from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FEDERATION_AUDIENCE,
     FEDERATION_PEER_ROLE,
+    SESSION_COOKIE,
     SESSION_TOKEN_TTL_SECONDS,
     WORKER_TOKEN_TTL_SECONDS,
     WORKER_USER,
@@ -32,18 +33,19 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.dashboard import (
-    _UNAUTHENTICATED_RPCS,
-    ControllerDashboard,
-)
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.rpc.auth import DASHBOARD_ROLE, authorize_method
+from iris.rpc.dashboard import (
+    _UNAUTHENTICATED_RPCS,
+    ControllerDashboard,
+)
+from iris.rpc.endpoint_service import EndpointServiceImpl
 from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
@@ -82,7 +84,7 @@ def _jwt_manager() -> JwtTokenManager:
 
 
 def _make_service(db, log_client, auth=None):
-    """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
+    """A legacy controller service with minimal deps for login and auth-setup tests."""
     EndpointsProjection(db)
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -102,7 +104,7 @@ def _make_service(db, log_client, auth=None):
         log_client=log_client,
         db=db,
         auth=auth or ControllerAuth(),
-        endpoint_service=EndpointServiceImpl(db=db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=db)),
     )
 
 
@@ -140,7 +142,7 @@ def service(state, tmp_path, log_client):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 

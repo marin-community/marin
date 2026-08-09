@@ -6,6 +6,7 @@
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cluster.federation.protocol import PeerCallError
 from iris.resources.action import ActionResult, ActionState
 from iris.resources.endpoint import EndpointQuery
 from iris.resources.job import JobQuery
@@ -186,7 +187,7 @@ def test_federated_action_outage_has_no_authority_or_execution_side_effect(feder
     assert current is not None
     federation.set_peer_reachable(False)
 
-    with pytest.raises(ConnectionError, match="unreachable"):
+    with pytest.raises(PeerCallError, match="unreachable"):
         federation.parent.retry_task(
             before_parent.summary.identity,
             expected_attempt_uid=current.attempt_uid,

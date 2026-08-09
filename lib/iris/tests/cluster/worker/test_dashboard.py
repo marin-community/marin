@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
+"""Behavior tests for the hosted worker RPC and dashboard surface."""
 
 from unittest.mock import Mock
 
@@ -10,9 +10,9 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from iris.cluster.types import JobName
-from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.worker_dashboard import WorkerDashboard
 from iris.rpc.worker_service import WorkerServiceImpl
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration

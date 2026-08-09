@@ -10,12 +10,13 @@ controller SQLite database goes through this module.
 import functools
 import json
 from collections.abc import Iterable, Mapping
-from typing import Any, NamedTuple, Protocol
+from typing import NamedTuple, Protocol
 
 from rigging.provenance import Provenance
 from rigging.timing import Duration
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
+from iris.cluster.types import JobName
 from iris.resources.execution import (
     CommandEntrypoint,
     CpuDevice,
@@ -65,6 +66,41 @@ class WorkerMetadataRow(Protocol):
     md_gce_zone: str
     md_device_json: str | None
     md_provenance_json: str | None
+
+
+class ResourceSpecRow(Protocol):
+    """Structural resource columns accepted by persistence decoders."""
+
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
+class JobSpecRow(ResourceSpecRow, Protocol):
+    """Structural persisted Job fields accepted by the Job decoder."""
+
+    job_id: JobName
+    entrypoint_json: str
+    environment_json: str
+    bundle_id: str
+    scheduling_timeout_ms: int | None
+    ports_json: list[str]
+    max_task_failures: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    constraints_json: str | None
+    coscheduling_group_by: str
+    has_coscheduling: bool
+    num_tasks: int
+    timeout_ms: int | None
+    fail_if_exists: bool
+    preemption_policy: int
+    existing_job_policy: int
+    priority_band: int
+    task_image: str
+    submit_argv_json: list[str]
+    container_profile: int
 
 
 # Maxsize for the JSON->proto decode caches. Sized to comfortably hold the
@@ -271,7 +307,7 @@ def device_variant_from_json(device_json: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def resource_spec_from_job_row(job: Any) -> ResourceSpec:
+def resource_spec_from_job_row(job: ResourceSpecRow) -> ResourceSpec:
     """Reconstruct a typed resource specification from native Job columns."""
     return resource_spec_from_scalars(
         job.res_cpu_millicores,
@@ -281,7 +317,7 @@ def resource_spec_from_job_row(job: Any) -> ResourceSpec:
     )
 
 
-def reconstruct_job_spec(job, *, workdir_files: dict[str, bytes]) -> JobSpec:
+def reconstruct_job_spec(job: JobSpecRow, *, workdir_files: dict[str, bytes]) -> JobSpec:
     """Reconstruct the typed Job specification persisted for ``job``."""
     return JobSpec(
         version=1,

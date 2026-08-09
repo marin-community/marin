@@ -4,8 +4,24 @@
 """Native status records authored by execution backends."""
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 from rigging.timing import Timestamp
+
+
+class VmState(IntEnum):
+    """Lifecycle states exposed for a managed VM."""
+
+    UNSPECIFIED = 0
+    BOOTING = 1
+    INITIALIZING = 2
+    READY = 3
+    UNHEALTHY = 4
+    STOPPING = 5
+    TERMINATED = 6
+    FAILED = 7
+    PREEMPTED = 8
+    REQUESTING = 9
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,7 +29,7 @@ class VmStatus:
     vm_id: str = ""
     slice_id: str = ""
     scale_group: str = ""
-    state: int = 0
+    state: VmState = VmState.UNSPECIFIED
     address: str = ""
     zone: str = ""
     created_at: Timestamp | None = None
@@ -66,8 +82,10 @@ class ScaleGroupStatus:
     idle_threshold_ms: int = 0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class AutoscalerActionStatus:
+    """One action whose pending result is finalized after cloud I/O returns."""
+
     timestamp: Timestamp | None = None
     action_type: str = ""
     scale_group: str = ""

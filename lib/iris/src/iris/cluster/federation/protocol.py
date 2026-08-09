@@ -10,17 +10,21 @@ so the manager stays a self-contained module that depends only on this Protocol
 and can be exercised with a fake store.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from enum import Enum, IntEnum, auto
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import Enum, IntEnum, StrEnum, auto
 from typing import Protocol
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.config import PeerConfig
 from iris.cluster.types import JobName
-from iris.resources.endpoint import EndpointAccess
+from iris.resources.action import ActionReceipt
+from iris.resources.endpoint import EndpointAccess, ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.execution import ResourceSpec
+from iris.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
 from iris.resources.job import JobSpec
+from iris.resources.system import ProcessInfo
 
 
 class FederationDirection(IntEnum):
@@ -57,6 +61,68 @@ class HandoffAdmission(Enum):
     ALREADY_EXISTS = auto()  # a live handle for this job id already existed (idempotent resubmit)
 
 
+class PeerErrorCode(StrEnum):
+    """Transport-independent peer failure classification."""
+
+    ALREADY_EXISTS = "already_exists"
+    PERMISSION_DENIED = "permission_denied"
+    INVALID_ARGUMENT = "invalid_argument"
+    NOT_FOUND = "not_found"
+    UNAUTHENTICATED = "unauthenticated"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class PeerCallError(RuntimeError):
+    """A remote federation operation failed before returning a native result."""
+
+    def __init__(self, code: PeerErrorCode, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class FederationResourceAvailability:
+    """Versioned resource capacity advertised by one peer backend."""
+
+    version: int
+    observation_epoch_ms: int
+    amounts: Mapping[str, int]
+    total_amounts: Mapping[str, int]
+    held_by_band: Mapping[int, Mapping[str, int]]
+
+
+@dataclass(frozen=True, slots=True)
+class FederationBackendObservation:
+    """Native backend facts returned by a federation capability heartbeat."""
+
+    backend_id: str
+    name: str = ""
+    kind: str = ""
+    capabilities: tuple[str, ...] = ()
+    advertised_attributes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    scale_groups: tuple[str, ...] = ()
+    worker_count: int = 0
+    pending_task_count: int = 0
+    running_task_count: int = 0
+    has_autoscaler: bool = False
+    capacity_health: Mapping[str, int] = field(default_factory=dict)
+    availability: FederationResourceAvailability | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FederationPeerObservation:
+    """Current native health observation for a configured federation peer."""
+
+    peer_id: str
+    controller_address: str
+    reachable: bool
+    last_contact_ms: int
+    active_federated_jobs: int
+    backends: tuple[FederationBackendObservation, ...]
+
+
 @dataclass(frozen=True)
 class HandoffSpec:
     """One handoff handle to admit, persist, and deliver.
@@ -77,6 +143,53 @@ class HandoffSpec:
     # submission reusing the id. "" only at admission time, before the store
     # mints one; every delivered spec carries the persisted handle's nonce.
     handoff_nonce: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffDelivery:
+    """Canonical handoff payload sent to an execution peer."""
+
+    spec: JobSpec
+    bundle_blob: bytes
+    requester_id: str
+    owner_principal: str
+    submitting_user: str
+    handoff_nonce: str
+
+
+class PeerConnection(Protocol):
+    """Native remote operations available to the federation coordinator."""
+
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]: ...
+
+    def launch_job(self, delivery: HandoffDelivery) -> None: ...
+
+    def terminate_job(self, job_id: JobName) -> None: ...
+
+    def federation_sync(self, requester_id: str, cursor: str) -> "FederationSyncBatch": ...
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt: ...
+
+    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+
+    def profile_task(self, request: ProfileRequest) -> ProfileResult: ...
+
+    def exec_in_container(self, request: ExecRequest) -> ExecResult: ...
+
+    def get_process_status(self, target: str) -> ProcessInfo: ...
+
+    def shutdown(self) -> None: ...
+
+
+PeerConnectFactory = Callable[[PeerConfig], PeerConnection]
 
 
 @dataclass(frozen=True)

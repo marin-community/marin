@@ -10,15 +10,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
-from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
+from rigging.timing import Deadline, Duration, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
@@ -39,7 +36,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType
 from iris.cluster.types import TaskAttempt as TaskAttemptId
-from iris.cluster.worker.dashboard import WorkerDashboard
+from iris.cluster.worker.control import WorkerController, WorkerRegistration, WorkerServer
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HardwareProbe,
@@ -72,12 +69,6 @@ from iris.resources.worker import (
     WorkerReconcileResponse,
     WorkerResourceSnapshot,
 )
-from iris.rpc import controller_pb2
-from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.resource_client import ResourceRpcClient
-from iris.rpc.worker_codec import worker_metadata_to_proto
-from iris.rpc.worker_service import WorkerServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +153,8 @@ class Worker:
         threads: ThreadContainer | None = None,
         worker_metadata: WorkerMetadata | None = None,
         log_client: LogClient | None = None,
+        controller: WorkerController | None = None,
+        server: WorkerServer | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = 10,
     ):
@@ -231,14 +224,8 @@ class Worker:
         if log_client is not None:
             self._register_stats_tables(log_client)
 
-        self._service = WorkerServiceImpl(self)
-        self._dashboard = WorkerDashboard(
-            self._service,
-            host=config.host,
-            port=config.port,
-        )
-
-        self._server: uvicorn.Server | None = None
+        self._controller = controller
+        self._server = server
         self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
@@ -250,49 +237,20 @@ class Worker:
         elif worker_id is None and hardware is not None:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
-        self._controller_client: ControllerServiceClientSync | None = None
-        self._resource_client: ResourceRpcClient | None = None
-
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Ordering matters here. Three invariants drive it:
-        #   1. LogClient must exist before adoption so adopted attempts capture
-        #      a live client (regression #5261). LogClient.connect is pure
-        #      construction — no I/O — so it can come first cheaply.
-        #   2. iris.worker / iris.task tables must be registered before adoption
-        #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
-        #      which goes through the resolver (_resolve_log_service) — and the
-        #      resolver requires self._resource_client to be set. After the
-        #      clients are built and the tables are registered once, the
-        #      per-attempt get_table inside adoption is a cache hit.
-        #   3. The uvicorn server must be up before we register with the
-        #      controller, so the controller's first ping lands on a ready
-        #      worker. Lifecycle thread is spawned last for that reason.
-        interceptors: tuple[BearerTokenInjector, ...] = ()
-        if self._config.controller_address and self._config.auth_token:
-            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
-
+        # Logging is composed before Worker.start so adopted attempts receive a
+        # live client. The hosted server starts before registration so the
+        # controller's first reconcile reaches a ready worker.
+        if self._server is None:
+            raise ValueError("Worker server adapter is required before start")
         if self._config.controller_address:
+            if self._controller is None:
+                raise ValueError("Worker controller adapter is required when controller_address is configured")
             if self._log_client is None:
-                self._log_client = LogClient.connect(
-                    LOG_SERVER_ENDPOINT_NAME,
-                    interceptors=interceptors,
-                    resolver=self._resolve_log_service,
-                )
-            self._controller_client = ControllerServiceClientSync(
-                address=self._config.controller_address,
-                timeout_ms=10_000,
-                interceptors=interceptors,
-                accept_compression=IRIS_RPC_COMPRESSIONS,
-                send_compression=None,
-            )
-            self._resource_client = ResourceRpcClient(
-                self._config.controller_address,
-                timeout_ms=10_000,
-                interceptors=interceptors,
-            )
+                raise ValueError("Worker log client is required when controller_address is configured")
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.
             assert self._log_client is not None
@@ -309,21 +267,7 @@ class Worker:
         # controller's Reconcile RPC the moment registration completes.
         # timeout_keep_alive=120: default 5s races with the controller's reconcile
         # cadence, causing TCP resets on idle connections.
-        self._server = uvicorn.Server(
-            uvicorn.Config(
-                self._dashboard.app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-                log_config=None,
-                timeout_keep_alive=120,
-            )
-        )
-        self._threads.spawn_server(self._server, name="worker-server")
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server.started,
-            timeout=Duration.from_seconds(5.0),
-        )
+        self._server.start(self, self._threads)
 
         # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
@@ -447,13 +391,11 @@ class Worker:
             # cascade into _task_threads and trigger on_stop container kills.
             self._threads.detach_child(self._task_threads)
 
-        if self._server:
-            self._server.should_exit = True
+        if self._server is not None:
+            self._server.stop()
         self._threads.stop()
-        if self._controller_client:
-            self._controller_client.close()
-        if self._resource_client:
-            self._resource_client.close()
+        if self._controller is not None:
+            self._controller.close()
         self._detach_log_handler()
         if self._log_client is not None:
             self._log_client.close()
@@ -508,7 +450,7 @@ class Worker:
         address = self._resolve_address()
 
         # Controller client is created in start() before this thread starts
-        assert self._controller_client is not None
+        assert self._controller is not None
 
         logger.info("Attempting to register with controller at %s", self._config.controller_address)
 
@@ -520,10 +462,10 @@ class Worker:
                     if rule.error:
                         raise rule.error
 
-                response = self._controller_client.register(
-                    controller_pb2.Controller.RegisterRequest(
+                response = self._controller.register(
+                    WorkerRegistration(
                         address=address,
-                        metadata=worker_metadata_to_proto(metadata),
+                        metadata=metadata,
                         worker_id=self._worker_id or "",
                         slice_id=self._config.slice_id or "",
                         scale_group=self._config.worker_attributes.get("scale-group", ""),
@@ -539,15 +481,6 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
-
-    def _resolve_log_service(self, server_url: str) -> str:
-        """Look up ``server_url`` on the controller's endpoint registry."""
-        if self._resource_client is None:
-            raise ConnectionError("worker resource client not yet initialized")
-        endpoints = self._resource_client.resolve_endpoints(server_url)
-        if not endpoints:
-            raise ConnectionError(f"No {server_url!r} endpoint registered on controller")
-        return endpoints[0].address
 
     def _attach_log_handler(self) -> None:
         """Attach or rename the remote log handler under ``worker_log_key(self._worker_id)``."""

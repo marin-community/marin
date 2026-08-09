@@ -434,10 +434,10 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        routed_entries = autoscaler._last_routing_decision_proto.routed_entries
-        if group_name not in routed_entries:
+        routing = autoscaler.get_last_routing_decision()
+        if routing is None:
             return 0
-        return len(routed_entries[group_name].entries)
+        return len(routing.routed_entries.get(group_name, ()))
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

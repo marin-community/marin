@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
+from iris.backends.status import AutoscalerActionStatus
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.platforms.types import SliceHandle
-from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def terminate_slices_for_workers(
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
-    log_action: Callable[..., vm_pb2.AutoscalerAction],
+    log_action: Callable[..., AutoscalerActionStatus],
     timestamp: Timestamp,
 ) -> SliceTerminationResult:
     """Detach and schedule slice termination for the given failed workers.

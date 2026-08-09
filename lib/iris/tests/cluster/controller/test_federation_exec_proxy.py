@@ -22,25 +22,26 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.federation import ControllerFederationStore
-from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.peer import (
-    FederationPeer,
-    HandoffDelivery,
-    legacy_handoff_request,
-)
-from iris.cluster.federation.protocol import FederationSyncBatch
+from iris.cluster.federation.peer import FederationPeer
+from iris.cluster.federation.protocol import FederationBackendObservation, FederationSyncBatch, HandoffDelivery
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import get_thread_container
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
-from iris.rpc.controller_service import ControllerServiceImpl
-from iris.rpc.legacy_job_codec import constraint_to_proto
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.federation_client import (
+    federation_batch_from_legacy,
+    handoff_to_legacy_request,
+    peer_transport_call,
+)
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.legacy.job_codec import constraint_to_proto
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.worker_codec import process_info_from_proto
 from rigging.provenance import Provenance
@@ -72,64 +73,76 @@ class _ProxyPeerConnection:
     short-circuits without a peer round-trip.
     """
 
-    def __init__(self, service: ControllerServiceImpl):
+    def __init__(self, service: LegacyControllerService):
         self._service = service
         self.profile_calls = 0
         self.exec_calls = 0
         self.status_calls = 0
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
-        return []
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
+        return ()
 
     def shutdown(self) -> None:
         pass
 
     def launch_job(self, delivery: HandoffDelivery) -> None:
         with identity_scope(_PEER_IDENTITY):
-            self._service.launch_job(legacy_handoff_request(delivery), None)
+            peer_transport_call(lambda: self._service.launch_job(handoff_to_legacy_request(delivery), None))
 
     def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
         with identity_scope(_PEER_IDENTITY):
-            response = self._service.federation_sync(
-                controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+            response = peer_transport_call(
+                lambda: self._service.federation_sync(
+                    controller_pb2.Controller.FederationSyncRequest(requester_id=requester_id, cursor=cursor), None
+                )
             )
         return federation_batch_from_legacy(response)
 
     def terminate_job(self, job_id: JobName) -> None:
         with identity_scope(_PEER_IDENTITY):
-            self._service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+            peer_transport_call(
+                lambda: self._service.terminate_job(
+                    controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None
+                )
+            )
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         self.profile_calls += 1
         assert request.attempt is not None
         with identity_scope(_PEER_IDENTITY):
-            response = self._service.profile_task(
-                job_pb2.ProfileTaskRequest(
-                    target=f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}",
-                    duration_seconds=int(request.duration.to_seconds()) if request.duration is not None else 0,
-                    profile_type=profile_configuration_to_proto(request.profile),
-                ),
-                None,
+            response = peer_transport_call(
+                lambda: self._service.profile_task(
+                    job_pb2.ProfileTaskRequest(
+                        target=f"{request.attempt.task.resource_id}:{request.attempt.attempt_number}",
+                        duration_seconds=int(request.duration.to_seconds()) if request.duration is not None else 0,
+                        profile_type=profile_configuration_to_proto(request.profile),
+                    ),
+                    None,
+                )
             )
         return ProfileResult(response.profile_data, response.error)
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
         self.exec_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            response = self._service.exec_in_container(
-                controller_pb2.Controller.ExecInContainerRequest(
-                    task_id=request.attempt.task.resource_id,
-                    command=request.command,
-                    timeout_seconds=int(request.timeout.to_seconds()) if request.timeout is not None else 0,
-                ),
-                None,
+            response = peer_transport_call(
+                lambda: self._service.exec_in_container(
+                    controller_pb2.Controller.ExecInContainerRequest(
+                        task_id=request.attempt.task.resource_id,
+                        command=request.command,
+                        timeout_seconds=int(request.timeout.to_seconds()) if request.timeout is not None else 0,
+                    ),
+                    None,
+                )
             )
         return ExecResult(response.exit_code, response.stdout, response.stderr, response.error)
 
     def get_process_status(self, target: str) -> ProcessInfo:
         self.status_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            response = self._service.get_process_status(job_pb2.GetProcessStatusRequest(target=target), None)
+            response = peer_transport_call(
+                lambda: self._service.get_process_status(job_pb2.GetProcessStatusRequest(target=target), None)
+            )
         return process_info_from_proto(response.process_info)
 
 
@@ -152,7 +165,7 @@ def _process_info(*, thread_count: int = 7) -> ProcessInfo:
 
 def _make_service(
     stack: ExitStack, subdir: str, tmp_path, log_client
-) -> tuple[ControllerServiceImpl, ControllerTestState]:
+) -> tuple[LegacyControllerService, ControllerTestState]:
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
@@ -161,13 +174,13 @@ def _make_service(
         bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     return service, state
 
 
 def _attach_federation(
-    parent_service: ControllerServiceImpl,
+    parent_service: LegacyControllerService,
     parent_state: ControllerTestState,
     connection: _ProxyPeerConnection,
 ) -> FederationManager:
@@ -193,7 +206,7 @@ def _handle(state: ControllerTestState, job_id: JobName):
 
 
 def _handoff_and_mirror_running_task(
-    parent_service: ControllerServiceImpl,
+    parent_service: LegacyControllerService,
     parent_state: ControllerTestState,
     peer_state: ControllerTestState,
     manager: FederationManager,

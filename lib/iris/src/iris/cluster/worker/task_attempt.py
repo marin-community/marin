@@ -27,6 +27,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
+from iris.cluster.process_error import format_exception_with_traceback, signal_name
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -51,8 +52,6 @@ from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpe
 from iris.resources.job import ContainerProfile, PriorityBand
 from iris.resources.state import TaskState
 from iris.resources.worker import BuildMetrics, ResourceUsage, WorkerMetadata, WorkerTaskStatus
-from iris.rpc.errors import format_exception_with_traceback
-from iris.rpc.proto_display import signal_name
 
 logger = logging.getLogger(__name__)
 
@@ -903,8 +902,7 @@ class TaskAttempt:
                         )
                         self._append_log(
                             source=INJECTED_ERROR_SOURCE,
-                            data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
-                            "reporting as worker failure",
+                            data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); reporting as worker failure",
                         )
                         self.transition_to(
                             TaskState.WORKER_FAILED,

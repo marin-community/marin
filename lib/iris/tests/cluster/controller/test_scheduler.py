@@ -11,6 +11,7 @@ modify state, or run threads.
 from collections import Counter
 
 import pytest
+from iris.backends.status import DemandEntryStatus, RoutingStatus, UnmetDemandStatus
 from iris.cluster.constraints import AttributeValue, WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.persistence import operations as ops
@@ -35,8 +36,8 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
 from iris.cluster.worker.env_probe import _build_worker_attributes
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
-from iris.rpc.legacy_job_codec import attribute_value_to_proto, constraint_to_proto
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy.job_codec import attribute_value_to_proto, constraint_to_proto
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
@@ -2310,13 +2311,9 @@ def _pending_task(job: str, idx: int) -> str:
 
 
 def test_build_job_pending_hints_reports_scale_up_group() -> None:
-    routing = vm_pb2.RoutingDecision(
+    routing = RoutingStatus(
         group_to_launch={"tpu_v5e_32": 1},
-        routed_entries={
-            "tpu_v5e_32": vm_pb2.DemandEntryStatusList(
-                entries=[vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-a", 0)])]
-            )
-        },
+        routed_entries={"tpu_v5e_32": (DemandEntryStatus(task_ids=(_pending_task("job-a", 0),)),)},
     )
 
     hints = build_job_pending_hints(routing)
@@ -2328,12 +2325,10 @@ def test_build_job_pending_hints_reports_scale_up_group() -> None:
 
 
 def test_build_job_pending_hints_reports_waiting_ready_when_no_launch() -> None:
-    routing = vm_pb2.RoutingDecision(
+    routing = RoutingStatus(
         group_to_launch={"tpu_v5e_32": 0},
         routed_entries={
-            "tpu_v5e_32": vm_pb2.DemandEntryStatusList(
-                entries=[vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-b", 0), _pending_task("job-b", 1)])]
-            )
+            "tpu_v5e_32": (DemandEntryStatus(task_ids=(_pending_task("job-b", 0), _pending_task("job-b", 1))),)
         },
     )
 
@@ -2346,13 +2341,13 @@ def test_build_job_pending_hints_reports_waiting_ready_when_no_launch() -> None:
 
 
 def test_build_job_pending_hints_reports_unmet_when_not_routed() -> None:
-    routing = vm_pb2.RoutingDecision(
-        unmet_entries=[
-            vm_pb2.UnmetDemand(
-                entry=vm_pb2.DemandEntryStatus(task_ids=[_pending_task("job-c", 0)]),
+    routing = RoutingStatus(
+        unmet_entries=(
+            UnmetDemandStatus(
+                entry=DemandEntryStatus(task_ids=(_pending_task("job-c", 0),)),
                 reason="no_matching_group: need device=tpu:v5p-8",
-            )
-        ]
+            ),
+        )
     )
 
     hints = build_job_pending_hints(routing)

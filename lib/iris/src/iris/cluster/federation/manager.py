@@ -18,12 +18,10 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 
 import logging
 import threading
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import TypeVar
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -37,17 +35,21 @@ from iris.cluster.federation.availability import (
     ReservationLedger,
     assign_queued,
 )
-from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.protocol import (
     CancelTarget,
+    FederationBackendObservation,
+    FederationPeerObservation,
     FederationStore,
+    HandoffDelivery,
     HandoffSpec,
+    PeerCallError,
+    PeerErrorCode,
 )
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.resources.job import JobSpec
-from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -63,65 +65,53 @@ DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
 DEFAULT_MAX_HANDOFFS_PER_CYCLE = 8
 _JOIN_TIMEOUT = Duration.from_seconds(5.0)
 
-_PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
+_PEER_RPC_ERRORS = (PeerCallError,)
 
 # A peer's verdict on the handoff itself, which it will repeat on every retry: the job
 # id already exists there (ALREADY_EXISTS), its allowlist refuses the submitter
 # (PERMISSION_DENIED), or the request is malformed (INVALID_ARGUMENT). Transport and
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
-_TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+_TERMINAL_HANDOFF_CODES = frozenset(
+    {PeerErrorCode.ALREADY_EXISTS, PeerErrorCode.PERMISSION_DENIED, PeerErrorCode.INVALID_ARGUMENT}
+)
 
 
-@dataclass(frozen=True, slots=True)
-class FederationBackendObservation:
-    """Backend placement facts observed through a federation heartbeat."""
-
-    backend_id: str
-    kind: str
-    worker_count: int
-    advertised_attributes: Mapping[str, tuple[str, ...]]
-
-
-@dataclass(frozen=True, slots=True)
-class FederationPeerObservation:
-    """Current native health observation for a configured federation peer."""
-
-    peer_id: str
-    controller_address: str
-    reachable: bool
-    last_contact_ms: int
-    active_federated_jobs: int
-    backends: tuple[FederationBackendObservation, ...]
-
-
-def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
+def _backend_availability(peer_id: str, backend: FederationBackendObservation) -> BackendAvailability:
     """Project one heartbeat backend into the assignment pass's view of it.
 
     A backend supplies a usable capacity metric only when it set the availability
     wrapper at a version this parent knows how to read; anything newer is dropped to
     shape-only matching rather than acted on with the wrong semantics.
     """
-    understood = backend.HasField("availability") and backend.availability.version <= AVAILABILITY_METRIC_VERSION
-    if backend.HasField("availability") and not understood:
+    availability = backend.availability
+    if availability is None:
+        return BackendAvailability(
+            backend_id=backend.backend_id,
+            supplies_metric=False,
+            generation=0,
+            amounts={},
+            held_by_band={},
+            advertised_shape={key: list(values) for key, values in backend.advertised_attributes.items()},
+        )
+    understood = availability.version <= AVAILABILITY_METRIC_VERSION
+    if not understood:
         logger.warning(
             "Peer %s backend %s reports availability metric v%d, newer than v%d: matching it on shape alone",
             peer_id,
             backend.backend_id,
-            backend.availability.version,
+            availability.version,
             AVAILABILITY_METRIC_VERSION,
         )
     return BackendAvailability(
         backend_id=backend.backend_id,
         supplies_metric=understood,
-        generation=backend.availability.observation_epoch_ms if understood else 0,
-        amounts=dict(backend.availability.amounts) if understood else {},
+        generation=availability.observation_epoch_ms if understood else 0,
+        amounts=dict(availability.amounts) if understood else {},
         held_by_band=(
-            {held.band: dict(held.amounts) for held in backend.availability.held_by_band if held.band}
-            if understood
-            else {}
+            {band: dict(amounts) for band, amounts in availability.held_by_band.items() if band} if understood else {}
         ),
-        advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
+        advertised_shape={key: list(values) for key, values in backend.advertised_attributes.items()},
     )
 
 
@@ -200,9 +190,9 @@ class FederationManager:
         peer = self._peers.get(peer_id)
         return peer.controller_address if peer is not None else None
 
-    def peer_summaries(self) -> list[controller_pb2.Controller.PeerSummary]:
-        """Encode every configured peer for the retired ControllerService boundary."""
-        return [self._build_summary(peer) for _, peer in sorted(self._peers.items())]
+    def peer_summaries(self) -> list[FederationPeerObservation]:
+        """Return native summaries for every configured peer, ordered by peer id."""
+        return [self._build_observation(peer) for _, peer in sorted(self._peers.items())]
 
     def peer_observations(self) -> tuple[FederationPeerObservation, ...]:
         """Return current peer health observations ordered by peer id."""
@@ -327,8 +317,8 @@ class FederationManager:
             return
         try:
             peer.terminate_job(target.local_job_id)
-        except ConnectError as exc:
-            if exc.code == Code.NOT_FOUND:
+        except PeerCallError as exc:
+            if exc.code is PeerErrorCode.NOT_FOUND:
                 self._store.mark_cancel_satisfied(target.local_job_id, now_ms=Timestamp.now().epoch_ms())
                 return
             logger.warning(
@@ -424,7 +414,7 @@ class FederationManager:
         try:
             handoff = self._build_handoff_delivery(spec)
             peer.launch_job(handoff)
-        except ConnectError as exc:
+        except PeerCallError as exc:
             # The peer answers a rejected handoff the same way every time — a name
             # collision there, a submitter its allowlist refuses, a malformed request.
             # Terminalize the handle so the re-drive stops rather than re-delivering
@@ -504,18 +494,6 @@ class FederationManager:
             handoff_nonce=handoff.handoff_nonce,
         )
 
-    def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
-        heartbeat = peer.heartbeat()
-        active = self._store.active_federated_job_count(peer.peer_id) if self._store is not None else 0
-        return controller_pb2.Controller.PeerSummary(
-            peer_id=peer.peer_id,
-            controller_address=peer.controller_address,
-            reachable=heartbeat.reachable,
-            last_contact_ms=heartbeat.last_contact_ms,
-            active_federated_jobs=active,
-            backends=heartbeat.backends,
-        )
-
     def _build_observation(self, peer: FederationPeer) -> FederationPeerObservation:
         heartbeat = peer.heartbeat()
         active = self._store.active_federated_job_count(peer.peer_id) if self._store is not None else 0
@@ -525,15 +503,5 @@ class FederationManager:
             reachable=heartbeat.reachable,
             last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
-            backends=tuple(
-                FederationBackendObservation(
-                    backend_id=backend.backend_id,
-                    kind=backend.kind,
-                    worker_count=backend.worker_count,
-                    advertised_attributes={
-                        key: tuple(values.values) for key, values in backend.advertised_attributes.items()
-                    },
-                )
-                for backend in heartbeat.backends
-            ),
+            backends=heartbeat.backends,
         )

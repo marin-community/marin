@@ -117,7 +117,7 @@ def autoscaler_status_to_proto(status: AutoscalerStatus) -> vm_pb2.AutoscalerSta
                                 vm_id=vm.vm_id,
                                 slice_id=vm.slice_id,
                                 scale_group=vm.scale_group,
-                                state=vm.state,
+                                state=int(vm.state),
                                 address=vm.address,
                                 zone=vm.zone,
                                 created_at=(timestamp_to_proto(vm.created_at) if vm.created_at is not None else None),

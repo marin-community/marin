@@ -15,10 +15,11 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
     resource_value,
 )
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from tests.cluster.controller.conftest import (
     MockController,
@@ -148,8 +149,8 @@ def test_effective_band_no_limit_row_uses_defaults():
 
 
 @pytest.fixture
-def service(state, tmp_path, log_client) -> ControllerServiceImpl:
-    """ControllerServiceImpl wired with static-provider auth so that
+def service(state, tmp_path, log_client) -> LegacyControllerService:
+    """LegacyControllerService wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
     return make_controller_service(
         controller=MockController(),
@@ -157,7 +158,7 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         log_client=log_client,
         db=state._db,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 

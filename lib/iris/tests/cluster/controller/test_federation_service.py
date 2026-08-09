@@ -15,13 +15,15 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
+from iris.cluster.federation.protocol import FederationBackendObservation
 from iris.cluster.types import LOCAL_CLUSTER, JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2
+from iris.rpc.endpoint_service import EndpointServiceImpl
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from sqlalchemy import select
 
@@ -29,20 +31,20 @@ from .conftest import make_controller_service, make_job_request
 
 _IDENTITY = VerifiedIdentity(user_id="alice", role="user")
 
-_PEER_BACKEND = controller_pb2.Controller.BackendSummary(
+_PEER_BACKEND = FederationBackendObservation(
     backend_id="tpu-fleet",
     kind="worker-daemon",
     worker_count=3,
-    advertised_attributes={"device-type": controller_pb2.StringList(values=["tpu"])},
+    advertised_attributes={"device-type": ("tpu",)},
 )
 
 
 class _StubPeerConnection:
-    def __init__(self, backends: tuple[controller_pb2.Controller.BackendSummary, ...]):
+    def __init__(self, backends: tuple[FederationBackendObservation, ...]):
         self._backends = backends
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
-        return list(self._backends)
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
+        return self._backends
 
     def shutdown(self) -> None:
         pass
@@ -50,7 +52,7 @@ class _StubPeerConnection:
 
 def _attach_peer(
     mock_controller,
-    backends: tuple[controller_pb2.Controller.BackendSummary, ...] = (_PEER_BACKEND,),
+    backends: tuple[FederationBackendObservation, ...] = (_PEER_BACKEND,),
 ) -> FederationPeer:
     """Give the controller one reachable peer (already heartbeated once)."""
     peer = FederationPeer(
@@ -89,7 +91,7 @@ def test_client_set_federation_field_is_rejected_from_a_non_admin(state, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
         auth=ControllerAuth(provider="test-provider"),
     )
     request = make_job_request("forged", replicas=1)

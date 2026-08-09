@@ -3,10 +3,8 @@
 
 """Read-side helpers: module-level functions taking ``tx: db.Tx`` as first argument.
 
-Return shapes vary and are documented per-function: some return raw SA ``Row``
-objects (or ``Sequence[Row]`` / dicts of them), others return typed dataclasses
-(``ControlSnapshot``, ``RowCounts``, ``PendingTask``, ``ReconcileRow``, …) or
-plain sets/dicts of ids.
+Database rows are converted here into frozen records before they cross the
+persistence boundary.
 
 Areas covered:
   budgets         — user budgets
@@ -22,7 +20,7 @@ Areas covered:
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Protocol, cast
+from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, and_, bindparam, case, exists, func, literal_column, or_, select, text, tuple_
@@ -31,7 +29,6 @@ from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.persistence.attempt_counts import failure_count_expr, preemption_count_expr
 from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.json_codec import (
-    WorkerMetadataRow,
     decode_attribute_value,
     device_counts_from_json,
     resource_spec_from_scalars,
@@ -61,6 +58,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
+    AttemptRecord,
     RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
@@ -121,6 +119,81 @@ class PendingDispatchRow:
     # Requested container security profile (job_config). UNSPECIFIED(0) resolves
     # to DEFAULT when the backend applies it.
     container_profile: ContainerProfile
+
+
+@dataclass(frozen=True, slots=True)
+class RunningTaskBandRecord:
+    """Running Task coordinates and resource basis used by scheduling policy."""
+
+    task_id: JobName
+    priority_band: int
+    worker_id: WorkerId
+    backend_id: str
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    has_coscheduling: bool
+
+
+@dataclass(frozen=True, slots=True)
+class JobRecord:
+    """Persisted Job and configuration fields consumed outside persistence."""
+
+    job_id: JobName
+    state: int
+    submitted_at_ms: Timestamp
+    root_submitted_at_ms: Timestamp
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    scheduling_deadline_epoch_ms: int | None
+    error: str | None
+    exit_code: int | None
+    num_tasks: int
+    name: str
+    depth: int
+    parent_job_id: JobName | None
+    backend_id: str
+    cluster: str
+    submitting_user: str
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    constraints_json: str | None
+    has_coscheduling: bool
+    coscheduling_group_by: str
+    scheduling_timeout_ms: int | None
+    max_task_failures: int
+    entrypoint_json: str
+    environment_json: str
+    bundle_id: str
+    ports_json: list[str]
+    max_retries_failure: int
+    max_retries_preemption: int
+    timeout_ms: int | None
+    preemption_policy: int
+    existing_job_policy: int
+    priority_band: int
+    task_image: str
+    container_profile: int
+    submit_argv_json: list[str]
+    fail_if_exists: bool
+    direction: int | None = None
+    peer_id: str | None = None
+    handoff_state: int | None = None
+    handoff_nonce: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserSpendRecord:
+    """Per-Job resource basis for active non-batch budget spend."""
+
+    job_id: JobName
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_device_json: str | None
+    task_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +564,97 @@ def job_coordinates(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, JobCoor
     }
 
 
+JOB_RECORD_COLS = (
+    jobs_table.c.job_id,
+    jobs_table.c.state,
+    jobs_table.c.submitted_at_ms,
+    jobs_table.c.root_submitted_at_ms,
+    jobs_table.c.started_at_ms,
+    jobs_table.c.finished_at_ms,
+    jobs_table.c.scheduling_deadline_epoch_ms,
+    jobs_table.c.error,
+    jobs_table.c.exit_code,
+    jobs_table.c.num_tasks,
+    jobs_table.c.name,
+    jobs_table.c.depth,
+    jobs_table.c.parent_job_id,
+    jobs_table.c.backend_id,
+    jobs_table.c.cluster,
+    jobs_table.c.submitting_user,
+    job_config_table.c.res_cpu_millicores,
+    job_config_table.c.res_memory_bytes,
+    job_config_table.c.res_disk_bytes,
+    job_config_table.c.res_device_json,
+    job_config_table.c.constraints_json,
+    job_config_table.c.has_coscheduling,
+    job_config_table.c.coscheduling_group_by,
+    job_config_table.c.scheduling_timeout_ms,
+    job_config_table.c.max_task_failures,
+    job_config_table.c.entrypoint_json,
+    job_config_table.c.environment_json,
+    job_config_table.c.bundle_id,
+    job_config_table.c.ports_json,
+    job_config_table.c.max_retries_failure,
+    job_config_table.c.max_retries_preemption,
+    job_config_table.c.timeout_ms,
+    job_config_table.c.preemption_policy,
+    job_config_table.c.existing_job_policy,
+    job_config_table.c.priority_band,
+    job_config_table.c.task_image,
+    job_config_table.c.container_profile,
+    job_config_table.c.submit_argv_json,
+    job_config_table.c.fail_if_exists,
+)
+
+
+def _job_record(row: Row, *, federation: bool) -> JobRecord:
+    return JobRecord(
+        job_id=row.job_id,
+        state=row.state,
+        submitted_at_ms=row.submitted_at_ms,
+        root_submitted_at_ms=row.root_submitted_at_ms,
+        started_at_ms=row.started_at_ms,
+        finished_at_ms=row.finished_at_ms,
+        scheduling_deadline_epoch_ms=row.scheduling_deadline_epoch_ms,
+        error=row.error,
+        exit_code=row.exit_code,
+        num_tasks=row.num_tasks,
+        name=row.name,
+        depth=row.depth,
+        parent_job_id=row.parent_job_id,
+        backend_id=row.backend_id,
+        cluster=row.cluster,
+        submitting_user=row.submitting_user,
+        res_cpu_millicores=row.res_cpu_millicores,
+        res_memory_bytes=row.res_memory_bytes,
+        res_disk_bytes=row.res_disk_bytes,
+        res_device_json=row.res_device_json,
+        constraints_json=row.constraints_json,
+        has_coscheduling=row.has_coscheduling,
+        coscheduling_group_by=row.coscheduling_group_by,
+        scheduling_timeout_ms=row.scheduling_timeout_ms,
+        max_task_failures=row.max_task_failures,
+        entrypoint_json=row.entrypoint_json,
+        environment_json=row.environment_json,
+        bundle_id=row.bundle_id,
+        ports_json=row.ports_json,
+        max_retries_failure=row.max_retries_failure,
+        max_retries_preemption=row.max_retries_preemption,
+        timeout_ms=row.timeout_ms,
+        preemption_policy=row.preemption_policy,
+        existing_job_policy=row.existing_job_policy,
+        priority_band=row.priority_band,
+        task_image=row.task_image,
+        container_profile=row.container_profile,
+        submit_argv_json=row.submit_argv_json,
+        fail_if_exists=row.fail_if_exists,
+        direction=row.direction if federation else None,
+        peer_id=row.peer_id if federation else None,
+        handoff_state=row.handoff_state if federation else None,
+        handoff_nonce=row.handoff_nonce if federation else None,
+    )
+
+
 def list_resource_jobs(
     tx: Tx,
     *,
@@ -502,12 +666,11 @@ def list_resource_jobs(
     execution_cluster: str | None,
     offset: int,
     limit: int,
-) -> Sequence[Row]:
+) -> list[JobRecord]:
     """Read one ordered Job page with configuration and federation coordinates."""
     stmt = (
         select(
-            *jobs_table.c,
-            *job_config_table.c,
+            *JOB_RECORD_COLS,
             federated_jobs_table.c.direction,
             federated_jobs_table.c.peer_id,
             federated_jobs_table.c.handoff_state,
@@ -535,7 +698,7 @@ def list_resource_jobs(
         stmt = stmt.where(jobs_table.c.backend_id == backend_id)
     if execution_cluster is not None:
         stmt = stmt.where(jobs_table.c.cluster == execution_cluster)
-    return tx.execute(stmt).all()
+    return [_job_record(row, federation=True) for row in tx.execute(stmt).all()]
 
 
 def resource_job_states(tx: Tx, resource_ids: Sequence[str]) -> dict[str, int]:
@@ -602,54 +765,17 @@ def probe_database(tx: Tx, checkpoint_epoch_key: str) -> int | None:
     return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
 
-def get_job_detail(tx: Tx, job_id: JobName):
-    """Return SA Row for ``job_id`` (joined with job_config) or None."""
-    return tx.execute(
+def get_job_detail(tx: Tx, job_id: JobName) -> JobRecord | None:
+    """Return the persisted Job and configuration, or ``None``."""
+    row = tx.execute(
         select(
-            jobs_table.c.job_id,
-            jobs_table.c.state,
-            jobs_table.c.submitted_at_ms,
-            jobs_table.c.root_submitted_at_ms,
-            jobs_table.c.started_at_ms,
-            jobs_table.c.finished_at_ms,
-            jobs_table.c.scheduling_deadline_epoch_ms,
-            jobs_table.c.error,
-            jobs_table.c.exit_code,
-            jobs_table.c.num_tasks,
-            jobs_table.c.name,
-            jobs_table.c.depth,
-            jobs_table.c.parent_job_id,
-            jobs_table.c.backend_id,
-            jobs_table.c.cluster,
-            jobs_table.c.submitting_user,
-            job_config_table.c.res_cpu_millicores,
-            job_config_table.c.res_memory_bytes,
-            job_config_table.c.res_disk_bytes,
-            job_config_table.c.res_device_json,
-            job_config_table.c.constraints_json,
-            job_config_table.c.has_coscheduling,
-            job_config_table.c.coscheduling_group_by,
-            job_config_table.c.scheduling_timeout_ms,
-            job_config_table.c.max_task_failures,
-            job_config_table.c.entrypoint_json,
-            job_config_table.c.environment_json,
-            job_config_table.c.bundle_id,
-            job_config_table.c.ports_json,
-            job_config_table.c.max_retries_failure,
-            job_config_table.c.max_retries_preemption,
-            job_config_table.c.timeout_ms,
-            job_config_table.c.preemption_policy,
-            job_config_table.c.existing_job_policy,
-            job_config_table.c.priority_band,
-            job_config_table.c.task_image,
-            job_config_table.c.container_profile,
-            job_config_table.c.submit_argv_json,
-            job_config_table.c.fail_if_exists,
+            *JOB_RECORD_COLS,
         )
         .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
         .where(jobs_table.c.job_id == bindparam("job_id")),
         {"job_id": job_id},
     ).first()
+    return _job_record(row, federation=False) if row is not None else None
 
 
 def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, dict]:
@@ -948,13 +1074,27 @@ _RUNNING_TASK_BAND_STMT = (
 )
 
 
-def running_task_band_rows(tx: Tx) -> Sequence[Row]:
-    """Return RUNNING worker-bound tasks with band, worker, and resource columns.
+def running_task_band_rows(tx: Tx) -> tuple[RunningTaskBandRecord, ...]:
+    """Return RUNNING worker-bound tasks with scheduling coordinates.
 
     The band is ``tasks.priority_band`` (stamped at assignment time), not the
     immutable requested band in ``job_config``.
     """
-    return tx.execute(_RUNNING_TASK_BAND_STMT, {"state": TaskState.RUNNING}).all()
+    rows = tx.execute(_RUNNING_TASK_BAND_STMT, {"state": TaskState.RUNNING}).all()
+    return tuple(
+        RunningTaskBandRecord(
+            task_id=row.task_id,
+            priority_band=row.priority_band,
+            worker_id=row.worker_id,
+            backend_id=row.backend_id,
+            res_cpu_millicores=row.res_cpu_millicores,
+            res_memory_bytes=row.res_memory_bytes,
+            res_disk_bytes=row.res_disk_bytes,
+            res_device_json=row.res_device_json,
+            has_coscheduling=row.has_coscheduling,
+        )
+        for row in rows
+    )
 
 
 _USER_SPEND_STMT = (
@@ -972,7 +1112,7 @@ _USER_SPEND_STMT = (
 )
 
 
-def user_spend_rows(tx: Tx) -> Sequence[Row]:
+def user_spend_rows(tx: Tx) -> tuple[UserSpendRecord, ...]:
     """Return per-job resource rows for active, non-BATCH tasks (budget spend basis).
 
     Each row carries ``(job_id, res_cpu_millicores, res_memory_bytes,
@@ -980,7 +1120,16 @@ def user_spend_rows(tx: Tx) -> Sequence[Row]:
     requested band) drives the BATCH exclusion, not the stamped
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
     """
-    return tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
+    return tuple(
+        UserSpendRecord(
+            job_id=row.job_id,
+            res_cpu_millicores=row.res_cpu_millicores,
+            res_memory_bytes=row.res_memory_bytes,
+            res_device_json=row.res_device_json,
+            task_count=row.task_count,
+        )
+        for row in tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1017,10 +1166,30 @@ _RECENT_ATTEMPT_TIME = case(
 )
 
 
+def _attempt_record(row: Row) -> AttemptRecord:
+    return AttemptRecord(
+        task_id=row.task_id,
+        attempt_id=row.attempt_id,
+        worker_id=row.worker_id,
+        state=row.state,
+        created_at_ms=row.created_at_ms,
+        started_at_ms=row.started_at_ms,
+        finished_at_ms=row.finished_at_ms,
+        exit_code=row.exit_code,
+        error=row.error,
+        attempt_uid=row.attempt_uid,
+        backend_id=row.backend_id,
+        pod_name=row.pod_name,
+        pod_uid=row.pod_uid,
+        node_name=row.node_name,
+        terminal_reason=row.terminal_reason,
+    )
+
+
 def bulk_get_attempts(
     tx: Tx,
     keys: Sequence[tuple[JobName, int]],
-) -> dict[tuple[JobName, int], object]:
+) -> dict[tuple[JobName, int], AttemptRecord]:
     """Return ``{(task_id, attempt_id): Row}`` for the requested keys.
 
     Drives lookups through the ``task_attempts`` PK. Missing keys are silently
@@ -1030,35 +1199,35 @@ def bulk_get_attempts(
     if not keys:
         return {}
     unique: list[tuple[JobName, int]] = list({k: None for k in keys}.keys())
-    result: dict[tuple[JobName, int], object] = {}
+    result: dict[tuple[JobName, int], AttemptRecord] = {}
     for chunk_start in range(0, len(unique), _BULK_GET_CHUNK_SIZE):
         chunk = unique[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
         rows = tx.execute(_BULK_GET_ATTEMPTS_STMT, {"keys": chunk}).all()
         for row in rows:
-            result[(row.task_id, row.attempt_id)] = row
+            result[(row.task_id, row.attempt_id)] = _attempt_record(row)
     return result
 
 
-def recent_attempts_for_worker(tx: Tx, worker_id: WorkerId, *, limit: int) -> Sequence[Row]:
+def recent_attempts_for_worker(tx: Tx, worker_id: WorkerId, *, limit: int) -> tuple[AttemptRecord, ...]:
     """Return the newest retained attempts for one worker-backed Node."""
-    return tx.execute(
+    rows = tx.execute(
         select(*ATTEMPT_COLS)
         .where(task_attempts_table.c.worker_id == bindparam("worker_id"))
         .order_by(_RECENT_ATTEMPT_TIME.desc(), task_attempts_table.c.task_id, task_attempts_table.c.attempt_id.desc())
         .limit(limit),
         {"worker_id": worker_id},
     ).all()
+    return tuple(_attempt_record(row) for row in rows)
 
 
-def attempts_for_task(tx: Tx, task_id: JobName) -> tuple[Row, ...]:
+def attempts_for_task(tx: Tx, task_id: JobName) -> tuple[AttemptRecord, ...]:
     """Return one Task's retained Attempt history in Attempt order."""
-    return tuple(
-        tx.execute(
-            select(*ATTEMPT_COLS)
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
-    )
+    rows = tx.execute(
+        select(*ATTEMPT_COLS)
+        .where(task_attempts_table.c.task_id == task_id)
+        .order_by(task_attempts_table.c.attempt_id.asc())
+    ).all()
+    return tuple(_attempt_record(row) for row in rows)
 
 
 def recent_attempts_for_provider_node(
@@ -1067,9 +1236,9 @@ def recent_attempts_for_provider_node(
     provider_node_id: str,
     *,
     limit: int,
-) -> Sequence[Row]:
+) -> tuple[AttemptRecord, ...]:
     """Return the newest retained attempts observed on one direct-provider Node."""
-    return tx.execute(
+    rows = tx.execute(
         select(*ATTEMPT_COLS)
         .where(
             task_attempts_table.c.backend_id == bindparam("backend_id"),
@@ -1079,6 +1248,7 @@ def recent_attempts_for_provider_node(
         .limit(limit),
         {"backend_id": backend_id, "provider_node_id": provider_node_id},
     ).all()
+    return tuple(_attempt_record(row) for row in rows)
 
 
 def attempt_counts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, AttemptCounts]:
@@ -1130,7 +1300,7 @@ def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName,
     }
 
 
-def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[AttemptRecord, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
     Returns the complete attempt history per task, with no per-task cap.
@@ -1143,9 +1313,9 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
     ).all()
-    grouped: dict[JobName, list[object]] = {}
+    grouped: dict[JobName, list[AttemptRecord]] = {}
     for row in rows:
-        grouped.setdefault(row.task_id, []).append(row)
+        grouped.setdefault(row.task_id, []).append(_attempt_record(row))
     return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
 
 
@@ -1621,12 +1791,12 @@ WORKER_DETAIL_COLS = (
 )
 
 
-class WorkerRecord(WorkerMetadataRow, Protocol):
-    """Typed read boundary for the worker fields consumed by resources."""
+@dataclass(frozen=True, slots=True)
+class WorkerRecord:
+    """Persisted Worker fields consumed outside persistence."""
 
     worker_id: WorkerId
     address: str
-    scale_group: str
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -1634,23 +1804,80 @@ class WorkerRecord(WorkerMetadataRow, Protocol):
     device_type: str
     device_variant: str
     slice_id: str | None
+    md_hostname: str
+    md_ip_address: str
+    md_cpu_count: int
+    md_memory_bytes: int
     md_disk_bytes: int
+    md_tpu_name: str
+    md_tpu_worker_hostnames: str
+    md_tpu_worker_id: str
+    md_tpu_chips_per_host_bounds: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_instance_name: str
+    md_gce_zone: str
+    md_device_json: str | None
+    md_provenance_json: str | None
+    scale_group: str
 
 
-def all_worker_details(tx: Tx) -> Sequence[WorkerRecord]:
+@dataclass(frozen=True, slots=True)
+class WorkerAttributeRecord:
+    """One persisted typed Worker attribute."""
+
+    worker_id: WorkerId
+    key: str
+    value_type: str
+    str_value: str | None
+    int_value: int | None
+    float_value: float | None
+
+
+def _worker_record(row: Row) -> WorkerRecord:
+    return WorkerRecord(
+        worker_id=row.worker_id,
+        address=row.address,
+        total_cpu_millicores=row.total_cpu_millicores,
+        total_memory_bytes=row.total_memory_bytes,
+        total_gpu_count=row.total_gpu_count,
+        total_tpu_count=row.total_tpu_count,
+        device_type=row.device_type,
+        device_variant=row.device_variant,
+        slice_id=row.slice_id,
+        md_hostname=row.md_hostname,
+        md_ip_address=row.md_ip_address,
+        md_cpu_count=row.md_cpu_count,
+        md_memory_bytes=row.md_memory_bytes,
+        md_disk_bytes=row.md_disk_bytes,
+        md_tpu_name=row.md_tpu_name,
+        md_tpu_worker_hostnames=row.md_tpu_worker_hostnames,
+        md_tpu_worker_id=row.md_tpu_worker_id,
+        md_tpu_chips_per_host_bounds=row.md_tpu_chips_per_host_bounds,
+        md_gpu_count=row.md_gpu_count,
+        md_gpu_name=row.md_gpu_name,
+        md_gpu_memory_mb=row.md_gpu_memory_mb,
+        md_gce_instance_name=row.md_gce_instance_name,
+        md_gce_zone=row.md_gce_zone,
+        md_device_json=row.md_device_json,
+        md_provenance_json=row.md_provenance_json,
+        scale_group=row.scale_group,
+    )
+
+
+def all_worker_details(tx: Tx) -> tuple[WorkerRecord, ...]:
     """Return the complete registered Worker roster."""
-    return cast(Sequence[WorkerRecord], tx.execute(select(*WORKER_DETAIL_COLS)).all())
+    return tuple(_worker_record(row) for row in tx.execute(select(*WORKER_DETAIL_COLS)).all())
 
 
 def get_worker_detail(tx: Tx, worker_id: WorkerId) -> WorkerRecord | None:
-    """Return SA Row for ``worker_id`` or None."""
-    return cast(
-        WorkerRecord | None,
-        tx.execute(
-            select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id == bindparam("worker_id")),
-            {"worker_id": worker_id},
-        ).first(),
-    )
+    """Return the persisted Worker, or ``None``."""
+    row = tx.execute(
+        select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id == bindparam("worker_id")),
+        {"worker_id": worker_id},
+    ).first()
+    return _worker_record(row) if row is not None else None
 
 
 def worker_detail_page_in_scale_groups(
@@ -1660,7 +1887,7 @@ def worker_detail_page_in_scale_groups(
     after_worker_id: WorkerId | None,
     include_after: bool,
     limit: int,
-) -> Sequence[WorkerRecord]:
+) -> tuple[WorkerRecord, ...]:
     """Return one worker-id-keyset page owned by the listed scale groups."""
     if not scale_groups:
         return ()
@@ -1674,9 +1901,9 @@ def worker_detail_page_in_scale_groups(
         )
         stmt = stmt.where(comparison)
         params["after_worker_id"] = after_worker_id
-    return cast(
-        Sequence[WorkerRecord],
-        tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all(),
+    return tuple(
+        _worker_record(row)
+        for row in tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all()
     )
 
 
@@ -1687,7 +1914,7 @@ def worker_detail_page_outside_scale_groups(
     after_worker_id: WorkerId | None,
     include_after: bool,
     limit: int,
-) -> Sequence[WorkerRecord]:
+) -> tuple[WorkerRecord, ...]:
     """Return one worker-id-keyset page outside scale groups owned by other backends."""
     stmt = select(*WORKER_DETAIL_COLS)
     params: dict[str, object] = {"limit": limit}
@@ -1702,17 +1929,17 @@ def worker_detail_page_outside_scale_groups(
         )
         stmt = stmt.where(comparison)
         params["after_worker_id"] = after_worker_id
-    return cast(
-        Sequence[WorkerRecord],
-        tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all(),
+    return tuple(
+        _worker_record(row)
+        for row in tx.execute(stmt.order_by(workers_table.c.worker_id).limit(bindparam("limit")), params).all()
     )
 
 
-def worker_attribute_rows(tx: Tx, worker_ids: Sequence[WorkerId]) -> Sequence[Row]:
+def worker_attribute_rows(tx: Tx, worker_ids: Sequence[WorkerId]) -> tuple[WorkerAttributeRecord, ...]:
     """Return persisted attributes for one bounded worker page."""
     if not worker_ids:
         return ()
-    return tx.execute(
+    rows = tx.execute(
         select(
             worker_attributes_table.c.worker_id,
             worker_attributes_table.c.key,
@@ -1723,6 +1950,17 @@ def worker_attribute_rows(tx: Tx, worker_ids: Sequence[WorkerId]) -> Sequence[Ro
         ).where(worker_attributes_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
         {"worker_ids": list(worker_ids)},
     ).all()
+    return tuple(
+        WorkerAttributeRecord(
+            worker_id=row.worker_id,
+            key=row.key,
+            value_type=row.value_type,
+            str_value=row.str_value,
+            int_value=row.int_value,
+            float_value=row.float_value,
+        )
+        for row in rows
+    )
 
 
 def worker_attributes_by_id(
@@ -2019,7 +2257,8 @@ _EXECUTION_TIMEOUT_STMT = (
 )
 
 
-class ExecutionTimeoutRow(Protocol):
+@dataclass(frozen=True, slots=True)
+class ExecutionTimeoutRow:
     """Persisted execution-deadline fields consumed by the control loop."""
 
     task_id: JobName
@@ -2033,9 +2272,16 @@ def scan_execution_timeout_rows(tx: Tx) -> Sequence[ExecutionTimeoutRow]:
     Whether a task has actually exceeded its deadline is left to the caller,
     which holds the tick clock; this only returns the candidates.
     """
-    return cast(
-        Sequence[ExecutionTimeoutRow],
-        tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": list(_EXECUTING_TASK_STATES)}).all(),
+    return tuple(
+        ExecutionTimeoutRow(
+            task_id=row.task_id,
+            started_at_ms=row.started_at_ms,
+            timeout_ms=row.timeout_ms,
+        )
+        for row in tx.execute(
+            _EXECUTION_TIMEOUT_STMT,
+            {"executing_states": list(_EXECUTING_TASK_STATES)},
+        ).all()
     )
 
 

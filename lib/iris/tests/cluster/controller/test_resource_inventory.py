@@ -19,7 +19,7 @@ from iris.backends.status import (
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
@@ -131,7 +131,7 @@ def resources(tmp_path: Path):
         db=db,
         runtime=runtime,
         bundle_store=Mock(),
-        endpoint_service=Mock(),
+        endpoint_registry=Mock(),
         auth=ControllerAuth(),
         user_budget_defaults=UserBudgetDefaults(),
         capability_url_config=CapabilityUrlConfig(),
@@ -168,7 +168,7 @@ def worker_resources(tmp_path: Path):
         db=db,
         runtime=runtime,
         bundle_store=Mock(),
-        endpoint_service=Mock(),
+        endpoint_registry=Mock(),
         auth=ControllerAuth(),
         user_budget_defaults=UserBudgetDefaults(),
         capability_url_config=CapabilityUrlConfig(),
@@ -214,7 +214,7 @@ def test_nodes_filter_page_and_describe_an_exact_incarnation(resources: Controll
 def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> None:
     db = ControllerDB(tmp_path / "system-endpoint-db")
     EndpointsProjection(db)
-    endpoint_service = EndpointServiceImpl(db=db)
+    endpoint_service = EndpointRegistry(db=db)
     endpoint_service.register_system_endpoint("/system/controller", "http://controller:8080")
     endpoint_service.register_system_endpoint("/system/log-server", "http://logs:9000")
     runtime = Mock()
@@ -224,7 +224,7 @@ def test_system_endpoints_are_resource_visible_and_paginated(tmp_path: Path) -> 
         db=db,
         runtime=runtime,
         bundle_store=Mock(),
-        endpoint_service=endpoint_service,
+        endpoint_registry=endpoint_service,
         auth=ControllerAuth(),
         user_budget_defaults=UserBudgetDefaults(),
         capability_url_config=CapabilityUrlConfig(),

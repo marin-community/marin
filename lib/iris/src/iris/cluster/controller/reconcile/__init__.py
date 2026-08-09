@@ -1,24 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reconcile kernel: a pure state machine over a closed snapshot, plus thin I/O.
+"""Plan canonical state transitions from a closed controller snapshot.
 
-The package surface is the **pure** kernel API — importing it pulls in no
-``db`` / ``schema`` / ``projections``, so a pure submodule (``task``, ``job``,
-``peers``, ``overlay``) stays import-clean even though Python evaluates this
-``__init__`` first:
-
-* :func:`load_closed_snapshot`'s output, :class:`TransitionSnapshot`, is built
-  by the loader; the neutral inputs callers construct are :class:`TaskUpdate`,
-  :class:`TerminalDecision`, :class:`TerminalKind`.
-* :class:`ReconcileState` is the batch facade; ``.open(snapshot).<verb>(...)``
-  runs one operation and returns a :class:`ControllerEffects`.
-
-The two I/O boundary helpers are intentionally NOT re-exported here so this
-surface stays pure — the I/O command layer imports them from their own modules:
-
-* ``load_closed_snapshot`` from :mod:`iris.cluster.controller.persistence.reconcile.loader`
-* ``commit_effects`` from :mod:`iris.cluster.controller.persistence.reconcile.commit`
+``ReconcileState`` consumes a ``TransitionSnapshot`` plus task, worker, and peer
+observations. Each operation returns ``ControllerEffects`` for the persistence
+layer to commit atomically. Snapshot loading and effect commits live in
+``controller.persistence.reconcile``; this package owns only transition policy.
 """
 
 from iris.cluster.controller.reconcile.batches import ReconcileState

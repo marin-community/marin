@@ -13,7 +13,7 @@ from iris.cluster.local_cluster import LocalCluster
 from iris.resources.execution import Entrypoint, Environment, ResourceSpec, build_runtime_entrypoint
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.legacy_job_codec import resource_spec_to_proto, runtime_entrypoint_to_proto
+from iris.rpc.legacy.job_codec import resource_spec_to_proto, runtime_entrypoint_to_proto
 from iris.version import client_revision_date
 from rigging.server_auth import (
     AuthRequest,

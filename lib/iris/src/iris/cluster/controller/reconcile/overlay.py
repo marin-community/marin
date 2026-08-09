@@ -175,7 +175,7 @@ class Overlay:
         if delta is not None and delta.finished_at is not None:
             return delta.finished_at.epoch_ms()
         row = self._snapshot.attempts.get((task_id, attempt_id))
-        return row.finished_at_ms if row is not None else None
+        return row.finished_at_ms.epoch_ms() if row is not None and row.finished_at_ms is not None else None
 
     def active_tasks_for_job(
         self,

@@ -3,7 +3,7 @@
 
 """Tests for job lifecycle operations through the RPC service layer.
 
-These tests exercise the ControllerServiceImpl API parameterized across
+These tests exercise the legacy controller-service API parameterized across
 both GCP and K8s providers via the ServiceTestHarness.
 """
 

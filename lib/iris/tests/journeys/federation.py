@@ -8,12 +8,17 @@ from pathlib import Path
 import pytest
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
-from iris.cluster.controller.jobs import FederationSubmission
-from iris.cluster.controller.runtime import ControllerRuntime
-from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
-from iris.cluster.federation.manager import FederationPeerObservation
-from iris.cluster.federation.peer import FederationPeer, HandoffDelivery
-from iris.cluster.federation.protocol import FederationSyncBatch
+from iris.cluster.controller.job import FederationSubmission
+from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.federation.peer import FederationPeer
+from iris.cluster.federation.protocol import (
+    FederationBackendObservation,
+    FederationPeerObservation,
+    FederationSyncBatch,
+    HandoffDelivery,
+    PeerCallError,
+    PeerErrorCode,
+)
 from iris.cluster.types import JobName
 from iris.resources.action import ActionReceipt
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
@@ -23,6 +28,7 @@ from iris.resources.system import ProcessInfo
 from iris.resources.task import TaskSummary
 from iris.rpc import controller_pb2, resource_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.federation_client import federation_batch_from_legacy
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.resource_client_codec import (
     action_receipt_from_proto,
@@ -46,7 +52,7 @@ _PEER_IDENTITY = VerifiedIdentity(user_id=PARENT_CLUSTER_ID, role=FEDERATION_PEE
 class InProcessPeerConnection:
     """Authenticated parent-to-peer RPCs against a real in-process service."""
 
-    def __init__(self, controller: ControllerRuntime) -> None:
+    def __init__(self, controller: ControllerProcess) -> None:
         self._controller = controller
         self._resources = ResourceServiceImpl(controller.controller)
         self._reachable = True
@@ -56,11 +62,11 @@ class InProcessPeerConnection:
 
     def _require_reachable(self) -> None:
         if not self._reachable:
-            raise ConnectionError("peer-b is unreachable")
+            raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer-b is unreachable")
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
         self._require_reachable()
-        return [controller_pb2.Controller.BackendSummary(backend_id="default")]
+        return (FederationBackendObservation(backend_id="default"),)
 
     def launch_job(self, delivery: HandoffDelivery) -> None:
         self._require_reachable()
@@ -191,7 +197,7 @@ class FederationJourney:
             peer_configs={PEER_ID: PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS)},
             federation_peers=[self._federation_peer],
         )
-        self.manager = self.parent.controller.federation
+        self.manager = self.parent.controller.runtime.federation
 
     def close(self) -> None:
         self.parent.close()
@@ -242,7 +248,7 @@ class FederationJourney:
 
     def restart_parent(self) -> None:
         self.parent.restart()
-        self.manager = self.parent.controller.federation
+        self.manager = self.parent.controller.runtime.federation
 
     def parent_job(self, job: JobRef) -> JobDetail:
         return self.parent.job(job)
@@ -257,5 +263,5 @@ class FederationJourney:
         return list(self.peer.tasks(job))
 
     def peer_summary(self) -> FederationPeerObservation:
-        (summary,) = self.parent.controller.federation.peer_observations()
+        (summary,) = self.parent.controller.runtime.federation.peer_observations()
         return summary

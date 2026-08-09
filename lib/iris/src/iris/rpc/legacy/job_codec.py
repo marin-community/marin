@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codecs for the protobuf task-launch and retired ControllerService wires."""
+"""Codecs shared by task-launch and the legacy job-oriented RPC wire."""
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
 from iris.resources.execution import (

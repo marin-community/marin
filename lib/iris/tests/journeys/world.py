@@ -11,12 +11,13 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.checkpoint import CheckpointResult, download_checkpoint_to_local
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
-from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
@@ -140,7 +141,7 @@ class JourneyWorld:
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
 
-    def _build_controller(self, db: ControllerDB) -> tuple[ControllerRuntime, dict[str, ScriptedTaskBackend]]:
+    def _build_controller(self, db: ControllerDB) -> tuple[ControllerProcess, dict[str, ScriptedTaskBackend]]:
         self._incarnation += 1
         state_dir = self.root / f"controller-{self._incarnation}"
         config = ControllerConfig(
@@ -170,7 +171,7 @@ class JourneyWorld:
             worker_token=None,
         )
         self.log_stack = log_stack
-        controller = compose_controller_runtime(
+        controller = compose_controller_process(
             config=config,
             backends=backends,
             log_stack=log_stack,
@@ -195,7 +196,7 @@ class JourneyWorld:
         self._check_invariants()
 
     def checkpoint(self) -> tuple[str, CheckpointResult]:
-        path, result = self.controller.begin_checkpoint()
+        path, result = self.controller.runtime.begin_checkpoint()
         self._checkpoint_jobs[path] = frozenset(self._jobs)
         self.trace.append(f"checkpoint {path}")
         return path, result
@@ -448,7 +449,7 @@ class JourneyWorld:
         """Run ticks that must fail at the scripted backend boundary."""
         for _ in range(ticks):
             try:
-                self.controller.run_control_tick()
+                self.controller.runtime.run_control_tick()
             except ConnectionError:
                 self.trace.append("tick backend-unavailable")
                 self._check_invariants()
@@ -456,7 +457,7 @@ class JourneyWorld:
                 raise AssertionError(f"backend unexpectedly reconciled: {self.timeline}")
 
     def step(self) -> None:
-        self.controller.run_control_tick()
+        self.controller.runtime.run_control_tick()
         self.trace.append("tick")
         self._check_invariants()
 

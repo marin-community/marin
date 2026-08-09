@@ -10,19 +10,9 @@ from iris.rpc import resource_pb2
 
 _SOURCE_ROOT = Path(__file__).parents[1] / "src" / "iris"
 _GENERATED_IMPORT_SUFFIXES = ("_pb2", "_connect")
-_TRANSPORT_FREE_PACKAGES = (
-    "resources",
-    "cluster/controller/persistence",
-    "cluster/controller/reconcile",
-    "cluster/controller/scheduling",
-)
-_TRANSPORT_FREE_MODULES = (
-    "backends/protocol.py",
-    "backends/status.py",
-    "backends/k8s/tasks.py",
-    "backends/rpc/backend.py",
-    "cluster/controller/controller.py",
-)
+_TRANSPORT_FREE_PACKAGES = ("resources", "cluster/federation")
+_CONTROLLER_TRANSPORT_HOSTS = frozenset({"composition.py", "process.py"})
+_BACKEND_TRANSPORT_HOSTS = frozenset({"k8s/logship.py"})
 
 
 def _tracked_module(module: str) -> bool:
@@ -62,11 +52,28 @@ def _rpc_imports(paths: list[Path]) -> frozenset[tuple[str, str]]:
 
 def test_native_resource_and_controller_kernel_packages_do_not_import_rpc_transport() -> None:
     paths = [path for package in _TRANSPORT_FREE_PACKAGES for path in (_SOURCE_ROOT / package).rglob("*.py")]
-    paths.extend(_SOURCE_ROOT / module for module in _TRANSPORT_FREE_MODULES)
-
+    paths.extend(
+        path
+        for path in (_SOURCE_ROOT / "cluster" / "controller").rglob("*.py")
+        if path.relative_to(_SOURCE_ROOT / "cluster" / "controller").as_posix() not in _CONTROLLER_TRANSPORT_HOSTS
+    )
+    paths.extend(
+        path
+        for path in (_SOURCE_ROOT / "backends").rglob("*.py")
+        if path.relative_to(_SOURCE_ROOT / "backends").as_posix() not in _BACKEND_TRANSPORT_HOSTS
+    )
     violations = _rpc_imports(paths)
 
     assert not violations, f"RPC imports in native resource/controller packages: {sorted(violations)}"
+
+
+def test_worker_core_does_not_import_iris_rpc_transport() -> None:
+    paths = [path for path in (_SOURCE_ROOT / "cluster" / "worker").rglob("*.py") if path.name != "main.py"]
+    violations = {
+        (path, module) for path, module in _rpc_imports(paths) if module == "iris.rpc" or module.startswith("iris.rpc.")
+    }
+
+    assert not violations, f"Iris RPC imports in worker core: {sorted(violations)}"
 
 
 def test_resource_service_wire_is_independent_of_the_retired_job_wire() -> None:
@@ -93,7 +100,7 @@ def test_controller_sqlalchemy_is_confined_to_persistence() -> None:
 
 def test_rpc_adapters_do_not_import_controller_persistence() -> None:
     violations: list[tuple[str, str]] = []
-    for path in (_SOURCE_ROOT / "rpc").glob("*.py"):
+    for path in (_SOURCE_ROOT / "rpc").rglob("*.py"):
         tree = ast.parse(path.read_bytes(), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -120,8 +127,10 @@ def test_control_runtime_does_not_construct_transport_adapters() -> None:
         )
     }
     forbidden = {
-        "iris.cluster.controller.dashboard",
-        "iris.rpc.controller_service",
+        "iris.cluster.controller.process",
+        "iris.rpc.legacy.controller_service",
+        "iris.rpc.dashboard",
+        "iris.rpc.endpoint_service",
         "iris.rpc.resource_service",
     }
     assert imports.isdisjoint(forbidden), f"Transport composition leaked into ControllerRuntime: {imports & forbidden}"

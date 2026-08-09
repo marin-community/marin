@@ -12,6 +12,10 @@ class InvalidResourceKey(ResourceError, ValueError):
     """A logical or exact resource identifier is malformed."""
 
 
+class InvalidResourceRequest(ResourceError, ValueError):
+    """A resource operation request is malformed."""
+
+
 class InvalidPageToken(ResourceError, ValueError):
     """A page token is malformed or does not match its request."""
 
@@ -22,6 +26,22 @@ class ResourceNotFound(ResourceError):
 
 class ResourceReplaced(ResourceError):
     """A logical resource now names a different exact incarnation."""
+
+
+class ResourcePermissionDenied(ResourceError):
+    """The caller is not authorized to perform the resource operation."""
+
+
+class ResourcePreconditionFailed(ResourceError):
+    """The resource state does not satisfy an operation precondition."""
+
+
+class ResourceConflict(ResourceError):
+    """The requested resource conflicts with retained state."""
+
+
+class ResourceExhausted(ResourceError):
+    """The resource operation exceeds an admitted limit."""
 
 
 class BackendIdentityUnknown(ResourceError):

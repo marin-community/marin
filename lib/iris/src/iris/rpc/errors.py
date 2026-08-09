@@ -88,15 +88,6 @@ def connect_error_with_traceback(
     return ConnectError(code, message, details=[details])
 
 
-def format_exception_with_traceback(exc: Exception) -> str:
-    """Format an exception with its full traceback as a string.
-
-    Suitable for embedding in JobStatus.error field.
-    """
-    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    return f"{type(exc).__name__}: {exc}\n\nTraceback:\n{tb}"
-
-
 def extract_error_details(error: ConnectError):
     """Extract ErrorDetails from a ConnectError if present.
 

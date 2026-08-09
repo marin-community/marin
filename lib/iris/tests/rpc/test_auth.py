@@ -13,6 +13,7 @@ from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     JwtTokenManager,
 )
+from iris.resources.errors import ResourcePermissionDenied
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     FEDERATION_PEER_ROLE,
@@ -198,9 +199,8 @@ def test_authorize_resource_owner_same_user():
 
 def test_authorize_resource_owner_different_user_denied():
     with identity_scope(VerifiedIdentity(user_id="bob", role="user")):
-        with pytest.raises(ConnectError) as exc_info:
+        with pytest.raises(ResourcePermissionDenied, match="cannot access resources owned by 'alice'"):
             authorize_resource_owner("alice")
-        assert exc_info.value.code == Code.PERMISSION_DENIED
 
 
 def test_authorize_resource_owner_admin_can_access_any():

@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 from iris.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
+from iris.cluster.constraints import ConstraintMode, ConstraintOp
 from iris.cluster.types import JobName
 
 
@@ -58,3 +61,30 @@ def test_worker_region_absent_when_env_not_set(monkeypatch):
     info = get_job_info()
     assert info is not None
     assert info.worker_region is None
+
+
+def test_constraints_from_task_environment(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
+    monkeypatch.setenv(
+        "IRIS_JOB_CONSTRAINTS",
+        json.dumps(
+            [
+                {
+                    "key": "region",
+                    "op": "in",
+                    "values": ["us-east1", "us-west1"],
+                    "mode": "preferred",
+                }
+            ]
+        ),
+    )
+
+    info = get_job_info()
+
+    assert info is not None
+    assert len(info.constraints) == 1
+    constraint = info.constraints[0]
+    assert constraint.key == "region"
+    assert constraint.op is ConstraintOp.IN
+    assert constraint.mode is ConstraintMode.PREFERRED
+    assert tuple(item.value for item in constraint.values) == ("us-east1", "us-west1")

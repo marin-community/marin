@@ -31,9 +31,10 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
@@ -49,6 +50,7 @@ from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
+from iris.rpc.worker_runtime import worker_rpc_bindings
 from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
@@ -124,7 +126,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._cache_dir = cache_dir
         self._env_provider_factory = env_provider_factory
-        self._controller: LocalCluster | ControllerRuntime | None = None
+        self._controller: LocalCluster | ControllerProcess | None = None
         self._controller_port: int | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._container_runtime: DockerRuntime | None = None
@@ -178,7 +180,7 @@ class E2ECluster:
             host="127.0.0.1",
             worker_token=None,
         )
-        self._controller = compose_controller_runtime(
+        self._controller = compose_controller_process(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: RpcTaskBackend(worker_client=RpcWorkerClient(RpcWorkerStubFactory()))},
             log_stack=log_stack,
@@ -217,11 +219,15 @@ class E2ECluster:
             env_provider = None
             if self._env_provider_factory:
                 env_provider = self._env_provider_factory(i, self._num_workers)
+            rpc = worker_rpc_bindings(worker_config)
             worker = Worker(
                 worker_config,
                 bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
+                log_client=rpc.log_client,
+                controller=rpc.controller,
+                server=rpc.server,
             )
             worker.start()
             self._workers.append(worker)

@@ -17,10 +17,10 @@ from datetime import date
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.controller.admin import ControllerAdmin
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
+from iris.cluster.controller.operations import OperationalServices
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB
@@ -45,15 +45,16 @@ from iris.resources.job import (
     PriorityBand,
 )
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
-from iris.rpc.legacy_codec import job_spec_from_legacy_request, job_spec_to_legacy_request
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.legacy.job_codec import (
     constraint_to_proto,
     device_to_proto,
 )
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     device_from_proto as legacy_device_from_proto,
 )
+from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request, job_spec_to_legacy_request
 from iris.rpc.resource_codec import (
     device_from_proto,
     job_spec_from_proto,
@@ -137,28 +138,28 @@ def _controller_boundaries(
     log_client,
     *,
     initialize_projections: bool = True,
-) -> tuple[Controller, ControllerServiceImpl]:
+) -> tuple[Controller, LegacyControllerService]:
     if initialize_projections:
         ControllerTestState(db)
     bundle_store = BundleStore(storage_dir=str(tmp_path / "bundles"))
-    endpoint_service = EndpointServiceImpl(db=db)
+    endpoint_service = EndpointServiceImpl(EndpointRegistry(db=db))
     resources = Controller(
         cluster_id="test",
         db=db,
         runtime=mock_controller,
         bundle_store=bundle_store,
-        endpoint_service=endpoint_service,
+        endpoint_registry=endpoint_service.registry,
         auth=ControllerAuth(),
         user_budget_defaults=UserBudgetDefaults(),
         capability_url_config=CapabilityUrlConfig(cluster_name="test"),
         backends=mock_controller.backends,
         backend_configs={backend_id: BackendConfig(kind="worker_daemon") for backend_id in mock_controller.backends},
     )
-    legacy = ControllerServiceImpl(
+    legacy = LegacyControllerService(
         runtime=mock_controller,
         bundle_store=bundle_store,
         log_client=log_client,
-        admin=ControllerAdmin(db),
+        operations=OperationalServices.from_database(db),
         endpoint_service=endpoint_service,
         controller=resources,
     )

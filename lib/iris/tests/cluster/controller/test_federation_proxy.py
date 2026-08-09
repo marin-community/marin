@@ -38,8 +38,7 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
 )
 from iris.cluster.controller.controller import CapabilityUrlConfig
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoint_registry import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
@@ -52,7 +51,8 @@ from iris.cluster.controller.persistence import reads
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.dashboard import ControllerDashboard
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from rigging.server_auth import RequestAuthPolicy
 from rigging.timing import Duration, ExponentialBackoff
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
@@ -146,7 +146,7 @@ def _federation_auth(requester: str = PARENT_ID):
 
 
 def _register_endpoint(
-    peer_service: ControllerServiceImpl,
+    peer_service: LegacyControllerService,
     peer_state: ControllerTestState,
     job_id: JobName,
     address: str,
@@ -251,7 +251,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             mode=NativeProxyAuthMode.ENFORCING,
             federation_keys={PARENT_ID: parent_public_key},
         )
-        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
+        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.registry.proxy_registry_snapshot())))
         peer_url = peer_proxy.address
 
         # Parent dashboard: resolves the mirrored remote endpoint and forwards to the
@@ -276,7 +276,9 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             parent_decision_secret,
             mode=NativeProxyAuthMode.PERMISSIVE,
         )
-        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        parent_proxy.replace_registry(
+            json.dumps(asdict(parent_service.endpoint_service.registry.proxy_registry_snapshot()))
+        )
         parent_url = parent_proxy.address
 
         # The whole forward: parent /proxy -> federation bearer -> peer /proxy -> upstream.
@@ -307,7 +309,9 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id), None
         )
         manager.sync_once()
-        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        parent_proxy.replace_registry(
+            json.dumps(asdict(parent_service.endpoint_service.registry.proxy_registry_snapshot()))
+        )
 
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")

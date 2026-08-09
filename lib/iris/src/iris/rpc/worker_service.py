@@ -4,7 +4,6 @@
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -13,11 +12,8 @@ from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status
 from iris.cluster.stats.tables import ProfileTrigger
-from iris.cluster.worker.worker_types import TaskInfo
-from iris.resources.attempt import AttemptLaunch
-from iris.resources.endpoint import ExecResult, ProfileConfiguration
+from iris.cluster.worker.control import WorkerTaskProvider
 from iris.resources.state import TaskState
-from iris.resources.worker import WorkerReconcileRequest, WorkerReconcileResponse
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.worker_codec import (
@@ -32,34 +28,12 @@ from iris.rpc.worker_codec import (
 logger = logging.getLogger(__name__)
 
 
-class TaskProvider(Protocol):
-    """Protocol for task management operations.
-
-    Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
-    """
-
-    def submit_task(self, request: AttemptLaunch) -> str: ...
-    def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
-    def list_tasks(self) -> list[TaskInfo]: ...
-    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def handle_reconcile(self, request: WorkerReconcileRequest) -> WorkerReconcileResponse: ...
-    def capture_and_log_profile(
-        self,
-        *,
-        target: str,
-        duration: int,
-        profile: ProfileConfiguration,
-        trigger: ProfileTrigger,
-    ) -> bytes: ...
-    def exec_in_container(self, task_id: str, command: list[str], timeout_seconds: int = 60) -> ExecResult: ...
-
-
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
     def __init__(
         self,
-        provider: TaskProvider,
+        provider: WorkerTaskProvider,
     ):
         self._provider = provider
         self._timer = Timer()

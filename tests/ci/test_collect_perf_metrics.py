@@ -8,8 +8,8 @@ from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.resources.job import JobSummary
 from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskSummary
-from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 from scripts.ci import collect_perf_metrics
@@ -20,7 +20,7 @@ def _task(job: JobSummary, index: int) -> tuple[TaskSummary, TaskDetail]:
     identity = TaskIdentity(key, f"task-{index}")
     attempt = AttemptSummary(
         identity=AttemptIdentity(key, 0, f"attempt-{index}"),
-        state=job_pb2.TASK_STATE_SUCCEEDED,
+        state=TaskState.SUCCEEDED,
         execution_cluster_id="test",
         backend_id="default",
         node=None,
@@ -35,7 +35,7 @@ def _task(job: JobSummary, index: int) -> tuple[TaskSummary, TaskDetail]:
         identity=identity,
         job=job.identity,
         task_index=index,
-        state=job_pb2.TASK_STATE_SUCCEEDED,
+        state=TaskState.SUCCEEDED,
         execution_cluster_id="test",
         backend_id="default",
         current_attempt=attempt.identity,
@@ -57,7 +57,7 @@ def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
         identity=JobIdentity(job_key, "job-uid"),
         owner_id="owner",
         parent=None,
-        state=job_pb2.JOB_STATE_SUCCEEDED,
+        state=JobState.SUCCEEDED,
         execution_cluster_id="test",
         backend_id="default",
         num_tasks=3,

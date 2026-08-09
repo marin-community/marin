@@ -8,7 +8,7 @@ from pathlib import Path
 
 from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.runtime import ControllerConfig
@@ -169,7 +169,7 @@ class WorkerJourney:
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
         )
-        self.controller = compose_controller_runtime(
+        self.controller = compose_controller_process(
             config=config,
             backends={DEFAULT_BACKEND_ID: self.backend},
             log_stack=build_log_stack(
@@ -264,7 +264,7 @@ class WorkerJourney:
         )
 
     def step(self) -> None:
-        self.controller.run_control_tick()
+        self.controller.runtime.run_control_tick()
 
     def advance(self, seconds: float) -> None:
         self.clock.advance(seconds)

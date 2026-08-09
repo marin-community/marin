@@ -32,8 +32,9 @@ from iris.cli.connect import connect_controller, rpc_client
 from iris.client import IrisClient
 from iris.cluster.types import JobName, is_task_finished
 from iris.resources.job import JobQuery, JobSummary
+from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.rpc import job_pb2, query_pb2
+from iris.rpc import query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.filesystem import StoragePath
 
@@ -80,7 +81,7 @@ FAILURE_BUCKETS: tuple[str, ...] = (
 )
 
 # SQL stores task states by numeric enum value.
-_TASK_STATE_SUCCEEDED = job_pb2.TASK_STATE_SUCCEEDED
+_TASK_STATE_SUCCEEDED = TaskState.SUCCEEDED
 
 # Wrapped in an outer SELECT so the query starts with SELECT (required by ExecuteRawQuery).
 _TASK_WALL_TIME_SQL = """\
@@ -192,8 +193,8 @@ def _list_tasks(client: IrisClient, job: JobSummary) -> list[TaskSummary]:
         query = TaskQuery(job=job.identity.key, page_token=page.next_page_token)
 
 
-def _task_state_name(state: int) -> str:
-    return job_pb2.TaskState.Name(state).removeprefix("TASK_STATE_").lower()
+def _task_state_name(state: TaskState) -> str:
+    return state.name.lower()
 
 
 def _task_summary_to_dict(task: TaskSummary, detail: TaskDetail) -> dict:
@@ -221,7 +222,7 @@ def _job_summary_to_dict(job: JobSummary, tasks: list[TaskSummary], *, has_child
     return {
         "job_id": job.identity.key.resource_id,
         "name": job.identity.key.resource_id.rsplit("/", 1)[-1],
-        "state": job_pb2.JobState.Name(job.state).removeprefix("JOB_STATE_").lower(),
+        "state": JobState(job.state).name.lower(),
         "error": job.error_message,
         "failure_count": sum(task.failure_count for task in tasks),
         "preemption_count": sum(task.preemption_count for task in tasks),

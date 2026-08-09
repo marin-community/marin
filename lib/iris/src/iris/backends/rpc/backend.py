@@ -16,7 +16,7 @@ effects, so no worker identity crosses the reconcile result boundary.
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 from rigging.timing import Duration, Timestamp
@@ -42,7 +42,7 @@ from iris.backends.protocol import (
 from iris.backends.status import AutoscalerStatus, BackendStatus, WorkerFleetStatus
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.status import autoscaler_status_from_proto, overlay_worker_usability
+from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.persistence.operations.worker import apply_reconcile
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
@@ -190,12 +190,13 @@ class RpcTaskBackend:
         if self.autoscaler is None:
             return AutoscalerStatus()
         status = self.autoscaler.get_status()
-        for group in status.groups:
-            group.backend_id = self.backend_id
+        status = replace(
+            status,
+            groups=tuple(replace(group, backend_id=self.backend_id) for group in status.groups),
+        )
         usability_by_id = {str(worker_id): live.usability for worker_id, live in self.health.all().items()}
         vm_ids = {WorkerId(vm.vm_id) for group in status.groups for s in group.slices for vm in s.vms if vm.vm_id}
-        overlay_worker_usability(status, usability_by_id, self._store.running_tasks(vm_ids))
-        return autoscaler_status_from_proto(status)
+        return overlay_worker_usability(status, usability_by_id, self._store.running_tasks(vm_ids))
 
     def status(self) -> BackendStatus:
         """Author the full ``worker`` status variant from this backend's own state:

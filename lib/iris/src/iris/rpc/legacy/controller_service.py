@@ -23,9 +23,7 @@ from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, Timer, Timestamp
 
 from iris.backends.protocol import BackendCapability, ProviderError, TaskBackend, TaskTarget
-from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller.admin import ControllerAdmin, FederatedRoute
 from iris.cluster.controller.auth import (
     ControllerAuth,
 )
@@ -33,12 +31,17 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
 )
 from iris.cluster.controller.controller import Controller
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.jobs import FederationSubmission
+from iris.cluster.controller.job import FederationSubmission
+from iris.cluster.controller.operations import (
+    FederatedRoute,
+    OperationalServices,
+    TaskOperations,
+    UserOperations,
+    WorkerOperations,
+)
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
-from iris.cluster.federation.legacy_rpc import federation_batch_to_legacy
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.process_status import get_process_status
@@ -68,21 +71,24 @@ from iris.resources.job import FederationPosture, JobObservation, JobQuery, JobS
 from iris.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
 from iris.resources.task import TaskQuery, TaskSummary
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize
+from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.backend_status_codec import autoscaler_status_to_proto, backend_status_to_proto, kubernetes_status_to_proto
-from iris.rpc.legacy_codec import (
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.federation_client import federation_batch_to_legacy, peer_observation_to_legacy, peer_rpc_call
+from iris.rpc.legacy.job_codec import resource_spec_to_proto
+from iris.rpc.legacy.job_service_codec import (
     job_spec_from_legacy_request,
     job_spec_to_legacy_request,
     job_status_to_legacy,
     redact_request_env_vars,
     task_detail_to_legacy,
 )
-from iris.rpc.legacy_job_codec import resource_spec_to_proto
 from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.rpc.proto_display import (
     job_state_friendly,
     task_state_friendly,
 )
+from iris.rpc.resource_errors import resource_call
 from iris.rpc.worker_codec import process_info_to_proto, worker_metadata_from_proto, worker_metadata_to_proto
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
@@ -299,22 +305,22 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_task_with_attempts(admin: ControllerAdmin, task_id: JobName) -> TaskWithAttempts | None:
+def _read_task_with_attempts(tasks: TaskOperations, task_id: JobName) -> TaskWithAttempts | None:
     """Return a TaskWithAttempts for ``task_id``, or None if absent."""
-    result = admin.task_detail_with_attempts(task_id)
+    result = tasks.task_detail_with_attempts(task_id)
     if result is None:
         return None
     task_row, attempt_rows = result
     return TaskWithAttempts.from_row(task_row, attempt_rows)
 
 
-def _read_worker(admin: ControllerAdmin, worker_id: WorkerId):
+def _read_worker(workers: WorkerOperations, worker_id: WorkerId):
     """Return a slim (worker_id, address, scale_group) row for ``worker_id``, or None."""
-    return admin.worker(worker_id)
+    return workers.worker(worker_id)
 
 
-def _read_worker_detail(admin: ControllerAdmin, worker_id: WorkerId):
-    return admin.worker_detail(worker_id)
+def _read_worker_detail(workers: WorkerOperations, worker_id: WorkerId):
+    return workers.worker_detail(worker_id)
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -435,7 +441,7 @@ def _query_from_list_jobs_request(
     return query
 
 
-def _live_user_stats(admin: ControllerAdmin) -> list[UserStats]:
+def _live_user_stats(users: UserOperations) -> list[UserStats]:
     """Aggregate job/task counts per user.
 
     The user set is every observed owner — everyone who has ever submitted a job
@@ -445,7 +451,7 @@ def _live_user_stats(admin: ControllerAdmin) -> list[UserStats]:
     active (non-terminal) jobs/tasks, so the Running/Pending/Active columns reflect
     current load and an idle user shows all zeros rather than disappearing.
     """
-    rows = admin.live_user_stats()
+    rows = users.live_user_stats()
     return [
         UserStats(
             user=row.user,
@@ -457,7 +463,7 @@ def _live_user_stats(admin: ControllerAdmin) -> list[UserStats]:
 
 
 def _attempts_for_worker(
-    admin: ControllerAdmin, worker_id: WorkerId, limit: int = 50
+    workers: WorkerOperations, worker_id: WorkerId, limit: int = 50
 ) -> list[controller_pb2.Controller.WorkerTaskAttempt]:
     """Return per-attempt history for ``worker_id``, newest first.
 
@@ -466,7 +472,7 @@ def _attempts_for_worker(
     independent state/duration per attempt rather than inheriting from the
     parent task (which produced bogus duplicate-RUNNING rows).
     """
-    raw_rows, resources_by_job = admin.recent_worker_attempts(worker_id, limit)
+    raw_rows, resources_by_job = workers.recent_worker_attempts(worker_id, limit)
     out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
     for row in raw_rows:
         proto_attempt = job_pb2.TaskAttempt(
@@ -501,7 +507,7 @@ def _attempts_for_worker(
 
 
 class ControllerRuntimeProtocol(Protocol):
-    """Protocol for controller operations used by ControllerServiceImpl."""
+    """Protocol for controller operations used by LegacyControllerService."""
 
     def wake(self) -> None: ...
 
@@ -539,7 +545,7 @@ class ControllerRuntimeProtocol(Protocol):
     def scale_group_to_backend(self) -> dict[str, str]: ...
 
 
-class ControllerServiceImpl:
+class LegacyControllerService:
     """Serve the retired ControllerService and operational RPC contract."""
 
     def __init__(
@@ -548,13 +554,18 @@ class ControllerServiceImpl:
         bundle_store: BundleStore,
         log_client: LogClient,
         *,
-        admin: ControllerAdmin,
+        operations: OperationalServices,
         endpoint_service: EndpointServiceImpl,
         controller: Controller,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
-        self._admin = admin
+        self._database_operations = operations.database
+        self._federation_operations = operations.federation
+        self._worker_operations = operations.workers
+        self._task_operations = operations.tasks
+        self._user_operations = operations.users
+        self._scheduling_operations = operations.scheduling
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
         self._endpoint_service = endpoint_service
@@ -566,7 +577,7 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
-        self._admin.attach_task_event_table(
+        self._database_operations.attach_task_event_table(
             self._log_client.get_table(
                 TASK_EVENT_NAMESPACE,
                 TaskEventRow,
@@ -582,7 +593,7 @@ class ControllerServiceImpl:
 
     def probe_database(self) -> int | None:
         """Return checkpoint ancestry after verifying controller state is readable."""
-        return self._admin.probe_database()
+        return self._database_operations.probe_database()
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -605,7 +616,7 @@ class ControllerServiceImpl:
             return
         identity = get_verified_identity()
         if identity is not None and identity.role == FEDERATION_PEER_ROLE:
-            if self._admin.received_requester(job_id) == identity.user_id:
+            if self._federation_operations.received_requester(job_id) == identity.user_id:
                 return
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
@@ -625,7 +636,7 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is None or identity.role != FEDERATION_PEER_ROLE:
             return
-        if self._admin.received_requester(root_job) == identity.user_id:
+        if self._federation_operations.received_requester(root_job) == identity.user_id:
             return
         raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
 
@@ -641,21 +652,25 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         if request.HasField("federation"):
             handoff = request.federation
-            identity = self._controller.submit_federated_job(
-                spec,
-                request.bundle_blob,
-                FederationSubmission(
-                    requester_id=handoff.requester_id,
-                    owner_principal=handoff.owner_principal,
-                    submitting_user=handoff.submitting_user,
-                    handoff_nonce=handoff.handoff_nonce,
-                ),
+            identity = resource_call(
+                lambda: self._controller.submit_federated_job(
+                    spec,
+                    request.bundle_blob,
+                    FederationSubmission(
+                        requester_id=handoff.requester_id,
+                        owner_principal=handoff.owner_principal,
+                        submitting_user=handoff.submitting_user,
+                        handoff_nonce=handoff.handoff_nonce,
+                    ),
+                )
             )
         else:
-            identity = self._controller.submit_job(
-                spec,
-                request.bundle_blob,
-                enforce_client_freshness=ctx is not None,
+            identity = resource_call(
+                lambda: self._controller.submit_job(
+                    spec,
+                    request.bundle_blob,
+                    enforce_client_freshness=ctx is not None,
+                )
             )
         return controller_pb2.Controller.LaunchJobResponse(job_id=identity.key.resource_id)
 
@@ -764,10 +779,12 @@ class ControllerServiceImpl:
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found") from exc
         self._authorize_job_actor(JobName.from_wire(request.job_id))
-        self._controller.cancel_job(
-            identity,
-            idempotency_key=f"legacy-terminate:{identity.job_uid}",
-            principal_id=JobName.from_wire(identity.key.resource_id).user,
+        resource_call(
+            lambda: self._controller.cancel_job(
+                identity,
+                idempotency_key=f"legacy-terminate:{identity.job_uid}",
+                principal_id=JobName.from_wire(identity.key.resource_id).user,
+            )
         )
         return job_pb2.Empty()
 
@@ -908,7 +925,7 @@ class ControllerServiceImpl:
         backend = self._backend_for_id(self._runtime.backend_id_for_scale_group(request.scale_group))
         health = backend.health
         assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
-        self._admin.register_worker(
+        self._worker_operations.register_worker(
             worker_id=worker_id,
             address=request.address,
             metadata=worker_metadata_from_proto(request.metadata),
@@ -930,7 +947,7 @@ class ControllerServiceImpl:
         Detects a recycled internal IP and defers its stale owner to the controller.
         and defers the reap to :meth:`Controller.request_worker_eviction`.
         """
-        stale = self._admin.stale_workers_at_address(worker_id, address)
+        stale = self._worker_operations.stale_workers_at_address(worker_id, address)
         if not stale:
             return
         logger.warning(
@@ -1046,7 +1063,7 @@ class ControllerServiceImpl:
     def _federated_handle_for_task(self, task_id: JobName) -> FederatedRoute | None:
         """The SENT federated handle owning ``task_id``'s root job, or ``None`` if
         that root job runs locally."""
-        return self._admin.federated_handle(task_id.root_job)
+        return self._federation_operations.federated_handle(task_id.root_job)
 
     def _proxy_if_federated(self, task_id: JobName, call: Callable[[FederationPeer], _T]) -> _T | None:
         """Forward an on-demand RPC to its owning peer if ``task_id`` is federated.
@@ -1060,7 +1077,7 @@ class ControllerServiceImpl:
         handle = self._federated_handle_for_task(task_id)
         if handle is None:
             return None
-        return self._runtime.federation.proxy_to_peer(handle.peer_id, call)
+        return peer_rpc_call(lambda: self._runtime.federation.proxy_to_peer(handle.peer_id, call))
 
     def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
         """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
@@ -1085,7 +1102,7 @@ class ControllerServiceImpl:
                 address=None,
                 attempt_uid=attempt_uid,
             )
-        worker = _read_worker(self._admin, task_worker_id)
+        worker = _read_worker(self._worker_operations, task_worker_id)
         if not worker or not self._runtime.liveness_for_worker(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
         return TaskTarget(
@@ -1232,7 +1249,7 @@ class ControllerServiceImpl:
                 return job_pb2.ProfileTaskResponse(error=str(exc))
         worker_id_text = _parse_worker_target(request.target)
         if worker_id_text is not None:
-            worker = _read_worker(self._admin, WorkerId(worker_id_text))
+            worker = _read_worker(self._worker_operations, WorkerId(worker_id_text))
             if worker is None:
                 raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_text} not found")
             if not self._runtime.liveness_for_worker(worker.worker_id).healthy:
@@ -1260,10 +1277,12 @@ class ControllerServiceImpl:
                     target.attempt_id,
                 )
             )
-            result = self._controller.profile_attempt(
-                attempt.summary.identity,
-                profile_configuration_from_proto(request.profile_type),
-                Duration.from_seconds(request.duration_seconds) if request.duration_seconds else None,
+            result = peer_rpc_call(
+                lambda: self._controller.profile_attempt(
+                    attempt.summary.identity,
+                    profile_configuration_from_proto(request.profile_type),
+                    Duration.from_seconds(request.duration_seconds) if request.duration_seconds else None,
+                )
             )
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found") from exc
@@ -1283,7 +1302,7 @@ class ControllerServiceImpl:
         del request, ctx
         role_policy = self._auth.role_policy
         users = sorted(
-            _live_user_stats(self._admin),
+            _live_user_stats(self._user_operations),
             key=lambda entry: (
                 -_active_job_count(entry.job_state_counts),
                 -(entry.task_state_counts.get(job_pb2.TASK_STATE_RUNNING, 0)),
@@ -1320,7 +1339,7 @@ class ControllerServiceImpl:
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-        detail = _read_worker_detail(self._admin, WorkerId(str(request.id)))
+        detail = _read_worker_detail(self._worker_operations, WorkerId(str(request.id)))
         if not detail:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
@@ -1345,7 +1364,7 @@ class ControllerServiceImpl:
         # (~10s) and stalls the worker page render. The dashboard fetches
         # them in parallel via LogService.FetchLogs with
         # source=/system/worker/<worker_id>.
-        recent_attempts = _attempts_for_worker(self._admin, worker.worker_id, limit=50)
+        recent_attempts = _attempts_for_worker(self._worker_operations, worker.worker_id, limit=50)
 
         resp = controller_pb2.Controller.GetWorkerStatusResponse(
             recent_attempts=recent_attempts,
@@ -1390,7 +1409,7 @@ class ControllerServiceImpl:
         if worker_id is None:
             return self._task_process_status(target)
 
-        worker = _read_worker(self._admin, WorkerId(worker_id))
+        worker = _read_worker(self._worker_operations, WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
         if not self._runtime.liveness_for_worker(worker.worker_id).healthy:
@@ -1426,7 +1445,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from exc
 
         self._authorize_federated_debug_target(task_id.root_job)
-        task = _read_task_with_attempts(self._admin, task_id)
+        task = _read_task_with_attempts(self._task_operations, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
 
@@ -1454,9 +1473,11 @@ class ControllerServiceImpl:
         endpoint = next((item for item in matches.items if item.name == request.endpoint_name), None)
         if endpoint is None:
             raise ConnectError(Code.NOT_FOUND, f"No endpoint {request.endpoint_name!r}")
-        token = self._controller.mint_endpoint_token(
-            endpoint.key,
-            duration_from_proto(request.ttl) if request.HasField("ttl") else None,
+        token = resource_call(
+            lambda: self._controller.mint_endpoint_token(
+                endpoint.key,
+                duration_from_proto(request.ttl) if request.HasField("ttl") else None,
+            )
         )
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token.token,
@@ -1494,10 +1515,12 @@ class ControllerServiceImpl:
             task = self._resource_task_summary(request.task_id)
             if task.current_attempt is None:
                 raise ResourceNotFound(request.task_id)
-            result = self._controller.exec_attempt(
-                task.current_attempt,
-                tuple(request.command),
-                Duration.from_seconds(request.timeout_seconds) if request.timeout_seconds else None,
+            result = peer_rpc_call(
+                lambda: self._controller.exec_attempt(
+                    task.current_attempt,
+                    tuple(request.command),
+                    Duration.from_seconds(request.timeout_seconds) if request.timeout_seconds else None,
+                )
             )
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found") from exc
@@ -1524,7 +1547,7 @@ class ControllerServiceImpl:
         if request.sql.lstrip()[:6].upper() != "SELECT":
             raise ConnectError(Code.INVALID_ARGUMENT, "only SELECT statements are allowed")
 
-        result = self._admin.raw_query(request.sql)
+        result = self._database_operations.raw_query(request.sql)
         columns = [query_pb2.ColumnMeta(name=name, type="unknown") for name in result.columns]
         rows = [json.dumps([_encode_query_cell(value) for value in row]) for row in result.rows]
 
@@ -1549,7 +1572,7 @@ class ControllerServiceImpl:
             job_pb2.PRIORITY_BAND_BATCH,
         ):
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
-        self._admin.set_user_budget(request.user_id, request.budget_limit, max_band, Timestamp.now())
+        self._user_operations.set_user_budget(request.user_id, request.budget_limit, max_band, Timestamp.now())
         return controller_pb2.Controller.SetUserBudgetResponse()
 
     def get_user_budget(
@@ -1561,7 +1584,7 @@ class ControllerServiceImpl:
         require_identity()
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-        budget = self._admin.user_budget(request.user_id)
+        budget = self._user_operations.user_budget(request.user_id)
         if budget is None:
             raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
         return controller_pb2.Controller.GetUserBudgetResponse(
@@ -1578,7 +1601,7 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListUserBudgetsResponse:
         """List all user budgets with current spend."""
         require_identity()
-        budgets = self._admin.user_budgets()
+        budgets = self._user_operations.user_budgets()
         users = []
         for b in budgets:
             users.append(
@@ -1605,7 +1628,7 @@ class ControllerServiceImpl:
         """
         require_identity()
 
-        inputs = self._admin.scheduler_state_inputs()
+        inputs = self._scheduling_operations.scheduler_state_inputs()
         budgets = inputs.budgets
         budget_limits: dict[str, int] = {budget.user_id: budget.budget_limit for budget in budgets}
         user_spend = inputs.user_spend
@@ -1729,7 +1752,7 @@ class ControllerServiceImpl:
             if bid in backend_to_sgs:
                 backend_to_sgs[bid].append(sg)
 
-        counts = self._admin.backend_counts(job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING)
+        counts = self._scheduling_operations.backend_counts(job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING)
         pending_by_backend = counts.pending_by_backend
         running_by_backend = counts.running_by_backend
         worker_counts_by_scale_group = counts.workers_by_scale_group
@@ -1834,7 +1857,9 @@ class ControllerServiceImpl:
         forwarded backends.
         """
         require_identity()
-        return controller_pb2.Controller.ListPeersResponse(peers=self._runtime.federation.peer_summaries())
+        return controller_pb2.Controller.ListPeersResponse(
+            peers=[peer_observation_to_legacy(peer) for peer in self._runtime.federation.peer_summaries()]
+        )
 
     def federation_sync(
         self,
@@ -1863,7 +1888,7 @@ class ControllerServiceImpl:
                 )
         elif identity.role != "admin":
             raise ConnectError(Code.PERMISSION_DENIED, "federation_sync requires a federation-peer or admin identity")
-        batch = self._admin.federation_batch(
+        batch = self._federation_operations.federation_batch(
             requester_id,
             request.cursor,
             backend_ids=tuple(self._runtime.backends),

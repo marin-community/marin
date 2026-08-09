@@ -3,7 +3,7 @@
 
 """Tests for controller RPC service implementation.
 
-These tests verify the RPC contract (input -> output) of the ControllerServiceImpl.
+These tests verify the legacy job-oriented RPC contract (input -> output).
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
@@ -23,10 +23,10 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import jobs as resource_jobs
+from iris.cluster.controller import job as resource_jobs
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.jobs import CLIENT_FRESHNESS_WINDOW
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
+from iris.cluster.controller.job import CLIENT_FRESHNESS_WINDOW
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
 from iris.cluster.controller.persistence.operations.task import Assignment, finalize
@@ -38,9 +38,10 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, 
 from iris.resources.endpoint import ProfileResult
 from iris.resources.execution import tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_service import MAX_LIST_JOBS_OFFSET
-from iris.rpc.legacy_codec import redact_request_env_vars
-from iris.rpc.legacy_job_codec import constraint_from_proto, constraint_to_proto, device_to_proto
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import MAX_LIST_JOBS_OFFSET
+from iris.rpc.legacy.job_codec import constraint_from_proto, constraint_to_proto, device_to_proto
+from iris.rpc.legacy.job_service_codec import redact_request_env_vars
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
@@ -866,7 +867,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         log_client=log_client,
         db=state._db,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -893,7 +894,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         log_client=log_client,
         db=state._db,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1449,7 +1450,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         log_client=log_client,
         db=state._db,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1477,7 +1478,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         log_client=log_client,
         db=state._db,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))

@@ -36,7 +36,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, TypedDict
 
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
 from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
@@ -137,6 +137,15 @@ class ConstraintMode(IntEnum):
     PREFERRED = 1
 
 
+class ConstraintJson(TypedDict):
+    """JSON payload used to pass a native constraint into an Iris task."""
+
+    key: str
+    op: str
+    values: list[str | int | float]
+    mode: str
+
+
 # Per-op arity bounds (lo, hi) for Constraint.values. hi=None means unbounded.
 # Enforced in Constraint.__post_init__ so invalid constraints cannot be constructed.
 _CONSTRAINT_ARITY: dict[ConstraintOp, tuple[int, int | None]] = {
@@ -232,6 +241,25 @@ class Constraint:
                 raise ValueError(f"op={op.name} requires value=, not values=")
             tup = (AttributeValue(value),)
         return cls(key=key, op=op, values=tup, mode=mode)
+
+    def json_value(self) -> ConstraintJson:
+        """Return the transport-independent task-environment representation."""
+        return {
+            "key": self.key,
+            "op": self.op.name.lower(),
+            "values": [item.value for item in self.values],
+            "mode": self.mode.name.lower(),
+        }
+
+    @classmethod
+    def from_json_value(cls, value: ConstraintJson) -> "Constraint":
+        """Decode a constraint from the task-environment representation."""
+        return cls(
+            key=value["key"],
+            op=ConstraintOp[value["op"].upper()],
+            values=tuple(AttributeValue(item) for item in value["values"]),
+            mode=ConstraintMode[value["mode"].upper()],
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from iris.resources.endpoint import (
 from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
 from iris.resources.identity import ResourceKey, ResourceKind
 from iris.resources.job import JobDetail, JobQuery, JobSummary
+from iris.resources.log import LogMatchScope
 from iris.resources.node import NodeHealth, NodeQuery, NodeSummary
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import job_pb2
@@ -529,7 +530,7 @@ class IrisBabysitter:
         response = self.logs.fetch_logs(
             logging_pb2.FetchLogsRequest(
                 source=source,
-                match_scope=match_scope,
+                match_scope=int(match_scope),
                 since_ms=since_ms,
                 cursor=cursor,
                 max_lines=max_lines,
@@ -772,9 +773,9 @@ def _normalize_state_filter(state: str) -> str:
     return normalized
 
 
-def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchScope"]:
+def _log_source(target: str, attempt_id: int) -> tuple[str, LogMatchScope]:
     if target.startswith("/system/"):
-        return target, logging_pb2.MATCH_SCOPE_EXACT
+        return target, LogMatchScope.EXACT
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 

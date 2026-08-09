@@ -7,10 +7,11 @@ from unittest.mock import MagicMock
 from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.resources.execution import Entrypoint, EnvironmentSpec, GpuDevice, ResourceSpec
-from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.resources.job import JobSummary
 from iris.resources.source import Page
-from iris.resources.state import JobState
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskSummary
 from rigging.timing import Timestamp
 
 
@@ -43,6 +44,38 @@ def test_current_job_finds_exact_job_beyond_first_prefix_page() -> None:
     job = client.current_job(JobName.from_wire("/alice/train"))
 
     assert job.identity == exact.identity
+
+
+def test_current_task_resolves_a_task_handle_from_its_wire_id() -> None:
+    job = _job("/alice/train", "job-uid")
+    task_id = JobName.from_wire("/alice/train/7")
+    task_identity = TaskIdentity(ResourceKey("test", ResourceKind.TASK, task_id.to_wire()), "task-uid")
+    summary = TaskSummary(
+        identity=task_identity,
+        job=job.identity,
+        task_index=7,
+        state=TaskState.RUNNING,
+        execution_cluster_id="test",
+        backend_id="default",
+        current_attempt=AttemptIdentity(task_identity.key, 0, "attempt-uid"),
+        current_node=None,
+        failure_count=0,
+        preemption_count=0,
+        submitted_at=Timestamp.from_ms(1),
+        started_at=Timestamp.from_ms(2),
+        finished_at=None,
+        status_message="",
+        error_message="",
+    )
+    cluster = MagicMock()
+    cluster.list_jobs.return_value = Page((job,), None, ())
+    cluster.describe_job.return_value = MagicMock(summary=job)
+    cluster.list_tasks.return_value = Page((summary,), None, ())
+    client = IrisClient(cluster)
+
+    task = client.current_task(task_id)
+
+    assert task.identity == task_identity
 
 
 def test_high_level_submit_applies_accelerator_cpu_floor_without_changing_direct_specs() -> None:

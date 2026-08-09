@@ -49,7 +49,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
     prepare_slice_config,
 )
-from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
@@ -66,6 +65,7 @@ from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
 from iris.cluster.provenance import is_same_image_provenance
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
+from iris.rpc.dashboard import ProxyControllerDashboard
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.rpc.worker_codec import provenance_from_proto
 from iris.time_proto import timestamp_from_proto

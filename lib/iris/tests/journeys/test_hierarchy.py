@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from connectrpc.errors import ConnectError
+from iris.resources.errors import ResourcePreconditionFailed
 from iris.rpc import job_pb2
 
 
@@ -62,5 +62,5 @@ def test_finished_parent_refuses_a_new_child(journey):
     journey.succeed(root[0])
     journey.settle()
 
-    with pytest.raises(ConnectError, match="has terminated"):
+    with pytest.raises(ResourcePreconditionFailed, match="has terminated"):
         journey.submit_child(root, "late-child")

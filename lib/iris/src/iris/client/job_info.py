@@ -12,13 +12,10 @@ import logging
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import cast
 
-from google.protobuf import json_format
-
-from iris.cluster.constraints import Constraint
+from iris.cluster.constraints import Constraint, ConstraintJson
 from iris.cluster.types import JobName, TaskAttempt
-from iris.rpc import job_pb2
-from iris.rpc.legacy_job_codec import constraint_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +106,7 @@ def get_job_info() -> JobInfo | None:
         constraints: list[Constraint] = []
         if constraints_json:
             for item in json.loads(constraints_json):
-                constraints.append(constraint_from_proto(json_format.ParseDict(item, job_pb2.Constraint())))
+                constraints.append(Constraint.from_json_value(cast(ConstraintJson, item)))
 
         info = JobInfo(
             task_id=task_id,

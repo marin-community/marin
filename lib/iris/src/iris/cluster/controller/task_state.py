@@ -52,6 +52,27 @@ class RunningTaskEntry(NamedTuple):
     attempt_uid: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class AttemptRecord:
+    """One persisted Attempt history record."""
+
+    task_id: JobName
+    attempt_id: int
+    worker_id: WorkerId | None
+    state: int
+    created_at_ms: Timestamp
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    exit_code: int | None
+    error: str | None
+    attempt_uid: str
+    backend_id: str
+    pod_name: str
+    pod_uid: str
+    node_name: str
+    terminal_reason: str
+
+
 def task_is_finished(
     state: int,
     failure_count: int,

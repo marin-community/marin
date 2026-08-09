@@ -27,7 +27,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     SliceState,
     _zones_from_config,
     prepare_slice_config,
-    slice_state_to_proto,
+    slice_state_to_status,
 )
 from iris.cluster.platforms.types import (
     CloudSliceState,
@@ -1110,8 +1110,8 @@ class TestMarkSliceState:
         group.mark_slice_failed("nonexistent")
 
 
-def test_slice_state_to_proto_uses_worker_ids_as_vm_ids():
-    """slice_state_to_proto uses worker_ids directly as vm_id."""
+def test_slice_state_status_uses_worker_ids_as_vm_ids():
+    """Native slice status uses worker_ids directly as vm_id."""
 
     handle = make_fake_slice_handle("my-slice", scale_group="sg", created_at_ms=1000)
     state = SliceState(
@@ -1119,21 +1119,21 @@ def test_slice_state_to_proto_uses_worker_ids_as_vm_ids():
         lifecycle=SliceLifecycleState.READY,
         worker_ids=["10.0.0.1", "10.0.0.2"],
     )
-    proto = slice_state_to_proto(state)
-    assert proto.vms[0].vm_id == "10.0.0.1"
-    assert proto.vms[1].vm_id == "10.0.0.2"
-    assert proto.state == "ready"
+    status = slice_state_to_status(state)
+    assert status.vms[0].vm_id == "10.0.0.1"
+    assert status.vms[1].vm_id == "10.0.0.2"
+    assert status.state == "ready"
 
 
-def test_slice_state_to_proto_exposes_state_for_booting_slice_without_vms():
+def test_slice_state_status_exposes_state_for_booting_slice_without_vms():
     """A booting slice has no workers yet; its state must still be reported so
     clients render "booting" instead of inferring "unknown" from the empty VM list."""
 
     handle = make_fake_slice_handle("booting-slice", scale_group="sg", created_at_ms=1000)
     state = SliceState(handle=handle, lifecycle=SliceLifecycleState.BOOTING, worker_ids=[])
-    proto = slice_state_to_proto(state)
-    assert proto.vms == []  # no workers registered yet
-    assert proto.state == "booting"
+    status = slice_state_to_status(state)
+    assert status.vms == ()  # no workers registered yet
+    assert status.state == "booting"
 
 
 def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> FakeWorkerHandle:
@@ -1297,8 +1297,8 @@ class TestMultiVmSliceIdleScaleDown:
         assert group.slice_count() == 1
 
 
-class TestSliceStateToProtoIdleFields:
-    """Tests for the idle/last_active fields on SliceInfo proto."""
+class TestSliceStateStatusIdleFields:
+    """Tests for the idle/last_active fields on native slice status."""
 
     def test_idle_true_when_past_threshold(self):
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
@@ -1311,9 +1311,9 @@ class TestSliceStateToProtoIdleFields:
 
         # With a 1ms threshold and quiet_since 1s ago (Timestamp.now() >> 2000ms),
         # the slice should be idle.
-        proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
-        assert proto.idle is True
-        assert proto.last_active.epoch_ms == 1000
+        status = slice_state_to_status(state, idle_threshold=Duration.from_ms(1))
+        assert status.idle is True
+        assert status.last_active == Timestamp.from_ms(1000)
 
     def test_idle_false_when_no_threshold(self):
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
@@ -1323,8 +1323,8 @@ class TestSliceStateToProtoIdleFields:
             worker_ids=["10.0.0.1"],
             quiet_since=Timestamp.from_ms(1000),
         )
-        proto = slice_state_to_proto(state, idle_threshold=None)
-        assert proto.idle is False
+        status = slice_state_to_status(state, idle_threshold=None)
+        assert status.idle is False
 
     def test_idle_false_when_currently_active(self):
         """quiet_since=None means currently active — never idle."""
@@ -1336,8 +1336,8 @@ class TestSliceStateToProtoIdleFields:
             worker_ids=["10.0.0.1"],
             quiet_since=None,
         )
-        proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
-        assert proto.idle is False
+        status = slice_state_to_status(state, idle_threshold=Duration.from_ms(1))
+        assert status.idle is False
 
     def test_idle_false_for_non_ready_slices(self):
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
@@ -1347,5 +1347,5 @@ class TestSliceStateToProtoIdleFields:
             worker_ids=[],
             quiet_since=None,
         )
-        proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
-        assert proto.idle is False
+        status = slice_state_to_status(state, idle_threshold=Duration.from_ms(1))
+        assert status.idle is False

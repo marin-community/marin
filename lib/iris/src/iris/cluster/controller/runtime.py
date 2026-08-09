@@ -1,28 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris Controller logic for connecting state, scheduler and managing workers."""
+"""Durable controller runtime and maintenance loops."""
 
-import asyncio
 import atexit
 import enum
-import json
 import logging
-import socket
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
-from rigging import telemetry
 from rigging.filesystem import prefix_join
-from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
+from rigging.server_auth import TokenVerifier
+from rigging.timing import Duration, RateLimiter, Timestamp, TokenBucket
 
 from iris.backends.protocol import (
     AutoscaleRequest,
@@ -36,31 +30,10 @@ from iris.backends.protocol import (
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, PeerConfig
-from iris.cluster.controller.application import ControllerApplication
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import (
-    CONTROL_PLANE_AUDIENCE,
-    DEFAULT_USER_ROLE,
-    ENDPOINT_TOKEN_SCOPE,
-    FEDERATION_AUDIENCE,
-    NATIVE_PROXY_JWT_CACHE_CAPACITY,
-    NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
-    NATIVE_PROXY_JWT_LEEWAY_SECONDS,
-    PROXY_PLANE_AUDIENCE,
-    ControllerAuth,
-    FederationTokenProvider,
-    NativeProxyAuthConfig,
-    NativeProxyAuthMode,
-)
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import resource_value
-from iris.cluster.controller.endpoint_service import ProxyMappingDelta, ProxyRegistryReset
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
-from iris.cluster.controller.native_proxy_metrics import (
-    NativeProxyTelemetry,
-    install_native_proxy_metrics,
-    uninstall_native_proxy_metrics,
-)
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.autoscaler.state import persist_autoscaler_state
@@ -104,16 +77,14 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import FederationPeer, build_peers
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     JobName,
@@ -123,37 +94,10 @@ from iris.cluster.types import (
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.resources.state import PriorityBand
-from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
-# Sync Connect RPC handlers are dispatched via ``asyncio.to_thread``, which
-# uses the running loop's default executor. asyncio's default executor sizes
-# at ``min(32, os.cpu_count() + 4)`` — only 8 threads on a 4-vCPU controller
-# VM. A handful of slow handlers (e.g. ``launch_job`` blocking up to 120s in
-# ``_wait_until_job_drained``) saturates that pool and head-of-line blocks
-# every other RPC, including the worker heartbeats that would unblock the
-# drain. Install a wider, named pool so a burst of slow handlers cannot
-# starve the rest.
-_RPC_HANDLER_THREADS = 64
-_CONTROLLER_KEEPALIVE = 120
-_PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 _SYNCHRONOUS_PHASE_INTERVAL = 0.0
-
-
-def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
-    """Replace ``server.run`` with a variant that pins a sized default executor."""
-
-    def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
-        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
-        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
-            runner.get_loop().set_default_executor(
-                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
-            )
-            runner.run(server.serve(sockets=sockets))
-
-    server.run = run_with_executor
 
 
 class SchedulingOutcome(enum.Enum):
@@ -328,7 +272,7 @@ class ControllerConfig:
 
 
 class ControllerRuntime:
-    """Unified controller managing all components and lifecycle.
+    """Durable control runtime managing scheduling and maintenance loops.
 
     One driver thread runs the control tick — schedule -> reconcile -> autoscale
     as phases over a single read snapshot, committed through one end-of-tick write
@@ -429,23 +373,13 @@ class ControllerRuntime:
 
         self._threads = threads if threads is not None else get_thread_container()
 
-        # Federation: remote clusters this controller may delegate whole jobs to.
-        # Inert with no peers configured (build_peers returns nothing, the loops
-        # never start), so a single-cluster deployment is unchanged. The store
-        # gives the manager durable access to this controller's tables. Each peer
-        # connection presents this cluster's federation token (minted from the auth
-        # signing key) so an enforcing peer admits the handoff as a trusted requester.
-        federation_token_provider = (
-            FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
-            if config.peers and config.auth and config.auth.jwt_manager
-            else None
-        )
+        # Federation peers are transport objects supplied by the composition root.
+        # The runtime owns the manager's maintenance loop and durable store, but it
+        # does not construct RPC clients.
         self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
-        peers = (
-            list(federation_peers)
-            if federation_peers is not None
-            else build_peers(config.peers, federation_token_provider=federation_token_provider)
-        )
+        if config.peers and federation_peers is None:
+            raise ValueError("federation_peers must be composed when peer configurations are present")
+        peers = list(federation_peers or ())
         self._federation = FederationManager(
             peers,
             threads=self._threads,
@@ -490,8 +424,6 @@ class ControllerRuntime:
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
-        self._application: ControllerApplication | None = None
-
         # Wakes the control-tick driver. A submit triggers a schedule-only
         # mini-tick so submit->assign latency is the schedule time, not gated on
         # the next reconcile cadence.
@@ -503,9 +435,6 @@ class ControllerRuntime:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
-        self._server: uvicorn.Server | None = None
-        self._native_proxy = None
-        self._native_proxy_metrics: NativeProxyTelemetry | None = None
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
@@ -604,28 +533,13 @@ class ControllerRuntime:
         """
         return self.all_liveness().get(worker_id, WorkerLiveness())
 
-    def attach_application(self, application: ControllerApplication) -> None:
-        """Attach the externally composed resource and transport application."""
-        if self._application is not None:
-            raise RuntimeError("Controller application is already attached")
-        if self.started:
-            raise RuntimeError("Controller application must be attached before start")
-        self._application = application
-        application.endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
-
-    def _require_application(self) -> ControllerApplication:
-        application = self._application
-        if application is None:
-            raise RuntimeError("Controller application has not been composed")
-        return application
-
     @property
     def started(self) -> bool:
         """Whether the controller loops have been started."""
         return self._started
 
     def start(self) -> None:
-        """Start the dashboard server and the control + housekeeping threads.
+        """Start the control and housekeeping loops.
 
         Every backend gets the same threads; each phase no-ops where it does not
         apply. The unified control tick drives schedule -> reconcile -> autoscale;
@@ -634,7 +548,8 @@ class ControllerRuntime:
         pods (cluster backends), folds the backend's observed health events, and
         tears down workers that cross the failure threshold.
         """
-        application = self._require_application()
+        if self._started:
+            return
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
@@ -644,44 +559,9 @@ class ControllerRuntime:
             if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
                 self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
-        # Create and start uvicorn server via spawn_server, which bridges the
-        # ManagedThread stop_event to server.should_exit automatically.
-        # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
-        # intervals of the same length, causing TCP resets on idle connections. Use 120s
-        # to safely cover long polling gaps during job waits.
-        # The native listener is Uvicorn's only ingress and preserves the load
-        # balancer's forwarded headers. Trust its loopback connection so
-        # Starlette builds externally reachable absolute URLs.
-        server_config = uvicorn.Config(
-            application.dashboard.app,
-            host=_PRIVATE_CONTROLLER_HOST,
-            port=0,
-            log_level="warning",
-            log_config=None,
-            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
-            proxy_headers=True,
-            forwarded_allow_ips="*",
-        )
-        self._server = uvicorn.Server(server_config)
-        _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
-        self._threads.spawn_server(self._server, name="controller-server")
-
-        # Register cluster endpoints BEFORE spawning the control loop. Otherwise
-        # the autoscale phase's first tick can create buffer slices whose workers
-        # query the controller for /system/log-server before this dict is
-        # populated, returning an empty result. The slice creation fails, the
-        # group enters backoff, and any task constrained to that group hangs until
-        # the backoff expires.
-        for name, url in self._config.endpoints.items():
-            application.endpoint_service.register_system_endpoint(name, url)
-            logger.info("Registered system endpoint %s -> %s", name, url)
-        application.endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
-
-        # One driver runs schedule -> reconcile -> autoscale as phases of a single
-        # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint
-        # registration because its first autoscale phase may provision buffer slices
-        # whose workers query /system/log-server. In dry-run it runs the schedule
-        # phase only.
+        # The process host registers system endpoints before starting this loop,
+        # because its first autoscale phase may provision workers that immediately
+        # resolve /system/log-server.
         self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -695,96 +575,6 @@ class ControllerRuntime:
         self._atexit_registered = True
         atexit.register(self._atexit_checkpoint)
 
-        # Wait for server startup with exponential backoff
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
-            timeout=Duration.from_seconds(5.0),
-        )
-        assert self._server is not None
-        assert self._server.servers
-        private_port = self._server.servers[0].sockets[0].getsockname()[1]
-        self._native_proxy = NativeProxy(
-            self._config.host,
-            self._config.port,
-            f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
-            application.dashboard.proxy_decision_secret,
-            json.dumps(asdict(self._native_proxy_auth_config())),
-        )
-        telemetry.configure(
-            endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
-            service="iris-controller",
-            attributes={"role": "controller"},
-        )
-        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
-        self._replace_native_proxy_registry()
-
-    def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
-        if self._native_proxy is None:
-            return
-        if isinstance(update, ProxyRegistryReset):
-            self._recover_native_proxy_registry()
-            return
-        payload = json.dumps(asdict(update))
-        try:
-            self._native_proxy.update_mappings(payload)
-        except ValueError:
-            logger.exception(
-                "Native proxy rejected endpoint mapping generation %d -> %d; replacing registry",
-                update.base_generation,
-                update.next_generation,
-            )
-            self._recover_native_proxy_registry()
-
-    def _recover_native_proxy_registry(self) -> None:
-        assert self._native_proxy is not None
-        try:
-            self._replace_native_proxy_registry()
-        except ValueError:
-            logger.exception("Native proxy registry replacement failed; pausing native routing")
-            self._native_proxy.pause_registry()
-
-    def _replace_native_proxy_registry(self) -> None:
-        if self._native_proxy is None:
-            return
-        self._native_proxy.pause_registry()
-        snapshot = self._require_application().endpoint_service.proxy_registry_snapshot()
-        self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
-
-    def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
-        auth = self._config.auth
-        if auth is None or auth.provider is None:
-            mode = NativeProxyAuthMode.PERMISSIVE
-        elif self._require_application().external_auth_allows_anonymous:
-            mode = NativeProxyAuthMode.OPTIONAL
-        else:
-            mode = NativeProxyAuthMode.ENFORCING
-        if auth is not None and auth.jwt_manager is not None:
-            issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
-        else:
-            issuers, jwks = (), {"keys": []}
-        return NativeProxyAuthConfig(
-            mode=mode,
-            issuers=issuers,
-            jwks=jwks,
-            leeway_seconds=NATIVE_PROXY_JWT_LEEWAY_SECONDS,
-            cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
-            cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
-            trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
-            control_audience=CONTROL_PLANE_AUDIENCE,
-            proxy_audience=PROXY_PLANE_AUDIENCE,
-            proxy_scope=ENDPOINT_TOKEN_SCOPE,
-            federation_audience=FEDERATION_AUDIENCE,
-            session_cookie=SESSION_COOKIE,
-            iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
-            iap_issuer=IAP_ISSUER,
-            iap_audience=auth.iap_audience if auth is not None else None,
-            federation_keys=auth.federation_keys if auth is not None else {},
-            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
-            default_user_role=(
-                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
-            ),
-        )
-
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
 
@@ -792,7 +582,7 @@ class ControllerRuntime:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
         2. Stop the control loop so no new work is triggered.
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        4. Stop remaining threads (server) and executors.
+        4. Release backend and store resources.
         """
         if self._stopped:
             return
@@ -816,12 +606,6 @@ class ControllerRuntime:
             self._task_state_collector.close()
         self._federation.stop()
 
-        if self._native_proxy_metrics is not None and self._native_proxy is not None:
-            uninstall_native_proxy_metrics(self._native_proxy)
-            self._native_proxy_metrics = None
-        if self._native_proxy is not None:
-            self._native_proxy.stop()
-        self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
         # stops the platform) and releases the backend's own resources.
         for backend in self._backends.values():
@@ -1678,16 +1462,6 @@ class ControllerRuntime:
             force_timeout_scan=True,
         )
 
-    @property
-    def controller(self):
-        """Return the canonical resource-oriented application controller."""
-        return self._require_application().controller
-
-    @property
-    def controller_service(self):
-        """The ControllerService transport adapter hosted by this controller."""
-        return self._require_application().controller_service
-
     # Properties
 
     @property
@@ -1725,6 +1499,11 @@ class ControllerRuntime:
         return self._log_client
 
     @property
+    def log_service_address(self) -> str:
+        """Finelog endpoint registered and instrumented by the process host."""
+        return self._log_service_address
+
+    @property
     def federation(self) -> FederationManager:
         """The federation manager: peer registry, heartbeat, and submit-time router."""
         return self._federation
@@ -1751,28 +1530,3 @@ class ControllerRuntime:
     def capabilities(self) -> frozenset[BackendCapability]:
         """Union of every backend's capabilities (which dashboard tabs/RPCs apply)."""
         return frozenset(cap for backend in self._backends.values() for cap in backend.capabilities)
-
-    @property
-    def port(self) -> int:
-        """Actual bound port (may differ from config if port=0 was specified)."""
-        return self._native_proxy.port if self._native_proxy is not None else self._config.port
-
-    @property
-    def native_proxy_stats(self) -> NativeProxyStats | None:
-        """Return native registry and JWT-cache counters, or ``None`` before startup."""
-        if self._native_proxy is None:
-            return None
-        return NativeProxyStats.from_json(self._native_proxy.stats_json)
-
-    @property
-    def external_host(self) -> str:
-        """Externally-reachable host address.
-
-        When bound to 0.0.0.0, probes for the real network IP via
-        ``probe_outbound_ip``.
-        """
-        return resolve_external_host(self._config.host)
-
-    @property
-    def url(self) -> str:
-        return f"http://{self.external_host}:{self.port}"

@@ -15,7 +15,7 @@ from iris.cluster.types import AttemptUid, JobName
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.rpc import job_pb2
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     constraint_from_proto,
     environment_from_proto,
     resource_spec_from_proto,

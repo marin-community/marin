@@ -33,6 +33,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import AttemptUid, JobName
+from iris.cluster.worker.control import WorkerRegistrationResult
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -48,7 +49,7 @@ from iris.resources.execution import (
 )
 from iris.resources.job import ContainerProfile, PriorityBand
 from iris.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.rpc.worker_service import WorkerServiceImpl
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
@@ -60,6 +61,15 @@ from tests.cluster.worker.conftest import (
 )
 
 pytestmark = pytest.mark.timeout(10)
+
+
+class _NoopWorkerServer:
+    def start(self, provider, threads) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
 
 # ============================================================================
 # PortAllocator Tests
@@ -851,9 +861,7 @@ def _worker_with_log_sink(
     return worker, sink
 
 
-def test_start_publishes_worker_logs_before_controller_registration(
-    mock_bundle_store, mock_runtime, tmp_path, monkeypatch
-):
+def test_start_publishes_worker_logs_before_controller_registration(mock_bundle_store, mock_runtime, tmp_path):
     sink = _RecordingLogClient()
 
     class _ControllerBoundary:
@@ -864,18 +872,15 @@ def test_start_publishes_worker_logs_before_controller_registration(
         def register(self, request):
             self.worker_log_visible = bool(sink.log_lines(worker_log_key("worker-log-test")))
             self.registration_seen.set()
-            return controller_pb2.Controller.RegisterResponse(accepted=True, worker_id=request.worker_id)
+            return WorkerRegistrationResult(accepted=True, worker_id=request.worker_id)
 
-        def close(self) -> None:
-            pass
+        def resolve_endpoint(self, name: str) -> str:
+            raise AssertionError(f"unexpected endpoint resolution: {name}")
 
-    class _ResourceBoundary:
         def close(self) -> None:
             pass
 
     controller = _ControllerBoundary()
-    monkeypatch.setattr("iris.cluster.worker.worker.ControllerServiceClientSync", lambda **_kwargs: controller)
-    monkeypatch.setattr("iris.cluster.worker.worker.ResourceRpcClient", lambda *_args, **_kwargs: _ResourceBoundary())
     worker = Worker(
         WorkerConfig(
             port=0,
@@ -888,6 +893,8 @@ def test_start_publishes_worker_logs_before_controller_registration(
         bundle_store=mock_bundle_store,
         container_runtime=mock_runtime,
         log_client=cast(LogClient, sink),
+        controller=controller,
+        server=_NoopWorkerServer(),
         threads=ThreadContainer(name="worker-log-test"),
     )
 
@@ -1490,6 +1497,7 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
         bundle_store=mock_bundle_store,
         container_runtime=docker_runtime,
         threads=ThreadContainer(name="worker-a"),
+        server=_NoopWorkerServer(),
     )
     try:
         worker_a.start()
@@ -1516,6 +1524,7 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
         bundle_store=mock_bundle_store,
         container_runtime=docker_runtime,
         threads=ThreadContainer(name="worker-b"),
+        server=_NoopWorkerServer(),
     )
     try:
         worker_b.start()

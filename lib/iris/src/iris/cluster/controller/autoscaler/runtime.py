@@ -29,6 +29,7 @@ from typing import TypeVar
 from finelog.client.log_client import Table
 from rigging.timing import Duration, Timestamp, TokenBucket
 
+from iris.backends.status import AutoscalerActionStatus, AutoscalerStatus, RoutingStatus, VmStatus
 from iris.cluster.config import AutoscalerConfig, WorkerConfig
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
@@ -55,7 +56,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
 )
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
-from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_status
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.persistence.autoscaler.recovery import (
     load_autoscaler_checkpoint,
@@ -74,8 +75,6 @@ from iris.cluster.platforms.types import (
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
 from iris.resources.execution import ResourceSpec
-from iris.rpc import vm_pb2
-from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +165,7 @@ class _ScaleUpRequest:
 
     group: ScalingGroup
     reason: str
-    action: vm_pb2.AutoscalerAction
+    action: AutoscalerActionStatus
 
 
 @dataclass
@@ -239,7 +238,7 @@ class Autoscaler:
         self._worker_registry = WorkerRegistry()
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
-        self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+        self._action_log: deque[AutoscalerActionStatus] = deque(maxlen=100)
 
         # finelog table for the iris.provisioning namespace, built from the
         # controller's log client before construction. None in test/local mode
@@ -248,10 +247,10 @@ class Autoscaler:
 
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
-        # Most recent routing decision, materialized as status protos. Dashboard
+        # Most recent routing decision, materialized as native status. Dashboard
         # polls (GetJobStatus, ListJobs) hit these on every pending job; building
         # them per request was the bottleneck described in #4844.
-        self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
+        self._last_routing_decision: RoutingStatus | None = None
         self._last_pending_hints: dict[str, PendingHint] | None = None
 
     @classmethod
@@ -348,7 +347,7 @@ class Autoscaler:
         outcome: ProvisioningOutcome | None = None,
         created_at: Timestamp | None = None,
         worker_count: int = 0,
-    ) -> vm_pb2.AutoscalerAction:
+    ) -> AutoscalerActionStatus:
         """Append an autoscaler action to the bounded action log and return it.
 
         The returned action is mutable so callers can update its status after
@@ -357,8 +356,8 @@ class Autoscaler:
         log line and the provisioning row are two views of one event, sharing
         ``reason`` as the row's ``error_message`` — so an outcome site logs once.
         """
-        action = vm_pb2.AutoscalerAction(
-            timestamp=timestamp_to_proto(Timestamp.now()),
+        action = AutoscalerActionStatus(
+            timestamp=Timestamp.now(),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -416,11 +415,11 @@ class Autoscaler:
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
-        self._last_routing_decision_proto = routing_decision_to_proto(
+        self._last_routing_decision = routing_decision_to_status(
             routing_decision,
             group_to_launch=scale_plan.launch_counts(),
         )
-        self._last_pending_hints = build_job_pending_hints(self._last_routing_decision_proto)
+        self._last_pending_hints = build_job_pending_hints(self._last_routing_decision)
 
         if routing_decision.unmet_entries:
             logger.debug(
@@ -904,9 +903,9 @@ class Autoscaler:
             groups.append(group_row)
         return AutoscalerState(slices=all_slices, groups=groups)
 
-    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
+    def get_vm(self, vm_id: str) -> VmStatus | None:
         """Get VM info by platform worker ID from the centralized worker registry."""
-        return self._worker_registry.vm_info(vm_id)
+        return self._worker_registry.vm_status(vm_id)
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
         """Get bootstrap log for a VM by platform worker ID."""
@@ -933,14 +932,14 @@ class Autoscaler:
         result = job_feasibility(self._groups.values(), constraints, replicas=replicas, resources=resources)
         return result.reason
 
-    def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
-        """Return the last routing decision as a proto.
+    def get_last_routing_decision(self) -> RoutingStatus | None:
+        """Return the last routing decision as native status.
 
         Populated by evaluate() so dashboard/service callers (GetJobStatus,
         ListJobs) never pay the per-entry conversion cost on the hot path
         (#4844). Returns None before the first evaluate() cycle.
         """
-        return self._last_routing_decision_proto
+        return self._last_routing_decision
 
     def get_pending_hints(self) -> dict[str, PendingHint]:
         """Return autoscaler pending hints keyed by job id.
@@ -953,18 +952,15 @@ class Autoscaler:
             return {}
         return self._last_pending_hints
 
-    def get_status(self) -> vm_pb2.AutoscalerStatus:
-        """Build status for the status API."""
-        status = vm_pb2.AutoscalerStatus(
-            groups=[g.to_status() for g in self._groups.values()],
+    def get_status(self) -> AutoscalerStatus:
+        """Build native autoscaler status."""
+        return AutoscalerStatus(
+            groups=tuple(g.to_status() for g in self._groups.values()),
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=timestamp_to_proto(self._last_evaluation),
-            recent_actions=list(self._action_log),
+            last_evaluation=self._last_evaluation,
+            recent_actions=tuple(self._action_log),
+            last_routing_decision=self.get_last_routing_decision(),
         )
-        routing_proto = self.get_last_routing_decision_proto()
-        if routing_proto is not None:
-            status.last_routing_decision.CopyFrom(routing_proto)
-        return status
 
     @property
     def groups(self) -> dict[str, ScalingGroup]:

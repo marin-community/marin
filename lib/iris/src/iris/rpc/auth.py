@@ -12,15 +12,21 @@ authenticates browsers with, and it reads the identity ``rigging.server_auth``
 bound for the request to enforce them.
 """
 
-from enum import StrEnum
-
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.server_auth import VerifiedIdentity, require_identity
+from rigging.server_auth import VerifiedIdentity
 
-# Browser session cookie the dashboard sets; passed to rigging's auth
-# interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
-SESSION_COOKIE = "iris_session"
+from iris.cluster.authorization import (
+    FEDERATION_PEER_ROLE,
+    AuthzAction,
+)
+from iris.cluster.authorization import (
+    authorize as authorize_resource_action,
+)
+from iris.cluster.authorization import (
+    authorize_resource_owner as authorize_native_resource_owner,
+)
+from iris.resources.errors import ResourcePermissionDenied
 
 # Read-only role granted to an IAP-authenticated caller whose email is not
 # provisioned in the user store (see the controller's IAP role resolver). It may
@@ -33,8 +39,6 @@ DASHBOARD_ROLE = "dashboard"
 # target-scoped FEDERATION_SCOPED_RPCS below, never a general identity: a federation
 # bearer the composite verifier accepts cannot reach any other RPC even though it
 # authenticated.
-FEDERATION_PEER_ROLE = "federation-peer"
-
 # RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
 # cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
 # DASHBOARD_READABLE_RPCS.
@@ -57,22 +61,6 @@ FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset(
         "ProfileAttempt",
     }
 )
-
-
-class AuthzAction(StrEnum):
-    """Actions requiring authorization. Add new actions here; policy is in POLICY."""
-
-    ACT_AS_WORKER = "act_as_worker"
-    MANAGE_BUDGETS = "manage_budgets"
-    SET_CONTAINER_PROFILE = "set_container_profile"
-
-
-# Action → frozenset of roles allowed. Admin is implicitly always allowed.
-POLICY: dict[AuthzAction, frozenset[str]] = {
-    AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
-    AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
-    AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
-}
 
 
 # RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
@@ -158,14 +146,16 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
 
 
 def authorize(action: AuthzAction) -> VerifiedIdentity:
-    """Require the current caller has permission for the given action.
+    """Map native Iris action authorization failures to Connect."""
+    try:
+        return authorize_resource_action(action)
+    except ResourcePermissionDenied as exc:
+        raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc
 
-    Admin role is always authorized. Other roles are checked against POLICY.
-    """
-    identity = require_identity()
-    if identity.role == "admin":
-        return identity
-    allowed = POLICY.get(action, frozenset())
-    if identity.role not in allowed:
-        raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
-    return identity
+
+def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
+    """Map native Iris resource-owner authorization failures to Connect."""
+    try:
+        return authorize_native_resource_owner(resource_owner)
+    except ResourcePermissionDenied as exc:
+        raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc

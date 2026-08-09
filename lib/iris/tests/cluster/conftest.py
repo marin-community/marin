@@ -11,7 +11,7 @@ from iris.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.backends.protocol import BackendCapability
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.operations.task import Assignment
@@ -28,7 +28,8 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -153,7 +154,7 @@ class ServiceTestHarness:
     tests that need deeper control.
     """
 
-    service: ControllerServiceImpl
+    service: LegacyControllerService
     state: ControllerTestState
     db: ControllerDB
     provider_type: str  # "gcp" or "k8s"
@@ -470,7 +471,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=LogClient.connect(log_address),
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=db)),
     )
 
     return ServiceTestHarness(
@@ -499,7 +500,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=LogClient.connect(log_address),
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=db)),
     )
 
     return ServiceTestHarness(
@@ -512,7 +513,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 
 @pytest.fixture(params=["gcp", "k8s"])
 def harness(request, tmp_path, embedded_log_server) -> ServiceTestHarness:
-    """ControllerServiceImpl backed by either GCP or K8s provider.
+    """LegacyControllerService backed by either GCP or K8s provider.
 
     Tests using this fixture run twice -- once with each provider -- to ensure
     both code paths are exercised.

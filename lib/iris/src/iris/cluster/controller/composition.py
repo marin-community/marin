@@ -1,34 +1,54 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller process composition root."""
+"""Composition roots for the controller runtime and hosted process."""
 
 import secrets
 from collections.abc import Sequence
 
 from iris.backends.protocol import TaskBackend
 from iris.cluster.config import BackendConfig
-from iris.cluster.controller.admin import ControllerAdmin
-from iris.cluster.controller.application import ControllerApplication
 from iris.cluster.controller.auth import (
     ControllerAuth,
     FederationTokenProvider,
     native_proxy_auth_policy,
     request_auth_policy,
 )
-from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.controller import Controller
+from iris.cluster.controller.dependencies import CapabilityUrlConfig
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.operations import OperationalServices
 from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.process import ControllerProcess
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
-from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName
-from iris.managed_thread import ThreadContainer
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.cluster.federation.peer import FederationPeer, build_peers
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.rpc.dashboard import ControllerDashboard
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.federation_client import peer_connection_factory
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.log_reader import FinelogLogReader
 from iris.rpc.resource_service import ResourceServiceImpl
+
+
+def _federation_token_provider(config: ControllerConfig) -> FederationTokenProvider | None:
+    if not config.peers or config.auth is None or config.auth.jwt_manager is None:
+        return None
+    return FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
+
+
+def _federation_peers(
+    config: ControllerConfig,
+    peers: Sequence[FederationPeer] | None,
+) -> Sequence[FederationPeer]:
+    if peers is not None:
+        return peers
+    return build_peers(
+        config.peers,
+        connect=peer_connection_factory(_federation_token_provider(config)),
+    )
 
 
 def compose_controller_runtime(
@@ -41,8 +61,8 @@ def compose_controller_runtime(
     backend_configs: dict[str, BackendConfig] | None = None,
     federation_peers: Sequence[FederationPeer] | None = None,
 ) -> ControllerRuntime:
-    """Build the control runtime and attach its resource/RPC/HTTP application."""
-    runtime = ControllerRuntime(
+    """Build the durable control runtime without network or presentation surfaces."""
+    return ControllerRuntime(
         config=config,
         backends=backends,
         log_stack=log_stack,
@@ -51,14 +71,39 @@ def compose_controller_runtime(
         backend_configs=backend_configs,
         federation_peers=federation_peers,
     )
-    endpoint_service = EndpointServiceImpl(db=runtime.database, system_endpoints={})
+
+
+def compose_controller_process(
+    *,
+    config: ControllerConfig,
+    backends: dict[str, TaskBackend],
+    log_stack: LogStack,
+    threads: ThreadContainer | None = None,
+    db: ControllerDB | None = None,
+    backend_configs: dict[str, BackendConfig] | None = None,
+    federation_peers: Sequence[FederationPeer] | None = None,
+) -> ControllerProcess:
+    """Build a hosted controller process around a pure control runtime."""
+    process_threads = threads if threads is not None else get_thread_container()
+    runtime = compose_controller_runtime(
+        config=config,
+        backends=backends,
+        log_stack=log_stack,
+        threads=process_threads,
+        db=db,
+        backend_configs=backend_configs,
+        federation_peers=_federation_peers(config, federation_peers),
+    )
+    endpoint_registry = EndpointRegistry(db=runtime.database)
+    endpoint_service = EndpointServiceImpl(endpoint_registry)
+    auth = config.auth or ControllerAuth()
     controller = Controller(
         cluster_id=config.cluster_id,
         db=runtime.database,
         runtime=runtime,
         bundle_store=runtime.bundle_store,
-        endpoint_service=endpoint_service,
-        auth=config.auth or ControllerAuth(),
+        endpoint_registry=endpoint_registry,
+        auth=auth,
         user_budget_defaults=config.user_budget_defaults,
         capability_url_config=CapabilityUrlConfig(
             cluster_name=config.cluster_id,
@@ -67,56 +112,47 @@ def compose_controller_runtime(
         ),
         backends=runtime.backends,
         backend_configs=runtime.backend_configs,
-        log_client=runtime.log_client,
+        log_reader=FinelogLogReader(runtime.log_client),
     )
-    controller_service = ControllerServiceImpl(
+    controller_service = LegacyControllerService(
         runtime=runtime,
         bundle_store=runtime.bundle_store,
         log_client=runtime.log_client,
-        admin=ControllerAdmin(runtime.database),
+        operations=OperationalServices.from_database(runtime.database),
         endpoint_service=endpoint_service,
         controller=controller,
         auth=config.auth,
         user_budget_defaults=config.user_budget_defaults,
     )
     resource_service = ResourceServiceImpl(controller)
-    federation_token_provider = (
-        FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
-        if config.peers and config.auth and config.auth.jwt_manager
-        else None
-    )
+    federation_token_provider = _federation_token_provider(config)
     federated_handoff = (
         FederatedEndpointHandoff(runtime.federation.peer_controller_address, federation_token_provider.get_token)
         if federation_token_provider is not None
         else None
     )
-
-    def federation_owner_check(root_job: JobName, peer_id: str) -> bool:
-        with runtime.database.read_snapshot() as query:
-            return reads.has_received_job_from_peer(query, peer_id, root_job)
-
     external_auth_policy = request_auth_policy(config.auth)
-    auth_policy = native_proxy_auth_policy(external_auth_policy)
     dashboard = ControllerDashboard(
         controller_service,
         resource_service=resource_service,
         endpoint_service=endpoint_service,
         auth_provider=config.auth_provider,
-        auth_policy=auth_policy,
+        auth_policy=native_proxy_auth_policy(external_auth_policy),
         reported_auth_policy=external_auth_policy,
         jwt_manager=config.auth.jwt_manager if config.auth else None,
         federated_handoff=federated_handoff,
-        federation_owner_check=federation_owner_check,
+        federation_owner_check=controller.received_job_from_peer,
         proxy_decision_secret=secrets.token_urlsafe(32),
     )
-    runtime.attach_application(
-        ControllerApplication(
-            controller=controller,
-            controller_service=controller_service,
-            resource_service=resource_service,
-            endpoint_service=endpoint_service,
-            dashboard=dashboard,
-            external_auth_allows_anonymous=external_auth_policy.allows_anonymous,
-        )
+    return ControllerProcess(
+        config=config,
+        runtime=runtime,
+        controller=controller,
+        controller_service=controller_service,
+        resource_service=resource_service,
+        endpoint_registry=endpoint_registry,
+        endpoint_service=endpoint_service,
+        dashboard=dashboard,
+        external_auth_allows_anonymous=external_auth_policy.allows_anonymous,
+        threads=process_threads,
     )
-    return runtime

@@ -26,7 +26,7 @@ from iris.cluster.composer import make_backends
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.composition import compose_controller_runtime
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.checkpoint import (
     download_checkpoint_to_local,
@@ -294,7 +294,7 @@ def run_controller_serve(
     if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
-    controller = compose_controller_runtime(
+    controller = compose_controller_process(
         config=config,
         backends=backends,
         log_stack=log_stack,
@@ -323,7 +323,7 @@ def run_controller_serve(
         logger.info("Shutdown signal received")
         if not config.dry_run:
             try:
-                path, result = controller.begin_checkpoint()
+                path, result = controller.runtime.begin_checkpoint()
                 logger.info(
                     "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                     path,

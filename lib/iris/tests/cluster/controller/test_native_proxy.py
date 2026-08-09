@@ -17,7 +17,7 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoint_registry import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer
@@ -125,12 +125,12 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
 
 
 def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
-    make_controller,
+    make_controller_process,
 ) -> None:
     threads = ThreadContainer()
     try:
         upstream, received_bodies = _start_upstream(threads)
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -171,9 +171,11 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         threads.stop()
 
 
-def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:
+def test_native_rpc_metrics_aggregate_controllers_in_one_process(
+    make_controller_process, tmp_path, telemetry_transport
+) -> None:
     controllers = [
-        make_controller(
+        make_controller_process(
             host="127.0.0.1",
             port=0,
             local_state_dir=tmp_path / name,
@@ -353,14 +355,14 @@ def test_native_metrics_concurrent_detach_and_reattach_publishes_new_proxy_snaps
         publisher.detach(proxy)
 
 
-def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, telemetry_transport) -> None:
+def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller_process, telemetry_transport) -> None:
     """A forwarded endpoint request emits byte-exact `proxy_*` telemetry, while a
     controller RPC does not. This also pins the Rust snapshot JSON to the publisher's
     contract: a shape drift would raise when the publisher unpacks the snapshot."""
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -404,7 +406,7 @@ def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, t
         threads.stop()
 
 
-def test_native_listener_caches_verified_jwt(make_controller) -> None:
+def test_native_listener_caches_verified_jwt(make_controller_process) -> None:
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
@@ -412,7 +414,7 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
         assert auth.jwt_manager is not None
         token = auth.jwt_manager.create_token("test-user", "user", "native-test", ttl_seconds=300)
         endpoint_token = auth.jwt_manager.create_endpoint_token(_ENDPOINT_NAME, "native-endpoint-test")
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -438,13 +440,13 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
 
 
 def test_native_listener_preserves_direct_controller_auth_without_trusting_forwarded_request(
-    make_controller,
+    make_controller_process,
 ) -> None:
     auth = create_controller_auth(
         AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
         cluster_name="native-controller-auth-test",
     )
-    controller = make_controller(
+    controller = make_controller_process(
         host="127.0.0.1",
         port=0,
         auth=auth,
@@ -661,7 +663,7 @@ def test_native_listener_owns_endpoint_access_policy() -> None:
         threads.stop()
 
 
-def test_native_listener_handles_subdomains_and_response_safety(make_controller) -> None:
+def test_native_listener_handles_subdomains_and_response_safety(make_controller_process) -> None:
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
@@ -669,7 +671,7 @@ def test_native_listener_handles_subdomains_and_response_safety(make_controller)
             AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
             cluster_name="native-loopback-test",
         )
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},

@@ -141,13 +141,7 @@ def _iris_client() -> IrisClient:
 
 
 def _current_task(client: IrisClient, task_id: JobName) -> Task:
-    job_id = task_id.parent
-    if job_id is None:
-        raise ValueError(f"Task {task_id} has no parent Job")
-    task = next((task for task in client.current_job(job_id).tasks() if task.task_id == task_id), None)
-    if task is None:
-        raise RuntimeError(f"Task {task_id} was not found")
-    return task
+    return client.current_task(task_id)
 
 
 def _current_attempt(task: Task) -> AttemptIdentity:

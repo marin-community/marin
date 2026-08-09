@@ -16,12 +16,13 @@ from connectrpc.errors import ConnectError
 from iris.backends.protocol import BackendCapability
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from tests.cluster.controller.conftest import (
     MockController,
@@ -43,19 +44,19 @@ def state():
         yield s
 
 
-def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> ControllerServiceImpl:
+def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> LegacyControllerService:
     return make_controller_service(
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 
 @pytest.fixture
-def service(state, tmp_path, log_client) -> ControllerServiceImpl:
+def service(state, tmp_path, log_client) -> LegacyControllerService:
     """Service with a configured auth provider (so elevation gates on admin)."""
     return _make_service(state, tmp_path, log_client, ControllerAuth(provider="static"))
 

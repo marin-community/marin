@@ -8,8 +8,8 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, get_verified_identity
 
-from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.controller.controller import Controller
+from iris.cluster.federation.protocol import PeerCallError
 from iris.cluster.types import JobName
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.activity import ActivityEntry, ActivityQuery
@@ -20,7 +20,12 @@ from iris.resources.errors import (
     ActionPolicyRejected,
     InvalidPageToken,
     InvalidResourceKey,
+    InvalidResourceRequest,
+    ResourceConflict,
+    ResourceExhausted,
     ResourceNotFound,
+    ResourcePermissionDenied,
+    ResourcePreconditionFailed,
     ResourceReplaced,
     ResourceSourceUnavailable,
 )
@@ -44,7 +49,8 @@ from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import iris_logging_pb2, resource_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE
+from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
+from iris.rpc.federation_client import peer_connect_error
 from iris.rpc.resource_codec import (
     job_spec_from_proto,
     job_spec_to_proto,
@@ -448,8 +454,16 @@ class ResourceServiceImpl:
     def submit_job(self, request: resource_pb2.SubmitJobRequest, _ctx: RequestContext) -> resource_pb2.SubmitJobResponse:
         try:
             identity = self._resources.submit_job(job_spec_from_proto(request.spec), request.bundle_blob)
-        except (InvalidResourceKey, ValueError) as exc:
+        except (InvalidResourceKey, InvalidResourceRequest, ValueError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        except ResourcePermissionDenied as exc:
+            raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc
+        except ResourcePreconditionFailed as exc:
+            raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        except ResourceConflict as exc:
+            raise ConnectError(Code.ALREADY_EXISTS, str(exc)) from exc
+        except ResourceExhausted as exc:
+            raise ConnectError(Code.RESOURCE_EXHAUSTED, str(exc)) from exc
         return resource_pb2.SubmitJobResponse(job=_job_identity_to_proto(identity))
 
     def list_jobs(self, request: resource_pb2.ListJobsRequest, _ctx: RequestContext) -> resource_pb2.ListJobsResponse:
@@ -741,6 +755,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
+        except ResourcePermissionDenied as exc:
+            raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc
         return resource_pb2.MintEndpointTokenResponse(
             token=token.token,
             expires_at=timestamp_to_proto(token.expires_at),
@@ -825,6 +841,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except ActionIdempotencyConflict as exc:
             raise ConnectError(Code.ALREADY_EXISTS, str(exc)) from exc
+        except PeerCallError as exc:
+            raise peer_connect_error(exc) from exc
         return resource_pb2.ActionResponse(receipt=_action_receipt_to_proto(receipt))
 
     def retry_task(self, request: resource_pb2.RetryTaskRequest, _ctx: RequestContext) -> resource_pb2.ActionResponse:
@@ -844,6 +862,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except ActionIdempotencyConflict as exc:
             raise ConnectError(Code.ALREADY_EXISTS, str(exc)) from exc
+        except PeerCallError as exc:
+            raise peer_connect_error(exc) from exc
         return resource_pb2.ActionResponse(receipt=_action_receipt_to_proto(receipt))
 
     def terminate_attempt(
@@ -864,6 +884,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except ActionIdempotencyConflict as exc:
             raise ConnectError(Code.ALREADY_EXISTS, str(exc)) from exc
+        except PeerCallError as exc:
+            raise peer_connect_error(exc) from exc
         return resource_pb2.ActionResponse(receipt=_action_receipt_to_proto(receipt))
 
     def get_action_receipt(
@@ -895,6 +917,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except ResourceSourceUnavailable as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
+        except PeerCallError as exc:
+            raise peer_connect_error(exc) from exc
         return resource_pb2.ExecAttemptResponse(
             exit_code=response.exit_code,
             stdout=response.stdout,
@@ -921,6 +945,8 @@ class ResourceServiceImpl:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except ResourceSourceUnavailable as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
+        except PeerCallError as exc:
+            raise peer_connect_error(exc) from exc
         return resource_pb2.ProfileAttemptResponse(
             profile_data=response.profile_data,
             error_message=response.error_message,

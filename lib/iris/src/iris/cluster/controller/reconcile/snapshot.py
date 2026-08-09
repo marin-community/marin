@@ -10,11 +10,10 @@ row shapes.
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
+from iris.cluster.controller.task_state import ActiveTaskRow, AttemptRecord, TaskDetailRow
 from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
 from iris.resources.state import TaskState
 
@@ -156,7 +155,7 @@ class TransitionSnapshot:
 
     now: Timestamp
     tasks: dict[JobName, TaskDetailRow]
-    attempts: dict[tuple[JobName, int], Any]
+    attempts: dict[tuple[JobName, int], AttemptRecord]
     attempt_uid_index: dict[AttemptUid, tuple[JobName, int]]
     job_configs: dict[JobName, JobConfigRow]
     job_state_basis: dict[JobName, JobStateBasis]

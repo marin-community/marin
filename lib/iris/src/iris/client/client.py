@@ -988,6 +988,16 @@ class IrisClient:
                 page_token=page.next_page_token,
             )
 
+    def current_task(self, task_id: JobName) -> Task:
+        """Resolve the current Task incarnation for a wire ID."""
+        job_id = task_id.parent
+        if job_id is None:
+            raise ValueError(f"Task {task_id} has no parent Job")
+        task = next((candidate for candidate in self.current_job(job_id).tasks() if candidate.task_id == task_id), None)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        return task
+
     def report_task_status_text(
         self,
         task_id: JobName,

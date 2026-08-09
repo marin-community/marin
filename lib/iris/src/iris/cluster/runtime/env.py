@@ -14,12 +14,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from iris.cluster.constraints import (
-    INHERITED_CONSTRAINT_KEYS,
-    AttributeValue,
-    Constraint,
-    ConstraintOp,
-)
+from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS, Constraint
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.resources.execution import (
@@ -169,24 +164,6 @@ def with_slice_topology_env(
     return replace(environment, env_vars=env_vars)
 
 
-def _attribute_value_proto_json(value: AttributeValue) -> dict[str, object]:
-    if isinstance(value.value, str):
-        return {"string_value": value.value}
-    if isinstance(value.value, int):
-        return {"int_value": str(value.value)}
-    return {"float_value": value.value}
-
-
-def _constraint_proto_json(value: Constraint) -> dict[str, object]:
-    result: dict[str, object] = {"key": value.key, "op": f"CONSTRAINT_OP_{value.op.name}"}
-    if value.op is ConstraintOp.IN:
-        result["values"] = [_attribute_value_proto_json(item) for item in value.values]
-    elif value.values:
-        result["value"] = _attribute_value_proto_json(value.values[0])
-    result["mode"] = f"CONSTRAINT_MODE_{value.mode.name}"
-    return result
-
-
 def _resource_proto_json(value: ResourceSpec) -> str:
     """Serialize native resources in the established ResourceSpecProto JSON shape."""
     result: dict[str, object] = {}
@@ -284,7 +261,7 @@ def build_common_iris_env(
     # are re-derived from each child's own resource spec.
     inheritable = [c for c in constraints if c.key in INHERITED_CONSTRAINT_KEYS]
     if inheritable:
-        env["IRIS_JOB_CONSTRAINTS"] = json.dumps([_constraint_proto_json(c) for c in inheritable])
+        env["IRIS_JOB_CONSTRAINTS"] = json.dumps([constraint.json_value() for constraint in inheritable])
 
     # Ports: k8s sets "0" (kernel-assigned at runtime), worker path overrides
     # with real allocated ports after calling this function.

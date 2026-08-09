@@ -1,139 +1,203 @@
-# Iris source layout
+# Iris architecture
 
-Iris has separate packages for the public client, RPC transport, native
-resources, controller behavior, persistence, and execution adapters. A resource
-request crosses each boundary once. Generated protobuf messages do not enter
-the native resource or controller-kernel packages.
+Iris has one native resource model and two controller RPC surfaces. New clients
+use `ResourceService`. The retained `ControllerService` decodes its old Job and
+Task messages at `iris.rpc.legacy` and then calls the same native controller.
+Generated protobuf messages do not enter the resource model, controller
+behavior, persistence, scheduling, reconciliation, or backend contracts.
 
-For the reconcile kernel, see [`reconcile_rpc.md`](reconcile_rpc.md). For
-multi-backend routing, see [`multi_backend.md`](multi_backend.md).
+For reconcile details, see [`reconcile_rpc.md`](reconcile_rpc.md). For backend
+routing, see [`multi_backend.md`](multi_backend.md).
 
-## Request flow
+## New resource requests
 
-The public resource path is:
-
-```mermaid
-flowchart LR
-    User[User code] --> IrisClient[iris.client.IrisClient]
-    IrisClient --> Remote[iris.client.RemoteClusterClient]
-    Remote --> RpcClient[iris.rpc.ResourceRpcClient]
-    RpcClient --> Stub[generated ResourceService client]
-    Stub --> Service[iris.rpc.resource_service]
-    Service --> Controller[cluster.controller.Controller]
-    Controller --> Persistence[controller.persistence]
-    Controller --> Runtime[controller.runtime]
-    Runtime --> Backends[iris.backends]
-```
-
-`ResourceRpcClient` and `resource_service` translate between protobuf messages
-and records from `iris.resources`. `Controller` receives only native values.
-SQL and SQLAlchemy stay in `cluster/controller/persistence`.
-
-The retained `ControllerService` wire is an RPC compatibility boundary for old
-clients and operational methods:
+`iris.resources` records are the public client model and the controller's
+application model. Each side of the Connect call translates once.
 
 ```mermaid
 flowchart LR
-    OldClient[ControllerService client] --> OldStub[generated ControllerService client]
-    OldStub --> Adapter[iris.rpc.controller_service]
-    Adapter --> Codec[iris.rpc.legacy_codec]
-    Codec --> Controller[cluster.controller.Controller]
-    Adapter --> Runtime[controller.runtime]
-    Adapter --> Admin[controller.admin]
-    Admin --> Persistence[controller.persistence]
+    User[User code] --> Client[iris.client.IrisClient]
+    Client --> Remote[iris.client.RemoteClusterClient]
+    Remote --> RpcClient[iris.rpc.resource_client.ResourceRpcClient]
+    RpcClient --> ClientCodec[iris.rpc.resource_client_codec]
+    ClientCodec --> Wire[resource_pb2 + generated ResourceService client]
+    Wire --> Service[iris.rpc.resource_service.ResourceServiceImpl]
+    Service --> Native[iris.resources records]
+    Native --> Controller[cluster.controller.controller.Controller]
+    Controller --> Nouns[controller job/task/attempt/endpoint/node/slice services]
+    Nouns --> DB[controller.persistence]
+    Nouns --> Ports[native backend and runtime ports]
 ```
 
-Old Job and Task messages are decoded into `iris.resources` before calling
-`Controller`. Operational methods call the typed `ControllerAdmin` application
-service or `ControllerRuntime`; the RPC adapter does not import controller
-persistence.
+`ResourceRpcClient` exposes native inputs and results. `resource_client_codec`,
+`resource_codec`, and `ResourceServiceImpl` own the protobuf translation.
+`Controller` accepts and returns native records and dispatches to the noun
+services in `iris.cluster.controller`.
 
-## Packages
+## Retained legacy requests
+
+`ControllerService` remains for old clients and for operational RPCs that do
+not yet have resource equivalents. Its handwritten implementation and Job
+codecs are confined to `iris.rpc.legacy`.
+
+```mermaid
+flowchart LR
+    OldClient[Old ControllerService client] --> OldWire[controller_pb2 / job_pb2]
+    OldWire --> Generated[generated ControllerService client and server]
+    Generated --> Legacy[iris.rpc.legacy.controller_service.LegacyControllerService]
+    Legacy --> LegacyCodec[iris.rpc.legacy.job_service_codec and job_codec]
+    LegacyCodec --> Native[iris.resources records]
+    Native --> Controller[cluster.controller.controller.Controller]
+    Legacy --> Ops[cluster.controller.operations.OperationalServices]
+    Legacy --> Runtime[cluster.controller.runtime.ControllerRuntime]
+```
+
+Legacy Job and Task operations cross `LegacyControllerService` and become
+native before reaching `Controller`. Worker registration, checkpoints, raw
+queries, budgets, scheduler diagnostics, and federation transport remain
+operational methods on `LegacyControllerService`; they use typed
+`OperationalServices` or `ControllerRuntime` entry points.
+
+Generated `controller_pb2`, `job_pb2`, and their Connect modules remain at the
+`iris.rpc` root. Worker and legacy protocol generation share those generated
+modules: `worker.proto` imports the old `job.proto`, and `controller.proto`
+defines the retained service. Their generated location does not make them an
+internal application model.
+
+## Maintenance cycle
+
+`ControllerRuntime` owns a single control tick. It reads controller-owned state,
+calls each `TaskBackend` with native requests, and commits all due decisions and
+effects in one transaction.
+
+```mermaid
+flowchart LR
+    Snapshot[ControllerDB control read snapshot] --> Inputs[ControllerRuntime tick inputs]
+    Inputs --> Route[backend routing and scheduling]
+    Inputs --> Reconcile[reconcile requests]
+    Route --> Backend[iris.backends.protocol.TaskBackend]
+    Reconcile --> Backend
+    Backend --> Results[ScheduleResult / ReconcileResult / AutoscaleResult]
+    Results --> Merge[ControllerRuntime._commit_tick]
+    Merge --> Commit[one ControllerDB write transaction]
+    Commit --> Effects[persistence operations and reconcile.commit_effects]
+```
+
+The tick runs schedule, reconcile, and autoscale phases when their cadences are
+due. `TaskBackend` implementations own backend observations and return native
+decisions or effects. The controller merges per-backend results, applies timeout
+and federation decisions, and persists the batch. Worker or pod identity does
+not pass back as an ad hoc controller-side mutation.
+
+## Worker reports and reconciliation
+
+The worker daemon uses a retained wire protocol, with native contracts on both
+sides of the transport.
+
+```mermaid
+sequenceDiagram
+    participant Store as persistence.backends.DbBackendWorkerStore
+    participant Backend as backends.rpc.RpcTaskBackend
+    participant Client as rpc.worker_client.RpcWorkerClient
+    participant Wire as worker_pb2 / Connect
+    participant Service as rpc.worker_service.WorkerServiceImpl
+    participant Worker as cluster.worker.WorkerTaskProvider
+    participant Runtime as controller.ControllerRuntime
+
+    Store->>Backend: ControlSnapshot
+    Backend->>Client: WorkerReconcilePlan records
+    Client->>Wire: encode desired attempts
+    Wire->>Service: Reconcile RPC
+    Service->>Worker: native WorkerReconcileRequest
+    Worker-->>Service: native WorkerReconcileResponse
+    Service-->>Wire: encode observations and health
+    Wire-->>Client: Reconcile response
+    Client-->>Backend: WorkerReconcileResult records
+    Backend->>Backend: resolve observations and liveness into effects
+    Backend-->>Runtime: native ReconcileResult
+    Runtime->>Store: commit effects in the control transaction
+```
+
+`iris.rpc.worker_client`, `worker_service`, and `worker_codec` own the worker
+protobufs. `RpcTaskBackend`, reconciliation kernels, and worker behavior use
+records from `iris.resources` and `iris.backends.protocol`. Kubernetes task
+execution does not use the worker daemon: `iris.backends.k8s.tasks.K8sTaskProvider`
+observes pods and returns the same native `TaskBackend` results.
+
+## Process composition
+
+`compose_controller_process` is the boundary where durable behavior, RPC
+adapters, HTTP presentation, and process lifecycle are assembled.
+
+```mermaid
+flowchart TB
+    Main[cluster.controller.main] --> Compose[cluster.controller.composition.compose_controller_process]
+    Compose --> Runtime[cluster.controller.runtime.ControllerRuntime]
+    Compose --> Controller[cluster.controller.controller.Controller]
+    Runtime --> DB[controller.persistence.ControllerDB]
+    Runtime --> Backends[iris.backends TaskBackend implementations]
+    Controller --> DB
+    Controller --> Backends
+
+    Compose --> Resource[iris.rpc.resource_service.ResourceServiceImpl]
+    Compose --> Legacy[iris.rpc.legacy.controller_service.LegacyControllerService]
+    Compose --> Endpoint[iris.rpc.endpoint_service.EndpointServiceImpl]
+    Compose --> Dashboard[iris.rpc.dashboard.ControllerDashboard]
+
+    Resource --> Controller
+    Legacy --> Controller
+    Legacy --> Runtime
+    Dashboard --> Resource
+    Dashboard --> Legacy
+    Dashboard --> Endpoint
+
+    Compose --> Process[cluster.controller.process.ControllerProcess]
+    Process --> Server[private Uvicorn / Starlette server]
+    Process --> Proxy[native public proxy]
+    Process --> Runtime
+```
+
+`ControllerProcess` starts the private ASGI server, the native public proxy, and
+the control runtime. `ControllerDashboard` mounts ResourceService,
+ControllerService, EndpointService, HTTP routes, and the dashboard assets.
+`composition.py` is allowed to depend on both native and transport modules;
+controller noun services and decision kernels are not.
+
+## Package ownership
 
 | Package | Owns |
 |---|---|
-| `iris.client` | `IrisClient`, job handles, client context, bundle creation, job metadata, and the remote cluster client |
-| `iris.rpc` | `.proto` files, generated Connect code, transport clients, server adapters, authentication, and protobuf codecs |
-| `iris.resources` | Immutable Job, Task, Attempt, Endpoint, Node, Slice, action, activity, and log records |
-| `iris.cluster.controller` | Resource behavior, control loops, scheduling, reconciliation, autoscaling, and persistence |
-| `iris.backends` | Task execution adapters: `RpcTaskBackend` and `K8sTaskProvider` |
+| `iris.client` | `IrisClient`, resource handles, client context, bundle creation, and remote-cluster composition |
+| `iris.resources` | Native Job, Task, Attempt, Endpoint, Node, Slice, action, activity, log, worker, and system records |
+| `iris.rpc` | Protobuf schemas and generated code, Connect clients and services, authentication, and wire/native codecs |
+| `iris.rpc.legacy` | The retained ControllerService implementation and old Job/Task wire translation |
+| `iris.cluster.controller` | Resource behavior, process composition, control loops, routing, scheduling, reconciliation, and persistence |
+| `iris.backends` | Native task-execution adapters, including worker-daemon and Kubernetes implementations |
 | `iris.cluster.platforms` | Controller and worker machine lifecycle for GCP, Kubernetes, local, and manual providers |
-| `iris.cluster.worker` | The worker daemon |
+| `iris.cluster.worker` | Native worker-daemon behavior and task runtime ownership |
 | `iris.cluster.runtime` | Docker and subprocess task execution |
 
-`iris.cluster` still contains configuration and vocabulary shared by the
-controller and execution adapters, including constraints, setup scripts,
-endpoint configuration, and provider configuration.
-
-## Controller structure
-
-`cluster/controller/controller.py` is the resource-oriented application
-surface. It accepts and returns records from `iris.resources`; it does not
-accept generated protobuf messages or issue SQL directly.
-
-`cluster/controller/runtime.py` owns control-loop state and coordinates
-scheduling, reconciliation, checkpointing, federation, and backend I/O.
-`cluster/controller/composition.py` constructs the resource controller, legacy
-RPC adapter, resource RPC adapter, endpoint service, dashboard, and runtime.
-`cluster/controller/main.py` resolves configuration and calls that composition
-root. `cluster/controller/application.py` groups the composed surfaces hosted by
-the process runtime.
-
-`cluster/controller/admin.py` exposes typed operational reads and mutations for
-the retained `ControllerService` methods that are not resource operations. It is
-the persistence-facing application boundary for that RPC adapter.
-
-Persistence is confined to `cluster/controller/persistence`:
+Persistence stays in `iris.cluster.controller.persistence`:
 
 - `schema.py` defines current tables and indexes.
-- `migrations/` upgrades older databases.
+- `migrations/` upgrades databases.
 - `database.py` owns engines, transactions, and snapshots.
-- `reads.py` and `operations/` expose typed reads and mutations.
-- `projections/` owns write-through derived state.
-- `backends.py` implements the database-backed worker view used by an RPC
-  backend.
+- `reads.py`, `writes.py`, and `operations/` expose typed reads and mutations.
+- `projections/` maintains derived state.
+- `backends.py` implements the worker-state port used by `RpcTaskBackend`.
 
-The decision kernels under `reconcile/` and `scheduling/` consume snapshots and
-return decisions. They do not import RPC transport or SQLAlchemy.
+## Transport rules and exceptions
 
-## Execution boundaries
-
-`TaskBackend` is the controller's task-execution contract. Each implementation
-drives one backend and exposes the same phases:
-
-- `schedule` returns placement decisions.
-- `reconcile` returns task observations and worker health observations.
-- `autoscale` returns capacity changes.
-- `get_process_status`, `profile_task`, and `exec_in_container` perform
-  explicit operational requests.
-
-`iris.backends.rpc.RpcTaskBackend` uses worker daemons and the Iris autoscaler.
-`iris.backends.k8s.K8sTaskProvider` observes and controls Kubernetes directly.
-The contract and its native request/result records live in
-`iris.backends.protocol`; native backend status records live in
-`iris.backends.status`. Worker-daemon backends receive a typed
-`BackendWorkerStore` from the composition runtime. They do not receive a
-`ControllerDB` or import persistence implementations. The Connect worker client
-and worker service adapter live in `iris.rpc.worker_client` and
-`iris.rpc.worker_service`; backend implementations exchange native records with
-them. `iris.rpc.backend_status_codec` converts native status to the retained
-dashboard wire.
-
-Machine lifecycle is separate from task execution. Implementations under
-`cluster/platforms` start, stop, and inspect controller or worker machines.
-They do not decide Job or Task state.
-
-## Dependency rules
-
-- `iris.resources` and the controller persistence, reconcile, and scheduling
-  packages do not import protobuf or Connect modules.
-- Handwritten protobuf translation belongs in `iris.rpc`.
-- SQLAlchemy belongs in `cluster/controller/persistence`.
+- `iris.resources`, controller noun services, scheduling, reconciliation, and
+  backend protocols do not import protobuf or Connect modules.
+- Handwritten protobuf translation belongs in `iris.rpc`; old ControllerService
+  translation belongs in `iris.rpc.legacy`.
+- SQLAlchemy belongs in `iris.cluster.controller.persistence`.
 - Public user code starts at `iris.client`; low-level Connect clients live in
-  `iris.rpc` and are named with an `RpcClient` suffix.
+  `iris.rpc` and use an `RpcClient` suffix.
 - External task effects belong in `iris.backends`; machine effects belong in
-  `cluster.platforms`.
-- The retained old Job/Task wire is decoded and encoded in
-  `iris.rpc.legacy_codec`.
-- RPC adapters may depend on typed controller application services. They do not
-  import `cluster.controller.persistence`.
+  `iris.cluster.platforms`.
+- `iris.backends.k8s.logship` is a standalone pod-side transport executable. It
+  uses `ResourceRpcClient` to discover the log endpoint and Finelog's generated
+  protobuf client to publish CRI log batches. It is not imported by
+  `K8sTaskProvider` behavior or a controller decision kernel.

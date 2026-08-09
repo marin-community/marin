@@ -24,7 +24,7 @@ from iris.cluster.types import AttemptUid, JobName
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
 from iris.rpc import job_pb2
-from iris.rpc.legacy_job_codec import (
+from iris.rpc.legacy.job_codec import (
     constraint_from_proto,
     environment_from_proto,
     resource_spec_from_proto,
@@ -210,7 +210,7 @@ def test_controller_address_set_when_provided():
     assert env["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
 
 
-def test_native_environment_preserves_legacy_constraint_json() -> None:
+def test_native_environment_carries_native_constraint_json() -> None:
     req = _make_req()
     req.constraints.add(
         key="region",
@@ -220,7 +220,7 @@ def test_native_environment_preserves_legacy_constraint_json() -> None:
     )
 
     assert json.loads(_common_env(req)["IRIS_JOB_CONSTRAINTS"]) == [
-        jf.MessageToDict(req.constraints[0], preserving_proto_field_name=True)
+        {"key": "region", "op": "eq", "values": ["us-east1"], "mode": "required"}
     ]
 
 

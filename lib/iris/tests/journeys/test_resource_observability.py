@@ -335,61 +335,6 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
     assert profile_response.profile_data == b"current profile"
 
 
-@pytest.mark.parametrize("operation", ["exec", "profile"])
-def test_debug_action_rechecks_attempt_after_target_resolution(journey, monkeypatch, operation: str) -> None:
-    job = journey.submit(f"debug-race-{operation}", preemption_retries=1)
-    journey.settle()
-    stale = journey.attempt(job[0]).summary.identity
-    original_target = journey.controller.controller._task_target
-
-    # Stage a competing controller write in the exact window under test; the
-    # oracle is the public error plus zero provider calls, not helper dispatch.
-    def replace_after_resolution(identity):
-        target = original_target(identity)
-        task = journey.task(job[0]).summary
-        assert task.current_attempt is not None
-        journey.retry_task(
-            task.identity,
-            expected_attempt_uid=task.current_attempt.attempt_uid,
-            idempotency_key=f"debug-race-{operation}",
-        )
-        journey.settle()
-        return target
-
-    runtime_calls: list[str] = []
-    monkeypatch.setattr(journey.controller.controller, "_task_target", replace_after_resolution)
-    monkeypatch.setattr(
-        journey.backend,
-        "exec_in_container",
-        lambda *_args, **_kwargs: runtime_calls.append("exec") or ExecResult(0, "", "", ""),
-    )
-    monkeypatch.setattr(
-        journey.backend,
-        "profile_task",
-        lambda *_args, **_kwargs: runtime_calls.append("profile") or ProfileResult(b"", ""),
-    )
-    service = ResourceServiceImpl(journey.controller.controller)
-
-    with pytest.raises(ConnectError) as error:
-        if operation == "exec":
-            service.exec_attempt(
-                resource_pb2.ExecAttemptRequest(attempt=_attempt_identity(stale), command=["true"]),
-                None,
-            )
-        else:
-            service.profile_attempt(
-                resource_pb2.ProfileAttemptRequest(
-                    attempt=_attempt_identity(stale),
-                    profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
-                ),
-                None,
-            )
-
-    assert error.value.code is Code.FAILED_PRECONDITION
-    assert runtime_calls == []
-    assert journey.attempt(job[0]).summary.identity != stale
-
-
 def test_exec_and_profile_refuse_an_attempt_from_a_replaced_task_incarnation(journey, monkeypatch) -> None:
     original = journey.submit("debug-replaced")
     journey.settle()

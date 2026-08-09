@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""HTTP dashboard with Connect RPC and web UI.
+"""HTTP host for the Connect RPC services and dashboard web UI.
 
 The dashboard serves:
 - Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
@@ -53,8 +53,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
 from iris.backends.protocol import backend_descriptor
-from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.auth import SESSION_COOKIE, VERIFIED_IDENTITY_HEADER, JwtTokenManager
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
@@ -67,7 +66,6 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_AUTHORIZATION_HEADER,
     UPSTREAM_URL_HEADER,
 )
-from iris.cluster.controller.persistence.database import DatabaseError
 from iris.cluster.dashboard_common import (
     favicon_route,
     html_shell,
@@ -76,11 +74,12 @@ from iris.cluster.dashboard_common import (
 )
 from iris.cluster.types import JobName
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, authorize_method
+from iris.rpc.auth import authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
-from iris.rpc.controller_service import ControllerServiceImpl
+from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.resource_connect import ResourceServiceASGIApplication
 from iris.rpc.resource_service import ResourceServiceImpl
 
@@ -176,7 +175,7 @@ class ControllerDashboard:
 
     def __init__(
         self,
-        service: ControllerServiceImpl,
+        service: LegacyControllerService,
         *,
         resource_service: ResourceServiceImpl | None = None,
         endpoint_service: EndpointServiceImpl | None = None,
@@ -439,7 +438,7 @@ class ControllerDashboard:
         """Health check endpoint for controller availability."""
         try:
             checkpoint_epoch_ms = self._service.probe_database()
-        except DatabaseError:
+        except Exception:
             logger.exception("Controller database health probe failed")
             return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)
         return JSONResponse(
