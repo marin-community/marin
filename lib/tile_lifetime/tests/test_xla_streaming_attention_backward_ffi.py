@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import pytest
 
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
-from tile_lifetime.ir import DType
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
@@ -405,6 +404,43 @@ def test_natural_grug_gpu_hlo_proves_one_entry_local_reverse_region() -> None:
     assert plan.provenance.score_scale == pytest.approx(0.32421875, rel=5e-4)
     assert all(users for _, users in plan.external_users)
     assert not ({value.instruction for value in plan.inputs} & set(plan.internal_instructions))
+
+
+def test_natural_grug_output_layout_restores_singleton_elided_value_axis() -> None:
+    program, generated, hlo = _grug_region_inputs()
+    plan = plan_streaming_attention_backward_hlo_region_replacement(hlo, program, generated)
+
+    layouts = derive_streaming_attention_backward_ffi_output_layouts(plan)
+
+    assert tuple(layout.minor_to_major for layout in layouts) == (
+        (3, 2, 1, 0),
+        (3, 2, 1, 0),
+        (1, 3, 2, 0),
+    )
+    schedule = derive_streaming_attention_backward_tile_schedule(
+        program,
+        query_tile_size=4,
+        key_value_tile_size=4,
+        domain_traversal=StreamingAttentionBackwardDomainTraversal.LOWER_TRIANGULAR,
+    )
+    regenerated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.grug_singleton_layout",
+        output_layouts=layouts,
+    )
+    regenerated_plan = plan_streaming_attention_backward_hlo_region_replacement(hlo, program, regenerated)
+    rewritten = replace_streaming_attention_backward_region_with_custom_call(
+        hlo,
+        regenerated_plan,
+        target=regenerated.target_name,
+    )
+    entry = parse_hlo_module_text(rewritten).computation("main.165")
+    shuttle_instructions = tuple(
+        instruction for instruction in entry.instructions if instruction.name.startswith("shuttle.")
+    )
+
+    assert not any(instruction.opcode == "copy" for instruction in shuttle_instructions)
 
 
 def test_natural_grug_region_rewrite_redirects_only_cotangent_users() -> None:

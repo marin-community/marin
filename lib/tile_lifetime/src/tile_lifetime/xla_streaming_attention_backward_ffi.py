@@ -252,7 +252,7 @@ def replace_streaming_attention_backward_region_with_custom_call(
     replacements: dict[str, str] = {}
     for index, value in enumerate(plan.outputs):
         canonical_name = f"shuttle.region.{value.role.value}.canonical"
-        lines.append(f"{indent}%{canonical_name} = {value.ffi_shape} " f"get-tuple-element(%{call_name}), index={index}")
+        lines.append(f"{indent}%{canonical_name} = {value.ffi_shape} get-tuple-element(%{call_name}), index={index}")
         physical_name = _emit_boundary_adapter(
             lines,
             indent=indent,
@@ -330,7 +330,7 @@ def derive_streaming_attention_backward_ffi_output_layouts(
     return tuple(
         StreamingAttentionBackwardFfiBufferLayout(
             buffer_name=value.role.value,
-            minor_to_major=_shape_layout(value.physical_shape),
+            minor_to_major=_lift_physical_layout_to_ffi_shape(value.physical_shape, value.ffi_shape),
         )
         for value in plan.outputs
     )
@@ -1436,6 +1436,46 @@ def _shape_signature(shape: str) -> tuple[str, tuple[int, ...]]:
     if match is None:
         raise ValueError(f"unsupported physical HLO array shape: {shape!r}")
     return match.group("dtype"), tuple(int(value) for value in match.group("dims").split(",") if value)
+
+
+def _lift_physical_layout_to_ffi_shape(physical_shape: str, ffi_shape: str) -> tuple[int, ...]:
+    """Restore singleton-elided FFI axes without changing physical strides."""
+    physical_dtype, physical_dimensions = _shape_signature(physical_shape)
+    ffi_dtype, ffi_dimensions = _shape_signature(ffi_shape)
+    physical_layout = _shape_layout(physical_shape)
+    if physical_dtype != ffi_dtype:
+        raise ValueError(f"physical and FFI output dtypes differ: {physical_dtype} != {ffi_dtype}")
+    if physical_dimensions == ffi_dimensions:
+        return physical_layout
+    if any(dimension == 1 for dimension in physical_dimensions):
+        raise ValueError(
+            "partially singleton-elided physical output layouts are unsupported: "
+            f"{physical_dimensions} -> {ffi_dimensions}"
+        )
+    ffi_non_singletons = tuple((axis, dimension) for axis, dimension in enumerate(ffi_dimensions) if dimension != 1)
+    if tuple(dimension for _, dimension in ffi_non_singletons) != physical_dimensions:
+        raise ValueError(
+            f"physical output dimensions are not a singleton-elided FFI shape: {physical_dimensions} -> {ffi_dimensions}"
+        )
+
+    physical_to_ffi_axis = tuple(axis for axis, _ in ffi_non_singletons)
+    lifted = [physical_to_ffi_axis[axis] for axis in physical_layout]
+    ffi_layout = _shape_layout(ffi_shape)
+    missing_axes = tuple(axis for axis in ffi_layout if axis not in lifted)
+    for missing_axis in missing_axes:
+        canonical_position = ffi_layout.index(missing_axis)
+        more_minor_axes = reversed(ffi_layout[:canonical_position])
+        anchor = next((axis for axis in more_minor_axes if axis in lifted), None)
+        if anchor is not None:
+            lifted.insert(lifted.index(anchor) + 1, missing_axis)
+            continue
+        more_major_axes = ffi_layout[canonical_position + 1 :]
+        anchor = next((axis for axis in more_major_axes if axis in lifted), None)
+        if anchor is None:
+            lifted.append(missing_axis)
+        else:
+            lifted.insert(lifted.index(anchor), missing_axis)
+    return tuple(lifted)
 
 
 def _buffer_signature(specification: StreamingAttentionBackwardFfiBuffer) -> tuple[str, tuple[int, ...]]:
