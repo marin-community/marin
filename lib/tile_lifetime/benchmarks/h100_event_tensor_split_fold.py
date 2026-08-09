@@ -16,6 +16,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import numpy as np
 import torch
 from torch.utils.cpp_extension import load
 
@@ -81,6 +82,14 @@ def _error(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
     }
 
 
+def _source_ordered_reference(input_tensor: torch.Tensor, *, rows: int, partitions: int) -> torch.Tensor:
+    input_array = input_tensor.detach().cpu().numpy().reshape(rows, partitions)
+    output = np.zeros((rows,), dtype=np.float32)
+    for partition in range(partitions):
+        output = np.asarray(output + input_array[:, partition], dtype=np.float32)
+    return torch.from_numpy(output).to(device=input_tensor.device)
+
+
 def _benchmark(
     variants: tuple[tuple[str, Callable[[], None]], ...],
     *,
@@ -139,7 +148,8 @@ def _correctness(
     rows: int,
     partitions: int,
 ) -> dict[str, Any]:
-    expected = input_tensor.reshape(rows, partitions).sum(dim=1)
+    source_ordered = _source_ordered_reference(input_tensor, rows=rows, partitions=partitions)
+    tree_reduced = input_tensor.reshape(rows, partitions).sum(dim=1)
     records: list[dict[str, Any]] = []
     first_hash: str | None = None
     for order_offset, order_stride in ((0, _coprime_strides(partitions)[0]), (13, _coprime_strides(partitions)[-1])):
@@ -150,15 +160,29 @@ def _correctness(
         output_hash = _tensor_sha256(output)
         if first_hash is None:
             first_hash = output_hash
+        finite = bool(torch.isfinite(output).all().item())
+        partials_match = torch.equal(partials, input_tensor)
+        source_order_match = torch.equal(output, source_ordered)
+        if not finite:
+            raise RuntimeError("counted-event output contains a non-finite value")
+        if not partials_match:
+            raise RuntimeError("counted-event producers did not write every required partial exactly once")
+        if not source_order_match:
+            error = _error(output, source_ordered)
+            raise RuntimeError(f"counted-event output does not match source-ordered FP32 reference: {error}")
+        if first_hash != output_hash:
+            raise RuntimeError("producer-order perturbation changed the source-ordered output")
         records.append(
             {
                 "order_offset": order_offset,
                 "order_stride": order_stride,
                 "delay_cycles": 997,
-                "error": _error(output, expected),
+                "source_ordered_error": _error(output, source_ordered),
+                "torch_tree_reduction_error": _error(output, tree_reduced),
                 "output_sha256": output_hash,
                 "matches_first_order_bitwise": output_hash == first_hash,
-                "partials_match_input_bitwise": torch.equal(partials, input_tensor),
+                "partials_match_input_bitwise": partials_match,
+                "finite": finite,
             }
         )
     module.run_counted_event_out(input_tensor, partials, output, 5, _coprime_strides(partitions)[0], 0)
@@ -166,10 +190,15 @@ def _correctness(
     repeat_hash = _tensor_sha256(output)
     module.run_counted_event_out(input_tensor, partials, output, 5, _coprime_strides(partitions)[0], 0)
     torch.cuda.synchronize()
+    repeat_bitwise = repeat_hash == _tensor_sha256(output)
+    if not repeat_bitwise:
+        raise RuntimeError("fresh per-invocation event storage produced a nondeterministic output")
     return {
         "perturbed_orders": records,
+        "source_ordered_reference_sha256": _tensor_sha256(source_ordered),
+        "torch_tree_reduction_sha256": _tensor_sha256(tree_reduced),
         "fresh_event_storage_each_invocation": True,
-        "repeat_bitwise": repeat_hash == _tensor_sha256(output),
+        "repeat_bitwise": repeat_bitwise,
     }
 
 
