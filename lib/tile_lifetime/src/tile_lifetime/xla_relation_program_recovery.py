@@ -26,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+import numpy as np
+
 from tile_lifetime.cast_scalar_program import (
     CastScalarNumericalPolicy,
     CastScalarProgram,
@@ -49,6 +51,13 @@ _CALLED_COMPUTATION = re.compile(r"to_apply=%([A-Za-z0-9_.-]+)")
 _DOT_DIMENSIONS = re.compile(
     r"(?P<name>lhs_contracting_dims|rhs_contracting_dims|lhs_batch_dims|rhs_batch_dims)=\{(?P<dims>[0-9,]*)\}"
 )
+_LAYOUT = re.compile(r"\{(?P<axes>[0-9,]+)\}$")
+_DIMENSIONS = re.compile(r"dimensions=\{(?P<axes>[0-9,]*)\}")
+_PADDING = re.compile(r"padding=(?P<dimensions>[0-9_x]+)")
+_IOTA_DIMENSION = re.compile(r"iota_dimension=(?P<axis>[0-9]+)")
+_COMPARE_DIRECTION = re.compile(r"direction=(?P<direction>[A-Z]+)")
+_SCALAR_CONSTANT = re.compile(r"constant\((?P<value>-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\)")
+_SINGLETON_CONSTANT = re.compile(r"constant\(\{(?P<value>-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\}\)")
 _DATAFLOW_OPCODES = frozenset(
     {
         "add",
@@ -199,6 +208,8 @@ class RoutedForwardMapStage:
     layout_opcodes: tuple[str, ...]
     scalar_outputs: tuple[ScalarMapOutputRecord, ...]
     has_segmented_layout: bool
+    segmented_layout: SegmentedLayoutRecord | None
+    segmented_layout_requirement: SegmentedLayoutRequirement | None
 
 
 @dataclass(frozen=True)
@@ -255,6 +266,107 @@ class SegmentedLayoutRequirement:
     physical_shape: str
     observed_path_opcodes: tuple[str, ...]
     required_relations: tuple[SegmentedLayoutRelation, ...]
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SegmentedPhysicalIndex:
+    """One logical routed scalar mapped onto a physical Contract operand."""
+
+    physical_row: int
+    physical_k: int
+    valid: bool
+
+
+@dataclass(frozen=True)
+class SegmentedLayoutIndexMap:
+    """Affine/runtime map from edge, feature, and segment to Contract coordinates."""
+
+    logical_edge_count: int
+    logical_feature_extent: int
+    segment_count: int
+    padded_row_extent: int
+    row_stride: int
+    row_offset: int
+    feature_stride: int
+    segment_stride: int
+
+    def physical_index(
+        self,
+        *,
+        edge_row: int,
+        feature: int,
+        segment: int,
+        segment_ends: tuple[int, ...],
+    ) -> SegmentedPhysicalIndex:
+        """Evaluate the recovered finite index relation."""
+        if edge_row < 0 or edge_row >= self.logical_edge_count:
+            raise ValueError("edge row lies outside the compact relation")
+        if feature < 0 or feature >= self.logical_feature_extent:
+            raise ValueError("feature lies outside the logical Map output")
+        if segment < 0 or segment >= self.segment_count:
+            raise ValueError("segment lies outside the relation destination domain")
+        if len(segment_ends) != self.segment_count:
+            raise ValueError("segment ends do not match the destination domain")
+        starts = (0, *segment_ends[:-1])
+        return SegmentedPhysicalIndex(
+            physical_row=edge_row * self.row_stride + self.row_offset,
+            physical_k=feature * self.feature_stride + segment * self.segment_stride,
+            valid=starts[segment] <= edge_row < segment_ends[segment],
+        )
+
+
+@dataclass(frozen=True)
+class SourceFoldInverseIndexMap:
+    """Map a destination-major edge row back to source and route-slot order."""
+
+    stable_permutation: str
+    fold_indices: str
+    source_item_divisor: int
+    route_slot_modulus: int
+
+    def source_coordinate(
+        self,
+        destination_edge_row: int,
+        permutation: tuple[int, ...],
+    ) -> tuple[int, int]:
+        """Evaluate the recovered inverse relation for one compact edge row."""
+        if destination_edge_row < 0 or destination_edge_row >= len(permutation):
+            raise ValueError("destination edge row lies outside the stable permutation")
+        route = permutation[destination_edge_row]
+        return route // self.source_item_divisor, route % self.route_slot_modulus
+
+
+@dataclass(frozen=True)
+class SegmentedLayoutProof:
+    """HLO dataflow evidence for one recovered index relation."""
+
+    relation: SegmentedLayoutRelation
+    nodes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SegmentedLayoutRecord:
+    """Verified relation-driven layout between logical and physical Contracts."""
+
+    relation_plan: str
+    index_map: SegmentedLayoutIndexMap
+    segment_ends: str
+    fill_value: float
+    physical_shape: str
+    weight_shape: str
+    inverse: SourceFoldInverseIndexMap
+    proofs: tuple[SegmentedLayoutProof, ...]
+
+    @property
+    def verified_relations(self) -> tuple[SegmentedLayoutRelation, ...]:
+        """Return the relations whose HLO derivations were verified."""
+        return tuple(proof.relation for proof in self.proofs)
+
+    @property
+    def runtime_index_inputs(self) -> tuple[str, str]:
+        """Return relation metadata that generated execution must receive at runtime."""
+        return self.segment_ends, self.inverse.stable_permutation
 
 
 @dataclass(frozen=True)
@@ -266,6 +378,7 @@ class RoutedForwardTypedFfiCodegenPlan:
     contracts: tuple[RoutedForwardContractStage, ...]
     map_stage: RoutedForwardMapStage
     fold_stage: RoutedForwardFoldStage
+    segmented_layout: SegmentedLayoutRecord | None
     disposition: RoutedForwardCodegenDisposition
     missing_segmented_layout: SegmentedLayoutRequirement | None
 
@@ -454,10 +567,17 @@ def form_routed_forward_region(hlo_text: str) -> RoutedForwardRegionRecord:
     layout_path = _inlined_path(graph, first_node.id, physical_map_output)
     logical_feature_extent = sum(output.feature_extent for output in chain.map.scalar_outputs)
     physical_shape = graph.node(physical_map_output).shape
-    parsed_physical_shape = _parse_array_shape(physical_shape)
-    has_segmented_layout = parsed_physical_shape is not None and parsed_physical_shape[1] == (
-        relation_plan.edge_count,
-        logical_feature_extent,
+    segmented_layout, segmented_layout_requirement = _recover_segmented_layout(
+        module=module,
+        graph=graph,
+        relation_plan=relation_plan,
+        layout_path=layout_path,
+        first_contract_value=first_node.operands[0],
+        physical_value=physical_map_output,
+        weight_value=second_node.operands[1],
+        fold_value=fold.fold,
+        logical_feature_extent=logical_feature_extent,
+        observed_path_opcodes=tuple(graph.node(node_id).opcode for node_id in layout_path[1:]),
     )
     map_stage = RoutedForwardMapStage(
         source_contract=chain.first.node,
@@ -469,7 +589,9 @@ def form_routed_forward_region(hlo_text: str) -> RoutedForwardRegionRecord:
         layout_path=layout_path,
         layout_opcodes=tuple(graph.node(node_id).opcode for node_id in layout_path[1:]),
         scalar_outputs=chain.map.scalar_outputs,
-        has_segmented_layout=has_segmented_layout,
+        has_segmented_layout=segmented_layout is not None,
+        segmented_layout=segmented_layout,
+        segmented_layout_requirement=segmented_layout_requirement,
     )
     fold_stage = RoutedForwardFoldStage(
         contribution_inputs=fold.contribution_inputs,
@@ -509,30 +631,499 @@ def plan_routed_forward_typed_ffi(hlo_text: str) -> RoutedForwardTypedFfiCodegen
         raise ValueError("routed forward region is not convex and topologically insertable")
     if region.requires_auxiliary_output_split:
         raise ValueError("routed forward region requires a generic auxiliary-output split")
-    missing_segmented_layout = None
-    disposition = RoutedForwardCodegenDisposition.READY
-    if not region.map_stage.has_segmented_layout:
-        missing_segmented_layout = SegmentedLayoutRequirement(
-            logical_shape=(region.map_stage.logical_row_extent, region.map_stage.logical_feature_extent),
-            physical_shape=region.map_stage.physical_output_shape,
-            observed_path_opcodes=region.map_stage.layout_opcodes,
-            required_relations=(
-                SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
-                SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,
-                SegmentedLayoutRelation.VALIDITY_AND_FILL,
-                SegmentedLayoutRelation.SOURCE_FOLD_INVERSE,
-            ),
-        )
-        disposition = RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    segmented_layout = region.map_stage.segmented_layout
+    all_relations = tuple(SegmentedLayoutRelation)
+    ready = segmented_layout is not None and segmented_layout.verified_relations == all_relations
+    disposition = (
+        RoutedForwardCodegenDisposition.READY if ready else RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    )
+    missing_segmented_layout = None if ready else region.map_stage.segmented_layout_requirement
+    if not ready and missing_segmented_layout is None:
+        raise ValueError("segmented layout recovery failed without a structured rejection")
     return RoutedForwardTypedFfiCodegenPlan(
         region=region,
         api_version=1,
         contracts=region.contracts,
         map_stage=region.map_stage,
         fold_stage=region.fold_stage,
+        segmented_layout=segmented_layout,
         disposition=disposition,
         missing_segmented_layout=missing_segmented_layout,
     )
+
+
+@dataclass(frozen=True)
+class _PhysicalArrayShape:
+    dtype: str
+    dimensions: tuple[int, ...]
+    minor_to_major: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _SegmentedMapLayoutTrace:
+    logical_value: str
+    pad: str
+    broadcast: str
+    select: str
+    transpose: str
+    copy: str
+    bitcast: str
+    predicate: str
+    logical_edge_count: int
+    logical_feature_extent: int
+    segment_count: int
+    padded_row_extent: int
+    flattened_pair_order: tuple[str, str]
+
+
+class _SegmentedLayoutRecoveryError(ValueError):
+    def __init__(self, relation: SegmentedLayoutRelation, reason: str):
+        self.relation = relation
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _recover_segmented_layout(
+    *,
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    relation_plan: RelationPlanRecord,
+    layout_path: tuple[str, ...],
+    first_contract_value: str,
+    physical_value: str,
+    weight_value: str,
+    fold_value: str,
+    logical_feature_extent: int,
+    observed_path_opcodes: tuple[str, ...],
+) -> tuple[SegmentedLayoutRecord | None, SegmentedLayoutRequirement | None]:
+    """Recover the physical relation from HLO index and layout operations."""
+    physical_shape = graph.node(physical_value).shape
+    missing: list[tuple[SegmentedLayoutRelation, str]] = []
+    trace: _SegmentedMapLayoutTrace | None = None
+    try:
+        trace = _segmented_map_layout_trace(
+            graph,
+            relation_plan=relation_plan,
+            layout_path=layout_path,
+            physical_value=physical_value,
+            logical_feature_extent=logical_feature_extent,
+        )
+    except _SegmentedLayoutRecoveryError as error:
+        missing.extend(
+            (relation, error.reason)
+            for relation in (
+                SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
+                SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,
+                SegmentedLayoutRelation.VALIDITY_AND_FILL,
+            )
+        )
+
+    feature_proof: SegmentedLayoutProof | None = None
+    edge_order_proof: SegmentedLayoutProof | None = None
+    validity_proof: SegmentedLayoutProof | None = None
+    fill_value = 0.0
+    if trace is not None:
+        try:
+            edge_order_proof = _verify_first_contract_edge_order(
+                graph,
+                relation_plan=relation_plan,
+                first_contract_value=first_contract_value,
+            )
+        except _SegmentedLayoutRecoveryError as error:
+            missing.append((error.relation, error.reason))
+        try:
+            feature_proof = _verify_segmented_weight_flattening(
+                graph,
+                trace=trace,
+                weight_value=weight_value,
+            )
+        except _SegmentedLayoutRecoveryError as error:
+            missing.append((error.relation, error.reason))
+        try:
+            validity_proof, fill_value = _verify_segmented_validity(
+                module,
+                graph,
+                relation_plan=relation_plan,
+                trace=trace,
+            )
+        except _SegmentedLayoutRecoveryError as error:
+            missing.append((error.relation, error.reason))
+
+    inverse: SourceFoldInverseIndexMap | None = None
+    inverse_proof: SegmentedLayoutProof | None = None
+    try:
+        inverse, inverse_proof = _recover_source_fold_inverse(
+            graph,
+            relation_plan=relation_plan,
+            fold_value=fold_value,
+        )
+    except _SegmentedLayoutRecoveryError as error:
+        missing.append((error.relation, error.reason))
+
+    if (
+        missing
+        or trace is None
+        or edge_order_proof is None
+        or feature_proof is None
+        or validity_proof is None
+        or inverse is None
+    ):
+        unique_missing: dict[SegmentedLayoutRelation, str] = {}
+        for relation, reason in missing:
+            unique_missing.setdefault(relation, reason)
+        return None, SegmentedLayoutRequirement(
+            logical_shape=(relation_plan.edge_count, logical_feature_extent),
+            physical_shape=physical_shape,
+            observed_path_opcodes=observed_path_opcodes,
+            required_relations=tuple(relation for relation in SegmentedLayoutRelation if relation in unique_missing),
+            reasons=tuple(
+                unique_missing[relation] for relation in SegmentedLayoutRelation if relation in unique_missing
+            ),
+        )
+
+    assert inverse_proof is not None
+    pair_strides = {
+        ("feature", "segment"): (trace.segment_count, 1),
+        ("segment", "feature"): (1, trace.logical_feature_extent),
+    }
+    feature_stride, segment_stride = pair_strides[trace.flattened_pair_order]
+    edge_proof = SegmentedLayoutProof(
+        relation=SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
+        nodes=(
+            *edge_order_proof.nodes,
+            trace.logical_value,
+            trace.pad,
+            trace.broadcast,
+            trace.transpose,
+            trace.copy,
+            trace.bitcast,
+        ),
+    )
+    return (
+        SegmentedLayoutRecord(
+            relation_plan=relation_plan.destination_sort,
+            index_map=SegmentedLayoutIndexMap(
+                logical_edge_count=trace.logical_edge_count,
+                logical_feature_extent=trace.logical_feature_extent,
+                segment_count=trace.segment_count,
+                padded_row_extent=trace.padded_row_extent,
+                row_stride=1,
+                row_offset=0,
+                feature_stride=feature_stride,
+                segment_stride=segment_stride,
+            ),
+            segment_ends=relation_plan.destination_offsets,
+            fill_value=fill_value,
+            physical_shape=physical_shape,
+            weight_shape=graph.node(weight_value).shape,
+            inverse=inverse,
+            proofs=(edge_proof, feature_proof, validity_proof, inverse_proof),
+        ),
+        None,
+    )
+
+
+def _segmented_map_layout_trace(
+    graph: InlinedHloGraph,
+    *,
+    relation_plan: RelationPlanRecord,
+    layout_path: tuple[str, ...],
+    physical_value: str,
+    logical_feature_extent: int,
+) -> _SegmentedMapLayoutTrace:
+    relation = SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW
+    path_nodes = tuple(graph.node(node_id) for node_id in layout_path)
+    pads = tuple(node for node in path_nodes if node.opcode == "pad")
+    if len(pads) != 1 or len(pads[0].operands) != 2:
+        raise _SegmentedLayoutRecoveryError(relation, f"layout path has {len(pads)} candidate pads")
+    pad = pads[0]
+    logical = _physical_array_shape(graph.node(pad.operands[0]).shape)
+    padded = _physical_array_shape(pad.shape)
+    expected_logical = (relation_plan.edge_count, logical_feature_extent)
+    if logical is None or logical.dimensions != expected_logical:
+        raise _SegmentedLayoutRecoveryError(relation, "pad input is not the logical edge-by-feature Map result")
+    if padded is None or len(padded.dimensions) != 2 or padded.dimensions[1] != logical_feature_extent:
+        raise _SegmentedLayoutRecoveryError(relation, "pad output does not preserve the feature axis")
+    padding = _padding_pairs(pad.attributes)
+    expected_padding = ((0, padded.dimensions[0] - relation_plan.edge_count), (0, 0))
+    if padding != expected_padding:
+        raise _SegmentedLayoutRecoveryError(relation, "pad does not embed compact edge rows at the physical row origin")
+    pad_fill = _scalar_constant(graph.node(pad.operands[1]))
+    if pad_fill != 0.0:
+        raise _SegmentedLayoutRecoveryError(relation, "compact edge-row padding is not zero-filled")
+
+    broadcasts = tuple(
+        node
+        for node in path_nodes
+        if node.opcode == "broadcast"
+        and (shape := _physical_array_shape(node.shape)) is not None
+        and len(shape.dimensions) == 3
+        and shape.dimensions[1:] == padded.dimensions
+        and _attribute_axes(node.attributes) == (1, 2)
+    )
+    if len(broadcasts) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, f"layout path has {len(broadcasts)} row-preserving broadcasts")
+    broadcast = broadcasts[0]
+    broadcast_shape = _physical_array_shape(broadcast.shape)
+    assert broadcast_shape is not None
+    segment_count = broadcast_shape.dimensions[0]
+    if segment_count != relation_plan.destination_count:
+        raise _SegmentedLayoutRecoveryError(relation, "broadcast segment axis differs from the RelationPlan domain")
+
+    selects = tuple(
+        node
+        for node in path_nodes
+        if node.opcode == "select" and len(node.operands) == 3 and node.operands[1] == broadcast.id
+    )
+    if len(selects) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, f"layout path has {len(selects)} segment-validity selects")
+    select = selects[0]
+    transposes = tuple(
+        node for node in path_nodes if node.opcode == "transpose" and select.id in _node_ancestors(graph, node.id)
+    )
+    if len(transposes) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, f"layout path has {len(transposes)} flattening transposes")
+    transpose = transposes[0]
+    transpose_axes = _attribute_axes(transpose.attributes)
+    pair_orders = {
+        (1, 2, 0): ("feature", "segment"),
+        (1, 0, 2): ("segment", "feature"),
+    }
+    if transpose_axes not in pair_orders:
+        raise _SegmentedLayoutRecoveryError(relation, f"unsupported row-preserving transpose {transpose_axes}")
+    transpose_shape = _physical_array_shape(transpose.shape)
+    if transpose_shape is None or transpose_shape.dimensions[0] != padded.dimensions[0]:
+        raise _SegmentedLayoutRecoveryError(relation, "transpose does not retain padded rows as its leading axis")
+
+    transpose_position = layout_path.index(transpose.id)
+    suffix = tuple(graph.node(node_id) for node_id in layout_path[transpose_position + 1 :])
+    if len(suffix) != 2 or suffix[0].opcode != "copy" or suffix[1].opcode != "bitcast":
+        raise _SegmentedLayoutRecoveryError(relation, "flattening is not an explicit transpose-copy-bitcast chain")
+    copy, bitcast = suffix
+    copy_shape = _physical_array_shape(copy.shape)
+    bitcast_shape = _physical_array_shape(bitcast.shape)
+    if copy_shape is None or copy_shape.minor_to_major != (2, 1, 0):
+        raise _SegmentedLayoutRecoveryError(relation, "flattening copy does not make the trailing pair contiguous")
+    expected_physical = (padded.dimensions[0], logical_feature_extent * segment_count)
+    if (
+        bitcast.id != physical_value
+        or bitcast_shape is None
+        or bitcast_shape.dimensions != expected_physical
+        or bitcast_shape.minor_to_major != (1, 0)
+    ):
+        raise _SegmentedLayoutRecoveryError(
+            relation, "bitcast does not flatten the segment/feature pair into Contract K"
+        )
+    return _SegmentedMapLayoutTrace(
+        logical_value=pad.operands[0],
+        pad=pad.id,
+        broadcast=broadcast.id,
+        select=select.id,
+        transpose=transpose.id,
+        copy=copy.id,
+        bitcast=bitcast.id,
+        predicate=select.operands[0],
+        logical_edge_count=relation_plan.edge_count,
+        logical_feature_extent=logical_feature_extent,
+        segment_count=segment_count,
+        padded_row_extent=padded.dimensions[0],
+        flattened_pair_order=pair_orders[transpose_axes],
+    )
+
+
+def _verify_segmented_weight_flattening(
+    graph: InlinedHloGraph,
+    *,
+    trace: _SegmentedMapLayoutTrace,
+    weight_value: str,
+) -> SegmentedLayoutProof:
+    relation = SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL
+    bitcast = graph.node(weight_value)
+    if bitcast.opcode != "bitcast" or len(bitcast.operands) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "Contract weight is not an explicit flattened bitcast")
+    copy = graph.node(bitcast.operands[0])
+    transpose = graph.node(copy.operands[0]) if copy.opcode == "copy" and len(copy.operands) == 1 else None
+    if transpose is None or transpose.opcode != "transpose" or len(transpose.operands) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "Contract weight is not a transpose-copy-bitcast layout")
+    source = graph.node(transpose.operands[0])
+    source_shape = _physical_array_shape(source.shape)
+    transpose_shape = _physical_array_shape(transpose.shape)
+    copy_shape = _physical_array_shape(copy.shape)
+    bitcast_shape = _physical_array_shape(bitcast.shape)
+    if source_shape is None or len(source_shape.dimensions) != 3:
+        raise _SegmentedLayoutRecoveryError(relation, "weight source is not segment-by-feature-by-output")
+    segment_count, feature_extent, output_extent = source_shape.dimensions
+    if (segment_count, feature_extent) != (trace.segment_count, trace.logical_feature_extent):
+        raise _SegmentedLayoutRecoveryError(relation, "weight segment/feature axes disagree with the Map layout")
+    weight_axes = _attribute_axes(transpose.attributes)
+    pair_orders = {
+        (1, 0, 2): ("feature", "segment"),
+        (0, 1, 2): ("segment", "feature"),
+    }
+    if weight_axes not in pair_orders or pair_orders[weight_axes] != trace.flattened_pair_order:
+        raise _SegmentedLayoutRecoveryError(relation, "Map and weight flatten segment/feature in different orders")
+    expected_transpose = tuple(source_shape.dimensions[axis] for axis in weight_axes)
+    expected_bitcast = (trace.logical_feature_extent * trace.segment_count, output_extent)
+    if (
+        transpose_shape is None
+        or transpose_shape.dimensions != expected_transpose
+        or copy_shape is None
+        or copy_shape.dimensions != expected_transpose
+        or copy_shape.minor_to_major != (2, 1, 0)
+        or bitcast_shape is None
+        or bitcast_shape.dimensions != expected_bitcast
+        or bitcast_shape.minor_to_major != (1, 0)
+    ):
+        raise _SegmentedLayoutRecoveryError(
+            relation, "weight physical layouts do not legalize the recovered K index map"
+        )
+    return SegmentedLayoutProof(relation=relation, nodes=(transpose.id, copy.id, bitcast.id))
+
+
+def _verify_first_contract_edge_order(
+    graph: InlinedHloGraph,
+    *,
+    relation_plan: RelationPlanRecord,
+    first_contract_value: str,
+) -> SegmentedLayoutProof:
+    relation = SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW
+    path = _inlined_path(graph, relation_plan.stable_permutation, first_contract_value)
+    gathers = tuple(
+        graph.node(node_id)
+        for node_id in path
+        if graph.node(node_id).opcode == "gather" and graph.node(node_id).dtype in {"bf16", "f16", "f32", "f64"}
+    )
+    if len(gathers) != 1:
+        raise _SegmentedLayoutRecoveryError(
+            relation,
+            f"first Contract relation path has {len(gathers)} payload gathers",
+        )
+    gather = gathers[0]
+    index_operands = tuple(
+        operand
+        for operand in gather.operands
+        if (shape := _parse_array_shape(graph.node(operand).shape)) is not None and shape[0] in {"s32", "s64"}
+    )
+    if len(index_operands) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "first Contract payload gather has ambiguous indices")
+    edge_count = relation_plan.edge_count
+    permutations = (
+        np.arange(edge_count, dtype=np.int32),
+        np.arange(edge_count - 1, -1, -1, dtype=np.int32),
+        np.roll(np.arange(edge_count, dtype=np.int32), 3),
+    )
+    expected_shape = (edge_count, 1)
+    for permutation in permutations:
+        try:
+            observed = _evaluate_integer_node(
+                graph,
+                index_operands[0],
+                {relation_plan.stable_permutation: permutation},
+            )
+        except ValueError as error:
+            raise _SegmentedLayoutRecoveryError(
+                relation,
+                f"could not evaluate first Contract edge order: {error}",
+            ) from error
+        expected = (permutation // relation_plan.slots_per_token).reshape(expected_shape)
+        if observed.shape != expected_shape or not np.array_equal(observed, expected):
+            raise _SegmentedLayoutRecoveryError(
+                relation,
+                "first Contract row r does not gather source stable_permutation[r] // route_slots",
+            )
+    return SegmentedLayoutProof(relation=relation, nodes=path)
+
+
+def _verify_segmented_validity(
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    *,
+    relation_plan: RelationPlanRecord,
+    trace: _SegmentedMapLayoutTrace,
+) -> tuple[SegmentedLayoutProof, float]:
+    relation = SegmentedLayoutRelation.VALIDITY_AND_FILL
+    predicate = graph.node(trace.predicate)
+    if predicate.opcode != "and" or len(predicate.operands) != 2:
+        raise _SegmentedLayoutRecoveryError(relation, "segment validity is not an intersection of two bounds")
+    comparisons = tuple(graph.node(operand) for operand in predicate.operands)
+    lower = next((node for node in comparisons if _compare_direction(node) == "LE"), None)
+    upper = next((node for node in comparisons if _compare_direction(node) == "LT"), None)
+    if lower is None or upper is None or len(lower.operands) != 2 or len(upper.operands) != 2:
+        raise _SegmentedLayoutRecoveryError(relation, "segment validity does not contain lower-LE and upper-LT bounds")
+    iota_candidates = {lower.operands[1], upper.operands[0]}
+    if len(iota_candidates) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "segment bounds do not compare the same padded-row index")
+    iota = graph.node(next(iter(iota_candidates)))
+    iota_axis = _IOTA_DIMENSION.search(iota.attributes)
+    if iota.opcode != "iota" or iota_axis is None or int(iota_axis.group("axis")) != 1:
+        raise _SegmentedLayoutRecoveryError(relation, "segment predicate is not indexed by the padded-row axis")
+    if not _is_segment_upper_bound(graph, upper.operands[1], relation_plan.destination_offsets):
+        raise _SegmentedLayoutRecoveryError(relation, "upper segment bound is not the recovered inclusive prefix end")
+    if not _is_segment_lower_bound(
+        graph,
+        lower.operands[0],
+        relation_plan.destination_offsets,
+        trace.segment_count,
+    ):
+        raise _SegmentedLayoutRecoveryError(relation, "lower segment bound is not zero plus prior prefix ends")
+    if not _is_inclusive_prefix_sum(module, graph, relation_plan):
+        raise _SegmentedLayoutRecoveryError(relation, "RelationPlan segment ends are not an inclusive count prefix")
+    select = graph.node(trace.select)
+    fill = _broadcast_scalar_constant(graph, select.operands[2])
+    if fill is None or fill != 0.0:
+        raise _SegmentedLayoutRecoveryError(relation, "invalid segment/row coordinates are not zero-filled")
+    return (
+        SegmentedLayoutProof(
+            relation=relation,
+            nodes=(relation_plan.destination_counts, relation_plan.destination_offsets, predicate.id, select.id),
+        ),
+        fill,
+    )
+
+
+def _recover_source_fold_inverse(
+    graph: InlinedHloGraph,
+    *,
+    relation_plan: RelationPlanRecord,
+    fold_value: str,
+) -> tuple[SourceFoldInverseIndexMap, SegmentedLayoutProof]:
+    relation = SegmentedLayoutRelation.SOURCE_FOLD_INVERSE
+    fold = graph.node(fold_value)
+    if fold.opcode != "scatter" or len(fold.operands) < 2:
+        raise _SegmentedLayoutRecoveryError(relation, "source Fold is not an indexed scatter")
+    fold_indices = fold.operands[1]
+    edge_count = relation_plan.edge_count
+    permutations = (
+        np.arange(edge_count, dtype=np.int32),
+        np.arange(edge_count - 1, -1, -1, dtype=np.int32),
+        np.roll(np.arange(edge_count, dtype=np.int32), 3),
+    )
+    expected_shape = (edge_count, 1)
+    for permutation in permutations:
+        try:
+            observed = _evaluate_integer_node(
+                graph,
+                fold_indices,
+                {relation_plan.stable_permutation: permutation},
+            )
+        except ValueError as error:
+            raise _SegmentedLayoutRecoveryError(
+                relation, f"could not evaluate source Fold index path: {error}"
+            ) from error
+        expected = (permutation // relation_plan.slots_per_token).reshape(expected_shape)
+        if observed.shape != expected_shape or not np.array_equal(observed, expected):
+            raise _SegmentedLayoutRecoveryError(
+                relation,
+                "source Fold indices do not equal stable_permutation[row] // route_slots",
+            )
+    path = _inlined_path(graph, relation_plan.stable_permutation, fold_indices)
+    inverse = SourceFoldInverseIndexMap(
+        stable_permutation=relation_plan.stable_permutation,
+        fold_indices=fold_indices,
+        source_item_divisor=relation_plan.slots_per_token,
+        route_slot_modulus=relation_plan.slots_per_token,
+    )
+    return inverse, SegmentedLayoutProof(relation=relation, nodes=path)
 
 
 def _entry_instruction_for_node(module: HloModuleGraph, node_id: str) -> str:
@@ -1268,6 +1859,221 @@ def _scatter_reducer_program(
         current = instructions[current.operands[0]]
     opcodes = tuple(instruction.opcode for instruction in computation.instructions if instruction.opcode != "parameter")
     return current.opcode, opcodes, import_hlo_scalar_computation(computation)
+
+
+def _physical_array_shape(shape: str) -> _PhysicalArrayShape | None:
+    parsed = _parse_array_shape(shape)
+    layout_match = _LAYOUT.search(shape)
+    if parsed is None or layout_match is None:
+        return None
+    return _PhysicalArrayShape(
+        dtype=parsed[0],
+        dimensions=parsed[1],
+        minor_to_major=tuple(int(axis) for axis in layout_match.group("axes").split(",")),
+    )
+
+
+def _attribute_axes(attributes: str) -> tuple[int, ...]:
+    match = _DIMENSIONS.search(attributes)
+    if match is None:
+        return ()
+    return tuple(int(axis) for axis in match.group("axes").split(",") if axis)
+
+
+def _padding_pairs(attributes: str) -> tuple[tuple[int, int], ...]:
+    match = _PADDING.search(attributes)
+    if match is None:
+        return ()
+    pairs = []
+    for dimension in match.group("dimensions").split("x"):
+        values = tuple(int(value) for value in dimension.split("_") if value)
+        if len(values) != 2:
+            return ()
+        pairs.append(values)
+    return tuple(pairs)
+
+
+def _scalar_constant(node: InlinedHloNode) -> float | None:
+    if node.opcode != "constant":
+        return None
+    match = _SCALAR_CONSTANT.search(node.attributes) or _SINGLETON_CONSTANT.search(node.attributes)
+    return float(match.group("value")) if match is not None else None
+
+
+def _broadcast_scalar_constant(graph: InlinedHloGraph, node_id: str) -> float | None:
+    current = graph.node(node_id)
+    while current.opcode in {"broadcast", "bitcast", "convert", "copy", "reshape"} and len(current.operands) == 1:
+        current = graph.node(current.operands[0])
+    return _scalar_constant(current)
+
+
+def _compare_direction(node: InlinedHloNode) -> str | None:
+    if node.opcode != "compare":
+        return None
+    match = _COMPARE_DIRECTION.search(node.attributes)
+    return match.group("direction") if match is not None else None
+
+
+def _node_ancestors(graph: InlinedHloGraph, node_id: str) -> frozenset[str]:
+    nodes = {node.id: node for node in graph.nodes}
+    ancestors = {node_id}
+    pending = list(nodes[node_id].operands)
+    while pending:
+        current = pending.pop()
+        if current in ancestors:
+            continue
+        ancestors.add(current)
+        pending.extend(nodes[current].operands)
+    return frozenset(ancestors)
+
+
+def _strip_unary_wrappers(graph: InlinedHloGraph, node_id: str) -> str:
+    current = graph.node(node_id)
+    while current.opcode in {"bitcast", "convert", "copy", "reshape"} and len(current.operands) == 1:
+        current = graph.node(current.operands[0])
+    return current.id
+
+
+def _is_segment_upper_bound(graph: InlinedHloGraph, node_id: str, segment_ends: str) -> bool:
+    node = graph.node(node_id)
+    if node.opcode != "broadcast" or _attribute_axes(node.attributes) != (0,) or len(node.operands) != 1:
+        return False
+    return _strip_unary_wrappers(graph, node.operands[0]) == _strip_unary_wrappers(graph, segment_ends)
+
+
+def _is_segment_lower_bound(
+    graph: InlinedHloGraph,
+    node_id: str,
+    segment_ends: str,
+    segment_count: int,
+) -> bool:
+    node = graph.node(node_id)
+    if node.opcode != "broadcast" or _attribute_axes(node.attributes) != (0,) or len(node.operands) != 1:
+        return False
+    concatenate = graph.node(_strip_unary_wrappers(graph, node.operands[0]))
+    if concatenate.opcode != "concatenate" or _attribute_axes(concatenate.attributes) != (0,):
+        return False
+    if len(concatenate.operands) != 2:
+        return False
+    zero = _broadcast_scalar_constant(graph, concatenate.operands[0])
+    sliced = graph.node(_strip_unary_wrappers(graph, concatenate.operands[1]))
+    if zero != 0.0 or sliced.opcode != "slice" or len(sliced.operands) != 1:
+        return False
+    sliced_shape = _parse_array_shape(sliced.shape)
+    if sliced_shape is None or sliced_shape[1] not in {(segment_count - 1,), (segment_count - 1, 1)}:
+        return False
+    return _strip_unary_wrappers(graph, sliced.operands[0]) == _strip_unary_wrappers(graph, segment_ends)
+
+
+def _is_inclusive_prefix_sum(
+    module: HloModuleGraph,
+    graph: InlinedHloGraph,
+    relation_plan: RelationPlanRecord,
+) -> bool:
+    offsets = graph.node(relation_plan.destination_offsets)
+    if offsets.opcode != "reduce-window" or len(offsets.operands) < 1:
+        return False
+    if relation_plan.destination_counts not in _node_ancestors(graph, offsets.id):
+        return False
+    window = re.search(r"window=\{size=(?P<size>[0-9]+)x1 pad=(?P<low>[0-9]+)_0x0_0\}", offsets.attributes)
+    if window is None:
+        return False
+    if int(window.group("size")) != relation_plan.destination_count:
+        return False
+    if int(window.group("low")) != relation_plan.destination_count - 1:
+        return False
+    reducer = _CALLED_COMPUTATION.search(offsets.attributes)
+    if reducer is None:
+        return False
+    computation = module.computation(reducer.group(1))
+    instructions = {instruction.name: instruction for instruction in computation.instructions}
+    root = computation.root
+    while root.opcode in {"bitcast", "convert", "copy", "reshape"} and len(root.operands) == 1:
+        root = instructions[root.operands[0]]
+    return root.opcode == "add"
+
+
+def _evaluate_integer_node(
+    graph: InlinedHloGraph,
+    node_id: str,
+    bindings: dict[str, np.ndarray],
+) -> np.ndarray:
+    nodes = {node.id: node for node in graph.nodes}
+    cache: dict[str, np.ndarray] = {name: np.asarray(value) for name, value in bindings.items()}
+
+    def evaluate(current_id: str) -> np.ndarray:
+        if current_id in cache:
+            return cache[current_id]
+        node = nodes[current_id]
+        shape = _parse_array_shape(node.shape)
+        if shape is None:
+            raise ValueError(f"integer expression {current_id!r} has non-array shape {node.shape!r}")
+        dimensions = shape[1]
+        operands = tuple(evaluate(operand) for operand in node.operands)
+        if node.opcode == "constant":
+            value = _scalar_constant(node)
+            if value is None:
+                raise ValueError(f"unsupported integer constant {node.attributes!r}")
+            result = np.asarray(int(value), dtype=np.int32)
+        elif node.opcode == "iota":
+            match = _IOTA_DIMENSION.search(node.attributes)
+            if match is None:
+                raise ValueError(f"iota {current_id!r} has no dimension")
+            axis = int(match.group("axis"))
+            base = np.arange(dimensions[axis], dtype=np.int32)
+            reshape = [1] * len(dimensions)
+            reshape[axis] = dimensions[axis]
+            result = np.broadcast_to(base.reshape(reshape), dimensions)
+        elif node.opcode == "broadcast":
+            axes = _attribute_axes(node.attributes)
+            if len(axes) != operands[0].ndim:
+                raise ValueError(f"broadcast {current_id!r} has incompatible dimensions")
+            reshape = [1] * len(dimensions)
+            for operand_axis, result_axis in enumerate(axes):
+                reshape[result_axis] = operands[0].shape[operand_axis]
+            result = np.broadcast_to(operands[0].reshape(reshape), dimensions)
+        elif node.opcode in {"bitcast", "copy", "reshape", "convert"}:
+            result = operands[0].reshape(dimensions)
+        elif node.opcode == "sign":
+            result = np.sign(operands[0])
+        elif node.opcode == "and":
+            result = np.bitwise_and(operands[0], operands[1])
+        elif node.opcode == "shift-right-logical":
+            result = np.right_shift(operands[0].astype(np.uint32), operands[1].astype(np.uint32)).astype(np.int32)
+        elif node.opcode == "add":
+            result = operands[0] + operands[1]
+        elif node.opcode == "subtract":
+            result = operands[0] - operands[1]
+        elif node.opcode == "compare":
+            directions = {
+                "LT": np.less,
+                "LE": np.less_equal,
+                "GT": np.greater,
+                "GE": np.greater_equal,
+                "EQ": np.equal,
+                "NE": np.not_equal,
+            }
+            direction = _compare_direction(node)
+            if direction not in directions:
+                raise ValueError(f"unsupported comparison {direction!r}")
+            result = directions[direction](operands[0], operands[1])
+        elif node.opcode == "select":
+            result = np.where(operands[0], operands[1], operands[2])
+        elif node.opcode == "gather":
+            if len(operands) != 2 or operands[1].ndim != 2 or operands[1].shape[1] != 1:
+                raise ValueError(f"unsupported gather shape at {current_id!r}")
+            result = np.take(operands[0], operands[1][:, 0], axis=0)
+            if result.ndim == 1 and dimensions == (result.shape[0], 1):
+                result = result[:, None]
+        else:
+            raise ValueError(f"unsupported integer opcode {node.opcode!r} at {current_id!r}")
+        result = np.asarray(result)
+        if result.shape != dimensions:
+            result = result.reshape(dimensions)
+        cache[current_id] = result
+        return result
+
+    return evaluate(node_id)
 
 
 def _parse_array_shape(shape: str) -> tuple[str, tuple[int, ...]] | None:

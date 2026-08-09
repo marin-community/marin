@@ -239,7 +239,7 @@ def test_grug_hlo_fold_contribution_mutation_regenerates_only_contribution_body(
     assert _count_kind(mutated.contribution_scalar_program.expression, CastScalarKind.MULTIPLY) == 0
 
 
-def test_grug_hlo_forms_convex_routed_forward_region_and_rejects_missing_layout_map() -> None:
+def test_grug_hlo_forms_ready_convex_routed_forward_region_with_verified_segmented_layout() -> None:
     plan = plan_routed_forward_typed_ffi(_frozen_hlo())
     region = plan.region
 
@@ -255,20 +255,51 @@ def test_grug_hlo_forms_convex_routed_forward_region_and_rejects_missing_layout_
     assert all(contract.dimensions.lhs_output == (0,) for contract in plan.contracts)
     assert all(contract.dimensions.rhs_output == (1,) for contract in plan.contracts)
     assert plan.api_version == 1
-    assert plan.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    assert plan.disposition is RoutedForwardCodegenDisposition.READY
     assert plan.map_stage.logical_row_extent == 16
     assert plan.map_stage.logical_feature_extent == 32
     assert plan.map_stage.physical_output_shape == "f32[512,128]{1,0}"
-    assert not plan.map_stage.has_segmented_layout
-    assert plan.missing_segmented_layout is not None
-    assert plan.missing_segmented_layout.logical_shape == (16, 32)
-    assert plan.missing_segmented_layout.physical_shape == "f32[512,128]{1,0}"
-    assert plan.missing_segmented_layout.required_relations == (
+    assert plan.map_stage.has_segmented_layout
+    assert plan.missing_segmented_layout is None
+    assert plan.segmented_layout is not None
+    layout = plan.segmented_layout
+    assert layout.verified_relations == (
         SegmentedLayoutRelation.EDGE_ROW_TO_PADDED_ROW,
         SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,
         SegmentedLayoutRelation.VALIDITY_AND_FILL,
         SegmentedLayoutRelation.SOURCE_FOLD_INVERSE,
     )
+    assert layout.index_map.padded_row_extent == 512
+    assert layout.index_map.segment_count == 4
+    assert layout.index_map.feature_stride == 4
+    assert layout.index_map.segment_stride == 1
+    assert layout.fill_value == 0.0
+    assert layout.runtime_index_inputs == (layout.segment_ends, layout.inverse.stable_permutation)
+    segment_ends = (3, 7, 12, 16)
+    first = layout.index_map.physical_index(
+        edge_row=0,
+        feature=5,
+        segment=0,
+        segment_ends=segment_ends,
+    )
+    next_segment = layout.index_map.physical_index(
+        edge_row=3,
+        feature=5,
+        segment=1,
+        segment_ends=segment_ends,
+    )
+    wrong_segment = layout.index_map.physical_index(
+        edge_row=3,
+        feature=5,
+        segment=0,
+        segment_ends=segment_ends,
+    )
+    assert (first.physical_row, first.physical_k, first.valid) == (0, 20, True)
+    assert (next_segment.physical_row, next_segment.physical_k, next_segment.valid) == (3, 21, True)
+    assert (wrong_segment.physical_row, wrong_segment.physical_k, wrong_segment.valid) == (3, 20, False)
+    permutation = (5, 0, 3, 2, 1, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14)
+    assert layout.inverse.source_coordinate(0, permutation) == (2, 1)
+    assert layout.inverse.source_coordinate(1, permutation) == (0, 0)
 
 
 def test_grug_hlo_routed_forward_map_mutation_changes_generic_codegen_plan() -> None:
@@ -288,7 +319,7 @@ def test_grug_hlo_routed_forward_map_mutation_changes_generic_codegen_plan() -> 
     )
     assert mutated.fold_stage.contribution_program.digest == baseline.fold_stage.contribution_program.digest
     assert mutated.fold_stage.reducer_program.digest == baseline.fold_stage.reducer_program.digest
-    assert mutated.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    assert mutated.disposition is RoutedForwardCodegenDisposition.READY
 
 
 def test_grug_hlo_routed_forward_fold_mutation_changes_generic_codegen_plan() -> None:
@@ -311,7 +342,45 @@ def test_grug_hlo_routed_forward_fold_mutation_changes_generic_codegen_plan() ->
         baseline.fold_stage.generated_contribution_cuda.source_digest
     )
     assert mutated.fold_stage.reducer_program.digest == baseline.fold_stage.reducer_program.digest
-    assert mutated.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    assert mutated.disposition is RoutedForwardCodegenDisposition.READY
+
+
+def test_grug_hlo_segmented_layout_shape_mutation_changes_physical_row_map() -> None:
+    baseline = plan_routed_forward_typed_ffi(_frozen_hlo())
+    mutated_hlo = _frozen_hlo().replace("512", "256").replace("496", "240")
+    mutated = plan_routed_forward_typed_ffi(mutated_hlo)
+
+    assert baseline.disposition is RoutedForwardCodegenDisposition.READY
+    assert mutated.disposition is RoutedForwardCodegenDisposition.READY
+    assert baseline.segmented_layout is not None
+    assert mutated.segmented_layout is not None
+    assert baseline.segmented_layout.index_map.padded_row_extent == 512
+    assert mutated.segmented_layout.index_map.padded_row_extent == 256
+    assert mutated.segmented_layout.physical_shape == "f32[256,128]{1,0}"
+    assert (
+        mutated.segmented_layout.index_map.physical_index(
+            edge_row=15,
+            feature=31,
+            segment=3,
+            segment_ends=(3, 7, 12, 16),
+        ).physical_k
+        == 127
+    )
+
+
+def test_grug_hlo_segmented_layout_rejects_mismatched_weight_flattening() -> None:
+    mutated_hlo = _frozen_hlo().replace(
+        "transpose(%convert.3419), dimensions={1,0,2}",
+        "transpose(%convert.3419), dimensions={0,1,2}",
+        1,
+    )
+    plan = plan_routed_forward_typed_ffi(mutated_hlo)
+
+    assert plan.disposition is RoutedForwardCodegenDisposition.MISSING_SEGMENTED_LAYOUT
+    assert plan.segmented_layout is None
+    assert plan.missing_segmented_layout is not None
+    assert plan.missing_segmented_layout.required_relations == (SegmentedLayoutRelation.SEGMENT_TO_FEATURE_PANEL,)
+    assert len(plan.missing_segmented_layout.reasons) == 1
 
 
 def _count_kind(expression: CastScalarExpression, kind: CastScalarKind) -> int:
