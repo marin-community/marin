@@ -17,18 +17,19 @@ author: dlwh
 ## Current TL;DR
 
 - The active path replaces generic forward and reverse regions in a natural
-  one-layer Grug training step after JAX-owned AD. Ten generated calls now own
-  routed forward, two input-adjoint Contracts, a shared Contract with two scalar
-  Maps, a deterministic source Fold, two expert-weight Contracts,
-  streaming-attention reverse, and two row Folds. A physical-H100 replay passed
-  ordered-FP correctness and bitwise determinism across 30 repetitions at
-  `1.178695x` XLA, inside the `1.20x` target. A static live-HLO audit attributes
-  84.1% of this fixture's pre-scheduler dot FLOPs to Shuttle; the weighted
-  RelationProgram reverse is the largest remaining arithmetic region. Generic
-  RMS reverse is correct on H100 but measures `1.512778x` XLA, so Fold
-  decomposition remains a performance task. H100, B200, and GB200 evidence
-  remain separate. The available secondary Blackwell cluster provides B200
-  portability evidence, not GB200 acceptance evidence.
+  one-layer Grug training step after JAX-owned AD. The accepted ten-call H100
+  boundary owns routed forward, two input-adjoint Contracts, a shared Contract
+  with two scalar Maps, a deterministic source Fold, two expert-weight
+  Contracts, streaming-attention reverse, and two row Folds at `1.178695x` XLA.
+  A twelve-call extension also owns the generic weighted RelationProgram
+  reverse and passes correctness/determinism, but remains unaccepted. Generic
+  demand-driven row narrowing reduces its ratio from `1.247988x` to
+  `1.241446x`, insufficient to recover the `1.20x` gate. The next bounded
+  candidate is generic Contract-plus-nested-Fold composition, not further
+  narrowing tuning. Generic RMS reverse is correct on H100 but remains about
+  `1.48x` XLA, so Fold decomposition remains a performance task. H100, B200,
+  and GB200 evidence remain separate. The available secondary Blackwell cluster
+  provides B200 portability evidence, not GB200 acceptance evidence.
 
 ## Hypothesis Queue
 
@@ -2792,3 +2793,35 @@ author: dlwh
 - Resume with one bounded physical-H100 replay of the twelve-call natural Grug
   harness. If it remains above `1.20x`, evaluate generic Contract-plus-nested-
   Fold composition rather than adding workload-specific reverse code.
+
+### 2026-08-09 14:15 PDT - TLTC-XLA-041 narrowed twelve-call H100 replay
+
+- Hypothesis: deriving the weighted reverse Contract's demanded row domain from
+  its sole contiguous-slice consumer will remove enough padded Contract work to
+  bring the twelve-call natural Grug boundary back under `1.20x` XLA.
+- Commit Hash: executed Shuttle revision `da49b94c359104690c2b8f98192300605cbd292e`,
+  containing demand-narrowing checkpoint `1ee45b825d`.
+- Command: `xla_grug_routed_combined_gpu_custom_call.py --architecture sm_90a
+  --composition-mode shared_map_xla_remainder --warmup 4 --repeats 30`, with
+  the exact NVCC 13.2.78 and repository paths preserved in the artifact README.
+- Config: one physical NVIDIA H100 80GB HBM3, compute capability 9.0, driver
+  595.71.05, 700 W power limit, JAX/JAXLIB 0.11.0, Torch 2.11.0+cu128, Triton
+  3.6.0, and NVCC 13.2.78. One CPU was requested and normalized to four. The
+  benchmark was invoked once with no replay retry.
+- Result: all twelve exact targets occurred once, every handler executed 35
+  times, 30 counterbalanced pairs were retained, both paths produced one stable
+  output hash, and ordered-FP correctness passed with maximum absolute error
+  `9.760261e-7` and mean absolute error `7.977502e-11`.
+- Result: generated median was `0.647562 ms` versus `0.521619 ms` XLA, or
+  `1.241446x`. This remains above `1.20x` and is therefore unaccepted.
+- Interpretation: row narrowing improves generated latency by `1.63%` and the
+  ratio by `0.006542` absolute versus the prior `1.247988x` replay, but removes
+  only `0.004866 ms` from the whole-step gap. Static padded-FLOP elimination is
+  real but is not the dominant remaining fixed-call cost at this shape.
+- Next action: if this boundary is pursued, evaluate exactly one generic
+  Contract-plus-nested-Fold composition candidate rather than tuning the
+  narrowed Contract or adding workload-specific MoE code.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/`.
+- Infrastructure: holder `/dlwh/dev-gpu-codex-h100-narrowed-da49` was released;
+  local session status and pod lookup both verified no active allocation.
