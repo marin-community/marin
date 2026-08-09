@@ -56,6 +56,69 @@ boundary amortizes the transformer cost by ~64×, keeping inference under a
 `meanmaxmin` pooling, `pool_window=64`, `embed_dim=256`, `hidden_dim=256`,
 `num_layers=2`, `num_heads=4`, `max_tokens=512`, tokenizer `intfloat/multilingual-e5-small`.
 
+## Building a label set
+
+Labels come from an offline grader (GLM-5.2, served by
+[`glm52_vllm.py`](../glm52_vllm.py)) applied to a stratified draw from the corpus
+sample. Two failures on this path produced label sets that looked healthy and were
+not, so the pipeline is built around detecting them rather than around throughput:
+
+```
+sample_labels.py    stratified draw across all sources → label_set/ shards
+label_with_glm52.py serve the grader, label with checkpointing → labels.parquet
+gate_labels.py      decide whether the result is fit to train on (run this before train.py)
+```
+
+**Documents are excerpted, not cut.** A hard cut at the character cap left text
+ending mid-token, which the rubric correctly reads as damage — so the grader marked
+those documents invalid and scored them 1. That put 85% of the bottom bucket at the
+cap and made length predict quality at Spearman -0.25. `sample_labels.py` therefore
+cuts on a boundary and appends an explicit `[Excerpt ends here …]` marker, and the
+rubric states that the marker is the harness shortening the document rather than
+damage in the source.
+
+**The character cap is not a token budget.** CJK and code tokenize far denser than
+English, so a 12k-character document can exceed 12k tokens; with output tokens
+reserved on top, those prompts overflow the context and the server rejects them.
+Counting such rejections as ordinary dropped documents hides the failure completely,
+because what is lost is exactly the *longest* documents — the same length bias the
+excerpting fix removes. The context is sized so the cap plus the reserved answer
+always fit, and a chunk that mostly fails aborts instead of dropping rows.
+
+## Validation
+
+`gate_labels.py` is the gate between labeling and training, because a poisoned label
+set still trains a model and that model still reports plausible metrics.
+
+It compares against the **input** set, not only the output. Selective loss is
+invisible from the survivors alone: drop every long document and the remaining
+length distribution is still perfectly well behaved. Only the input/output
+comparison shows the hole.
+
+The length check is **directional and measured above a 500-character floor**. The
+poisoning signature is long documents scoring *worse*; quality rising with length is
+ordinary signal, because short documents genuinely are junk (under 200 characters:
+41.5% invalid, mean quality 1.66). Excluding that stub tail sharpens rather than
+softens the test — the known-poisoned set reads -0.343 above the floor against
+-0.250 overall, while the corrected set reads -0.006.
+
+Aggregates alone are not sufficient to accept a model. A candidate that improved
+every summary statistic — wider bucket spread, better cross-domain parity, higher
+within-domain variance — turned out to promote gym timetables and demote worked
+Fourier derivations. [`sample_disagreements.py`](sample_disagreements.py) exists to
+make reading the disagreements a repeatable step rather than an ad-hoc one.
+
+### Known limitation: per-type ceiling compression
+
+Ranking *within* a content type is sound; absolute calibration *across* types is not.
+Agentic trajectories carry an explicit outcome banner and the grader keys on it
+correctly (failed 2.57 < unverified 2.72 < solved 3.36 mean quality), yet even
+successfully solved trajectories reach 5 only 3.4% of the time against prose's 26%.
+Multilingual's lower aggregate is a composition effect rather than a blanket penalty
+— one Japanese web source is 56% of it at 7.4% top-share, while `dolma4pdfs` reaches
+23.6%, on par with prose. Bucketing within domain by quantile uses only the ranking,
+which is the part that is correct.
+
 ## Files
 
 Core:
@@ -69,6 +132,20 @@ Core:
 - [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets + samples side output).
 - [`metrics.py`](metrics.py) — rank-based AUC / Spearman used by the training holdout.
 - [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES`.
+
+Labeling:
+
+- [`sample_labels.py`](sample_labels.py) — stratified draw across every source, excerpted on a boundary.
+- [`label_with_glm52.py`](label_with_glm52.py) — run the grader with checkpointing and resume; aborts a chunk that mostly fails rather than dropping rows.
+- [`gate_labels.py`](gate_labels.py) — decide whether a label set is fit to train on.
+
+Evaluation:
+
+- [`domain_eval_set.py`](domain_eval_set.py) — census → proportional allocation → draw, so no single source dominates the evaluation.
+- [`score_eval_set.py`](score_eval_set.py) — score the evaluation set with a given model version.
+- [`compare_by_domain.py`](compare_by_domain.py) — per-domain bucket distributions across model versions.
+- [`sample_disagreements.py`](sample_disagreements.py) — surface the documents two scorers most disagree about, for reading.
+- [`intruder_ab.py`](intruder_ab.py) — bucket-coherence intruder test, `--bucketing {global,domain-quantile}`.
 
 ## Artifacts
 

@@ -43,6 +43,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.rubric import CONTENT_TYPES, SYSTEM_PROMPT
+from experiments.datakit.cluster.quality.fast_transformer.sample_labels import excerpt
 from experiments.datakit.cluster.quality.glm52_vllm import (
     GB200_FLEET,
     H100_FLEET,
@@ -56,13 +57,18 @@ from experiments.datakit.cluster.quality.glm52_vllm import (
 logger = logging.getLogger(__name__)
 
 QUALITY_LEVELS = (1, 2, 3, 4, 5)
-# Documents are capped at 12k *characters* upstream, which is not a token budget:
-# CJK and code tokenize far denser than English, so a 12k-character document can
-# exceed 12k tokens. With MAX_OUTPUT_TOKENS reserved on top, a 16384 context
-# rejected those documents outright with a 400 — silently dropping long documents
-# and reintroducing the very length bias the excerpting fix removed. Sized so the
-# cap plus the reserved answer always fits.
-DEFAULT_MAX_MODEL_LEN = 32_768
+DEFAULT_MAX_MODEL_LEN = 16_384
+# The upstream 12k-*character* cap is not a token budget: CJK and code tokenize far
+# denser than English, so a 12k-character document can exceed 12k tokens. Once
+# MAX_OUTPUT_TOKENS is reserved on top, those prompts overflow the context and the
+# server rejects them with a 400 — which silently drops the *longest* documents and
+# reintroduces the length bias the excerpting fix removed.
+#
+# Enlarging the context is the wrong lever: it costs KV cache on every request to
+# accommodate a handful of dense ones. Cap the prompt text instead, at a width that
+# survives the worst density actually observed (the rejections reported ~1.02 tokens
+# per character), leaving room for the system prompt and the reserved answer.
+PROMPT_TEXT_CHARS = 10_500
 DEFAULT_MAX_NUM_SEQS = 64
 DEFAULT_CONCURRENCY = 48
 # Documents per checkpoint. Small enough that a preemption loses minutes of GPU
@@ -147,7 +153,10 @@ def label_document(client: OpenAI, text: str, rejects: list[str]) -> dict | None
             temperature=0.0,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f'<document index="0">\n{text}\n</document>'},
+                {
+                    "role": "user",
+                    "content": f'<document index="0">\n{excerpt(text, PROMPT_TEXT_CHARS)}\n</document>',
+                },
             ],
         )
     except Exception as e:  # one bad request must not abort a 20k-row run
