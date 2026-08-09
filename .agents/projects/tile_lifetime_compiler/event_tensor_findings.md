@@ -37,6 +37,22 @@ dependence derivation. Until that exists, the branch proves structural reuse
 and a physical attachment point, not replacement of current attention or MoE
 readiness logic.
 
+The Torch-free JAX typed-FFI replay also executes on one NVIDIA GB200 at revision
+`1a04930ecd`. Runtime relation inputs and all phased Q/K/V inputs remain
+parameters in optimized HLO; each executable contains one typed-FFI target and
+no constant or copy lines. Runtime primary and mutation are bitwise equal to
+their source-ordered references. Phased primary and mutation have maximum
+absolute errors `8.9407e-8` and `1.1921e-7`; all four paths are bitwise
+deterministic over five repeats. The 30-sample medians are 0.061314 ms and
+0.061152 ms for runtime primary/mutation, and 0.169697 ms and 0.146477 ms for
+phased primary/mutation.
+
+These GB200 timings measure a scalar physical reference pipeline. The
+`StreamingAttentionProgram` adapter is structural and is not physically linked
+to the measured payload. This result validates JAX-owned runtime inputs,
+EventTensorPlan readiness, generations, and SM100 lowering. It does not validate
+tensor-core QK/PV execution or full attention performance.
+
 ## Acceptance answers
 
 ### 1. Is Event Tensor a necessary first-class IR object?
@@ -85,10 +101,10 @@ Replacing those records is not part of this bounded branch because existing acce
 - CTA memory visibility is legalized through `__threadfence_block` plus atomics in the bounded emitters. Cluster, device, and system scopes remain unimplemented.
 - No official ETC code was available for implementation-level comparison.
 
-The Torch extension used to compile the probes is prototype-only. The intended
-integration is a JAX-registered, Torch-free-by-default runtime. The algebra and
-CTA lowering survived the intended tests without workload-specific event
-construction; high-performance persistent scheduling remains separate work.
+The earlier Torch extension used to compile the H100 probes is prototype-only.
+The current replay uses JAX typed FFI without Torch. The algebra and CTA lowering
+survived the intended tests without workload-specific event construction;
+high-performance persistent scheduling remains separate work.
 
 ## Paper lineage
 
