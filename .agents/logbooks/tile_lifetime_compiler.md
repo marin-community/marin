@@ -2267,3 +2267,36 @@ author: dlwh
   363 tests.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.
+
+### 2026-08-09 - TLTC-XLA-021 combined routed Grug train step on GB200
+
+- Hypothesis: the independently validated routed forward, input-adjoint, and
+  two expert weight-gradient replacements can coexist in one natural
+  JAX-differentiated Grug train step without changing their generic physical
+  bodies or absorbing placement collectives.
+- Commit Hash: composed transformation checkpoint `6d5afa01fd`; integrated
+  replay artifact checkpoint `ad6ae00733`.
+- Boundary: one GPU `PRE_SCHEDULER` transformation inserts four independent
+  generated typed-FFI calls: routed forward Contract/Map/Contract/source Fold,
+  routed input adjoint Contract/reverse Map/Contract/source Fold, and two
+  instances of the generic group-batched weight-gradient Contract. This is not
+  a routed-training megakernel. JAX owns differentiation; XLA retains relation
+  construction, surrounding rematerialization, and placement collectives.
+- Result: on one actual NVIDIA GB200 at compute capability 10.0, 30 paired
+  counterbalanced whole-step samples measure 0.654897 ms for the combined
+  generated path and 0.554336 ms for stock XLA, a 1.181407x ratio. No B200
+  result is involved.
+- Correctness/audit: maximum and mean absolute errors are 3.725e-9 and
+  1.199e-12; 49 of 53 leaves are bitwise equal and the generated full-step
+  hash is stable across all retained executions. Each target occurs once in
+  post-roundtrip HLO and each handler executes 35 times. The input-adjoint
+  auxiliary remains a direct operand of the first weight Contract; both weight
+  results feed one direct external `psum`; copies remain 0 -> 0 and transposes
+  change 51 -> 50. Generated sources contain no `atomicAdd`.
+- Numerical policy: forward and input-adjoint regions are source ordered. The
+  weight Contracts use BF16 operands, FP32 accumulation, BF16 RNE output, and
+  `ALLOW_ROUNDING_REORDER`; the only static operand is a Fold identity.
+- Verification: all 21 artifact hashes pass, 46 focused recovery/replacement
+  tests pass, and the complete tile-lifetime suite passes 369 tests.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_routed_combined_gpu_gb200_v0/`.
