@@ -64,3 +64,55 @@ The implementation is a correctness-first physical family. The scalar loops do
 not yet use tensor cores, and no GPU latency claim is attached to this commit.
 This host has no NVCC, so CUDA compile/load validation remains the next required
 preflight before an H100 run.
+
+## H100 component harness
+
+`h100_generated_contract_map_chain_training.py` is the bounded component gate.
+It reconstructs the generic program from the frozen natural Grug HLO, generates
+the two CUDA handlers, compiles and loads them through JAX typed FFI, and compares
+one generated forward/reverse step with the same ordinary JAX forward and
+`jax.vjp`. JAX, rather than Shuttle, defines the reverse scalar programs.
+
+The full run records the raw counterbalanced timing distributions, deterministic
+output hashes, source and semantic digests, generated-source audit, StableHLO,
+optimized matched-JAX HLO, and H100 telemetry. Host-side instrumentation requires
+exactly one forward and one reverse handler invocation per generated step. It is
+non-atomic because this bounded harness performs one sequential dispatch stream;
+it is evidence instrumentation, not part of the physical computation.
+
+The required environment is Linux x86-64 with one visible H100, CUDA 13 NVCC and
+runtime libraries, and matching versions of `jax`, `jaxlib`,
+`jax-cuda13-plugin`, and `jax-cuda13-pjrt`, all pinned to 0.11.0. The frozen HLO
+fixture is:
+
+~~~
+lib/tile_lifetime/benchmarks/artifacts/
+  xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/
+  transformed-gpu-pre-scheduler-hlo.txt.gz
+~~~
+
+From a checkout at the revision under test, the one-run command is:
+
+~~~bash
+PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD" \
+/app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py \
+  --hlo-fixture \
+    lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/transformed-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-contract-map-chain-h100/generated \
+  --json-output /tmp/shuttle-contract-map-chain-h100/result.json \
+  --shuttle-revision "$(git rev-parse HEAD)" \
+  --require-jax-version 0.11.0 \
+  --threads 256 \
+  --seed 20260809 \
+  --warmups 10 \
+  --repeats 30 \
+  --iterations 1000
+~~~
+
+Appending `--preflight-only` performs source generation, NVCC compile/link,
+library load, symbol resolution, and zero-count verification without allocating
+or executing a GPU buffer. This local macOS host has no NVCC, so neither preflight
+nor H100 execution has been claimed yet.
