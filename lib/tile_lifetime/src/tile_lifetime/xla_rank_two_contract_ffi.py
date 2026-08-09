@@ -22,6 +22,9 @@ from tile_lifetime.xla_hlo_recovery import (
 from tile_lifetime.xla_relation_program_recovery import ContractDimensionMap, RoutedForwardContractStage
 
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]\{(?P<layout>[0-9,]+)\}")
+_SLICE_RANGES = re.compile(r"slice=\{(?P<ranges>[^}]*)\}")
+_SLICE_RANGE = re.compile(r"\[(?P<start>[0-9]+):(?P<limit>[0-9]+)(?::(?P<stride>[0-9]+))?\]")
+_ROW_DOMAIN_VIEW_OPCODES = frozenset({"bitcast", "copy", "reshape", "slice"})
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,8 @@ class RankTwoBf16ContractTypedFfiPlan:
     external_users: tuple[str, ...]
     api_version: int
     numerical_contract: RankTwoContractNumericalContract
+    source_instruction: str
+    lhs_row_start: int
 
 
 @dataclass(frozen=True)
@@ -113,9 +118,78 @@ def plan_rank_two_bf16_contract_typed_ffi(
             numerical_policy=numerical_policy,
             deterministic_accumulation=True,
         ),
+        source_instruction=instruction_name,
+        lhs_row_start=0,
     )
     _validated_dimensions(plan)
     return plan
+
+
+def narrow_rank_two_contract_to_consumer_row_domain(
+    hlo_text: str,
+    plan: RankTwoBf16ContractTypedFfiPlan,
+    *,
+    consumer_value: str,
+) -> RankTwoBf16ContractTypedFfiPlan:
+    """Project a Contract onto one contiguous row-domain view demanded by its consumer."""
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    users = _entry_users(entry)
+    if plan.source_instruction != plan.instruction or plan.lhs_row_start != 0:
+        raise ValueError("consumer row-domain narrowing requires an unprojected Contract plan")
+    if consumer_value not in instructions:
+        raise ValueError(f"unknown Contract consumer value %{consumer_value}")
+
+    chain: list[HloInstruction] = []
+    current = instructions[consumer_value]
+    while current.name != plan.instruction:
+        if current.opcode not in _ROW_DOMAIN_VIEW_OPCODES or len(current.operands) != 1:
+            raise ValueError(f"%{consumer_value} is not a view-only projection of %{plan.instruction}")
+        chain.append(current)
+        current = instructions[current.operands[0]]
+    chain.reverse()
+    if not chain:
+        return plan
+
+    row_start = 0
+    current_shape = _parse_shape(plan.output_shape)
+    if current_shape is None:
+        raise ValueError("Contract output shape is not a physical array")
+    current_rows, current_features = current_shape[1]
+    previous = plan.instruction
+    for view in chain:
+        if users[previous] != (view.name,):
+            raise ValueError(f"cannot narrow %{plan.instruction}; %{previous} has consumers outside the view chain")
+        view_shape = _parse_shape(view.shape)
+        if view_shape is None or view_shape[0] != "bf16" or len(view_shape[1]) != 2:
+            raise ValueError("Contract row-domain projection must remain a rank-two BF16 value")
+        if view.opcode == "slice":
+            row_slice, feature_slice = _slice_ranges(view)
+            if row_slice[2] != 1 or feature_slice != (0, current_features, 1):
+                raise ValueError("Contract row-domain projection requires a contiguous row slice and all features")
+            if row_slice[1] > current_rows or view_shape[1] != (row_slice[1] - row_slice[0], current_features):
+                raise ValueError("Contract row-domain slice shape disagrees with its index relation")
+            row_start += row_slice[0]
+        elif view_shape[1] != (current_rows, current_features):
+            raise ValueError("non-slice Contract views must preserve the rank-two row domain")
+        current_rows, current_features = view_shape[1]
+        previous = view.name
+
+    narrowed = RankTwoBf16ContractTypedFfiPlan(
+        instruction=consumer_value,
+        lhs=plan.lhs,
+        rhs=plan.rhs,
+        output_shape=instructions[consumer_value].shape,
+        dimensions=plan.dimensions,
+        external_users=users[consumer_value],
+        api_version=plan.api_version,
+        numerical_contract=plan.numerical_contract,
+        source_instruction=plan.instruction,
+        lhs_row_start=row_start,
+    )
+    _validated_dimensions(narrowed)
+    return narrowed
 
 
 def generate_cuda_rank_two_contract_ffi(
@@ -126,6 +200,7 @@ def generate_cuda_rank_two_contract_ffi(
     """Generate a row-major BF16 Contract with FP32 accumulation."""
     dimensions = _validated_dimensions(plan)
     semantic_record = {
+        "lhs_row_start": plan.lhs_row_start,
         "lhs_shape": plan.lhs.shape,
         "rhs_shape": plan.rhs.shape,
         "output_shape": plan.output_shape,
@@ -188,7 +263,8 @@ ffi::Error ShuttleRankTwoContract(
   }}
   const float alpha = 1.0f;
   const float beta = 0.0f;
-  const auto* lhs = reinterpret_cast<const std::uint16_t*>(lhs_buffer.typed_data());
+  const auto* lhs = reinterpret_cast<const std::uint16_t*>(lhs_buffer.typed_data())
+      + {plan.lhs_row_start} * kReduction;
   const auto* rhs = reinterpret_cast<const std::uint16_t*>(rhs_buffer.typed_data());
   auto* output = reinterpret_cast<std::uint16_t*>(output_buffer->typed_data());
   status = cublasGemmEx(
@@ -314,11 +390,13 @@ def evaluate_rank_two_contract_plan(
     dimensions = _validated_dimensions(plan)
     lhs = np.asarray(lhs)
     rhs = np.asarray(rhs)
-    if lhs.shape != (dimensions["rows"], dimensions["reduction"]):
+    if lhs.shape != (dimensions["input_rows"], dimensions["reduction"]):
         raise ValueError("runtime lhs shape does not match the Contract plan")
     if rhs.shape != (dimensions["reduction"], dimensions["features"]):
         raise ValueError("runtime rhs shape does not match the Contract plan")
-    return _round_bf16_array(lhs.astype(np.float32) @ rhs.astype(np.float32))
+    row_start = plan.lhs_row_start
+    row_limit = row_start + dimensions["rows"]
+    return _round_bf16_array(lhs[row_start:row_limit].astype(np.float32) @ rhs.astype(np.float32))
 
 
 def _validated_dimensions(plan: RankTwoBf16ContractTypedFfiPlan) -> dict[str, int]:
@@ -344,9 +422,35 @@ def _validated_dimensions(plan: RankTwoBf16ContractTypedFfiPlan) -> dict[str, in
         or dimensions.rhs_output != (1,)
     ):
         raise ValueError("unsupported rank-two Contract dimension relation")
-    if lhs[1] != rhs[0] or output != (lhs[0], rhs[1]):
+    if lhs[1] != rhs[0] or output[1] != rhs[1]:
         raise ValueError("rank-two Contract shapes disagree with its dimension relation")
-    return {"rows": lhs[0], "reduction": lhs[1], "features": rhs[1]}
+    if plan.lhs_row_start < 0 or plan.lhs_row_start + output[0] > lhs[0]:
+        raise ValueError("Contract output row domain is outside its LHS row domain")
+    if plan.source_instruction == plan.instruction and (plan.lhs_row_start != 0 or output[0] != lhs[0]):
+        raise ValueError("an unprojected Contract must produce its complete LHS row domain")
+    return {
+        "input_rows": lhs[0],
+        "rows": output[0],
+        "reduction": lhs[1],
+        "features": rhs[1],
+    }
+
+
+def _slice_ranges(instruction: HloInstruction) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    match = _SLICE_RANGES.search(instruction.attributes)
+    if match is None:
+        raise ValueError(f"slice %{instruction.name} has no index relation")
+    ranges = tuple(
+        (
+            int(item.group("start")),
+            int(item.group("limit")),
+            int(item.group("stride") or 1),
+        )
+        for item in _SLICE_RANGE.finditer(match.group("ranges"))
+    )
+    if len(ranges) != 2:
+        raise ValueError("Contract row-domain projection requires a rank-two slice relation")
+    return ranges[0], ranges[1]
 
 
 def _entry_instruction_name(entry: str, node: str) -> str:

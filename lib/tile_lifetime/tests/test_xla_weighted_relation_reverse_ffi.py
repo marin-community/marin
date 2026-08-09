@@ -6,8 +6,18 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
+from tile_lifetime.xla_rank_two_contract_ffi import (
+    audit_rank_two_contract_replacement,
+    evaluate_rank_two_contract_plan,
+    generate_cuda_rank_two_contract_ffi,
+    narrow_rank_two_contract_to_consumer_row_domain,
+    plan_rank_two_bf16_contract_typed_ffi,
+    replace_rank_two_contract_with_custom_call,
+)
+from tile_lifetime.xla_relation_program_recovery import ContractDimensionMap, RoutedForwardContractStage
 from tile_lifetime.xla_routed_shared_map_training_ffi import (
     RoutedSharedMapTrainingFfiTargets,
     plan_routed_shared_map_training_typed_ffi,
@@ -43,16 +53,18 @@ def test_natural_hlo_recovers_generic_weighted_relation_reverse() -> None:
     assert plan.relation_plan.edge_count == 16
     assert plan.payload_policy is RelationPayloadPolicy.RECOMPUTE_CONTRACT
     assert plan.legal_payload_policies == (RelationPayloadPolicy.RECOMPUTE_CONTRACT,)
-    assert plan.payload_contract.instruction == "dot.69"
+    assert plan.payload_contract.instruction == "slice.35"
+    assert plan.payload_contract.source_instruction == "dot.69"
+    assert plan.payload_contract.lhs_row_start == 0
     assert plan.payload_contract.lhs.instruction == "reshape.363"
     assert plan.payload_contract.rhs.instruction == "reshape.364"
-    assert plan.payload_contract.output_shape == "bf16[512,32]{1,0}"
+    assert plan.payload_contract.output_shape == "bf16[16,32]{1,0}"
     assert plan.edge_fold.instruction == "scatter-add.41"
     assert plan.edge_fold.payload_logical_shape == "bf16[16,32]{1,0}"
     assert plan.edge_fold.payload_wrappers == ("slice.35",)
     assert plan.edge_fold.edge_cotangent.instruction == "reshape.735"
     assert plan.edge_fold.internal_instructions == (
-        "slice.35",
+        "dot.69",
         "mul.967",
         "reduce_sum.710",
         "reshape.409",
@@ -65,7 +77,8 @@ def test_generated_calls_own_contract_map_and_nested_folds_before_collective() -
     plan = plan_weighted_relation_reverse_typed_ffi(hlo)
     contract_target = "shuttle.weighted_relation_reverse.contract.test"
     fold_target = "shuttle.weighted_relation_reverse.fold.test"
-    generated = generate_cuda_relation_edge_fold_ffi(plan.edge_fold, target=fold_target)
+    generated_contract = generate_cuda_rank_two_contract_ffi(plan.payload_contract, target=contract_target)
+    generated_fold = generate_cuda_relation_edge_fold_ffi(plan.edge_fold, target=fold_target)
     transformed = replace_weighted_relation_reverse_with_custom_calls(
         hlo,
         plan,
@@ -80,12 +93,12 @@ def test_generated_calls_own_contract_map_and_nested_folds_before_collective() -
         fold_target=fold_target,
     )
 
-    assert audit.contract_instruction == "dot.69"
+    assert audit.contract_instruction == "slice.35"
     assert audit.fold_instruction == "scatter-add.41"
     assert audit.fold_operands == (
         "broadcast.102",
         "broadcast_in_dim.427",
-        "dot.69",
+        "slice.35",
         "reshape.735",
     )
     assert audit.dead_replaced_instructions == plan.edge_fold.internal_instructions
@@ -93,10 +106,12 @@ def test_generated_calls_own_contract_map_and_nested_folds_before_collective() -
     assert audit.placement_collective == "psum.51"
     assert 'custom_call_target="shuttle.weighted_relation_reverse.contract.test"' in transformed
     assert 'custom_call_target="shuttle.weighted_relation_reverse.fold.test"' in transformed
-    assert "atomicAdd(" not in generated.source
-    assert "generated_edge_contribution" in generated.source
-    assert "generated_inner_fold_update" in generated.source
-    assert "generated_outer_fold_update" in generated.source
+    assert "constexpr int kRows = 16;" in generated_contract.source
+    assert "constexpr int kRows = 512;" not in generated_contract.source
+    assert "atomicAdd(" not in generated_fold.source
+    assert "generated_edge_contribution" in generated_fold.source
+    assert "generated_inner_fold_update" in generated_fold.source
+    assert "generated_outer_fold_update" in generated_fold.source
     parse_hlo_module_text(transformed)
 
 
@@ -133,12 +148,71 @@ def test_weighted_reverse_composes_after_existing_generated_routed_regions() -> 
     assert transformed.count('custom_call_target="shuttle.composed.') == 9
     assert reverse_plan.relation_plan.stable_permutation.endswith("/sort.9")
     assert audit.dead_replaced_instructions == (
-        "slice.35",
+        "dot.69",
         "mul.967",
         "reduce_sum.710",
         "reshape.409",
     )
     assert audit.placement_collective == "psum.51"
+
+
+def _rank_two_slice_hlo(*, input_rows: int, row_start: int, row_count: int) -> str:
+    row_limit = row_start + row_count
+    return f"""HloModule row_domain
+
+ENTRY %main (%lhs: bf16[{input_rows},5], %rhs: bf16[5,3]) -> bf16[{row_count},3] {{
+  %lhs = bf16[{input_rows},5]{{1,0}} parameter(0)
+  %rhs = bf16[5,3]{{1,0}} parameter(1)
+  %dot = bf16[{input_rows},3]{{1,0}} dot(%lhs, %rhs), lhs_contracting_dims={{1}}, rhs_contracting_dims={{0}}
+  %window = bf16[{row_count},3]{{1,0}} slice(%dot), slice={{[{row_start}:{row_limit}], [0:3]}}
+  ROOT %root = bf16[{row_count},3]{{1,0}} copy(%window)
+}}
+"""
+
+
+@pytest.mark.parametrize(("input_rows", "row_start", "row_count"), ((7, 0, 4), (9, 2, 3)))
+def test_contract_row_domain_projection_uses_generic_slice_relation(
+    input_rows: int,
+    row_start: int,
+    row_count: int,
+) -> None:
+    hlo = _rank_two_slice_hlo(input_rows=input_rows, row_start=row_start, row_count=row_count)
+    stage = RoutedForwardContractStage(
+        node="main/dot",
+        lhs="main/lhs",
+        rhs="main/rhs",
+        output_shape=f"bf16[{input_rows},3]{{1,0}}",
+        dimensions=ContractDimensionMap(
+            lhs_contracting=(1,),
+            rhs_contracting=(0,),
+            lhs_batch=(),
+            rhs_batch=(),
+            lhs_output=(0,),
+            rhs_output=(1,),
+        ),
+    )
+    full = plan_rank_two_bf16_contract_typed_ffi(hlo, stage)
+    narrowed = narrow_rank_two_contract_to_consumer_row_domain(hlo, full, consumer_value="window")
+    generated = generate_cuda_rank_two_contract_ffi(narrowed, target="shuttle.row_domain.test")
+    transformed = replace_rank_two_contract_with_custom_call(hlo, narrowed, target="shuttle.row_domain.test")
+    audit = audit_rank_two_contract_replacement(hlo, transformed, narrowed, target="shuttle.row_domain.test")
+
+    lhs = np.arange(input_rows * 5, dtype=np.float32).reshape(input_rows, 5) / 16
+    rhs = np.arange(15, dtype=np.float32).reshape(5, 3) / 8
+    observed = evaluate_rank_two_contract_plan(narrowed, _bf16(lhs), _bf16(rhs))
+    expected = _bf16(_bf16(lhs)[row_start : row_start + row_count] @ _bf16(rhs))
+
+    assert np.array_equal(observed, expected)
+    assert narrowed.source_instruction == "dot"
+    assert narrowed.instruction == "window"
+    assert narrowed.output_shape == f"bf16[{row_count},3]{{1,0}}"
+    assert narrowed.lhs_row_start == row_start
+    assert narrowed.numerical_contract == full.numerical_contract
+    assert audit.call_instruction == "window"
+    assert audit.output_shape == f"bf16[{row_count},3]{{1,0}}"
+    assert transformed.count('custom_call_target="shuttle.row_domain.test"') == 1
+    assert f"constexpr int kRows = {row_count};" in generated.source
+    assert f"+ {row_start} * kReduction" in generated.source
 
 
 def test_weighted_relation_reverse_cpu_semantics_match_independent_reference() -> None:

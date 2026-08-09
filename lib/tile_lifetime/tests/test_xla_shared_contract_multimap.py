@@ -230,10 +230,10 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
     assert audit.routed.retained_input_adjoint_wrappers == plan.routed.retained_input_adjoint_wrappers
     assert len(audit.axis_folds) == 2
     assert audit.routed.shared_contract_multi_map.outputs == ("select.5", "select.7")
-    assert audit.weighted_relation_reverse.contract_instruction == "dot.69"
+    assert audit.weighted_relation_reverse.contract_instruction == "slice.35"
     assert audit.weighted_relation_reverse.fold_instruction == "scatter-add.41"
     assert audit.weighted_relation_reverse.dead_replaced_instructions == (
-        "slice.35",
+        "dot.69",
         "mul.967",
         "reduce_sum.710",
         "reshape.409",

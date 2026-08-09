@@ -33,6 +33,7 @@ from tile_lifetime.xla_hlo_recovery import (
 from tile_lifetime.xla_rank_two_contract_ffi import (
     RankTwoBf16ContractTypedFfiPlan,
     evaluate_rank_two_contract_plan,
+    narrow_rank_two_contract_to_consumer_row_domain,
     plan_rank_two_bf16_contract_typed_ffi,
     replace_rank_two_contract_with_custom_call,
 )
@@ -616,21 +617,31 @@ def _recover_candidate(
         output_shape=contract.shape,
         dimensions=_contract_dimensions(contract),
     )
-    contract_plan = plan_rank_two_bf16_contract_typed_ffi(
+    full_contract_plan = plan_rank_two_bf16_contract_typed_ffi(
         hlo_text,
         contract_stage,
         numerical_policy=numerical_policy,
+    )
+    contract_plan = narrow_rank_two_contract_to_consumer_row_domain(
+        hlo_text,
+        full_contract_plan,
+        consumer_value=payload_source,
+    )
+    dead_payload_instructions = (
+        (full_contract_plan.instruction, *payload_wrappers[:-1])
+        if contract_plan.instruction != full_contract_plan.instruction
+        else payload_wrappers
     )
     fold = RelationEdgeFoldTypedFfiPlan(
         instruction=scatter.name,
         initial=EntryRegionValue(initial.name, initial.shape),
         source_indices=EntryRegionValue(source_indices.name, source_indices.shape),
-        payload=EntryRegionValue(contract.name, contract.shape),
+        payload=EntryRegionValue(contract_plan.instruction, contract_plan.output_shape),
         edge_cotangent=EntryRegionValue(edge_cotangent.name, edge_cotangent.shape),
         payload_logical_shape=instructions[payload_source].shape,
         payload_wrappers=payload_wrappers,
         internal_instructions=(
-            *payload_wrappers,
+            *dead_payload_instructions,
             reduction_input.name,
             reduction.name,
             update_wrapper.name,
