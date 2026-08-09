@@ -210,12 +210,34 @@ libraries link the exact versioned CUDA 13 runtime from the JAX environment.
 
 The phased physical payload is a scalar reference pipeline, not a tensor-core
 attention kernel. `StreamingAttentionProgram` reaches Event Tensor task algebra
-through a structural adapter, but buffer-slot assignment and reuse dependences
-are not yet connected to this CUDA payload. The replay validates readiness,
-generation-safe reuse, runtime inputs, and the SM100 attachment boundary only.
+through a structural adapter. This initial replay validates readiness,
+generation-safe reuse, runtime inputs, and the SM100 attachment boundary only;
+the workload-linked follow-up below connects exact buffer-slot assignment and
+reuse dependences to real tensor payloads.
 
 Raw samples, generated CUDA, optimized HLO, and hashes are preserved in
 `lib/tile_lifetime/benchmarks/artifacts/event_tensor_jax_ffi_gb200_v0/`. The
 holder was released after copying the artifact; a status check found no active
 session. The preceding one-hour H100 request never admitted and consumed no GPU
 time.
+
+## Workload-linked GB200 follow-up
+
+Revision `85212469d7` connects the exact derived plans to real tensor payloads
+through Torch-free JAX typed FFI. The runtime relation case consumes RelationPlan
+CSR counts, offsets, and source IDs and executes a real segmented FP32 Contract.
+The streaming case executes QK, normalized-exponential Fold, and PV over a finite
+shared K/V buffer. The buffer plan mechanically derives PV as the unique last
+consumer and adds the reuse edge to the next producer generation.
+
+The physical audit keeps K/V-stage acquire and last-consumer release barriers,
+while QK-to-Fold, Fold-to-PV, finalization, and the relation gather-to-Contract
+edge erase to proven same-owner program order. Primary and mutation paths all
+match independent references and are deterministic. The 30-sample medians are
+0.112208/0.121696 ms for segmented primary/mutation and 0.122144/0.121584 ms for
+streaming primary/mutation.
+
+These small FP32 bodies validate derivation, exact buffer reuse, physical event
+realization, and semantic mutation. They do not claim expert grouped-GEMM or
+streaming-attention performance. The raw artifact and generated CUDA are under
+`lib/tile_lifetime/benchmarks/artifacts/event_tensor_workload_linkage_gb200_v0/`.

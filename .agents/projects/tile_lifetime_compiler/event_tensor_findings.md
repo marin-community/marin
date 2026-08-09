@@ -27,15 +27,14 @@ from the program's logical axes and tile schedule. Changing the Fold domain
 changes event counts without a workload dispatch. Runtime segment readiness
 also consumes the same executable `RelationPlan` type used by the MoE path.
 
-This is not yet an end-to-end attention/MoE Event Tensor integration. The
-accurate streaming graph has one task per row tile and K/V Fold partition,
-whereas the bounded CUDA validation template currently assumes that its
-pipeline-slot count is also the complete Fold-partition count and adds a
-conservative finalize-before-next-generation reuse edge. Connecting the exact
-graph to circular storage needs a separate buffer-slot assignment and reuse
-dependence derivation. Until that exists, the branch proves structural reuse
-and a physical attachment point, not replacement of current attention or MoE
-readiness logic.
+The workload-linkage follow-up closes the earlier structural-to-payload gap for
+bounded reference bodies. `BoundedBufferPlan` assigns finite K/V slots and
+generations, derives the unique last consumer by task-graph reachability, and
+adds last-consumer-to-next-producer reuse dependences. The same exact graph now
+drives real QK, normalized-exponential Fold, and PV payload execution. The
+runtime relation path consumes RelationPlan CSR counts, offsets, and source rows
+to execute a real segmented Contract. These remain small reference kernels,
+not replacements for the accepted production MoE or attention paths.
 
 The Torch-free JAX typed-FFI replay also executes on one NVIDIA GB200 at revision
 `1a04930ecd`. Runtime relation inputs and all phased Q/K/V inputs remain
@@ -47,11 +46,15 @@ deterministic over five repeats. The 30-sample medians are 0.061314 ms and
 0.061152 ms for runtime primary/mutation, and 0.169697 ms and 0.146477 ms for
 phased primary/mutation.
 
-These GB200 timings measure a scalar physical reference pipeline. The
-`StreamingAttentionProgram` adapter is structural and is not physically linked
-to the measured payload. This result validates JAX-owned runtime inputs,
-EventTensorPlan readiness, generations, and SM100 lowering. It does not validate
-tensor-core QK/PV execution or full attention performance.
+Those original GB200 timings measured a scalar event-only physical pipeline.
+The workload-linkage replay at revision `85212469d7` additionally executes the
+derived relation and streaming plans over real tensor payloads. Segmented
+Contract primary/mutation medians are 0.112208/0.121696 ms with bitwise reference
+matches. Streaming Contract/Fold primary/mutation medians are
+0.122144/0.121584 ms with maximum absolute errors 2.384e-7/1.192e-7. All four
+paths are bitwise deterministic across repeated execution. This validates the
+logical-to-physical linkage and mutation boundary, not tensor-core throughput
+or full attention/MoE performance.
 
 ## Acceptance answers
 
