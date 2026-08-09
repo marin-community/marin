@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
-import importlib
 import json
 import re
 import statistics
@@ -38,6 +37,7 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     write_gzip_text,
 )
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
+from tile_lifetime.jax_hlo_rewrite_runtime import require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     compile_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
@@ -457,14 +457,14 @@ def run_smoke(
     repeats: int = 30,
 ) -> dict[str, Any]:
     """Compile, execute, and time the combined routed-plus-attention transform."""
+    hlo_runtime = require_hlo_rewrite_runtime()
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the combined routed training replacement requires a CUDA JAX device")
     if warmup < 0:
         raise ValueError("warmup must be nonnegative")
     if repeats <= 0 or repeats % 2:
         raise ValueError("repeats must be a positive even number")
-    hlo = importlib.import_module("jaxlib._hlo")
-    xla = importlib.import_module("jax.extend.xla")
+    xla = hlo_runtime.transformation_api
     jax.config.update("jax_enable_compilation_cache", False)
     temporary = None
     if artifact_directory is None:
@@ -547,7 +547,7 @@ def run_smoke(
 
             def replace(serialized_module: bytes) -> bytes | None:
                 nonlocal attention_library_path
-                module = hlo.HloModule.from_serialized_hlo_module_proto(serialized_module)
+                module = hlo_runtime.module_from_serialized_proto(serialized_module)
                 if module.name != "jit_train_step":
                     return None
                 original = module.to_string()
@@ -766,7 +766,7 @@ def run_smoke(
                         "axis_folds": generated_axis_folds,
                     }
                 )
-                transformed_module = hlo.hlo_module_from_text(rewritten)
+                transformed_module = hlo_runtime.module_from_text(rewritten)
                 transformed_text = transformed_module.to_string()
                 transformed_modules.append(transformed_text)
                 if not composition_mode.uses_shared_map:
