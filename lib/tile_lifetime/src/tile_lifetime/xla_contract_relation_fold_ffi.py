@@ -61,6 +61,8 @@ class ContractRelationFoldReplacementAudit:
     output_shape: str
     dead_instructions: tuple[str, ...]
     external_users: tuple[str, ...]
+    placement_wrappers: tuple[str, ...]
+    placement_collective: str
     api_version: int
 
 
@@ -354,12 +356,16 @@ def audit_contract_relation_fold_replacement(
     original_users = _entry_users(original_entry)
     if users[call.name] != fold.external_users or original_users[fold.instruction] != fold.external_users:
         raise ValueError("generated Contract/relation-Fold consumer boundary changed")
+    instructions = {instruction.name: instruction for instruction in transformed_entry.instructions}
+    placement_wrappers, placement_collective = _placement_collective_path(instructions, users, call.name)
     return ContractRelationFoldReplacementAudit(
         call_instruction=call.name,
         operands=operands,
         output_shape=call.shape,
         dead_instructions=dead,
         external_users=users[call.name],
+        placement_wrappers=placement_wrappers,
+        placement_collective=placement_collective,
         api_version=1,
     )
 
@@ -494,6 +500,26 @@ def _unique_target_instruction(entry: HloComputation, target: str) -> HloInstruc
     if len(matches) != 1:
         raise ValueError(f"expected one generated target {target!r}, found {len(matches)}")
     return matches[0]
+
+
+def _placement_collective_path(
+    instructions: dict[str, HloInstruction],
+    users: dict[str, tuple[str, ...]],
+    start: str,
+) -> tuple[tuple[str, ...], str]:
+    wrappers: list[str] = []
+    current = start
+    while True:
+        direct_users = users[current]
+        if len(direct_users) != 1:
+            raise ValueError(f"relation Fold output %{current} has {len(direct_users)} users")
+        user = instructions[direct_users[0]]
+        if user.opcode == "all-reduce":
+            return tuple(wrappers), user.name
+        if user.opcode not in {"bitcast", "copy", "reshape", "slice", "transpose"} or len(user.operands) != 1:
+            raise ValueError(f"relation Fold output does not reach a placement collective through views: %{user.name}")
+        wrappers.append(user.name)
+        current = user.name
 
 
 def _target_symbol(target: str) -> str:

@@ -161,6 +161,8 @@ def test_bounded_contract_relation_fold_candidate_erases_payload_materialization
         "reshape.735",
     )
     assert audit.external_users == ("reshape.230",)
+    assert audit.placement_wrappers == ("reshape.230",)
+    assert audit.placement_collective == "psum.51"
     assert "dot.69" in audit.dead_instructions
     assert "slice.35" in audit.dead_instructions
     assert "cublas" not in generated.source

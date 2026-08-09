@@ -8,6 +8,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call_smoke import _tree_hash_evidence
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
@@ -15,6 +16,7 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _SHARED_ROUTED_TARGETS,
     _WEIGHTED_RELATION_CONTRACT_TARGET,
     _WEIGHTED_RELATION_FOLD_TARGET,
+    _WEIGHTED_RELATION_FUSED_TARGET,
     _attention_reverse_program,
     _audit_shared_map_composition,
     _axis_fold_reassociation_report,
@@ -22,9 +24,11 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
     _plan_shared_map_composition,
     _replace_shared_map_composition,
     _single_custom_call_target_occurrences,
+    _target_occurrence,
 )
 from tile_lifetime.jax_streaming_attention_backward_ffi import generate_streaming_attention_backward_ffi
 from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.xla_contract_relation_fold_ffi import ContractRelationFoldReplacementAudit
 from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     SharedContractMapDependence,
@@ -48,6 +52,7 @@ from tile_lifetime.xla_streaming_attention_backward_ffi import (
     derive_streaming_attention_backward_ffi_output_layouts,
     plan_streaming_attention_backward_hlo_region_replacement,
 )
+from tile_lifetime.xla_weighted_relation_reverse_ffi import WeightedRelationReverseReplacementAudit
 
 _ARTIFACT = (
     Path(__file__).parents[1]
@@ -185,7 +190,8 @@ def test_routed_training_composition_replaces_all_input_adjoint_arithmetic_once(
     assert audit.transpose_count[1] <= audit.transpose_count[0]
 
 
-def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
+@pytest.mark.parametrize("fuse_weighted_reverse", (False, True))
+def test_shared_map_harness_composes_generated_input_adjoint_calls(fuse_weighted_reverse: bool) -> None:
     hlo = _hlo()
     attention_program, attention_schedule, _ = _attention_reverse_program()
     default_attention = generate_streaming_attention_backward_ffi(
@@ -209,8 +215,17 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
 
     assert _axis_fold_reassociation_report(plan.axis_folds) == ["deterministic_tree", "deterministic_tree"]
 
-    transformed = _replace_shared_map_composition(hlo, plan)
-    audit = _audit_shared_map_composition(hlo, transformed, plan)
+    transformed = _replace_shared_map_composition(
+        hlo,
+        plan,
+        fuse_weighted_reverse=fuse_weighted_reverse,
+    )
+    audit = _audit_shared_map_composition(
+        hlo,
+        transformed,
+        plan,
+        fuse_weighted_reverse=fuse_weighted_reverse,
+    )
 
     targets = (
         _SHARED_ROUTED_TARGETS.forward,
@@ -218,26 +233,43 @@ def test_shared_map_harness_composes_generated_input_adjoint_calls() -> None:
         _SHARED_ROUTED_TARGETS.shared_contract_multi_map,
         _SHARED_ROUTED_TARGETS.source_fold,
         *_SHARED_ROUTED_TARGETS.weight_gradients,
-        _WEIGHTED_RELATION_CONTRACT_TARGET,
-        _WEIGHTED_RELATION_FOLD_TARGET,
+        *(
+            (_WEIGHTED_RELATION_FUSED_TARGET,)
+            if fuse_weighted_reverse
+            else (_WEIGHTED_RELATION_CONTRACT_TARGET, _WEIGHTED_RELATION_FOLD_TARGET)
+        ),
         _ROUTED_ATTENTION_TARGETS.attention_backward,
     )
     selected_targets = (*targets, *(generated.target_name for generated in axis_folds))
     exact_occurrences = _single_custom_call_target_occurrences(transformed, selected_targets)
-    assert len(exact_occurrences) == 12
+    assert len(exact_occurrences) == (11 if fuse_weighted_reverse else 12)
     assert set(exact_occurrences.values()) == {1}
     assert transformed.count("shuttle.routed_training.input_adjoint.v2") == 0
     assert audit.routed.retained_input_adjoint_wrappers == plan.routed.retained_input_adjoint_wrappers
     assert len(audit.axis_folds) == 2
     assert audit.routed.shared_contract_multi_map.outputs == ("select.5", "select.7")
-    assert audit.weighted_relation_reverse.contract_instruction == "slice.35"
-    assert audit.weighted_relation_reverse.fold_instruction == "scatter-add.41"
-    assert audit.weighted_relation_reverse.dead_replaced_instructions == (
-        "dot.69",
-        "mul.967",
-        "reduce_sum.710",
-        "reshape.409",
-    )
+    if fuse_weighted_reverse:
+        assert isinstance(audit.weighted_relation_reverse, ContractRelationFoldReplacementAudit)
+        assert audit.weighted_relation_reverse.call_instruction == "scatter-add.41"
+        assert audit.weighted_relation_reverse.dead_instructions == (
+            "slice.35",
+            "dot.69",
+            "mul.967",
+            "reduce_sum.710",
+            "reshape.409",
+        )
+        assert _target_occurrence(transformed, _WEIGHTED_RELATION_CONTRACT_TARGET) == 0
+        assert _target_occurrence(transformed, _WEIGHTED_RELATION_FOLD_TARGET) == 0
+    else:
+        assert isinstance(audit.weighted_relation_reverse, WeightedRelationReverseReplacementAudit)
+        assert audit.weighted_relation_reverse.contract_instruction == "slice.35"
+        assert audit.weighted_relation_reverse.fold_instruction == "scatter-add.41"
+        assert audit.weighted_relation_reverse.dead_replaced_instructions == (
+            "dot.69",
+            "mul.967",
+            "reduce_sum.710",
+            "reshape.409",
+        )
     assert audit.weighted_relation_reverse.placement_collective == "psum.51"
 
 
