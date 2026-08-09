@@ -52,6 +52,7 @@ def test_axis_fold_evaluator_matches_independent_column_reduction() -> None:
 def test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast() -> None:
     program = _scaled_column_sum_program()
     another_schedule = replace(program, threads=128)
+    tiled_schedule = replace(program, threads=128, groups_per_block=16)
     mutation = replace(
         program,
         output_expression=scalar_binary(
@@ -64,7 +65,10 @@ def test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast(
     scale = np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
 
     assert another_schedule.semantic_fingerprint == program.semantic_fingerprint
+    assert tiled_schedule.semantic_fingerprint == program.semantic_fingerprint
     assert generate_cuda_axis_fold(another_schedule).source != generate_cuda_axis_fold(program).source
+    assert "constexpr int kGroupsPerBlock = 16" in generate_cuda_axis_fold(tiled_schedule).source
+    assert "stride * kGroupsPerBlock" in generate_cuda_axis_fold(tiled_schedule).source
     assert mutation.semantic_fingerprint != program.semantic_fingerprint
     np.testing.assert_array_equal(
         evaluate_axis_fold_program(mutation, {"value": values, "scale": scale}),

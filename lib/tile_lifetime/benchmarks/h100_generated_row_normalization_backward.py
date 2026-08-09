@@ -11,6 +11,7 @@ import json
 import statistics
 import subprocess
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
@@ -131,6 +132,7 @@ def main() -> None:
     parser.add_argument("--rows", type=int, default=2048)
     parser.add_argument("--hidden", type=int, default=4096)
     parser.add_argument("--threads", type=int, default=256)
+    parser.add_argument("--column-groups-per-block", type=int, default=32)
     parser.add_argument("--statistic", choices=("rms", "layer"), default="rms")
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
@@ -161,7 +163,11 @@ def main() -> None:
     )
     programs = lower_row_normalization_axis_folds(plan, threads=args.threads)
     generated_input = generate_cuda_axis_fold(programs.input_cotangent)
-    generated_scale = generate_cuda_axis_fold(programs.feature_scale_cotangent)
+    scale_program = replace(
+        programs.feature_scale_cotangent,
+        groups_per_block=args.column_groups_per_block,
+    )
+    generated_scale = generate_cuda_axis_fold(scale_program)
     input_module, input_source_path = _load_generated_axis_fold(
         generated_input,
         args.source_directory,
@@ -276,6 +282,7 @@ def main() -> None:
             "input_fold_state_count": len(programs.input_cotangent.reductions),
             "input_fold_fingerprint": programs.input_cotangent.semantic_fingerprint,
             "scale_fold_fingerprint": programs.feature_scale_cotangent.semantic_fingerprint,
+            "column_groups_per_block": args.column_groups_per_block,
             "reassociation": programs.input_cotangent.reassociation.value,
         },
         "correctness": correctness,

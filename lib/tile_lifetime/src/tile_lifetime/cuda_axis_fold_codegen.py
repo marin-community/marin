@@ -99,13 +99,22 @@ class AxisFoldProgram:
     output_expression: ScalarExpression
     output_dtype: DType
     threads: int = 256
+    groups_per_block: int = 1
     reassociation: AxisFoldReassociation = AxisFoldReassociation.DETERMINISTIC_TREE
 
     def __post_init__(self) -> None:
-        if min(self.rows, self.columns, self.threads) <= 0:
+        if min(self.rows, self.columns, self.threads, self.groups_per_block) <= 0:
             raise ValueError("axis-Fold dimensions and thread count must be positive")
         if self.threads & (self.threads - 1):
             raise ValueError("axis-Fold thread count must be a power of two")
+        if self.groups_per_block & (self.groups_per_block - 1):
+            raise ValueError("axis-Fold groups per block must be a power of two")
+        if self.threads % self.groups_per_block:
+            raise ValueError("axis-Fold groups per block must divide the thread count")
+        if self.groups_per_block > 1 and (
+            self.reduction_axis is not AxisFoldDirection.ROWS or self.output_kind is not AxisFoldOutputKind.REDUCED
+        ):
+            raise ValueError("tiled axis-Fold groups currently require a reduced row-axis Fold")
         if self.output_dtype not in {DType.BF16, DType.FP32}:
             raise ValueError("axis-Fold output must be BF16 or FP32")
         input_names = tuple(value.name for value in self.inputs)
@@ -171,6 +180,8 @@ class GeneratedCudaAxisFold:
 
 def generate_cuda_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxisFold:
     """Render a generic deterministic Map/Fold CUDA extension."""
+    if program.groups_per_block > 1:
+        return _generate_tiled_row_axis_fold(program)
     argument_declarations = ",\n    ".join(f"torch::Tensor {value.name}" for value in program.inputs)
     pointer_declarations = "\n".join(_pointer_declaration(value) for value in program.inputs)
     wrapper_checks = "\n".join(_wrapper_check(value, program) for value in program.inputs)
@@ -278,6 +289,119 @@ torch::Tensor shuttle_axis_fold_out(
 torch::Tensor shuttle_axis_fold(
     {argument_declarations}) {{
   auto output = torch::empty({output_shape}, {program.inputs[0].name}.options().dtype({output_torch_dtype}));
+  return shuttle_axis_fold_out({', '.join(value.name for value in program.inputs)}, output);
+}}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
+  module.def("run", &shuttle_axis_fold);
+  module.def("run_out", &shuttle_axis_fold_out);
+}}
+""".strip()
+    return GeneratedCudaAxisFold(
+        source=source,
+        semantic_fingerprint=program.semantic_fingerprint,
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+    )
+
+
+def _generate_tiled_row_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxisFold:
+    """Render a coalesced multi-group schedule for a row-axis reduction."""
+    argument_declarations = ",\n    ".join(f"torch::Tensor {value.name}" for value in program.inputs)
+    pointer_declarations = "\n".join(_pointer_declaration(value) for value in program.inputs)
+    wrapper_checks = "\n".join(_wrapper_check(value, program) for value in program.inputs)
+    local_reductions = "\n".join(f"  float local_{value.name} = 0.0f;" for value in program.reductions)
+    contribution_updates = "\n".join(
+        f"      local_{value.name} = __fadd_rn(local_{value.name}, "
+        f"{_cuda_expression(value.contribution, _input_aliases(program.inputs, 'row', 'column'))});"
+        for value in program.reductions
+    )
+    shared_declarations = "\n".join(f"  __shared__ float shared_{value.name}[kThreads];" for value in program.reductions)
+    shared_initialization = "\n".join(
+        f"  shared_{value.name}[threadIdx.x] = local_{value.name};" for value in program.reductions
+    )
+    shared_updates = "\n".join(
+        f"      shared_{value.name}[threadIdx.x] = __fadd_rn("
+        f"shared_{value.name}[threadIdx.x], shared_{value.name}[threadIdx.x + stride * kGroupsPerBlock]);"
+        for value in program.reductions
+    )
+    reduction_aliases = {value.name: f"shared_{value.name}[threadIdx.x]" for value in program.reductions}
+    output_aliases = _reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
+    output_expression = _cuda_expression(program.output_expression, output_aliases)
+    output_store = _output_store(program.output_dtype, "group", output_expression)
+    output_torch_dtype = "torch::kBFloat16" if program.output_dtype is DType.BF16 else "torch::kFloat32"
+    output_pointer_type = "__nv_bfloat16" if program.output_dtype is DType.BF16 else "float"
+    source = f"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic rank-two Map/Fold semantics; do not edit.
+#include <torch/extension.h>
+
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+
+namespace {{
+
+constexpr int kRows = {program.rows};
+constexpr int kColumns = {program.columns};
+constexpr int kThreads = {program.threads};
+constexpr int kGroupsPerBlock = {program.groups_per_block};
+constexpr int kReductionLanes = kThreads / kGroupsPerBlock;
+
+__global__ __launch_bounds__(kThreads) void shuttle_axis_fold_kernel(
+    {', '.join(_kernel_parameter(value) for value in program.inputs)},
+    {output_pointer_type}* output) {{
+{shared_declarations}
+  const int group_lane = threadIdx.x % kGroupsPerBlock;
+  const int reduction_lane = threadIdx.x / kGroupsPerBlock;
+  const int group = blockIdx.x * kGroupsPerBlock + group_lane;
+{local_reductions}
+  if (group < kColumns) {{
+    for (int row = reduction_lane; row < kRows; row += kReductionLanes) {{
+      const int column = group;
+{contribution_updates}
+    }}
+  }}
+{shared_initialization}
+  __syncthreads();
+  for (int stride = kReductionLanes / 2; stride > 0; stride /= 2) {{
+    if (reduction_lane < stride) {{
+{shared_updates}
+    }}
+    __syncthreads();
+  }}
+  if (reduction_lane == 0 && group < kColumns) {{
+    {output_store}
+  }}
+}}
+
+}}  // namespace
+
+torch::Tensor shuttle_axis_fold_out(
+    {argument_declarations},
+    torch::Tensor output) {{
+{wrapper_checks}
+  TORCH_CHECK(output.is_cuda(), "axis-Fold output must be CUDA");
+  TORCH_CHECK(output.scalar_type() == {output_torch_dtype}, "axis-Fold output dtype mismatch");
+  TORCH_CHECK(output.is_contiguous(), "axis-Fold output must be contiguous");
+  TORCH_CHECK(output.dim() == 1 && output.size(0) == kColumns,
+              "axis-Fold reduced output shape mismatch");
+  const c10::cuda::CUDAGuard device_guard(output.device());
+{pointer_declarations}
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  constexpr int kBlocks = (kColumns + kGroupsPerBlock - 1) / kGroupsPerBlock;
+  shuttle_axis_fold_kernel<<<kBlocks, kThreads, 0, stream>>>(
+      {', '.join(f'{value.name}_pointer' for value in program.inputs)},
+      reinterpret_cast<{output_pointer_type}*>(output.data_ptr()));
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return output;
+}}
+
+torch::Tensor shuttle_axis_fold(
+    {argument_declarations}) {{
+  auto output = torch::empty({{kColumns}}, {program.inputs[0].name}.options().dtype({output_torch_dtype}));
   return shuttle_axis_fold_out({', '.join(value.name for value in program.inputs)}, output);
 }}
 
