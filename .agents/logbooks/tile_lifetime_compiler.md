@@ -2537,3 +2537,31 @@ author: dlwh
   library.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/xla_streaming_attention_backward_physical_layout_h100_v0/`.
+
+### 2026-08-09 - TLTC-XLA-030 region-local Grug ownership audit
+
+- The natural one-layer Grug post-SPMD artifact contains 68 physical Contract
+  instructions. The current composed Shuttle transform proves four routed
+  regions and one local attention-reverse region without metadata or model
+  names: routed forward, routed input adjoint, two group-batched expert-weight
+  Contracts, and normalized-exponential attention reverse.
+- The routed input-adjoint call still consumes `dot.66`, a rematerialized first
+  expert Contract, as the auxiliary input to its generated reverse Map. That
+  value also feeds the independently generated forward-Map activation used by
+  the second expert-weight Contract, so simply moving it into the existing call
+  would duplicate rather than eliminate the Contract.
+- The next clean ownership candidate is therefore a generic multi-output
+  rematerialization plan: one Contract produces both the forward scalar-Map
+  value and reverse scalar-Map value, which then feed the input-adjoint and two
+  weight-gradient Contracts. The candidate must be recovered from shared
+  Contract/Map dataflow, preserve both live outputs, and remain valid when the
+  scalar Map changes. It must not be keyed on MoE, SwiGLU, or source metadata.
+- Separate structural recovery found three unambiguous row Fold to full-shape
+  BF16 final-Map reverse regions in the same entry. Their exact HLO has an FP32
+  primal/inverse-scale boundary and a final BF16 cast, so the existing standalone
+  four-buffer RMS helper cannot be substituted blindly. The integration must
+  derive and generate the exact Map/Fold boundary while retaining an explicit
+  deterministic-tree numerical policy.
+- Hardware taxonomy remains strict: the preserved artifact reports an actual
+  NVIDIA GB200. Schmidt allocations, if used later, are B200 portability data
+  and must not be cited as GB200 evidence.
