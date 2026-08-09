@@ -205,7 +205,7 @@ component comparison and mutation evidence.
 
 ## Mixture-of-Kittens follow-on
 
-The pinned Mixture-of-Kittens implementation targets SM100/SM103 rather than H100. Its forward megakernel combines shared and routed expert gate/up GEMMs, SwiGLU, down GEMMs, dispatch/combine communication, readiness events, and a persistent task scheduler. It is used to establish an expert-parallel correctness/performance oracle and to inspect useful physical constraints, not as a complete compiler backend. Generated first-principles plans will be compared on low-priority B200 capacity and reported separately from the H100 dense results.
+The pinned Mixture-of-Kittens implementation targets SM100/SM103 rather than H100. Its forward megakernel combines shared and routed expert gate/up GEMMs, SwiGLU, down GEMMs, dispatch/combine communication, readiness events, and a persistent task scheduler. It is used to establish an expert-parallel correctness/performance oracle and to inspect useful physical constraints, not as a complete compiler backend. Generated first-principles MoE plans are compared on matching low-priority four-GB200 capacity and reported separately from H100 dense and B200 portability results.
 
 The official commit now builds and runs on one low-priority four-GPU GB200 tray. The isolated environment uses PyTorch 2.10.0+cu130, CUDA NVCC/CCCL 13.0.88/13.0.85, driver 595.71.05, and SM100 code generation. The pip CUDA toolkit required its library directory on `LIBRARY_PATH` so the host linker could find `libcudadevrt.a` and `libcudart_static.a`; no MoK or ThunderKittens source changes were made.
 

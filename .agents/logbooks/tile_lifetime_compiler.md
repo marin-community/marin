@@ -335,7 +335,7 @@ author: dlwh
 - Numerical result: at sequence 2048, prologue versus delayed mean absolute difference is 0.001601 at `x2` and 0.002429 at packed next QKV, matching the hand-composed oracle with BF16 gammas. At sequence 4096 the corresponding means are 0.001635 and 0.002482.
 - Backend contract: `rope_posfreq` validates canonical base-10000 sine/cosine tables once before timed execution. General dynamic RoPE tables remain unsupported rather than being silently ignored.
 - Interpretation: dense structure is recovered from ordinary StableHLO through executable H100 dispatch. Remaining dense work is refinement—durable serialization, cache/capture, and K-invariant prologue scale transport—not a structural blocker for beginning MoK recovery.
-- Next action: use low-priority B200 capacity to reproduce the pinned Mixture-of-Kittens oracle and define the first expert-parallel skeleton around its router schedule, shared/routed expert tasks, readiness events, and dispatch/combine buffers.
+- Next action: use low-priority four-GB200 capacity to reproduce the pinned Mixture-of-Kittens oracle and define the first expert-parallel skeleton around its router schedule, shared/routed expert tasks, readiness events, and dispatch/combine buffers. B200 remains a separate SM100 portability target.
 
 ### 2026-08-06 - TLTC-022 official Mixture-of-Kittens GB200 oracle
 
