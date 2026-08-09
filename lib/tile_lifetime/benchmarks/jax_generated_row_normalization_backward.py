@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import itertools
 import json
 import statistics
 import subprocess
@@ -24,7 +25,11 @@ import jaxlib
 import numpy as np
 
 from tile_lifetime.cuda_axis_fold_codegen import AxisFoldPipelineSchedule, generate_cuda_axis_fold_ffi
-from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
+from tile_lifetime.cuda_toolchain import (
+    cuda_toolkit_link_flags,
+    cuda_toolkit_shared_library,
+    cuda_toolkit_shared_library_link_flags,
+)
 from tile_lifetime.jax_axis_fold_ffi import call_cuda_axis_fold_ffi, register_cuda_axis_fold_ffi
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
@@ -36,6 +41,28 @@ from tile_lifetime.stablehlo_row_normalization_backward import (
 _TARGET_NAME = "shuttle.axis_fold_reverse_v1"
 _INPUT_TARGET_NAME = "shuttle.axis_fold_reverse_input_v1"
 _FEATURE_TARGET_NAME = "shuttle.axis_fold_reverse_feature_v1"
+
+
+def _comparison_target_name(schedule: AxisFoldPipelineSchedule) -> str:
+    return f"{_TARGET_NAME}.{schedule.value}"
+
+
+def _cuda_profiler_range(functions: tuple[Any, ...], nvcc: Path) -> None:
+    runtime = ctypes.CDLL(str(cuda_toolkit_shared_library(nvcc, "cudart")))
+    start = runtime.cudaProfilerStart
+    stop = runtime.cudaProfilerStop
+    start.restype = ctypes.c_int
+    stop.restype = ctypes.c_int
+    start_status = int(start())
+    if start_status != 0:
+        raise RuntimeError(f"cudaProfilerStart failed with status {start_status}")
+    try:
+        for function in functions:
+            jax.block_until_ready(function())
+    finally:
+        stop_status = int(stop())
+    if stop_status != 0:
+        raise RuntimeError(f"cudaProfilerStop failed with status {stop_status}")
 
 
 def _normalization(x: jax.Array, feature_scale: jax.Array) -> jax.Array:
@@ -106,8 +133,9 @@ def _measure(
             jax.block_until_ready(function())
     samples: dict[str, list[float]] = {name: [] for name, _ in variants}
     orders: list[list[str]] = []
+    counterbalanced_orders = tuple(itertools.permutations(variants))
     for repeat in range(repeats):
-        order = variants if repeat % 2 == 0 else tuple(reversed(variants))
+        order = counterbalanced_orders[repeat % len(counterbalanced_orders)]
         orders.append([name for name, _ in order])
         for name, function in order:
             started = time.perf_counter()
@@ -149,17 +177,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     exported = jax.export.export(jax.jit(_natural_reverse))(*arguments)
     serialized = exported.mlir_module_serialized
     graph = import_stablehlo(serialized, input_names=("matrix_a", "feature_vector", "matrix_b"))
-    compilation = compile_stablehlo_row_normalization_backward_ffi(
-        graph,
-        target_name=_TARGET_NAME,
-        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        threads=args.threads,
-        feature_groups_per_block=args.column_groups_per_block,
-        pipeline_schedule=AxisFoldPipelineSchedule(args.pipeline_schedule),
-    )
-    generated = compilation.generated
-    library = _compile_generated_source(generated.source, args.artifact_directory, args.nvcc, args.architecture)
-    register_cuda_axis_fold_ffi(generated, library)
+    selected_schedule = AxisFoldPipelineSchedule(args.pipeline_schedule)
+    schedules = tuple(AxisFoldPipelineSchedule) if args.compare_pipeline_schedules else (selected_schedule,)
+    compilations = {}
+    generated_variants = {}
+    libraries = {}
+    for schedule in schedules:
+        target_name = _comparison_target_name(schedule) if args.compare_pipeline_schedules else _TARGET_NAME
+        compilation = compile_stablehlo_row_normalization_backward_ffi(
+            graph,
+            target_name=target_name,
+            numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+            threads=args.threads,
+            feature_groups_per_block=args.column_groups_per_block,
+            pipeline_schedule=schedule,
+        )
+        generated = compilation.generated
+        artifact_directory = (
+            args.artifact_directory / schedule.value if args.compare_pipeline_schedules else args.artifact_directory
+        )
+        library = _compile_generated_source(generated.source, artifact_directory, args.nvcc, args.architecture)
+        register_cuda_axis_fold_ffi(generated, library)
+        compilations[schedule] = compilation
+        generated_variants[schedule] = generated
+        libraries[schedule] = library
+    compilation = compilations[selected_schedule]
+    generated = generated_variants[selected_schedule]
+    library = libraries[selected_schedule]
 
     input_generated = None
     input_library = None
@@ -201,20 +245,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     standardized = (local * inverse_scale[:, None]).astype(jnp.bfloat16)
     projected = cotangent.astype(jnp.float32)
 
-    @jax.jit
-    def generated_reverse(
-        primal_argument: jax.Array,
-        feature_scale_argument: jax.Array,
-        output_cotangent_argument: jax.Array,
-    ) -> tuple[jax.Array, ...]:
-        return call_cuda_axis_fold_ffi(
-            generated,
-            {
-                "primal": primal_argument,
-                "feature_scale": feature_scale_argument,
-                "output_cotangent": output_cotangent_argument,
-            },
-        )
+    def generated_reverse_function(generated_program: Any) -> Any:
+        @jax.jit
+        def generated_reverse(
+            primal_argument: jax.Array,
+            feature_scale_argument: jax.Array,
+            output_cotangent_argument: jax.Array,
+        ) -> tuple[jax.Array, ...]:
+            return call_cuda_axis_fold_ffi(
+                generated_program,
+                {
+                    "primal": primal_argument,
+                    "feature_scale": feature_scale_argument,
+                    "output_cotangent": output_cotangent_argument,
+                },
+            )
+
+        return generated_reverse
+
+    generated_reverse_functions = {
+        schedule: generated_reverse_function(generated_program)
+        for schedule, generated_program in generated_variants.items()
+    }
 
     @jax.jit
     def matched_xla_algebra(
@@ -242,8 +294,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ) -> jax.Array:
         return jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
 
-    def execute_generated_reverse() -> tuple[jax.Array, ...]:
-        return generated_reverse(x, feature_scale, cotangent)
+    def execute_generated_reverse(schedule: AxisFoldPipelineSchedule = selected_schedule) -> tuple[jax.Array, ...]:
+        return generated_reverse_functions[schedule](x, feature_scale, cotangent)
 
     def execute_matched_xla_algebra() -> tuple[jax.Array, jax.Array]:
         return matched_xla_algebra(x, feature_scale, cotangent)
@@ -260,28 +312,47 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             matched_xla_feature_scale_cotangent.lower(projected, standardized).compile().as_text()
         )
 
-    generated_outputs = execute_generated_reverse()
+    generated_outputs_by_schedule = {schedule: execute_generated_reverse(schedule) for schedule in schedules}
+    generated_outputs = generated_outputs_by_schedule[selected_schedule]
     xla_outputs = execute_matched_xla_algebra()
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
-    jax.block_until_ready((generated_outputs, xla_outputs, natural_outputs))
-    correctness = {
-        "natural_jax_vjp": {
-            "input_cotangent": _error(generated_outputs[0], xla_outputs[0]),
-            "feature_scale_cotangent": _error(generated_outputs[1], xla_outputs[1]),
-        },
-        "independent_natural_jax_vjp": {
-            "input_cotangent": _error(generated_outputs[0], natural_outputs[0]),
-            "feature_scale_cotangent": _error(generated_outputs[1], natural_outputs[1]),
-        },
-    }
-    first_hashes = tuple(_hash(value) for value in generated_outputs)
-    second_outputs = execute_generated_reverse()
-    jax.block_until_ready(second_outputs)
-    second_hashes = tuple(_hash(value) for value in second_outputs)
-    if first_hashes != second_hashes:
-        raise AssertionError("generated axis-Fold FFI is not deterministic")
+    jax.block_until_ready((generated_outputs_by_schedule, xla_outputs, natural_outputs))
+    correctness_by_schedule = {}
+    deterministic_hashes_by_schedule = {}
+    for schedule, schedule_outputs in generated_outputs_by_schedule.items():
+        correctness_by_schedule[schedule] = {
+            "natural_jax_vjp": {
+                "input_cotangent": _error(schedule_outputs[0], xla_outputs[0]),
+                "feature_scale_cotangent": _error(schedule_outputs[1], xla_outputs[1]),
+            },
+            "independent_natural_jax_vjp": {
+                "input_cotangent": _error(schedule_outputs[0], natural_outputs[0]),
+                "feature_scale_cotangent": _error(schedule_outputs[1], natural_outputs[1]),
+            },
+        }
+        first_hashes = tuple(_hash(value) for value in schedule_outputs)
+        second_outputs = execute_generated_reverse(schedule)
+        jax.block_until_ready(second_outputs)
+        second_hashes = tuple(_hash(value) for value in second_outputs)
+        if first_hashes != second_hashes:
+            raise AssertionError(f"generated axis-Fold FFI schedule {schedule.value!r} is not deterministic")
+        deterministic_hashes_by_schedule[schedule] = first_hashes
+    correctness = correctness_by_schedule[selected_schedule]
+    first_hashes = deterministic_hashes_by_schedule[selected_schedule]
+    generated_measurement_variants = tuple(
+        (
+            f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi",
+            lambda schedule=schedule: execute_generated_reverse(schedule),
+        )
+        for schedule in schedules
+    )
+    if args.cuda_profiler_range:
+        _cuda_profiler_range(
+            (*tuple(function for _, function in generated_measurement_variants), execute_matched_xla_algebra),
+            args.nvcc,
+        )
     measurements, execution_order = _measure(
-        (("generated_ffi", execute_generated_reverse), ("matched_xla", execute_matched_xla_algebra)),
+        (*generated_measurement_variants, ("matched_xla", execute_matched_xla_algebra)),
         warmups=args.warmups,
         repeats=args.repeats,
         iterations=args.iterations,
@@ -392,7 +463,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "generated_handler_executions": _handler_call_count(feature_library),
             },
         }
-    generated_ms = measurements["generated_ffi"]["median_ms"]
+    selected_measurement_name = (
+        f"generated_{selected_schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"
+    )
+    generated_ms = measurements[selected_measurement_name]["median_ms"]
     xla_ms = measurements["matched_xla"]["median_ms"]
     telemetry = subprocess.check_output(
         (
@@ -421,6 +495,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "pipeline_schedule": generated.pipeline_schedule.value,
             "handler_executions": _handler_call_count(library),
         },
+        "generated_schedule_comparison": {
+            schedule.value: {
+                "target": generated_variants[schedule].target_name,
+                "source_sha256": generated_variants[schedule].source_sha256,
+                "semantic_fingerprints": list(generated_variants[schedule].semantic_fingerprints),
+                "handler_executions": _handler_call_count(libraries[schedule]),
+                "correctness": correctness_by_schedule[schedule],
+                "deterministic_hashes": list(deterministic_hashes_by_schedule[schedule]),
+                "measurements": measurements[
+                    f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"
+                ],
+                "ratio_to_matched_xla": (
+                    measurements[f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"][
+                        "median_ms"
+                    ]
+                    / measurements["matched_xla"]["median_ms"]
+                ),
+            }
+            for schedule in schedules
+        },
         "numerical_contract": {
             "policy": compilation.numerical_policy.value,
             "generated_reassociation": [stage.program.reassociation.value for stage in compilation.pipeline.stages],
@@ -441,6 +535,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "iterations_per_sample": args.iterations,
             "counterbalanced": True,
             "timing": "host enqueue interval followed by jax.block_until_ready",
+            "cuda_profiler_range": args.cuda_profiler_range,
         },
         "environment": {
             "jax": jax.__version__,
@@ -467,6 +562,8 @@ def main() -> None:
         choices=tuple(schedule.value for schedule in AxisFoldPipelineSchedule),
         default=AxisFoldPipelineSchedule.SEPARATE_STAGES.value,
     )
+    parser.add_argument("--compare-pipeline-schedules", action="store_true")
+    parser.add_argument("--cuda-profiler-range", action="store_true")
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", choices=("sm_90a", "sm_100a"), required=True)
