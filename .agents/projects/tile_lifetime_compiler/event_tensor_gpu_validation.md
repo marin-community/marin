@@ -90,6 +90,13 @@ minutes. Kueue reported that no GPU node fit the request. It was terminated befo
 any GPU allocation, so this is a second zero-use capacity blocker rather than an
 SM100 benchmark result.
 
+After the dynamic runtime/phased emitters were ready, reduced-host requests used
+`--cpu 1 --memory 16GB --disk 50GB`. The H100 request remained gated for roughly
+five minutes; the sequential GB200 fallback did the same. Both were terminated
+without a pod or any GPU time. No H100 and GB200 reservation was active
+simultaneously. Retry only after the existing Shuttle gradient holder releases;
+do not increase host resources to bypass the queue.
+
 The command records raw repeated-run samples, execution order, generated-source hash, plan fingerprint, kernel resource attributes, toolchain, driver, clocks, and power telemetry. Correctness runs use two producer permutations and nonzero producer delays. Repeated fresh kernel invocations verify the declared `per_invocation` generation policy.
 
 Release immediately after copying the JSON and generated CUDA source:
