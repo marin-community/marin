@@ -68,7 +68,9 @@ def _load_source(source: str, source_sha256: str, source_directory: Path, prefix
     source_path = source_directory / f"{module_name}.cu"
     build_directory = source_directory / f"build_{module_name}"
     build_directory.mkdir(parents=True, exist_ok=True)
-    source_path.write_text(source + "\n")
+    source_text = source + "\n"
+    if not source_path.exists() or source_path.read_text() != source_text:
+        source_path.write_text(source_text)
     module = load(
         name=module_name,
         sources=[str(source_path)],
