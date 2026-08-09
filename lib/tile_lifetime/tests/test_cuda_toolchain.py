@@ -9,6 +9,7 @@ from tile_lifetime.cuda_toolchain import (
     cuda_toolkit_library_directories,
     cuda_toolkit_link_flags,
     cuda_toolkit_shared_library,
+    cuda_toolkit_shared_library_link_flags,
 )
 
 
@@ -49,6 +50,26 @@ def test_cuda_toolkit_shared_library_resolves_versioned_pip_library(tmp_path: Pa
     versioned.touch()
 
     assert cuda_toolkit_shared_library(nvcc, "cublas") == versioned
+
+
+def test_cuda_toolkit_shared_library_link_flags_wrap_exact_versioned_paths(tmp_path: Path) -> None:
+    toolkit = tmp_path / "nvidia" / "cu13"
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    library_directory = toolkit / "lib"
+    library_directory.mkdir()
+    cublas = library_directory / "libcublas.so.13"
+    cudart = library_directory / "libcudart.so.13"
+    cublas.touch()
+    cudart.touch()
+
+    assert cuda_toolkit_shared_library_link_flags(nvcc, ("cublas", "cudart")) == (
+        "-Xlinker",
+        str(cublas),
+        "-Xlinker",
+        str(cudart),
+    )
 
 
 def test_cuda_toolkit_shared_library_prefers_unversioned_library(tmp_path: Path) -> None:

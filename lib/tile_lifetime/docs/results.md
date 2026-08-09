@@ -842,3 +842,20 @@ and measures 0.018128 ms. The small attention binding is deterministic with
 maximum/mean error 0.00134033/0.000149893. Raw distributions and the complete
 boundary audit are under
 `benchmarks/artifacts/msa_generic_tiled_fold_sm100_v1`.
+
+## JAX-owned RMS backward on H100
+
+The generic reverse-Fold path now executes directly through JAX CUDA typed FFI
+on H100. JAX owns AD; Shuttle imports the ordinary `jax.vjp` StableHLO and
+generates deterministic row and column Folds from erased Map/Fold semantics.
+
+At 2048 rows and hidden size 4096, 30 counterbalanced samples measure 0.079698
+ms generated versus 0.040753 ms for the identical explicit FP32 XLA algebra,
+or `1.955629x`. The result is correct and deterministic but not competitive:
+maximum errors are `9.537e-7` for the input cotangent and `2.289e-5` for the
+feature-scale cotangent. Natural BF16 VJP output remains diagnostic because its
+cast and reduction order differs from the generated deterministic-tree policy.
+
+The replay also validates versioned-only pip CUDA linking without symlinks or
+manual library-path settings. Evidence is under
+`benchmarks/artifacts/jax_row_normalization_backward_h100_v0`.

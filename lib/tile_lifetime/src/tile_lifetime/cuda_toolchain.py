@@ -33,6 +33,11 @@ def cuda_toolkit_shared_library(nvcc: Path, name: str) -> Path:
     raise ValueError(f"CUDA shared library {filename} does not exist beside {nvcc}; searched {searched}")
 
 
+def cuda_toolkit_shared_library_link_flags(nvcc: Path, names: tuple[str, ...]) -> tuple[str, ...]:
+    """Return linker-driver flags for exact CUDA shared-library paths."""
+    return tuple(flag for name in names for flag in ("-Xlinker", str(cuda_toolkit_shared_library(nvcc, name))))
+
+
 def cuda_toolkit_link_flags(nvcc: Path, *, runtime_search_path: bool) -> tuple[str, ...]:
     """Return NVCC flags for pip and system toolkit library layouts."""
     directories = cuda_toolkit_library_directories(nvcc)
