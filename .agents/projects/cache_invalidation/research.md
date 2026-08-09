@@ -2,10 +2,9 @@
 
 ## Scope
 
-This review covers caches in `lib/levanter`, the Rigging cache primitives they
-use, and the Iris setup code that selects storage for XLA. Dataset, checkpoint,
-Hugging Face download, and runtime KV caches are outside scope because they do
-not store compilation or autotuning results.
+This review covers compilation and autotuning caches in `lib/levanter`, the
+Rigging primitives they use, and Iris's XLA cache setup. Dataset, checkpoint,
+model-download, and runtime attention KV caches are outside scope.
 
 The starting revision is
 [`b7169e65`](https://github.com/marin-community/marin/tree/b7169e65ac1b219887f1268df97d02f75caafb73).
@@ -14,66 +13,62 @@ Prior work is recorded in
 [#8061](https://github.com/marin-community/marin/pull/8061), and
 [#8065](https://github.com/marin-community/marin/pull/8065). The last change is
 the safety baseline: hashing only the Python file that defined a launcher missed
-the imported 1,600-line segmented-backward implementation and allowed a stale
-CuTeDSL object to run.
+the imported segmented-backward implementation and allowed a stale CuTeDSL
+object to run.
 
 ## Inventory and recommendation
 
 | Cache | Stored artifact and location | Current invalidation inputs | Finding | Recommendation |
 | --- | --- | --- | --- | --- |
-| JAX persistent compilation cache | XLA executable in region-local object storage | Non-optimized HLO, `jaxlib` version, relevant XLA flags, device topology, compression, optional custom hook | The owner already hashes the computation and compilation environment. Adding a git identity would only create misses. Multi-node jobs need shared storage because only process 0 writes. | Keep the native JAX key and shared object-store directory. Do not add a git hash. |
-| XLA per-fusion autotune cache | Compiler-owned directory under `/cache`, mirrored by `SyncedDirectory` | XLA owns per-fusion entries; Rigging adds the entire launch tree as the outer directory | The launch tree is unrelated to most autotune results, so every source edit starts cold. It is also the wrong safety boundary: OpenXLA requires callers to separate XLA versions and GPU types. A local directory reused across jobs can mix versions before mirroring. | Namespace both local and remote directories by `jaxlib`/XLA version and Iris GPU variant. Make `sync_kv_cache` accept the namespace instead of reading git provenance. |
-| CuTeDSL object cache | One object per key in a 30-day region-local bucket | Launcher identity/config, full launch tree hash, argument spec, GPU architecture | Safe but too broad. Commit hashes miss dirty edits; a single module hash is unsafe; the full git tree invalidates on docs, experiments, Iris, and unrelated Levanter changes. | Hash the complete Levanter CuTe source set (`levanter/grug`) and the installed package-version set, then combine it with launcher config, spec, and device architecture. Work outside that declared source root should fail closed. |
-| Fused cross-entropy autotune cache | Selected block sizes or a negative result in `PersistentKvCache` | Backend, device kind, shapes/dtypes/options, and a jaxpr digest; encoding changes rely on manual `block_sizes_vN` bumps | A jaxpr change invalidates kernel semantics, but an XLA/JAX upgrade or a candidate-policy change can leave the jaxpr unchanged. Negative entries are the highest-risk case because they suppress every future compile attempt. | Add a source hash for the full fused-CE package and JAX/`jaxlib` versions to the key. Retain shapes, device, options, and jaxpr. |
-| DeepEP layout FFI | Local `.so` under `~/.cache/marin` or `MARIN_DEEPEP_CACHE_DIR` | Two CUDA files, absolute source/include paths, architecture, manual schema | Absolute paths cause false misses. Transitive DeepEP headers, JAX FFI header content, build logic, and `nvcc` identity can change without a miss. | Hash content, not absolute paths: local DeepEP shim sources, the DeepEP `csrc` tree, JAX FFI headers, compile flags, schema, and compiler identity. |
-| DeepEP transport FFI | Local `.so`/Python extension beside raw build outputs | Selected CUDA/header contents, transport module bytes, paths, flags/options, manual schema | Better than layout, but the selected-file list can miss transitive headers and changes in shared availability/build helpers; paths still cause false misses; compiler identity is absent. | Use the same complete source-set/environment hash as layout, plus Python ABI and Torch build mode when selected. |
-| Triton/JAX-Triton Sonic cache | Triton-owned directory at `/tmp/marin-triton-cache` | Triton's native kernel source/AST, signature/constants, backend/compiler target and versions | Invalidation belongs to Triton and should not be wrapped in a git namespace. The current location only survives within the task/container lifetime. | Keep the native key. Moving the directory to persistent node storage is useful, but remote mirroring should wait until we have measured Sonic compile cost and concurrent-writer behavior. |
-| Python/JAX in-process memoization | Launcher instances, `cutlass_call` closures, traces and lowerings in memory | Python function/launcher identity and call arguments | Process-local only; stale cross-run hits are impossible. Recreating closures causes misses but not incorrect hits. | Keep the existing `lru_cache` wrappers. |
+| JAX persistent compilation cache | XLA executable in region-local object storage | Non-optimized HLO, `jaxlib`, relevant XLA flags, device topology, compression, optional custom hook | The compiler already owns the semantic key. A git identity would only add false misses. Multi-node jobs need shared storage because only process 0 writes. | Keep the native JAX key and shared directory. |
+| XLA per-fusion autotune cache | Compiler-owned directory under `/cache`, mirrored by `SyncedDirectory` | XLA owns per-fusion entries; Rigging adds the launch tree as the outer directory | The tree is broader than the artifact, but replacing it with requested Iris GPU resources is unsafe: requests can be `auto`, contain alternatives, and differ from placement. A fleet-wide version directory would also make `SyncedDirectory` fetch an unbounded tree. | Keep the bounded tree namespace in this PR. Follow up with observed-device identity, a bounded remote layout, and local generation cleanup as one change. |
+| CuTeDSL object cache | One object per key in a 30-day region-local bucket | Launcher identity/config, full launch tree, argument spec, GPU architecture | Safe but far too broad. Commit hashes miss dirty edits; one defining module is unsafe; the whole tree invalidates on docs, experiments, Iris, and unrelated Levanter work. | Hash the complete `levanter/grug` tree and actual installed bytes of the declared CuTe toolchain distributions. Retain launcher config, spec, and observed device. Do not persist launchers defined outside that boundary. |
+| Fused cross-entropy autotune cache | Selected block sizes or a negative result in `PersistentKvCache` | Backend, device kind, shapes/dtypes/options, jaxpr digest | Candidate-policy, JAX, `jaxlib`, or `libtpu` changes can alter the decision without changing the jaxpr. Negative entries are highest risk because they suppress later attempts. | Add the full fused-CE source tree, JAX, `jaxlib`, and actual `libtpu` bytes for TPU. Do not share a result when jaxpr or source identity is unavailable. |
+| DeepEP layout FFI | Local `.so` under `~/.cache/marin` or `MARIN_DEEPEP_CACHE_DIR` | Two CUDA files, absolute paths, architecture, manual schema | Transitive headers, JAX FFI headers, build logic, host compiler, `nvcc`, and atomic publication are outside the key. Absolute paths create false misses. | Treat as a follow-up: content-address the full inputs and make concurrent builds private and atomic together. A partial key edit would imply safety it does not provide. |
+| DeepEP transport FFI | Local `.so`/extension beside build outputs | Selected source/header bytes, module bytes, paths, flags/options, manual schema | Better than layout, but selected files can miss transitive headers and shared build helpers. Host compiler, Torch/Python ABI details, absolute paths, and concurrent publication remain. | Use the same complete build-input and atomic-publication follow-up as layout. |
+| Triton/JAX-Triton Sonic cache | Triton-owned directory at `/tmp/marin-triton-cache` | Native kernel source/AST, signature/constants, backend/compiler target and versions | Invalidation belongs to Triton. The directory only survives the task/container. | Keep the native key. Measure compile cost and concurrent-writer behavior before adding persistence. |
+| Python/JAX in-process memoization | Launchers, `cutlass_call` closures, traces and lowerings | Function/launcher identity and call arguments | Process-local only, so stale cross-run hits are impossible. | Keep the existing `lru_cache` wrappers. |
 
-JAX documents the fields in its persistent key and the rank-0 write behavior in
-its [persistent compilation cache guide](https://docs.jax.dev/en/latest/persistent_compilation_cache.html).
-OpenXLA explicitly says the per-fusion directory can accumulate entries across
-different models, while callers must separate XLA versions and use results on
-the same GPU type in its
+JAX documents its persistent key and rank-0 write behavior in the
+[persistent compilation cache guide](https://docs.jax.dev/en/latest/persistent_compilation_cache.html).
+OpenXLA says callers must separate XLA versions and use autotune results on the
+same GPU type in its
 [persisted autotuning guide](https://openxla.org/xla/persisted_autotuning).
 
 ## Strategy comparison
 
 `git commit hash` is neither a content key nor a safe development key. Rebases
-and amended metadata miss despite identical inputs, while dirty and untracked
-source changes can hit an old commit's cache.
+and metadata changes miss despite identical inputs, while dirty source can hit
+the committed cache.
 
-`git worktree/tree hash` is content-addressed and includes dirty tracked and
-untracked content in Marin's provenance implementation. It is a safe fallback
-when the dependency closure is unknown, but it couples every artifact to every
-file in the launch bundle. It should remain an image/build identity, not the
-default compile-cache key.
+Marin's `git worktree/tree hash` uses `git stash create`, so it covers tracked
+staged and unstaged changes but not untracked file contents. Untracked state is
+reported separately as dirty. Even when complete, a repository-wide tree is a
+safe fallback rather than a precise cache key: it couples every artifact to
+every file in the launch bundle.
 
-`module hash` is safe only when “module” means the complete source closure. The
-defining Python file is not enough: a launcher can instantiate kernel classes
-from sibling Levanter modules and external distributions. Static import-graph
-walking is also incomplete in this code because the FA4 adapters use dynamic
-`importlib.import_module` calls.
+`module hash` is safe only when “module” means the complete source closure. A
+defining Python file is not enough: launchers instantiate kernels from sibling
+modules and external distributions, and FA4 uses dynamic imports that defeat a
+simple static import walk.
 
 `local source-set hash + environment` is the recommended application-owned key.
-The caller declares a conservative directory boundary and Rigging hashes every
-source file beneath it, excluding generated Python bytecode. The environment
-part includes compiler/package versions, device identity, compile options, and
-an explicit schema. This allows reuse across commits and unrelated worktree
-edits while retaining fail-closed invalidation.
+The caller declares a conservative directory boundary; Rigging hashes logical
+paths and actual bytes, then adds compiler/runtime identities, observed device,
+compile options, and an explicit schema. This enables reuse across commits and
+unrelated worktree edits without accepting stale artifacts.
 
-## Surprises and remaining uncertainty
+## Remaining uncertainty
 
-The broad git-tree namespace is not universally safer. XLA's documented safety
-boundary is XLA version plus GPU type; the current namespace changes on unrelated
-source edits but does not directly identify the GPU model. The node-local XLA
-directory also lacks any namespace, so old files can be uploaded into a new
-remote namespace after a code rollout.
+The installed CuTe distributions total roughly 100 MB and `libtpu` roughly 200
+MB. Their bytes are hashed once per process at first cache use. Version or
+`RECORD` metadata would be cheaper but would miss locally patched installations;
+the byte scan is the cost of fail-closed persistence.
 
-CuTeDSL object code is generated before JAX forms the HLO cache key, so JAX's
-persistent cache cannot rescue this compile. The CuTe cache needs its own source
-and environment identity even when a warm JAX executable exists.
+CuTe's declared Levanter boundary is definition-site based: all current opted-in
+factories live below `levanter.grug`. Future runtime patching from outside that
+tree must either expand the boundary or disable persistence for that launcher.
 
-Triton's native cache appears to own the right semantic inputs. We have not
-measured whether persisting Sonic's cache beyond `/tmp` changes startup enough
-to justify another mirror and object-store prefix.
+The XLA directory and DeepEP builds need storage/publication changes as well as
+new identities. They remain deliberately conservative rather than receiving
+partial invalidation fixes.

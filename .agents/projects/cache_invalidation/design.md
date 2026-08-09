@@ -1,96 +1,84 @@
-# Content-address compile caches by their real inputs
+# Content-address Levanter compile caches by their real inputs
 
-Levanter's CuTeDSL cache will survive unrelated Marin worktree changes without
-serving stale kernels. Rigging will expose explicit source/environment keying and
-caller-owned directory namespaces, so each compiler cache invalidates on the
-inputs that can change its artifact. The full inventory and prior-work evidence
-are in [research.md](research.md).
+Levanter's CuTeDSL object cache will survive unrelated Marin worktree changes
+without serving stale kernels. The fused cross-entropy autotuner will also
+invalidate positive and negative decisions when source or compiler inputs
+change. The full inventory is in [research.md](research.md), and Claude's
+independent review is summarized in [peer_review.md](peer_review.md).
 
 ## Challenges
 
 The caches do not share one correct revision key. JAX hashes lowered HLO and its
 compiler environment; XLA owns per-fusion files but delegates version and GPU
 separation to the caller; CuTeDSL emits object code before JAX can hash the
-module; Levanter's autotuner stores a performance decision, including negative
-results; DeepEP invokes `nvcc` over local and external source trees.
+module; Levanter's autotuner stores a performance decision; DeepEP invokes local
+compilers over multiple source trees.
 
-A narrow source key must remain fail-closed. PR #8065 showed that hashing a
-launcher's defining file was incomplete: `_fa4_cute_kernels.py` dynamically
-loads `_fa4_cute_segmented_bwd.py`, so the old key silently reused code compiled
-before an edit. Commit hashes have the opposite defect for development: they do
-not see dirty source.
+A narrow key must remain fail-closed. PR #8065 showed that hashing a launcher's
+defining file was incomplete because it dynamically loaded a sibling kernel
+implementation. Package versions have the same weakness for editable, rebuilt,
+or locally patched installs.
 
-## Costs / Risks
+## Costs and risks
 
-- Hashing conservative source directories costs extra filesystem reads once per
-  process. The current Grug and DeepEP source sets are small compared with a
-  kernel compile.
-- Cache keys produced by this change abandon warm entries under the old schemes.
-  The 30-day object lifecycle reclaims them.
-- The XLA namespace trusts Iris's requested GPU variant. A malformed or missing
-  variant will keep the cache node-local instead of sharing an ambiguous entry.
-- Triton remains task-local until measurements justify remote mirroring.
+- The CuTe toolchain and `libtpu` scans read about 100 MB and 200 MB respectively
+  once per process, when those caches are first used.
+- New schemas leave old entries cold; the 30-day object lifecycle reclaims them.
+- `levanter/grug` is a declared definition-site boundary, not a dynamic import
+  tracer. Opted-in launchers outside it compile without persistent storage.
+- XLA and DeepEP retain broad/local keys until their synchronization and build
+  publication rules can be changed safely as a whole.
 
 ## Design
 
-Add a Rigging `compile_cache_key` helper that hashes an ordered set of files or
-directory trees plus explicit environment strings. It includes logical relative
-paths and file bytes, excludes `__pycache__`/`.pyc` output, and raises on a
-missing source. It never includes absolute checkout paths, git metadata, or
-timestamps.
+Rigging adds `compile_cache_key`, which hashes ordered file or directory roots
+plus explicit environment strings. Length-framed components include root index,
+logical relative path, and file bytes. Absolute checkout paths and mtimes are
+excluded. Python bytecode is excluded. Missing paths and symlinks raise rather
+than producing an ambiguous key.
 
-CuTeDSL will replace `launch_provenance().tree_hash` in
-[`cutlass_kernel_cache.py`](https://github.com/marin-community/marin/blob/b7169e65ac1b219887f1268df97d02f75caafb73/lib/levanter/src/levanter/cutlass_kernel_cache.py#L141-L161)
-with a cached digest of `levanter/grug` and the installed distribution-version
-set. The key will continue to include launcher name/configuration, stable
-argument-spec representation, and GPU architecture. The decorator will reject
-launchers defined outside the declared Grug source root, preventing a future
-caller from receiving a persistent identity with an uncovered source file.
+Rigging also adds `installed_distribution_fingerprint`. It hashes distribution
+name, version, installed logical paths, and the actual bytes listed by package
+metadata. Actual bytes, rather than `RECORD` checksums alone, cover local patches
+made without metadata updates.
 
-Rigging's
-[`sync_kv_cache`](https://github.com/marin-community/marin/blob/b7169e65ac1b219887f1268df97d02f75caafb73/lib/rigging/src/rigging/cache.py#L251-L262)
-will take an explicit namespace. Iris will derive the XLA namespace from
-`jaxlib` version and `TaskResources.gpu_variant`; the same namespace will appear
-in the node-local and object-store paths. Missing launch provenance still means
-node-local only, and a missing GPU variant disables the remote mirror. JAX's
-main compilation cache remains unchanged because its native key already covers
-HLO, `jaxlib`, flags, and topology.
+CuTeDSL replaces `launch_provenance().tree_hash` with a process-cached digest of
+`levanter/grug` and a declared Cutlass/CuTe/FA4/Quack toolchain distribution
+set. The artifact key retains launcher configuration, stable argument spec, and
+observed JAX device architecture. The launcher factory marks whether its
+definition is inside `levanter.grug`; uncovered launchers compile normally but
+are never written to shared storage. If source identity cannot be built, the
+entire CuTe persistent layer degrades to compile-only for that process.
 
-The fused cross-entropy autotune key will add a digest of its package source and
-the JAX/`jaxlib` versions. Shapes, dtypes, options, device kind, and jaxpr stay in
-the key. This makes both positive and negative entries expire when candidate
-policy or the compiler changes.
+The fused cross-entropy key adds a digest of its package source and JAX/`jaxlib`
+versions. TPU decisions additionally include actual installed `libtpu` bytes.
+Shapes, dtypes, options, backend, observed device kind, and jaxpr remain. If
+jaxpr tracing or source identity fails, the sweep can run but neither a winner
+nor a negative result is shared.
 
-DeepEP layout and transport will use `compile_cache_key` over the Levanter
-DeepEP package, the external DeepEP `csrc` tree, and JAX FFI headers. Their
-environment fields will cover schema, generated/patched source choices,
-architecture and compile flags, compiler identity, build mode, and Python ABI
-where relevant. Absolute paths will leave the key.
-
-Triton and JAX keep their owner-generated keys. The PR will document why they do
-not receive a git namespace, but it will not introduce another storage layer.
+JAX and Triton keep their compiler-native keys. XLA retains the existing
+tree-scoped mirror in this PR: an observed GPU identity is not available at the
+current setup boundary, and a fleet-wide version directory would make each task
+download an unbounded cache tree. DeepEP remains a follow-up because correct
+invalidation also requires atomic/private build publication.
 
 ## Testing
 
-Rigging tests will prove that identical content at different absolute paths has
-one key; edits, logical path changes, and environment changes miss; generated
-bytecode does not. Directory-sync tests will prove caller namespaces select
-distinct remote roots.
+Rigging tests cover checkout-location independence; source content, logical path,
+and environment invalidation; bytecode exclusion; missing/symlink rejection; and
+actual installed-file changes without a version bump.
 
-CuTe tests will compile once across unrelated provenance changes, then recompile
-after a Grug source or installed-package version change. A launcher outside the
-source boundary will be rejected. Pallas tests will show compiler/source revision
-changes select different autotune entries.
+CuTe tests cover reuse across a simulated process restart, source-revision
+invalidation, source-identity failure, and a launcher outside the declared
+boundary. Fused-CE tests cover revision invalidation and refusal to share when a
+jaxpr is unavailable. Existing tests retain launcher config, spec, cache
+concurrency, and positive/negative decision coverage.
 
-Iris tests will assert the XLA path and mirror namespace include XLA version and
-GPU variant, and that an unknown GPU variant is never uploaded. DeepEP tests will
-exercise key changes with source/header/toolchain changes without invoking a GPU
-compiler.
+## Decisions
 
-## Open Questions
-
-- Is `levanter/grug` the right conservative CuTe source boundary, or should the
-  first version hash all of `levanter` for simpler ownership at the cost of more
-  misses?
-- Should Sonic's Triton cache move to `/cache` in this PR despite the lack of a
-  startup measurement, or remain a measured follow-up?
+- Use source-set plus environment hashes for Levanter-owned artifacts.
+- Use actual installed bytes where editable or patched packages can affect code
+  generation.
+- Keep compiler-native keys when the compiler already owns the semantic inputs.
+- Keep a broader safe boundary when narrowing requires missing observed state or
+  a storage/publication redesign.

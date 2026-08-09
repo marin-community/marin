@@ -1,6 +1,6 @@
 # Compile-cache invalidation contract
 
-## Rigging API
+## Rigging content identities
 
 File: `lib/rigging/src/rigging/cache.py`
 
@@ -9,107 +9,72 @@ def compile_cache_key(
     source_paths: Sequence[pathlib.Path],
     *,
     environment: Sequence[str],
-) -> str:
-    """Return a SHA-256 content address for source trees and build inputs.
-
-    Paths are consumed in caller order. Directories are traversed recursively in
-    sorted logical-path order. The hash includes each logical path, file bytes,
-    and each environment string. Absolute root paths, mtimes, Python bytecode,
-    and `__pycache__` entries are excluded. Missing or non-file/non-directory
-    paths raise `ValueError`.
-    """
+) -> str: ...
 
 
-def sync_kv_cache(prefix: str, namespace: str, local: str) -> SyncedDirectory:
-    """Mirror a compiler-owned local tree to a namespaced temp object directory.
-
-    The remote root is `marin_temp_bucket(30, prefix)/namespace`. The caller owns
-    invalidation and must supply a path-safe, non-empty namespace. Invalid
-    namespaces raise `ValueError`. Transfer failures retain existing best-effort
-    warning behavior.
-    """
+def installed_distribution_fingerprint(
+    distribution_names: Sequence[str],
+) -> str: ...
 ```
 
-`sync_kv_cache` no longer reads `launch_provenance` and no longer returns `None`.
-Callers decide whether the external state required to mirror a cache exists.
+`compile_cache_key` consumes roots and environment strings in caller order. A
+directory is recursive and sorted by logical relative path. SHA-256 inputs are
+length framed and include root indices, paths, and bytes. Absolute roots, mtimes,
+`.pyc`, and `__pycache__` are excluded. Missing roots, non-regular entries, and
+symlinks raise `ValueError`.
 
-## Iris resource and XLA contracts
+`installed_distribution_fingerprint` consumes names in caller order and includes
+installed distribution name, version, metadata-listed logical paths, and actual
+file bytes. Missing distributions, absent file inventories, missing files,
+non-regular files, and symlinks raise `ValueError`.
 
-File: `lib/iris/src/iris/env_resources.py`
-
-```python
-@dataclass(frozen=True)
-class TaskResources:
-    memory_bytes: int
-    cpu_cores: float
-    gpu_count: int
-    tpu_count: int
-    gpu_variant: str | None = None
-```
-
-`TaskResources.from_environment()` copies `device.gpu.variant` from
-`IRIS_TASK_RESOURCES`; absent/empty values become `None`.
-
-File: `lib/iris/src/iris/runtime/jax_init.py`
-
-```python
-def _xla_autotune_namespace(*, xla_version: str, gpu_variant: str) -> str:
-    """Return a path-safe namespace that changes with XLA and GPU type."""
-```
-
-For remote JAX compilation-cache configurations, GPU tasks use
-`/cache/xla/per-fusion-autotune/<namespace>` and mirror it to
-`xla-per-fusion-autotune/<namespace>`. Tasks without a GPU variant still use a
-versioned node-local directory but do not mirror it to object storage.
-
-## CuTeDSL contract
+## CuTeDSL object cache
 
 File: `lib/levanter/src/levanter/cutlass_kernel_cache.py`
 
-`_kernel_key(fn, spec)` returns SHA-256 over:
+The artifact key is SHA-256 over:
 
 1. cache schema;
 2. factory module, qualified name, and sorted keyword configuration;
-3. `compile_cache_key([levanter/grug], environment=<installed distributions>)`;
+3. `compile_cache_key([levanter/grug], environment=[schema, toolchain digest])`;
 4. stable `repr(spec)`;
-5. JAX device platform and compute capability/device kind.
+5. observed JAX device platform and compute capability/device kind.
 
-A launcher without an identity, a launcher defined outside `levanter/grug`, or
-a specification containing a process address is compiled without persistent
-storage. Source-key construction errors propagate during launcher creation so an
-uncovered source boundary cannot silently become cacheable.
+The toolchain digest covers actual installed bytes for the declared TVM FFI,
+CUDA Python, nvdisasm, Cutlass DSL/libraries, FlashAttention 4, and Quack
+distributions.
 
-## Fused cross-entropy contract
+A launcher without an identity, a launcher defined outside `levanter.grug`, or
+a spec containing a process address compiles without persistent storage. Failure
+to construct the source/toolchain identity disables the persistent layer for the
+installed wrapper; compilation still proceeds.
+
+The positional launcher-factory argument remains the singleton CuTe module
+bundle and does not enter launcher identity. New factories with positional
+configuration are invalid and must change the contract before opting in.
+
+## Fused cross-entropy autotune cache
 
 File: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
 
-The existing autotune key gains one `revision=<sha256>` field. The revision is
-`compile_cache_key([fused_cross_entropy_loss package], environment=[JAX version,
-jaxlib version, cache schema])`. Existing shape, dtype, option, backend, device,
-and jaxpr fields remain.
+The existing key gains schema and revision fields. The revision is
+`compile_cache_key([fused_cross_entropy_loss package], environment=[schema, JAX
+version, jaxlib version, optional libtpu digest])`. TPU uses actual installed
+`libtpu` bytes. Shapes, dtypes, options, backend, observed device kind, and jaxpr
+remain.
 
-## DeepEP contract
+If jaxpr tracing or revision construction fails, `_autotune_cache_key` returns
+`None`. Autotuning may continue, but the cache is neither read nor written; this
+applies to winners and negative entries.
 
-Files:
+## Unchanged contracts
 
-- `lib/levanter/src/levanter/kernels/deepep/layout_ffi.py`
-- `lib/levanter/src/levanter/kernels/deepep/transport_ffi.py`
+- JAX persistent compilation keeps its native HLO/compiler/device key.
+- XLA per-fusion autotuning keeps the launch-tree mirror until observed GPU
+  identity, bounded remote generations, and local cleanup are designed together.
+- Triton Sonic keeps its native cache at `/tmp/marin-triton-cache`.
+- DeepEP layout and transport keep their local build caches pending a complete
+  source/toolchain key plus atomic/private build publication.
 
-Both artifact directories use the first 16 hexadecimal characters of a
-`compile_cache_key`. Sources include the Levanter DeepEP package, external
-`DEEPEP_SRC_ROOT/csrc`, and `jaxlib/include`. Environment values include cache
-schema, effective CUDA architecture/compile flags, and `nvcc --version` output.
-Transport additionally includes the patched intranode source bytes, Torch/raw
-and Python-module modes, dispatch-thread override, compatibility signature, and
-Python ABI tag. No absolute source or include directory enters either key.
-
-If `nvcc` identity cannot be read, the environment records `nvcc=unknown`; the
-subsequent build retains its existing explicit failure if the compiler is
-unavailable.
-
-## Out of scope
-
-- Changing JAX's persistent compilation-cache key or storage.
-- Persisting or remotely mirroring Triton's Sonic cache.
-- vLLM compilation-cache generations.
-- Dataset, checkpoint, Hugging Face download, and runtime attention KV caches.
+Dataset, checkpoint, model-download, vLLM, and runtime attention KV caches remain
+outside scope.

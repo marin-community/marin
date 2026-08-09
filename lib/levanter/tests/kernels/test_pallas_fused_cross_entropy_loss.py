@@ -1361,6 +1361,7 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
 
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_revision", lambda _impl_name: "source-v1")
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
     )
@@ -1440,6 +1441,7 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
     """A sweep where every candidate fails is negative-cached, so a second call does not re-sweep."""
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_revision", lambda _impl_name: "source-v1")
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
     )
@@ -1534,6 +1536,61 @@ def test_fused_ce_autotune_jaxpr_hash_is_stable_for_same_inputs():
 
     assert hash_1 is not None
     assert hash_1 == hash_2
+
+
+def test_fused_ce_autotune_cache_key_is_unavailable_without_a_jaxpr(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    monkeypatch.setattr(fused_api, "_autotune_jaxpr_hash", lambda **_kwargs: None)
+
+    assert (
+        fused_api._autotune_cache_key(
+            impl_name="pallas_tpu",
+            fn=lambda *_args, **_kwargs: (x, x),
+            x=x,
+            labels=y,
+            w=w,
+            inferred=inferred,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+        is None
+    )
+
+
+def test_fused_ce_autotune_cache_key_changes_with_source_revision(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    revision = ["source-v1"]
+    monkeypatch.setattr(fused_api, "_autotune_jaxpr_hash", lambda **_kwargs: "jaxpr-v1")
+    monkeypatch.setattr(fused_api, "_autotune_revision", lambda _impl_name: revision[0])
+
+    def cache_key() -> str | None:
+        return fused_api._autotune_cache_key(
+            impl_name="pallas_tpu",
+            fn=lambda *_args, **_kwargs: (x, x),
+            x=x,
+            labels=y,
+            w=w,
+            inferred=inferred,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    original = cache_key()
+    revision[0] = "source-v2"
+
+    assert original is not None
+    assert cache_key() != original
 
 
 def test_fused_cross_entropy_pallas_bwd_matches_reference():

@@ -1,9 +1,100 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pathlib
+import types
+
+import pytest
 import rigging.cache as cache_module
-from rigging.cache import PersistentKvCache, SyncedDirectory, flush_background_writes, sync_kv_cache
+from rigging.cache import (
+    PersistentKvCache,
+    SyncedDirectory,
+    compile_cache_key,
+    flush_background_writes,
+    installed_distribution_fingerprint,
+    sync_kv_cache,
+)
 from rigging.provenance import Provenance
+
+
+def test_compile_cache_key_is_independent_of_checkout_location(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "kernel.py").write_text("source")
+    (second / "kernel.py").write_text("source")
+
+    assert compile_cache_key([first], environment=["compiler-v1"]) == compile_cache_key(
+        [second], environment=["compiler-v1"]
+    )
+
+
+def test_compile_cache_key_changes_with_source_path_content_and_environment(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    kernel = source / "kernel.py"
+    kernel.write_text("first")
+    original = compile_cache_key([source], environment=["compiler-v1"])
+
+    kernel.write_text("second")
+    changed_content = compile_cache_key([source], environment=["compiler-v1"])
+    kernel.rename(source / "renamed.py")
+    changed_path = compile_cache_key([source], environment=["compiler-v1"])
+    changed_environment = compile_cache_key([source], environment=["compiler-v2"])
+
+    assert len({original, changed_content, changed_path, changed_environment}) == 4
+
+
+def test_compile_cache_key_ignores_derived_bytecode(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "kernel.py").write_text("source")
+    original = compile_cache_key([source], environment=[])
+
+    bytecode = source / "__pycache__"
+    bytecode.mkdir()
+    (bytecode / "kernel.cpython-312.pyc").write_bytes(b"derived")
+
+    assert compile_cache_key([source], environment=[]) == original
+
+
+def test_compile_cache_key_rejects_missing_paths_and_symlinks(tmp_path):
+    source = tmp_path / "source.py"
+    source.write_text("source")
+    symlink = tmp_path / "linked.py"
+    symlink.symlink_to(source)
+    source_tree = tmp_path / "tree"
+    bytecode = source_tree / "__pycache__"
+    bytecode.mkdir(parents=True)
+    (source_tree / "kernel.py").write_text("source")
+    (bytecode / "kernel.pyc").symlink_to(source)
+
+    with pytest.raises(ValueError, match="does not exist"):
+        compile_cache_key([tmp_path / "missing.py"], environment=[])
+    with pytest.raises(ValueError, match="cannot be symlinks"):
+        compile_cache_key([symlink], environment=[])
+    with pytest.raises(ValueError, match="cannot be symlinks"):
+        compile_cache_key([source_tree], environment=[])
+
+
+def test_installed_distribution_fingerprint_hashes_actual_installed_bytes(tmp_path, monkeypatch):
+    installed = tmp_path / "demo"
+    installed.mkdir()
+    module = installed / "kernel.py"
+    module.write_text("first")
+    distribution = types.SimpleNamespace(
+        metadata={"Name": "demo"},
+        version="1.0",
+        files=[pathlib.PurePosixPath("kernel.py")],
+        locate_file=lambda relative: installed / relative,
+    )
+    monkeypatch.setattr(cache_module.importlib_metadata, "distribution", lambda _name: distribution)
+    original = installed_distribution_fingerprint(["demo"])
+
+    module.write_text("locally patched")
+
+    assert installed_distribution_fingerprint(["demo"]) != original
 
 
 def test_store_then_load_round_trips_bytes(tmp_path):
