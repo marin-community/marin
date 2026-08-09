@@ -3,6 +3,7 @@
 
 import gzip
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -16,9 +17,11 @@ from tile_lifetime.xla_relation_program_recovery import (
     form_shared_contract_multi_map_region,
 )
 from tile_lifetime.xla_shared_contract_multimap import (
-    audit_shared_contract_multi_map_replacement,
     evaluate_shared_contract_multi_map_plan,
-    replace_shared_contract_multi_map_region_with_custom_call,
+)
+from tile_lifetime.xla_shared_contract_multimap_ffi import (
+    compile_shared_contract_multi_map_ffi,
+    generate_cuda_shared_contract_multi_map_ffi,
 )
 
 _ARTIFACT = (
@@ -154,11 +157,96 @@ def test_scalar_map_mutations_change_only_the_affected_generated_ast() -> None:
     assert reverse_digests[1] != baseline_digests[1]
 
 
-def test_shared_contract_multi_map_replacement_preserves_both_consumer_sets() -> None:
+def test_cuda_typed_ffi_generation_tracks_semantics_not_frontend_names() -> None:
     hlo = _hlo()
     plan = form_shared_contract_multi_map_region(hlo)
-    transformed = replace_shared_contract_multi_map_region_with_custom_call(hlo, plan, target=_TARGET)
-    audit = audit_shared_contract_multi_map_replacement(hlo, transformed, plan, target=_TARGET)
+    generated = generate_cuda_shared_contract_multi_map_ffi(plan, target=_TARGET)
+    renamed = re.sub(r'op_name="[^"]*"', 'op_name="unrelated_label"', hlo)
+    renamed_generated = generate_cuda_shared_contract_multi_map_ffi(
+        form_shared_contract_multi_map_region(renamed),
+        target=_TARGET,
+    )
+
+    assert generated.output_count == 2
+    assert generated.scalar_semantic_digests == (
+        (plan.outputs[0].scalar_outputs[0].scalar_program.digest,),
+        tuple(scalar.scalar_program.digest for scalar in plan.outputs[1].scalar_outputs),
+    )
+    assert generated.semantic_digest == renamed_generated.semantic_digest
+    assert generated.source_digest == renamed_generated.source_digest
+
+
+def test_cuda_typed_ffi_output_count_and_body_come_from_mutated_plan() -> None:
+    hlo = _hlo()
+    baseline_plan = form_shared_contract_multi_map_region(hlo)
+    forward_mutation = hlo.replace(
+        "%mul.960 = bf16[16,32]{1,0} multiply(%mul.83, %split.11)",
+        "%mul.960 = bf16[16,32]{1,0} add(%mul.83, %split.11)",
+        1,
+    )
+    mutated_plan = form_shared_contract_multi_map_region(forward_mutation)
+    baseline = generate_cuda_shared_contract_multi_map_ffi(baseline_plan, target=_TARGET)
+    mutated = generate_cuda_shared_contract_multi_map_ffi(mutated_plan, target=_TARGET)
+
+    assert baseline.scalar_semantic_digests[0] != mutated.scalar_semantic_digests[0]
+    assert baseline.scalar_semantic_digests[1] == mutated.scalar_semantic_digests[1]
+    assert baseline.semantic_digest != mutated.semantic_digest
+    assert baseline.source_digest != mutated.source_digest
+
+    reverse_only_plan = replace(baseline_plan, outputs=(baseline_plan.outputs[1],))
+    reverse_only = generate_cuda_shared_contract_multi_map_ffi(reverse_only_plan, target=_TARGET)
+    assert reverse_only.output_count == 1
+    assert reverse_only.scalar_semantic_digests == (baseline.scalar_semantic_digests[1],)
+
+    rng = np.random.default_rng(47)
+    operands = (
+        _bf16(rng.normal(size=(512, 128)).astype(np.float32)),
+        _bf16(rng.normal(size=(128, 64)).astype(np.float32)),
+        _bf16(rng.normal(size=(16, 32)).astype(np.float32)),
+        np.ones((4, 512, 32), dtype=np.bool_),
+        np.ones((4, 512, 64), dtype=np.bool_),
+    )
+    full_outputs = evaluate_shared_contract_multi_map_plan(baseline_plan, operands)
+    reverse_only_outputs = evaluate_shared_contract_multi_map_plan(reverse_only_plan, operands)
+    assert len(reverse_only_outputs) == 1
+    assert np.array_equal(reverse_only_outputs[0], full_outputs[1])
+
+
+def test_cuda_typed_ffi_accepts_independent_segmented_output_layouts() -> None:
+    plan = form_shared_contract_multi_map_region(_hlo())
+    contract_only, auxiliary = plan.outputs
+    operands = tuple(
+        (
+            replace(operand, value=replace(operand.value, shape="pred[4,512,64]{0,2,1}"))
+            if operand.role is SharedContractMultiMapOperandRole.CONTRACT_AND_AUXILIARY_VALIDITY
+            else operand
+        )
+        for operand in plan.operands
+    )
+    layout_mutation = replace(
+        plan,
+        operands=operands,
+        outputs=(
+            contract_only,
+            replace(auxiliary, value=replace(auxiliary.value, shape="bf16[4,512,64]{1,2,0}")),
+        ),
+    )
+
+    baseline = generate_cuda_shared_contract_multi_map_ffi(plan, target=_TARGET)
+    generated = generate_cuda_shared_contract_multi_map_ffi(layout_mutation, target=_TARGET)
+
+    assert generated.output_count == baseline.output_count
+    assert generated.scalar_semantic_digests == baseline.scalar_semantic_digests
+    assert generated.semantic_digest != baseline.semantic_digest
+    assert generated.source_digest != baseline.source_digest
+
+
+def test_shared_contract_multi_map_replacement_preserves_both_consumer_sets() -> None:
+    hlo = _hlo()
+    compilation = compile_shared_contract_multi_map_ffi(hlo, target=_TARGET)
+    generated = compilation.generated
+    transformed = compilation.transformed_hlo
+    audit = compilation.replacement_audit
 
     assert transformed.count(f'custom_call_target="{_TARGET}"') == 1
     assert "%dot.66 =" not in transformed
@@ -173,6 +261,8 @@ def test_shared_contract_multi_map_replacement_preserves_both_consumer_sets() ->
     )
     assert audit.copy_count[0] == audit.copy_count[1]
     assert audit.transpose_count[0] == audit.transpose_count[1]
+    assert generated.target == _TARGET
+    assert generated.output_count == len(audit.outputs)
     parse_hlo_module_text(transformed)
 
 
