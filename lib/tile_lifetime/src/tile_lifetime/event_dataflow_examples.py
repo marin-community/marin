@@ -19,7 +19,12 @@ from tile_lifetime.event_dataflow import (
 from tile_lifetime.relation import RelationPlan
 
 
-def split_fold_dependence(*, row_count: int, partition_count: int) -> TaskDependence:
+def split_fold_dependence(
+    *,
+    row_count: int,
+    partition_count: int,
+    visibility_scope: EventMemoryScope = EventMemoryScope.DEVICE,
+) -> TaskDependence:
     """Build the task dependence induced by splitting a row Fold into partials."""
     if row_count <= 0:
         raise ValueError("split Fold row count must be positive")
@@ -30,7 +35,7 @@ def split_fold_dependence(*, row_count: int, partition_count: int) -> TaskDepend
     pairs = tuple(((row, partition), (row,)) for row in range(row_count) for partition in range(partition_count))
     return TaskDependence(
         TaskRelation.from_pairs(partial, finalize, pairs),
-        MemoryVisibility(EventMemoryScope.DEVICE),
+        MemoryVisibility(visibility_scope),
     )
 
 
