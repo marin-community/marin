@@ -25,6 +25,8 @@ from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_ja
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
 EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
+INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
 
 
 @dataclass
@@ -101,7 +103,7 @@ def exit_hooks(monkeypatch: pytest.MonkeyPatch) -> FakeExitHooks:
 
 
 def _make_job_info(task_index: int = 0, num_tasks: int = 1, attempt_id: int = 0) -> JobInfo:
-    """Create a JobInfo with the given task_index and num_tasks."""
+    """Create a JobInfo with the given task index, task count, and attempt."""
     job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
     return JobInfo(
         task_id=job_name,
@@ -165,7 +167,7 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     coordinator_info.ports = {"jax": 12345}
     mock_get_job_info.side_effect = [coordinator_info, _make_job_info(task_index=1, num_tasks=2)]
     found = ResolveResult(
-        name="jax_coordinator-attempt-0",
+        name=INITIAL_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.1:12345", actor_id="ep-1")],
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
@@ -174,7 +176,7 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     initialize_jax()
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:12345")]
+    assert fake_ctx.registry.registered == [(INITIAL_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
     assert mock_jax_init.call_args_list == [
         call(
             "10.0.0.1:12345",
@@ -225,7 +227,7 @@ def test_initialize_jax_task0_registers(
 
     initialize_jax(port=9999, heartbeat_timeout=37)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:9999")]
+    assert fake_ctx.registry.registered == [(INITIAL_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:9999")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:9999",
         4,
@@ -254,7 +256,7 @@ def test_initialize_jax_task0_uses_iris_port(
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:12345")]
+    assert fake_ctx.registry.registered == [(INITIAL_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:12345",
         2,
@@ -276,9 +278,9 @@ def test_initialize_jax_taskN_polls(
     """Task N polls for the coordinator endpoint and calls jax.distributed.initialize."""
     mock_get_job_info.return_value = _make_job_info(task_index=2, num_tasks=4)
 
-    empty = ResolveResult(name="jax_coordinator-attempt-0", endpoints=[])
+    empty = ResolveResult(name=INITIAL_ATTEMPT_ENDPOINT_NAME, endpoints=[])
     found = ResolveResult(
-        name="jax_coordinator-attempt-0",
+        name=INITIAL_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="ep-1")],
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[empty, empty, found]))
@@ -307,7 +309,7 @@ def test_initialize_jax_poll_timeout(
     """TimeoutError is raised when coordinator endpoint is not found within timeout."""
     mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
 
-    empty = ResolveResult(name="jax_coordinator-attempt-0", endpoints=[])
+    empty = ResolveResult(name=INITIAL_ATTEMPT_ENDPOINT_NAME, endpoints=[])
     fake_ctx = FakeContext(resolver=FakeResolver(results=[empty]))
     mock_iris_ctx.return_value = fake_ctx
 
@@ -330,7 +332,7 @@ def test_initialize_jax_supervised_single_host(
     """A local peer resolves the address published by global rank 0."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
     found = ResolveResult(
-        name="jax_coordinator-attempt-0",
+        name=INITIAL_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.1:12345", actor_id="ep-1")],
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
@@ -373,7 +375,7 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-3", "10.0.0.1:12345")]
+    assert fake_ctx.registry.registered == [(RETRY_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:12345",
         16,
@@ -405,7 +407,7 @@ def test_initialize_jax_supervised_global_rank0_picks_port(
         initialize_jax()
 
     coordinator = "10.0.0.1:45678"
-    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", coordinator)]
+    assert fake_ctx.registry.registered == [(INITIAL_ATTEMPT_ENDPOINT_NAME, coordinator)]
     mock_jax_init.assert_called_once_with(
         coordinator,
         16,
@@ -428,7 +430,7 @@ def test_initialize_jax_supervised_other_host_polls(
     """A supervised rank on host != 0 polls the registry for rank 0's address."""
     mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
     found = ResolveResult(
-        name="jax_coordinator-attempt-0",
+        name=INITIAL_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
@@ -466,14 +468,14 @@ def test_initialize_jax_retry_ignores_previous_attempt_coordinator(
         endpoints=[ResolvedEndpoint(url="10.0.0.1:27055", actor_id="attempt-2")],
     )
     current = ResolveResult(
-        name="jax_coordinator-attempt-3",
+        name=RETRY_ATTEMPT_ENDPOINT_NAME,
         endpoints=[ResolvedEndpoint(url="10.0.0.1:47647", actor_id="attempt-3")],
     )
     fake_ctx = FakeContext(
         resolver=FakeResolver(
             results_by_name={
                 "jax_coordinator": stale,
-                "jax_coordinator-attempt-3": current,
+                RETRY_ATTEMPT_ENDPOINT_NAME: current,
             }
         )
     )
