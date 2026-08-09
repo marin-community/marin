@@ -1,0 +1,17 @@
+source_commit=9fe460e7db2bc563e9c324d421ae5fd6560a1e68
+normalized_exp_sha256=7ce508c747edc1e5106eebeed0e0274ac69291801de34c158a60292c0931cbe9
+hardware=NVIDIA H100 80GB HBM3
+compute_capability=9.0
+driver=595.71.05
+memory=81559 MiB
+power_limit=700.00 W
+sm_clock_sample=345 MHz
+memory_clock_sample=2619 MHz
+python=3.12.13
+torch=2.11.0+cu128
+jax=0.11.0
+jaxlib=0.11.0
+nvidia-cutlass-dsl=4.5.2
+quack-kernels=0.5.0
+flash-attn-4=4.0.0b16
+

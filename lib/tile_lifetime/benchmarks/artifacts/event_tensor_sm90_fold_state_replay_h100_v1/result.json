@@ -1,0 +1,159 @@
+{
+  "canonical": {
+    "backend_sha256": {
+      "cute_streaming_base.py": "d8e4a9ec133726fabf0e54fa7dc3de481af8d59347ea5206af0c9a4480cde981",
+      "cute_streaming_emitter.py": "57dc6860834d8eb974061075338845e828cff5a7a4db456a1f6aa39f259f1cc4",
+      "cute_streaming_sm90.py": "aa5e502e5ace4b5321049f171cb320c8ec6f42d40cfb0f236fab28f91973c422"
+    },
+    "captures": [
+      {
+        "compile_seconds": 3.057674458999827,
+        "deterministic": true,
+        "deterministic_output_hash": "36626c594342bc25b794afd7457a02eefd839c6abd192eb69c24f0bd165bd6c7",
+        "mean_absolute_error": 0.00011439512309152633,
+        "median_ms": 0.07980799674987793,
+        "maximum_absolute_error": 0.015625,
+        "samples_ms": [
+          0.08841600269079208,
+          0.081727996468544,
+          0.08076799660921097,
+          0.07980799674987793,
+          0.07939200103282928,
+          0.07974400371313095,
+          0.0798719972372055,
+          0.07980799674987793,
+          0.07964800298213959,
+          0.07964800298213959
+        ]
+      },
+      {
+        "compile_seconds": 3.1412952419996145,
+        "deterministic": true,
+        "deterministic_output_hash": "36626c594342bc25b794afd7457a02eefd839c6abd192eb69c24f0bd165bd6c7",
+        "mean_absolute_error": 0.00011439512309152633,
+        "median_ms": 0.08057600259780884,
+        "maximum_absolute_error": 0.015625,
+        "samples_ms": [
+          0.09321600198745728,
+          0.08182399719953537,
+          0.0804160013794899,
+          0.08099199831485748,
+          0.07977599650621414,
+          0.08054400235414505,
+          0.08012799918651581,
+          0.08060800284147263,
+          0.0796160027384758,
+          0.08111999928951263
+        ]
+      }
+    ],
+    "helper_patch": "cute_normalized_exp.py copied byte-for-byte from the Event source",
+    "pooled_maximum_ms": 0.09321600198745728,
+    "pooled_median_ms": 0.08027200028300285,
+    "pooled_minimum_ms": 0.07939200103282928,
+    "source_commit": "31e673a1a992af9e89dc005c46dcdc4f4120c28f"
+  },
+  "command": {
+    "repeats": 10,
+    "script": "lib/tile_lifetime/benchmarks/h100_cute_generated_streaming_attention.py",
+    "sequence_length": 2048,
+    "warmups": 5
+  },
+  "environment": {
+    "compute_capability": "9.0",
+    "driver": "595.71.05",
+    "flash-attn-4": "4.0.0b16",
+    "hardware": "NVIDIA H100 80GB HBM3",
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "memory": "81559 MiB",
+    "nvidia-cutlass-dsl": "4.5.2",
+    "power_limit": "700.00 W",
+    "python": "3.12.13",
+    "quack-kernels": "0.5.0",
+    "torch": "2.11.0+cu128"
+  },
+  "event_tensor": {
+    "backend_sha256": {
+      "cute_streaming_base.py": "d8e4a9ec133726fabf0e54fa7dc3de481af8d59347ea5206af0c9a4480cde981",
+      "cute_streaming_emitter.py": "aa1a43765fcac284d51221eb7b140688398300458d45f80842f0b5deb53d69e9",
+      "cute_streaming_sm90.py": "f992d64ac98f5b814aaff296e231b2d232402c53b3026d9525fe028caf16ca88"
+    },
+    "captures": [
+      {
+        "compile_seconds": 3.2199260809975385,
+        "deterministic": true,
+        "deterministic_output_hash": "36626c594342bc25b794afd7457a02eefd839c6abd192eb69c24f0bd165bd6c7",
+        "mean_absolute_error": 0.00011439512309152633,
+        "median_ms": 0.0798879973590374,
+        "maximum_absolute_error": 0.015625,
+        "samples_ms": [
+          0.0989760011434555,
+          0.08246400207281113,
+          0.08048000186681747,
+          0.08070400357246399,
+          0.07939200103282928,
+          0.07999999821186066,
+          0.07977599650621414,
+          0.07919999957084656,
+          0.07964800298213959,
+          0.07977599650621414
+        ]
+      },
+      {
+        "compile_seconds": 3.247101193999697,
+        "deterministic": true,
+        "deterministic_output_hash": "36626c594342bc25b794afd7457a02eefd839c6abd192eb69c24f0bd165bd6c7",
+        "mean_absolute_error": 0.00011439512309152633,
+        "median_ms": 0.08044800162315369,
+        "maximum_absolute_error": 0.015625,
+        "samples_ms": [
+          0.09455999732017517,
+          0.08160000294446945,
+          0.08089599758386612,
+          0.0814720019698143,
+          0.0799039974808693,
+          0.08032000064849854,
+          0.08038400113582611,
+          0.08003199845552444,
+          0.07977599650621414,
+          0.08051200211048126
+        ]
+      }
+    ],
+    "pooled_maximum_ms": 0.0989760011434555,
+    "pooled_median_ms": 0.08035200089216232,
+    "pooled_minimum_ms": 0.07919999957084656,
+    "source_commit": "ad1a0c319245022e759ee7d79d9f2662c1b1940f"
+  },
+  "event_to_canonical_ratio": 1.0009966191060073,
+  "normalized_exp_sha256": "b164e9a3fc87cb35e47be61917f983c14d94406e811d6eb28e1666b8d14095ca",
+  "process_order": [
+    "canonical",
+    "event_tensor",
+    "event_tensor",
+    "canonical"
+  ],
+  "schedule": {
+    "intra_warpgroup_overlap": true,
+    "pack_gqa": true,
+    "pv_register_source": true,
+    "q_in_registers": false,
+    "stages": 2,
+    "threads": 384,
+    "tile_m": 128,
+    "tile_n": 128
+  },
+  "score_map": {
+    "causal": true,
+    "scale": 0.08838834764831843,
+    "softcap": null
+  },
+  "shape": {
+    "batch": 1,
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}
