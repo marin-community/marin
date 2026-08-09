@@ -1,0 +1,16 @@
+{
+  "compute_capability": "10.0",
+  "device_kind": "NVIDIA GB200",
+  "packages": {
+    "jax": "0.11.0",
+    "jax-cuda13-pjrt": "0.11.0",
+    "jax-cuda13-plugin": "0.11.0",
+    "jaxlib": "0.11.0",
+    "nvidia-cublas": "13.4.1.1",
+    "nvidia-cuda-cccl": "13.0.85",
+    "nvidia-cuda-crt": "13.0.88",
+    "nvidia-cuda-nvcc": "13.0.88",
+    "nvidia-nvvm": "13.0.88"
+  },
+  "shuttle_revision": "b42e8f65f3f2a9ddc08dbecea23d45f924a6391e"
+}
