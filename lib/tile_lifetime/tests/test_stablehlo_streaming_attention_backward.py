@@ -21,8 +21,10 @@ from tile_lifetime import (
     export_debug_streaming_attention_backward,
     recover_stablehlo_streaming_attention_backward,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import CompareAttributes, import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import StableHLOStreamingAttentionBackwardError
+from tile_lifetime.streaming_attention_backward import eliminate_normalized_exp_maximum_vjp
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "causal_gqa_attention_vjp_v1_17_0.mlir.bc.b64"
 SCHEDULE = StreamingTileSchedule(query_tile_size=2, key_value_tile_size=2, pipeline_depth=2)
@@ -103,6 +105,27 @@ def test_live_jax_vjp_recovery_executes_with_bf16_gradient_parity(scale: float) 
         error = np.abs(generated_bf16 - reference_bf16)
         assert float(error.max()) == 0.0
         assert float(error.mean()) == 0.0
+
+
+def test_maximum_vjp_invariant_rewrite_requires_rounding_reorder_policy() -> None:
+    recovered = recover_stablehlo_streaming_attention_backward(_fixture_graph(), schedule=SCHEDULE)
+
+    with pytest.raises(ValueError, match="bitwise policy"):
+        eliminate_normalized_exp_maximum_vjp(
+            recovered.program,
+            numerical_policy=NumericalPolicy.BITWISE_EXACT,
+        )
+
+    lowered = eliminate_normalized_exp_maximum_vjp(
+        recovered.program,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+
+    assert recovered.program.maximum_vjp is StreamingAttentionBackwardMaximumVJP.JAX_EQUAL_SPLIT
+    assert lowered.maximum_vjp is StreamingAttentionBackwardMaximumVJP.NORMALIZED_EXP_INVARIANT
+    assert lowered.provenance is StreamingAttentionBackwardProvenance.JAX_VJP_HLO_RECOVERY
+    assert lowered.forward == recovered.program.forward
+    assert lowered.score_map_vjp == recovered.program.score_map_vjp
 
 
 def test_recovery_rejects_noncausal_domain_predicate_before_assigning_provenance() -> None:

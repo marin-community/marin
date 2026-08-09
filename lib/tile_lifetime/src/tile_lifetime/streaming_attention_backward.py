@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 import numpy as np
@@ -13,6 +13,7 @@ import numpy as np
 from tile_lifetime.autodiff import differentiate_scalar_expression
 from tile_lifetime.event_dataflow import TaskAxis, TaskFamily, TaskRelation
 from tile_lifetime.ir import DType
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.shared_reverse_fusion import SharedReverseFusionPlan, plan_shared_producer_reverse_fusion
 from tile_lifetime.streaming_attention import (
     AttentionScoreAxis,
@@ -203,6 +204,31 @@ def derive_streaming_attention_backward(
         stages=tuple(StreamingAttentionBackwardStage),
         materialized_values=cotangents,
         provenance=StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP,
+    )
+
+
+def eliminate_normalized_exp_maximum_vjp(
+    program: StreamingAttentionBackwardProgram,
+    *,
+    numerical_policy: NumericalPolicy,
+) -> StreamingAttentionBackwardProgram:
+    """Eliminate the explicit maximum VJP using normalized-exp invariance.
+
+    JAX differentiates the source max Fold and assigns its cotangent equally to
+    tied maxima.  For a normalized exponential, adding a row constant leaves
+    the result unchanged, so the complete maximum-cotangent path cancels over
+    the reals.  The cancellation changes floating-point operation order and is
+    therefore unavailable under ``BITWISE_EXACT``.
+    """
+    if program.maximum_vjp is StreamingAttentionBackwardMaximumVJP.NORMALIZED_EXP_INVARIANT:
+        return program
+    if program.maximum_vjp is not StreamingAttentionBackwardMaximumVJP.JAX_EQUAL_SPLIT:
+        raise ValueError(f"unsupported maximum VJP {program.maximum_vjp.value!r}")
+    if numerical_policy is NumericalPolicy.BITWISE_EXACT:
+        raise ValueError("bitwise policy requires preserving JAX's explicit equal-split maximum VJP")
+    return replace(
+        program,
+        maximum_vjp=StreamingAttentionBackwardMaximumVJP.NORMALIZED_EXP_INVARIANT,
     )
 
 

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import jax
 import torch
 import torch.nn.functional as functional
 import triton
@@ -22,14 +23,23 @@ import triton.language as tl
 from h100_generated_streaming_attention import _inputs, _program, emit_streaming_attention, lower_score_map
 
 from tile_lifetime import (
+    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    StreamingAttentionBackwardDebugConfig,
     StreamingAttentionBackwardDomainTraversal,
+    StreamingTileSchedule,
     derive_streaming_attention_backward,
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
+    export_debug_streaming_attention_backward,
+    recover_stablehlo_streaming_attention_backward,
 )
+from tile_lifetime.plan import NumericalPolicy
+from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.streaming_attention_backward import (
+    StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProgram,
     StreamingAttentionBackwardTileSchedule,
+    eliminate_normalized_exp_maximum_vjp,
 )
 from tile_lifetime.tensor_program import serialize_scalar_expression
 
@@ -361,6 +371,11 @@ def prepare_streaming_attention_backward_launches(
     num_stages: int,
 ) -> StreamingAttentionBackwardLaunches:
     """Validate and bind a generic query-major/grouped-key-major reverse schedule."""
+    if program.maximum_vjp is not StreamingAttentionBackwardMaximumVJP.NORMALIZED_EXP_INVARIANT:
+        raise ValueError(
+            "the first reverse emitter requires an explicit legality rewrite to the "
+            "normalized-exp maximum-VJP invariant"
+        )
     forward = program.forward
     lowered = lower_score_map(forward)
     block_m = schedule.query_tile_size
@@ -569,6 +584,11 @@ def _benchmark_variants(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sequence", type=int, default=2048)
+    parser.add_argument(
+        "--semantic-source",
+        choices=("jax_vjp_hlo_recovery", "reference_symbolic_vjp"),
+        default="jax_vjp_hlo_recovery",
+    )
     parser.add_argument("--mutation", choices=("causal", "softcap"), default="causal")
     parser.add_argument("--scale", type=float, default=1.0 / math.sqrt(128))
     parser.add_argument("--block-m", type=int, choices=(16, 32, 64), default=32)
@@ -589,8 +609,41 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("streaming backward benchmark requires CUDA")
 
-    forward = _program(args.sequence, score_scale=args.scale, mutation=args.mutation)
-    backward = derive_streaming_attention_backward(forward)
+    if args.semantic_source == "jax_vjp_hlo_recovery":
+        if args.mutation != "causal":
+            raise ValueError("natural JAX VJP recovery currently supports the causal domain mutation")
+        config = StreamingAttentionBackwardDebugConfig(
+            batch=1,
+            query_length=args.sequence,
+            key_length=args.sequence,
+            query_heads=32,
+            key_value_heads=8,
+            head_dimension=128,
+            scale=args.scale,
+        )
+        graph = import_stablehlo(
+            export_debug_streaming_attention_backward(config),
+            input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+        )
+        recovered = recover_stablehlo_streaming_attention_backward(
+            graph,
+            schedule=StreamingTileSchedule(
+                query_tile_size=args.block_m,
+                key_value_tile_size=args.block_n,
+                pipeline_depth=args.num_stages,
+            ),
+        )
+        source_backward = recovered.program
+        backward = eliminate_normalized_exp_maximum_vjp(
+            source_backward,
+            numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        )
+    else:
+        forward = _program(args.sequence, score_scale=args.scale, mutation=args.mutation)
+        source_backward = derive_streaming_attention_backward(forward)
+        backward = source_backward
+        recovered = None
+    forward = backward.forward
     backward_schedule = derive_streaming_attention_backward_tile_schedule(
         backward,
         query_tile_size=args.block_m,
@@ -743,10 +796,39 @@ def main() -> None:
         },
         "semantic_generation": {
             "provenance": backward.provenance.value,
-            "accepted_frontend_boundary": "recover equivalent reverse algebra from JAX VJP HLO",
+            "semantic_source": args.semantic_source,
+            "accepted_frontend_boundary": (
+                "ordinary JAX causal GQA differentiated by jax.vjp and recovered from StableHLO"
+                if recovered is not None
+                else "local symbolic reverse component oracle"
+            ),
             "stages": [stage.value for stage in backward.stages],
             "score_map_vjp": serialize_scalar_expression(backward.score_map_vjp.expression),
             "reassociation": backward.reassociation.value,
+            "source_maximum_vjp": source_backward.maximum_vjp.value,
+            "physical_maximum_vjp": backward.maximum_vjp.value,
+            "maximum_vjp_rewrite": (
+                {
+                    "property": "normalized exponential is invariant to an additive row constant",
+                    "numerical_policy": NumericalPolicy.ALLOW_ROUNDING_REORDER.value,
+                    "finite_precision_effect": (
+                        "eliminates JAX's explicit equal-split maximum cotangent and changes operation order"
+                    ),
+                }
+                if source_backward.maximum_vjp is not backward.maximum_vjp
+                else None
+            ),
+            "recovered_operation_counts": (
+                {
+                    "contracts": len(recovered.contract_operation_ids),
+                    "normalized_exponential_folds": len(recovered.normalized_exponential_fold_operation_ids),
+                    "maximum_vjp_tie_folds": 1,
+                    "broadcast_vjp_folds": len(recovered.broadcast_vjp_fold_operation_ids),
+                    "domain_restrictions": len(recovered.domain_restriction_operation_ids),
+                }
+                if recovered is not None
+                else None
+            ),
             "materialized_values": [value.name for value in backward.materialized_values],
         },
         "schedule": {
@@ -814,6 +896,7 @@ def main() -> None:
             "counterbalanced_order": args.mutation == "causal",
         },
         "environment": {
+            "jax": jax.__version__,
             "torch": torch.__version__,
             "triton": triton.__version__,
             "cuda": torch.version.cuda,
