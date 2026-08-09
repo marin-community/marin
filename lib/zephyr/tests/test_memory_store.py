@@ -9,19 +9,21 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import cloudpickle
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
+from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
@@ -370,3 +372,18 @@ def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
     with _store_context(local_client, tmp_path) as context:
         with pytest.raises(ValueError):
             _load_store(context, dataset, name="shuffled")
+
+
+def test_memory_store_rejects_a_driver_that_cannot_resolve_worker_handles():
+    """A distributed driver outside an Iris job cannot resolve the handles it is sent.
+
+    Worker handles arrive from the coordinator, and serializing one drops its resolver,
+    so it rebinds through the ambient Iris context. Failing here names the problem
+    instead of surfacing it as a bare "requires IrisContext" from inside the load.
+    """
+    with pytest.raises(RuntimeError, match="inside an Iris job"):
+        _require_resolvable_worker_handles(MagicMock())
+
+
+def test_local_pools_need_no_iris_context():
+    _require_resolvable_worker_handles(LocalClient())

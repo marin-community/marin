@@ -24,6 +24,7 @@ from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.client.client import get_iris_ctx
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
 
@@ -200,6 +201,24 @@ class _OwnedPool:
             self.coordinator_group.shutdown()
 
 
+def _require_resolvable_worker_handles(client: Client) -> None:
+    """Reject a memory-store load whose worker handles could never resolve.
+
+    The coordinator owns the worker group, so the driver receives worker handles over
+    an actor response. Serializing an ``IrisActorHandle`` drops its resolver, and the
+    handle rebinds through the ambient Iris context -- which a driver outside a job
+    does not have. Without this check the load fails later, inside ``load_pass``, as a
+    bare "requires IrisContext" from deep in fray.
+    """
+    if isinstance(client, LocalClient) or get_iris_ctx() is not None:
+        return
+    raise RuntimeError(
+        "load_memory_store requires a driver running inside an Iris job: worker handles "
+        "arrive from the coordinator and resolve through the ambient Iris context. "
+        "Run this driver as an Iris job, or use a LocalClient pool."
+    )
+
+
 def _distributed_worker_limit(configured: int | None) -> int:
     requested = configured or MAX_IRIS_WORKER_REPLICAS
     return min(requested, MAX_IRIS_WORKER_REPLICAS)
@@ -370,6 +389,8 @@ class ZephyrContext:
             hash_key=hash_key,
             worker_count=pool.worker_count,
         )
+
+        _require_resolvable_worker_handles(self.client)
 
         deadline = time.monotonic() + ready_timeout
         handles = coordinator.worker_handles.remote(pool.worker_count, ready_timeout).result(timeout=ready_timeout)
