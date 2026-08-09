@@ -37,9 +37,9 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.defaults import default_validation_sets
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
@@ -426,7 +426,7 @@ def _predict_run_spec(
         target_flops=target_flops,
         batch_size=batch_size,
     )
-    train_tokens = int(round(candidate.tokens))
+    train_tokens = round(candidate.tokens)
     realized_train_tokens = candidate.train_steps * batch_size * SEQ_LEN_DELPHI
     phase_weights = _constant_phase_weights(_weights_for_mixture(mixture))
     run_name = f"{mixture.value}_{_slug(target_flops)}"

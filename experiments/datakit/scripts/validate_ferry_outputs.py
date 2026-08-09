@@ -46,7 +46,7 @@ NORMALIZE_REQUIRED_COLUMNS = {"id", "text", "url", "source_id", "token_count"}
 # The smoke ferry runs fuzzy dedup over a single source (fineweb-edu sample/10BT).
 FUZZY_DUPS_EXPECTED_SOURCES = 1
 FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE = 106
-FUZZY_DUPS_REQUIRED_COLUMNS = {"id", "attributes"}
+FUZZY_DUPS_REQUIRED_COLUMNS = {"id", "dup_cluster_id", "is_cluster_canonical"}
 # Non-canonicals are the rows consolidate will drop. Should be a non-trivial
 # but bounded fraction. Reference (old exact-dedup pipeline): 286,263 / 9,268,156 = 3.1%.
 FUZZY_DUPS_DROP_MIN_FRACTION = 0.005  # at least 0.5% dropped
@@ -128,10 +128,10 @@ def _count_canonicals(files: list[str]) -> int:
     total = 0
     for path in files:
         with StoragePath(path).open("rb") as f:
-            tbl = pq.ParquetFile(f).read(columns=["attributes"])
+            tbl = pq.ParquetFile(f).read(columns=["is_cluster_canonical"])
         if tbl.num_rows == 0:
             continue
-        canonical = tbl.column("attributes").combine_chunks().field("is_cluster_canonical")
+        canonical = tbl.column("is_cluster_canonical")
         total += int(pc.sum(canonical).as_py() or 0)
     return total
 
@@ -140,8 +140,8 @@ def _validate_fuzzy_dups(base: str, normalize_rows: int) -> int:
     """Validate the fuzzy-dups step and return the number of rows consolidate will drop.
 
     Fuzzy dedup writes one cluster-member parquet per normalize shard, per source,
-    under ``<attr_dir>/*.parquet`` with schema ``{id, attributes: {dup_cluster_id,
-    is_cluster_canonical}}``. Singletons are omitted, and exactly one cluster
+    under ``<attr_dir>/*.parquet`` with schema
+    ``{id, dup_cluster_id, is_cluster_canonical}``. Singletons are omitted, and exactly one cluster
     member is flagged ``is_cluster_canonical=True``. Consolidate's default policy
     keeps canonicals and singletons, so non-canonicals == rows dropped.
     """

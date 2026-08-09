@@ -6,6 +6,8 @@
 import textwrap
 
 import pytest
+from draccus.utils import ParsingError
+from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
     ModelConfig,
@@ -62,6 +64,13 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
+
+
+def test_load_model_config_rejects_name_with_job_path_separator(tmp_path):
+    body = "name: Qwen/Qwen3-8B\nlocation: Qwen/Qwen3-8B\n"
+
+    with pytest.raises(ParsingError):
+        load_model_config(_write(tmp_path, "model.yaml", body))
 
 
 def test_load_rejects_unknown_field_at_load_time(tmp_path):
@@ -139,7 +148,12 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
         ),
     )
     choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
-    engine_args = inference_config_for_model(model, choice, env_vars={}).engine.extra_args
+    engine_args = inference_config_for_model(
+        model,
+        choice,
+        env_vars={},
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    ).engine.extra_args
     assert "--swap-space" not in engine_args
     assert "--trust-remote-code" not in engine_args
 
@@ -157,18 +171,6 @@ def test_scan_model_configs_rejects_duplicate_names(tmp_path):
     _write(tmp_path, "b/dup.yaml", "name: dup\nlocation: b/x\n")
     with pytest.raises(ValueError, match="duplicate model name"):
         scan_model_configs(tmp_path)
-
-
-def test_every_registered_model_resolves_on_the_marin_fleet():
-    for name, config in models().items():
-        platform = Platform.GPU if config.resource_hint.gpu else Platform.TPU
-        choice = MARIN_EVAL_HARDWARE.select(config, platform, override=None)
-        if config.resource_hint.gpu:
-            gpu_type = choice.gpu_type
-            assert gpu_type is not None and gpu_type in config.resource_hint.gpu, name
-            assert choice.gpu_count == config.resource_hint.gpu[gpu_type], name
-        else:
-            assert choice.platform is Platform.TPU, name
 
 
 def test_model_registry_callers_cannot_mutate_the_cached_catalog():

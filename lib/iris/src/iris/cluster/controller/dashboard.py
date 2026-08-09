@@ -7,7 +7,8 @@ The dashboard serves:
 - Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /worker/{id} (worker detail page)
-- Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
+- Connect RPC at /iris.cluster.ControllerService/* and /iris.cluster.EndpointService/*
+  (called directly by JS)
 - Health check at /health
 
 All data fetching happens via Connect RPC calls from the browser JavaScript.
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
@@ -45,6 +47,7 @@ from rigging.server_auth import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
@@ -165,9 +168,8 @@ class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
     The dashboard serves a single-page web UI that fetches all data directly
-    via Connect RPC calls to the ControllerService. This eliminates the need
-    for a separate REST API layer and ensures the dashboard shows exactly
-    what the RPC returns.
+    via Connect RPC calls. This eliminates the need for a separate REST API
+    layer and ensures the dashboard shows exactly what the RPC returns.
     """
 
     def __init__(
@@ -232,10 +234,7 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
-        # Leased service-discovery registry on its own wire surface. The legacy
-        # ControllerService.{Register,Unregister,List}Endpoint RPCs forward into
-        # the same backend in-process (see ControllerServiceImpl); new clients
-        # call this service directly to learn their lease and renew.
+        # Leased service-discovery registry on its own wire surface.
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
@@ -458,12 +457,30 @@ class ControllerDashboard:
         return Response(data, media_type="application/octet-stream")
 
 
+class _CredentialAuth(httpx.Auth):
+    """Attaches ``credentials`` to every request an httpx client sends.
+
+    Minting per request keeps a proxy that outlives a token's lifetime working;
+    it can refresh over the network, so it runs off the event loop.
+    """
+
+    def __init__(self, credentials: ClientCredentials):
+        self._credentials = credentials
+
+    async def async_auth_flow(self, request: httpx.Request):
+        request.headers.update(await run_in_threadpool(self._credentials.headers))
+        yield request
+
+
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
 
     Serves the same web UI locally but forwards all Connect RPC requests
     to an upstream controller at the given URL. Useful for viewing a remote
     controller's state without running a local controller instance.
+
+    The browser holds no cluster credentials, so this process authenticates
+    upstream on its behalf with ``credentials``.
     """
 
     def __init__(
@@ -471,11 +488,16 @@ class ProxyControllerDashboard:
         upstream_url: str,
         host: str = "0.0.0.0",
         port: int = 8080,
+        credentials: ClientCredentials | None = None,
     ):
         self._upstream_url = upstream_url.rstrip("/")
         self._host = host
         self._port = port
-        self._client = httpx.AsyncClient(base_url=self._upstream_url, timeout=60.0)
+        self._client = httpx.AsyncClient(
+            base_url=self._upstream_url,
+            timeout=60.0,
+            auth=_CredentialAuth(credentials) if credentials is not None else None,
+        )
         self._app = self._create_app()
 
     @property
@@ -506,10 +528,18 @@ class ProxyControllerDashboard:
                 ),
             ),
             Route("/health", self._health),
+            # GET only: /auth/config is the sole auth route the proxy can serve.
+            # The upstream's POST routes check CSRF against their own origin, which a
+            # request relayed from localhost can never match without rewriting Origin.
             Route("/auth/{path:path}", self._proxy_auth),
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/iris.cluster.EndpointService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),

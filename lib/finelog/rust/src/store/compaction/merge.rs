@@ -23,7 +23,10 @@ use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
-use crate::store::segment::ROW_GROUP_SIZE;
+/// Rows per output batch from the k-way merge. This is a batching decision only:
+/// the writer accumulates across batches and cuts row groups at its own
+/// byte-derived stride (see [`crate::store::segment::segment_writer_properties`]).
+const MERGE_CHUNK_ROWS: usize = 16_384;
 
 /// Project `batch` onto `target_schema`, additive-null-filling any target column
 /// absent from the batch.
@@ -188,7 +191,7 @@ pub fn kway_merge(
 
     // (batch_idx, row_idx) pairs in global sort order, partitioned into chunks.
     let mut chunks: Vec<Vec<(usize, usize)>> = Vec::new();
-    let mut current: Vec<(usize, usize)> = Vec::with_capacity(ROW_GROUP_SIZE.min(total));
+    let mut current: Vec<(usize, usize)> = Vec::with_capacity(MERGE_CHUNK_ROWS.min(total));
     while let Some(entry) = heap.pop() {
         let bi = entry.batch_idx;
         let ri = cursors[bi];
@@ -200,9 +203,9 @@ pub fn kway_merge(
                 batch_idx: bi,
             });
         }
-        if current.len() >= ROW_GROUP_SIZE {
+        if current.len() >= MERGE_CHUNK_ROWS {
             chunks.push(std::mem::take(&mut current));
-            current = Vec::with_capacity(ROW_GROUP_SIZE);
+            current = Vec::with_capacity(MERGE_CHUNK_ROWS);
         }
     }
     if !current.is_empty() {
@@ -333,14 +336,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_emits_row_group_aligned_chunks() {
-        // A merge that exceeds 16384 rows must produce 16384-row chunks.
-        let n = ROW_GROUP_SIZE as i64 + 100;
+    fn merge_emits_fixed_size_chunks() {
+        // A merge that exceeds MERGE_CHUNK_ROWS must cut its output into chunks of
+        // that size; the writer's row groups are sized separately, by bytes.
+        let n = MERGE_CHUNK_ROWS as i64 + 100;
         let a = batch((0..n).step_by(2).map(|s| (s, s, "a")).collect());
         let b = batch((1..n).step_by(2).map(|s| (s, s, "b")).collect());
         let merged = kway_merge(&[a, b], &[1, 0]).unwrap();
         assert!(merged.len() >= 2, "large merge splits into chunks");
-        assert_eq!(merged[0].num_rows(), ROW_GROUP_SIZE);
+        assert_eq!(merged[0].num_rows(), MERGE_CHUNK_ROWS);
         let total: usize = merged.iter().map(|m| m.num_rows()).sum();
         assert_eq!(total as i64, n);
         // strictly increasing seq across the whole stream.

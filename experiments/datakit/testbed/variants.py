@@ -27,7 +27,11 @@ from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs,
+)
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
@@ -80,7 +84,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     return StepSpec(
         name="data/datakit/fuzzy_dups",
         deps=list(minhash_steps),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
@@ -107,9 +111,9 @@ def _deduped_step(src_name: str, sampled: StepSpec, fuzzy_dups: StepSpec) -> Ste
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData)
-                    .sources[read_artifact(sampled.output_path, NormalizedData).main_output_dir]
-                    .attr_dir,
+                    attribute_path=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                        read_artifact(sampled.output_path, NormalizedData).main_output_dir
+                    ),
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
                     keep_if_missing=True,

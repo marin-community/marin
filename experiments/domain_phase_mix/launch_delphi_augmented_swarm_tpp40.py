@@ -22,7 +22,7 @@ from dataclasses import asdict, replace
 from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
 from experiments.llama import llama3_tokenizer

@@ -23,7 +23,7 @@ import pyarrow.parquet as pq
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 logger = logging.getLogger(__name__)
 

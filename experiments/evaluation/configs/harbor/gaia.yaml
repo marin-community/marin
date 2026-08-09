@@ -1,6 +1,14 @@
 n_concurrent_trials: 32
 retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
   exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
 environment:
   type: daytona
 agents:

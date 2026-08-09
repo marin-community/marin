@@ -14,13 +14,14 @@ from rigging.filesystem import StoragePath, open_url, prefix_join
 
 from levanter.analysis.perplexity_gap import (
     LOG2E,
-    _SEGMENT_RE,
     GapReportBuilder,
     RawTextDocument,
     TokenizedDocument,
     bucket_for_segment,
+    char_to_byte_offsets,
+    iter_scored_segments,
+    register_dataset_hierarchy,
     write_report_files,
-    _byte_span_to_char_span,
 )
 
 
@@ -91,13 +92,6 @@ class ModelScoreReportBuilder:
     bucket_stats: dict[str, ModelLossAggregate] = field(default_factory=lambda: defaultdict(ModelLossAggregate))
     group_to_leaves: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
 
-    def register_dataset(self, dataset_name: str, tags: Sequence[str]) -> None:
-        self.group_to_leaves[dataset_name].add(dataset_name)
-        for tag in tags:
-            self.group_to_leaves[tag].add(dataset_name)
-            self._register_hierarchy(tag, dataset_name)
-        self._register_hierarchy(dataset_name, dataset_name)
-
     def add_document(
         self,
         *,
@@ -106,7 +100,7 @@ class ModelScoreReportBuilder:
         token_count: int = 0,
         elapsed_seconds: float = 0.0,
     ) -> None:
-        self.register_dataset(document.dataset_name, document.tags)
+        register_dataset_hierarchy(self.group_to_leaves, document.dataset_name, document.tags)
 
         total_doc_bytes = len(per_byte_loss)
         score_start, score_end = document.score_span(total_doc_bytes)
@@ -125,30 +119,10 @@ class ModelScoreReportBuilder:
         )
 
         prefix = np.concatenate(([0.0], np.cumsum(per_byte_loss, dtype=np.float64)))
-        byte_offsets = _char_to_byte_offsets(document.text)
-        for match in _SEGMENT_RE.finditer(document.text):
-            segment = match.group(0)
-            if not segment:
-                continue
-
-            byte_start = byte_offsets[match.start()]
-            byte_end = byte_offsets[match.end()]
-            overlap_start = max(byte_start, score_start)
-            overlap_end = min(byte_end, score_end)
-            if overlap_end <= overlap_start:
-                continue
-            overlap_char_start, overlap_char_end = _byte_span_to_char_span(
-                byte_offsets,
-                overlap_start,
-                overlap_end,
-            )
-            overlap_segment = document.text[overlap_char_start:overlap_char_end]
-            if not overlap_segment:
-                continue
-
-            segment_loss = float(prefix[overlap_end] - prefix[overlap_start])
-            segment_bytes = int(overlap_end - overlap_start)
-            self.bucket_stats[bucket_for_segment(overlap_segment)].add(loss=segment_loss, num_bytes=segment_bytes)
+        byte_offsets = char_to_byte_offsets(document.text)
+        for segment in iter_scored_segments(document.text, byte_offsets, score_start, score_end):
+            segment_loss = float(prefix[segment.byte_end] - prefix[segment.byte_start])
+            self.bucket_stats[bucket_for_segment(segment.text)].add(loss=segment_loss, num_bytes=segment.num_bytes)
 
     def build_summary(self) -> dict[str, Any]:
         dataset_rows = [
@@ -182,11 +156,6 @@ class ModelScoreReportBuilder:
             "dataset_groups": sorted(group_rows, key=lambda row: row["bits"], reverse=True),
             "pattern_buckets": sorted(bucket_rows, key=lambda row: row["bits"], reverse=True),
         }
-
-    def _register_hierarchy(self, tag: str, dataset_name: str) -> None:
-        parts = tag.split("/")
-        for i in range(1, len(parts)):
-            self.group_to_leaves["/".join(parts[:i])].add(dataset_name)
 
 
 def write_model_score_files(
@@ -421,15 +390,6 @@ def _scored_document_key(scored_document: ScoredDocument) -> tuple[str, str, int
 def _scored_document_request_id(scored_document: ScoredDocument) -> str:
     dataset_name, shard_name, row_index = _scored_document_key(scored_document)
     return f"{dataset_name}:{shard_name}:{row_index}"
-
-
-def _char_to_byte_offsets(text: str) -> np.ndarray:
-    offsets = np.zeros(len(text) + 1, dtype=np.int32)
-    running = 0
-    for i, ch in enumerate(text, start=1):
-        running += len(ch.encode("utf-8"))
-        offsets[i] = running
-    return offsets
 
 
 def _token_count_artifacts(

@@ -491,9 +491,8 @@ export interface NodePoolStatus {
 }
 
 /**
- * One physical node surfaced as a worker-like fleet member. Identity/liveness/
- * allocatable come from the kubectl node sync; the live host + GPU readings from
- * the controller's exporter scrape. int64 fields serialize as strings.
+ * One physical Kubernetes node. Identity, liveness, and allocatable capacity
+ * come from the kubectl node sync. int64 fields serialize as strings.
  */
 export interface NodeStatus {
   name: string
@@ -509,20 +508,6 @@ export interface NodeStatus {
   diskBytes?: string
   runningPods?: number
   created?: string
-  // Live scrape readings (metricsTs is epoch ms; '0'/absent = never scraped).
-  metricsTs?: string
-  cpuPct?: number
-  memUsedBytes?: string
-  memTotalBytes?: string
-  diskUsedBytes?: string
-  diskTotalBytes?: string
-  netRecvBytes?: string
-  netSentBytes?: string
-  hbmUsedBytes?: string
-  hbmTotalBytes?: string
-  gpuUtilPct?: number
-  gpuTempC?: number
-  gpuPowerW?: number
 }
 
 export interface GetKubernetesClusterStatusResponse {

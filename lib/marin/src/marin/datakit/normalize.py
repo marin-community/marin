@@ -27,7 +27,7 @@ from typing import Any
 import dupekit
 import pyarrow as pa
 from fray.types import ResourceConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationInfo, model_validator
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -36,6 +36,8 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
+from marin.datakit.source_key import DatakitArtifactPath
+from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
 # a single normalize spans thousands of shards over very large staged dumps.
 DEFAULT_MAX_WORKERS = 1024
+NORMALIZED_DATA_VERSION = "v2"
 
 
 class DedupMode(StrEnum):
@@ -76,14 +79,32 @@ class NormalizedData(BaseModel):
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
-        dup_output_dir: Directory containing the duplicate side output Parquet files.
+        dup_output_dir: Directory containing the duplicate side output Parquet
+            files. A v2 artifact stores both directories relative to
+            ``MARIN_PREFIX`` when they are under the active prefix.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v1"
-    main_output_dir: str
-    dup_output_dir: str
+    version: str = NORMALIZED_DATA_VERSION
+    main_output_dir: DatakitArtifactPath
+    dup_output_dir: DatakitArtifactPath
     counters: dict[str, int | float]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_artifact_paths(cls, value: object, info: ValidationInfo) -> object:
+        if not info.context or not info.context.get(ARTIFACT_LOAD_CONTEXT_KEY):
+            return value
+        if not isinstance(value, dict):
+            return value
+
+        version = value.get("version", "v1")
+        if version not in ("v1", NORMALIZED_DATA_VERSION):
+            raise ValueError(f"Unsupported NormalizedData version: {version!r}")
+
+        loaded = dict(value)
+        loaded["version"] = NORMALIZED_DATA_VERSION
+        return loaded
 
 
 def generate_id(text: str) -> str:
@@ -105,6 +126,7 @@ def _make_normalize_fn(
     text_field: str,
     id_field: str,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
@@ -112,7 +134,8 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns unless *bare* is set (see below).
+    4. Keeps all other columns unless *bare* is set or they are listed in
+       *drop_fields*.
 
     *bare* takes the strict path: drop every column that isn't ``id``,
     ``text``, or ``source_id``. Use this for sources whose extra columns
@@ -139,7 +162,7 @@ def _make_normalize_fn(
         if not bare:
             # Copy all original columns except the ones we're replacing
             for k, v in record.items():
-                if k == id_field:
+                if k == id_field or k in drop_fields:
                     continue
                 if k == text_field and text_field != "text":
                     continue
@@ -321,10 +344,11 @@ def _build_pipeline(
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -379,14 +403,15 @@ def normalize_to_parquet(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files recursively under *input_path*, merges them into a
-    single Zephyr pipeline that normalizes records (``id``, ``text``, preserves
-    all other columns unless *output_schema* selects a subset), optionally
-    deduplicates by content per *dedup_mode*, sorts by ``id``, and writes
+    single Zephyr pipeline that normalizes records (``id``, ``text``, and other
+    columns unless removed by *bare* or *drop_fields*), optionally deduplicates by
+    content per *dedup_mode*, sorts by ``id``, and writes
     Parquet partitions sized by *target_partition_bytes*. Input directory
     structure is not preserved.
 
@@ -421,6 +446,7 @@ def normalize_to_parquet(
             ``EXACT`` (the default) drops records with duplicate ``id`` values
             (i.e. byte-identical text).  ``NONE`` skips dedup and preserves
             all input records.
+        drop_fields: Source fields to remove while preserving other metadata.
         output_schema: Optional schema for normalized output records.
 
     Returns:
@@ -454,6 +480,7 @@ def normalize_to_parquet(
         dedup_mode,
         max_whitespace_run_chars,
         bare=bare,
+        drop_fields=drop_fields,
         output_schema=output_schema,
     )
     ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
@@ -492,6 +519,7 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
@@ -515,6 +543,7 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
+        drop_fields: Source fields to remove while preserving other metadata.
         output_schema: Optional schema for normalized output records.
     """
     if relative_input_path:
@@ -538,6 +567,8 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
+    if drop_fields:
+        hash_attrs["drop_fields"] = drop_fields
     if output_schema is not None:
         hash_attrs["output_schema"] = str(output_schema)
     return StepSpec(
@@ -554,6 +585,7 @@ def normalize_step(
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             bare=bare,
+            drop_fields=drop_fields,
             output_schema=output_schema,
         ),
         deps=[download],

@@ -51,9 +51,9 @@ from marin.processing.tokenize.data_configs import (
     TokenizerConfigLike,
     lm_varying_mixture_data_config,
 )
-from marin.rl.placement import marin_prefix_for_region
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig

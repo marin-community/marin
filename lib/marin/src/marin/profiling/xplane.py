@@ -8,6 +8,7 @@ import logging
 import re
 import tempfile
 from collections.abc import Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
@@ -26,7 +27,8 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
-    breakdown_part,
+    empty_category_totals,
+    make_time_breakdown,
 )
 from marin.profiling.semantics import canonical_op_name
 from marin.profiling.trace_summary import (
@@ -297,7 +299,7 @@ def summarize_xplane_tables(
         trace_event_count=trace_event_count,
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb_xprof_tables",
         source_path=str(xplane_path),
         run_metadata=run_metadata or RunMetadata(),
@@ -326,19 +328,13 @@ def _try_summarize_xprof_tables(
     count_trace_events: bool,
 ) -> ProfileSummary | None:
     try:
-        if output_dir is not None:
-            export = export_xplane_tables(xplane_path, output_dir, count_trace_events=count_trace_events)
-            return summarize_xplane_tables(
-                export.output_dir,
-                xplane_path=xplane_path,
-                run_metadata=run_metadata,
-                warmup_steps=warmup_steps,
-                hot_op_limit=hot_op_limit,
-                trace_event_count=export.trace_event_count,
-            )
-
-        with tempfile.TemporaryDirectory(prefix="marin-xplane-tables-") as temp_dir:
-            export = export_xplane_tables(xplane_path, Path(temp_dir), count_trace_events=count_trace_events)
+        with ExitStack() as stack:
+            # Without a caller-supplied directory the tables are only an intermediate,
+            # so they live in a temp dir that is torn down once summarization is done.
+            table_dir = output_dir
+            if table_dir is None:
+                table_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="marin-xplane-tables-")))
+            export = export_xplane_tables(xplane_path, table_dir, count_trace_events=count_trace_events)
             return summarize_xplane_tables(
                 export.output_dir,
                 xplane_path=xplane_path,
@@ -393,7 +389,7 @@ def _merge_timeline_and_xprof_summaries(
         limit=max(hot_op_limit, 50),
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb",
         source_path=timeline_summary.source_path,
         run_metadata=timeline_summary.run_metadata,
@@ -728,13 +724,7 @@ def _periodicity(steps: list[int]) -> int | None:
 
 
 def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: list[dict[str, Any]]) -> TimeBreakdown:
-    totals = {
-        "compute": 0.0,
-        "communication": 0.0,
-        "host": 0.0,
-        "stall": 0.0,
-        "other": 0.0,
-    }
+    totals = empty_category_totals()
     for row in rows:
         totals["compute"] += (_float_value(row, "deviceComputeTimeMs") or 0.0) * 1000.0
         totals["communication"] += (_float_value(row, "deviceCollectivesTimeMs") or 0.0) * 1000.0
@@ -745,7 +735,7 @@ def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: lis
     if total_from_steps > 0:
         bucket_total = sum(totals.values())
         totals["other"] = max(0.0, total_from_steps - bucket_total)
-        return _make_time_breakdown("xprof_overview_step_time_us", totals, total=total_from_steps)
+        return make_time_breakdown("xprof_overview_step_time_us", totals, total_from_steps)
 
     communication = sum(
         _float_value(row, "total_duration_us") or 0.0
@@ -755,19 +745,7 @@ def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: lis
     total = sum(_float_value(row, "total_duration_us") or 0.0 for row in kernel_rows)
     totals["communication"] = communication
     totals["compute"] = max(0.0, total - communication)
-    return _make_time_breakdown("xprof_kernel_duration_us", totals, total=total)
-
-
-def _make_time_breakdown(duration_basis: str, totals: dict[str, float], *, total: float) -> TimeBreakdown:
-    return TimeBreakdown(
-        duration_basis=duration_basis,
-        total_duration=total,
-        compute=breakdown_part(totals["compute"], total),
-        communication=breakdown_part(totals["communication"], total),
-        host=breakdown_part(totals["host"], total),
-        stall=breakdown_part(totals["stall"], total),
-        other=breakdown_part(totals["other"], total),
-    )
+    return make_time_breakdown("xprof_kernel_duration_us", totals, total)
 
 
 def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list[HotOp]:

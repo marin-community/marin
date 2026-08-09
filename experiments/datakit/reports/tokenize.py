@@ -58,8 +58,8 @@ def tokenize_report(output_path: str, sources: dict[str, TokenizedAttrData], spl
         "n_sources": len(sources),
         "sampled_docs": len(lengths),
     }
-    # Common parent of the per-source main dirs: char-wise prefix trimmed back to a path boundary.
-    data_root = os.path.commonprefix([sources[name].source_main_dirs[split] for name in names]).rsplit("/", 1)[0]
+    # Common parent of the source keys: char-wise prefix trimmed back to a path boundary.
+    data_root = os.path.commonprefix([sources[name].source_keys[split] for name in names]).rsplit("/", 1)[0]
     sampling = (
         f"docs/tokens from step counters (exact); token-length histogram from the first "
         f"{HIST_ROWS_PER_SOURCE} rows per source (file order) over {len(sampled)} of {len(sources)} sources"

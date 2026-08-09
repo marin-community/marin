@@ -5,6 +5,9 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import jax
+import numpy as np
+import pytest
 from marin.execution.lazy import lower
 from marin.execution.step_status import STATUS_SUCCESS
 
@@ -15,11 +18,10 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 )
 
 
-def test_dense_support_manifest_matches_frozen_hash_and_environment() -> None:
+def test_dense_support_manifest_has_valid_frozen_hash_and_environment() -> None:
     manifest = json.loads(design.OUTPUT_PATH.read_text(encoding="utf-8"))
     claimed_hash = manifest.pop("design_sha256")
 
-    assert design.build_payload() == manifest
     assert design.canonical_sha256(manifest) == claimed_hash
     assert manifest["design_environment"] == {
         "jax_version": design.DESIGN_JAX_VERSION,
@@ -29,6 +31,18 @@ def test_dense_support_manifest_matches_frozen_hash_and_environment() -> None:
         "uv_lock_sha256": design.UV_LOCK_SHA256,
     }
     assert manifest["training_environment"] == launcher.EXPECTED_TRAINING_ENVIRONMENT
+
+
+def test_dense_support_manifest_matches_generator_in_frozen_environment() -> None:
+    if jax.__version__ != design.DESIGN_JAX_VERSION or np.__version__ != design.DESIGN_NUMPY_VERSION:
+        pytest.skip(
+            f"Frozen design requires jax={design.DESIGN_JAX_VERSION}, numpy={design.DESIGN_NUMPY_VERSION}; "
+            f"current environment has jax={jax.__version__}, numpy={np.__version__}"
+        )
+
+    manifest = json.loads(design.OUTPUT_PATH.read_text(encoding="utf-8"))
+    manifest.pop("design_sha256")
+    assert design.build_payload() == manifest
 
 
 def test_coverage_gate_accepts_complete_artifacts(monkeypatch: Any) -> None:

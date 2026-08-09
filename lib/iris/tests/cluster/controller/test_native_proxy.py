@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import threading
 from dataclasses import asdict
+from typing import cast
 from urllib.parse import unquote
 
 import httpx
+import pytest
 import uvicorn
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import (
@@ -16,9 +19,10 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
-from iris.cluster.controller.native_proxy_metrics import NativeProxyMetricsCollector
+from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer
-from rigging import telltale
+from rigging import telemetry
+from rigging.testing import RecordingTelemetryTransport
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -27,6 +31,15 @@ from starlette.routing import Route
 
 _ENDPOINT_NAME = "/system/native-test"
 _ENCODED_NAME = "system.native-test"
+
+
+@pytest.fixture
+def telemetry_transport(monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    yield transport
+    telemetry.shutdown(1)
 
 
 def _standalone_proxy(auth_config_json: str) -> NativeProxy:
@@ -158,7 +171,7 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         threads.stop()
 
 
-def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path) -> None:
+def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:
     controllers = [
         make_controller(
             host="127.0.0.1",
@@ -182,25 +195,168 @@ def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller
         "upstream": "controller",
     }
 
-    def sample_value(name: str, **extra_labels: str) -> float:
-        matching = [
-            family_sample.sample.value
-            for family_sample in telltale.samples()
-            if family_sample.sample.name == name and family_sample.sample.labels == {**labels, **extra_labels}
-        ]
-        assert len(matching) == 1
-        return matching[0]
-
-    assert sample_value("iris_rpc_requests_total") == 2
-    assert sample_value("iris_rpc_responses_total", status="200") == 2
-    assert sample_value("iris_rpc_in_flight") == 0
-    assert sample_value("iris_rpc_duration_seconds_count") == 2
+    flush_native_proxy_metrics()
+    telemetry_transport.wait_for_value("rpc_requests_total", labels, 2)
+    telemetry_transport.wait_for_value("rpc_responses_total", {**labels, "status": "200"}, 2)
+    telemetry_transport.wait_for_value("rpc_in_flight", labels, 0)
+    telemetry_transport.wait_for_value("rpc_duration_seconds_count", labels, 2)
+    assert (
+        telemetry_transport.record("rpc_requests_total", labels)["attributes"]["source_temporality"]
+        == "cumulative_snapshot"
+    )
+    assert telemetry_transport.record("rpc_in_flight", labels)["attributes"]["source_temporality"] == "current_snapshot"
 
 
-def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller) -> None:
-    """A forwarded endpoint request lands in `iris_proxy_*`, byte-exact; a controller
-    RPC does not. This also pins the Rust snapshot JSON to the collector's contract:
-    a shape drift would raise when the collector unpacks the snapshot."""
+def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetry_transport) -> None:
+    class TransientMetricsProxy:
+        rpc_reads = 0
+
+        @property
+        def rpc_metrics_json(self) -> str:
+            self.rpc_reads += 1
+            if self.rpc_reads == 1:
+                return "{"
+            return json.dumps(
+                {
+                    "series": [
+                        {
+                            "service": "iris.test.Service",
+                            "method": "Poll",
+                            "upstream": "controller",
+                            "requests": 7,
+                            "responses": {},
+                            "in_flight": 0,
+                            "latency_buckets": [],
+                            "latency_count": 0,
+                            "latency_sum_seconds": 0.0,
+                        }
+                    ]
+                }
+            )
+
+        @property
+        def proxy_metrics_json(self) -> str:
+            return json.dumps(
+                {
+                    "aggregate": {
+                        "endpoint": "",
+                        "method": "",
+                        "route_kind": "",
+                        "requests": 0,
+                        "responses": {},
+                        "in_flight": 0,
+                        "latency_buckets": [],
+                        "latency_count": 0,
+                        "latency_sum_seconds": 0.0,
+                        "request_bytes": 0,
+                        "response_bytes": 0,
+                    },
+                    "series": [],
+                }
+            )
+
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller")
+    proxy = cast(NativeProxy, TransientMetricsProxy())
+    publisher = NativeProxyTelemetry(interval=0.01)
+    publisher.attach(proxy)
+    try:
+        labels = {"service": "iris.test.Service", "method": "Poll", "upstream": "controller"}
+        telemetry_transport.wait_for_value(
+            "rpc_requests_total",
+            labels,
+            7,
+        )
+        assert telemetry_transport.record("rpc_requests_total", labels)["value"] == 7
+    finally:
+        publisher.detach(proxy)
+
+
+def test_native_metrics_concurrent_detach_and_reattach_publishes_new_proxy_snapshot(
+    telemetry_transport,
+) -> None:
+    class BlockingMetricsProxy:
+        def __init__(self) -> None:
+            self.first_read_started = threading.Event()
+            self.release_first_read = threading.Event()
+            self.next_read_started = threading.Event()
+            self.reads = 0
+
+        @property
+        def rpc_metrics_json(self) -> str:
+            self.reads += 1
+            if self.reads == 1:
+                self.first_read_started.set()
+                assert self.release_first_read.wait(1)
+            else:
+                self.next_read_started.set()
+            return json.dumps(
+                {
+                    "series": [
+                        {
+                            "service": "iris.test.Service",
+                            "method": "ConcurrentAttach",
+                            "upstream": "controller",
+                            "requests": self.reads,
+                            "responses": {},
+                            "in_flight": 0,
+                            "latency_buckets": [],
+                            "latency_count": 0,
+                            "latency_sum_seconds": 0.0,
+                        }
+                    ]
+                }
+            )
+
+        @property
+        def proxy_metrics_json(self) -> str:
+            return json.dumps(
+                {
+                    "aggregate": {
+                        "endpoint": "",
+                        "method": "",
+                        "route_kind": "",
+                        "requests": 0,
+                        "responses": {},
+                        "in_flight": 0,
+                        "latency_buckets": [],
+                        "latency_count": 0,
+                        "latency_sum_seconds": 0.0,
+                        "request_bytes": 0,
+                        "response_bytes": 0,
+                    },
+                    "series": [],
+                }
+            )
+
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller")
+    fake = BlockingMetricsProxy()
+    proxy = cast(NativeProxy, fake)
+    publisher = NativeProxyTelemetry(interval=0.01)
+    publisher.attach(proxy)
+    assert fake.first_read_started.wait(1)
+
+    detacher = threading.Thread(target=publisher.detach, args=(proxy,))
+    detacher.start()
+    fake.release_first_read.set()
+    detacher.join(timeout=1)
+    assert not detacher.is_alive()
+
+    publisher.attach(proxy)
+    try:
+        assert fake.next_read_started.wait(1)
+        telemetry_transport.wait_for_value(
+            "rpc_requests_total",
+            {"service": "iris.test.Service", "method": "ConcurrentAttach", "upstream": "controller"},
+            2,
+        )
+    finally:
+        publisher.detach(proxy)
+
+
+def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, telemetry_transport) -> None:
+    """A forwarded endpoint request emits byte-exact `proxy_*` telemetry, while a
+    controller RPC does not. This also pins the Rust snapshot JSON to the publisher's
+    contract: a shape drift would raise when the publisher unpacks the snapshot."""
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
@@ -219,60 +375,33 @@ def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller) -
             assert client.post("/iris.cluster.ControllerService/ListJobs", json={}).status_code == 200
         assert response.status_code == 200
 
-        def sample(name: str, labels: dict[str, str]) -> float:
-            matching = [
-                family_sample.sample.value
-                for family_sample in telltale.samples()
-                if family_sample.sample.name == name and family_sample.sample.labels == labels
-            ]
-            assert len(matching) == 1, f"{name}{labels}: {matching}"
-            return matching[0]
-
-        total = {"scope": "total", "endpoint": "", "method": "", "route_kind": ""}
-        assert sample("iris_proxy_requests_total", total) == 1
-        assert sample("iris_proxy_request_bytes_total", total) == len(payload)
-        assert sample("iris_proxy_response_bytes_total", total) > 0
-        assert sample("iris_proxy_responses_total", {**total, "status": "200"}) == 1
+        flush_native_proxy_metrics()
+        total = {"scope": "total"}
+        telemetry_transport.wait_for_value("proxy_requests_total", total, 1)
+        telemetry_transport.wait_for_value("proxy_request_bytes_total", total, len(payload))
+        with telemetry_transport.condition:
+            assert telemetry_transport.condition.wait_for(
+                lambda: any(
+                    record["name"] == "proxy_response_bytes_total"
+                    and record["value"] > 0
+                    and record["attributes"].get("scope") == "total"
+                    for record in telemetry_transport.records
+                ),
+                timeout=5,
+            )
+        telemetry_transport.wait_for_value("proxy_responses_total", {**total, "status": "200"}, 1)
 
         # The bounded per-endpoint breakdown attributes the same request to its
         # endpoint, and no ControllerService route leaks into the proxy family.
-        endpoint_requests = [
-            family_sample.sample
-            for family_sample in telltale.samples()
-            if family_sample.sample.name == "iris_proxy_requests_total"
-            and family_sample.sample.labels.get("scope") == "endpoint"
-        ]
-        assert len(endpoint_requests) == 1
-        assert endpoint_requests[0].labels["endpoint"] == _ENCODED_NAME
-        assert endpoint_requests[0].value == 1
-        assert sample(
-            "iris_proxy_request_bytes_total",
+        endpoint = {"scope": "endpoint", "endpoint": _ENCODED_NAME, "method": "POST", "route_kind": "endpoint"}
+        telemetry_transport.wait_for_value("proxy_requests_total", endpoint, 1)
+        telemetry_transport.wait_for_value(
+            "proxy_request_bytes_total",
             {"scope": "endpoint", "endpoint": _ENCODED_NAME, "method": "POST", "route_kind": "endpoint"},
-        ) == len(payload)
+            len(payload),
+        )
     finally:
         threads.stop()
-
-
-class _WheelWithoutProxyMetrics:
-    """A native proxy from a published wheel predating ``proxy_metrics_json``.
-
-    Exposes only ``rpc_metrics_json``; ``hasattr(proxy, "proxy_metrics_json")`` is
-    False, exactly as for an older ``iris_native`` build.
-    """
-
-    rpc_metrics_json = json.dumps({"series": []})
-
-
-def test_native_metrics_collector_tolerates_a_wheel_without_proxy_metrics() -> None:
-    """The pure package may lead the native wheel: a controller on an older wheel
-    must still expose ``iris_rpc_*`` and simply omit the proxy family, never crash
-    the Telltale scrape on the missing getter."""
-    collector = NativeProxyMetricsCollector()
-    collector.attach(_WheelWithoutProxyMetrics())  # type: ignore[arg-type]
-
-    names = {family.name for family in collector.collect()}
-    assert "iris_rpc_requests" in names
-    assert not any(name.startswith("iris_proxy") for name in names)
 
 
 def test_native_listener_caches_verified_jwt(make_controller) -> None:

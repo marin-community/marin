@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
+import pytest
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
@@ -15,12 +16,18 @@ from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
-from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
+from loom_alerts import (
+    LoomAlertClient,
+    LoomAlertDeliveryError,
+    SlackAlertClient,
+    SlackAnnouncementError,
+    SlackThread,
+)
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
-from training_stalls import training_stall_alert_rows
+from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
-from zephyr_stalls import zephyr_stall_alert_rows
+from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
@@ -81,6 +88,7 @@ def _client(
     cache_ttl: float = 20.0,
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
+    slack_alerts: SlackAlertClient | None = None,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -92,6 +100,7 @@ def _client(
             k8s_fleet or K8sFleet(()),
             WandbSource(timeout=5.0),
             loom_alerts,
+            slack_alerts,
         )
     )
 
@@ -210,7 +219,7 @@ def test_json_labels_flatten_into_columns():
 
 
 def test_native_map_labels_flatten_into_columns():
-    # A native Map<Utf8,Utf8> column (telltale metrics) arrives as list[(k, v)].
+    # A native Map<Utf8,Utf8> column arrives as list[(k, v)].
     table = pa.table(
         {"value": [3.0], "labels": [[("region", "us-east5"), ("scope", "pool")]]},
         schema=pa.schema([("value", pa.float64()), ("labels", pa.map_(pa.string(), pa.string()))]),
@@ -245,16 +254,16 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
             datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
         ],
     )
-    telltale_metrics = finelog_result(
+    telemetry_metrics = finelog_result(
         cluster=["cw-a", "cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
         job=["/u/stale", "/u/stale", "/u/initializing", "/u/healthy", "/u/healthy", "/u/starting"],
         name=[
-            "levanter_phase",
-            "levanter_progress_time_seconds",
-            "levanter_phase",
-            "levanter_phase",
-            "levanter_progress_time_seconds",
-            "levanter_phase",
+            "phase",
+            "progress_time_seconds",
+            "phase",
+            "phase",
+            "progress_time_seconds",
+            "phase",
         ],
         value=[
             1.0,
@@ -267,7 +276,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         ts=[now] * 6,
     )
 
-    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/stale",
@@ -306,11 +315,9 @@ def test_training_stall_alert_does_not_warn_on_a_producer_that_predates_phase():
         job=["/u/legacy"],
         running_since=[datetime(2026, 7, 28, 10, 0, tzinfo=UTC)],
     )
-    telltale_metrics = finelog_result(
-        cluster=["cw-a"], job=["/u/legacy"], name=["levanter_step"], value=[5669.0], ts=[now]
-    )
+    telemetry_metrics = finelog_result(cluster=["cw-a"], job=["/u/legacy"], name=["step"], value=[5669.0], ts=[now])
 
-    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
         {"cluster": "cw-a", "job": "/u/legacy", "phase": "unknown", "reason": "producer_missing", "value": 0}
     ]
 
@@ -363,6 +370,40 @@ def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
     ]
 
 
+def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    for sql in (telemetry_query(now), zephyr_progress_query(now)):
+        assert 'FROM "telemetry_v1"' in sql
+        assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
+        assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
+        assert "* 1000 AS BIGINT)" in sql
+        assert "to_timestamp_millis(timestamp_ms)" in sql
+        assert "AS origin_cluster" in sql
+        assert "PARTITION BY origin_cluster" in sql
+        assert "ORDER BY timestamp_ms DESC, seq DESC" in sql
+        assert "json_get(" in sql
+        assert "json_get_string" not in sql
+        assert "timestamp_ms >= TIMESTAMP" not in sql
+
+
+def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
+    """Wide scans read telemetry_v1 once a minute and can saturate Finelog.
+
+    Levanter republishes `phase` every 60s, so a live job always has an
+    enrollment row inside the stall window. Progress needs one extra stall
+    window so a metric that just became stale remains observable.
+    """
+    sql = telemetry_query(datetime(2026, 7, 28, 12, tzinfo=UTC))
+
+    assert sql.count('FROM "telemetry_v1"') == 1
+    assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:30:00') * 1000 AS BIGINT)" in sql
+    assert (
+        "name <> 'phase' OR timestamp_ms >= "
+        "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:45:00') * 1000 AS BIGINT)" in sql
+    )
+
+
 class FakeLoomAlerts(LoomAlertClient):
     def __init__(self, result: dict | None = None, error: LoomAlertDeliveryError | None = None) -> None:
         self.result = result
@@ -389,6 +430,49 @@ def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
     ).post("/alerts/loom", json={"alerts": [{"status": "firing"}]})
     assert resp.status_code == 502
     assert resp.json() == {"error": "loom.example returned HTTP 503"}
+
+
+class FakeSlackAlerts(SlackAlertClient):
+    def __init__(self, thread: SlackThread | None) -> None:
+        self.thread = thread
+        self.payloads: list[object] = []
+
+    async def announce(self, payload: object) -> SlackThread | None:
+        self.payloads.append(payload)
+        return self.thread
+
+
+def test_slack_alert_route_announces_without_a_run():
+    fallback = FakeSlackAlerts(SlackThread(channel="C0123ABCD", thread_ts="1700000000.000001"))
+    resp = _client(FakeSource(), slack_alerts=fallback).post("/alerts/slack", json={"alerts": []})
+
+    assert resp.status_code == 202
+    assert resp.json() == {"announced": True}
+    assert fallback.payloads == [{"alerts": []}]
+
+
+def test_slack_alert_route_is_disabled_without_a_configured_destination():
+    resp = _client(FakeSource()).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 503
+
+
+def test_slack_alert_route_reports_a_resolution_as_nothing_announced():
+    resp = _client(FakeSource(), slack_alerts=FakeSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 202
+    assert resp.json() == {"announced": False, "reason": "no firing alerts"}
+
+
+def test_slack_alert_route_asks_grafana_to_retry_a_refused_announcement():
+    """This receiver has no second leg, so a dropped announcement is the whole
+    notification: it must not answer 2xx."""
+
+    class RefusingSlackAlerts(FakeSlackAlerts):
+        async def announce(self, payload: object) -> SlackThread | None:
+            raise SlackAnnouncementError("Slack did not accept the alert announcement")
+
+    resp = _client(FakeSource(), slack_alerts=RefusingSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 502
+    assert resp.json() == {"error": "Slack did not accept the alert announcement"}
 
 
 def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():
@@ -478,6 +562,21 @@ def test_cache_coalesces_concurrent_misses_on_one_key():
 
     assert len(calls) == 1
     assert results == [7, 7, 7, 7]
+
+
+def test_cache_reuses_compute_failures_until_the_ttl_expires():
+    cache: TtlCache[int] = TtlCache(ttl=60.0)
+    calls: list[int] = []
+
+    def compute() -> int:
+        calls.append(1)
+        raise ValueError("upstream timed out")
+
+    for _ in range(3):
+        with pytest.raises(ValueError, match="upstream timed out"):
+            cache.get_or_compute("k", compute)
+
+    assert calls == [1]
 
 
 def test_cache_prunes_expired_entries_on_write():

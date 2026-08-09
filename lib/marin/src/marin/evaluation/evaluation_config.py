@@ -28,7 +28,7 @@ class EvalTaskConfig:
     """One lm-eval task and its prompt/scoring behavior."""
 
     name: str
-    num_fewshot: int
+    num_fewshot: int | None
     task_alias: str | None = None
     task_kwargs: dict | None = None
     generation: bool = False

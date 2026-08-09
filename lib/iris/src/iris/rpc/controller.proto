@@ -571,10 +571,8 @@ message Controller {
     string quota = 12;
   }
 
-  // One physical node surfaced as a worker-like fleet member. A cluster backend
-  // has no per-node Iris worker daemon, so identity/liveness/allocatable come
-  // from the periodic kubectl node sync and the utilization/device readings from
-  // the controller-side exporter scrape (0 until the first successful scrape).
+  // One physical Kubernetes node. Identity, liveness, and allocatable capacity come from the periodic kubectl
+  // node sync. Hardware utilization is published by the Iris node agent.
   message NodeStatus {
     string name = 1;
     bool ready = 2;               // kubelet Ready condition
@@ -590,20 +588,7 @@ message Controller {
     int32 running_pods = 12;      // Iris-managed pods scheduled on this node
     string created = 13;          // node creationTimestamp (RFC3339)
 
-    // Live host + device readings from the last exporter scrape.
-    int64 metrics_ts = 20;        // scrape time (epoch ms); 0 = never scraped
-    double cpu_pct = 21;
-    int64 mem_used_bytes = 22;
-    int64 mem_total_bytes = 23;
-    int64 disk_used_bytes = 24;
-    int64 disk_total_bytes = 25;
-    int64 net_recv_bytes = 26;
-    int64 net_sent_bytes = 27;
-    int64 hbm_used_bytes = 28;
-    int64 hbm_total_bytes = 29;
-    double gpu_util_pct = 30;
-    double gpu_temp_c = 31;
-    double gpu_power_w = 32;
+    reserved 20 to 32;
   }
 
   message GetKubernetesClusterStatusResponse {
@@ -884,14 +869,6 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  // Endpoint registry — deprecated compatibility surface. EndpointService is the
-  // canonical home; all current clients call it. These forward there so a
-  // pre-migration worker or task (e.g. an already-running log shipper) that still
-  // calls the old surface keeps working across a controller update. Remove once
-  // those old callers have drained.
-  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
-  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
-  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
   // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
   rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
 
@@ -955,10 +932,7 @@ service ControllerService {
 // the owning task's row lifetime. RegisterEndpoint returns the granted
 // lease_duration so the client can pace its renewals off the server's policy.
 //
-// This is the canonical endpoint-registry surface; all current clients call it.
-// ControllerService still exposes the same three RPCs as deprecated forwarding
-// shims for pre-migration callers during rollout (removed once they drain).
-// MintEndpointToken (scoped proxy tokens) stays on ControllerService.
+// MintEndpointToken (scoped proxy tokens) lives on ControllerService.
 service EndpointService {
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);

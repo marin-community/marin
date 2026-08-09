@@ -163,28 +163,9 @@ def summarize_profile_artifact(
             hot_op_limit=hot_op_limit,
             breakdown_mode=breakdown_mode,
         )
-    except DecodeError:
-        trace_path = find_profile_trace(profile_dir)
-        return summarize_trace(
-            trace_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            breakdown_mode=breakdown_mode,
-        )
-    except FileNotFoundError as xplane_error:
-        try:
-            trace_path = find_profile_trace(profile_dir)
-        except FileNotFoundError:
-            raise xplane_error from None
-        return summarize_trace(
-            trace_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            breakdown_mode=breakdown_mode,
-        )
-    except MultipleXPlaneFilesError as xplane_error:
+    except (DecodeError, FileNotFoundError, MultipleXPlaneFilesError) as xplane_error:
+        # No single decodable XPlane protobuf: fall back to the Perfetto/Chrome trace JSON.
+        # When there is no trace either, the XPlane failure is the more useful diagnostic.
         try:
             trace_path = find_profile_trace(profile_dir)
         except FileNotFoundError:

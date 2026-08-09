@@ -75,7 +75,12 @@ def test_generate_until_uses_leader_axis_resources(monkeypatch):
     harness = LevanterHarnessLM(leader)
 
     outputs = harness.generate_until(
-        [SimpleNamespace(args=("abc", {"max_gen_toks": 1, "temperature": 0.0, "n": 1, "until": []}))]
+        [
+            SimpleNamespace(
+                args=("abc", {"max_gen_toks": 1, "temperature": 0.0, "n": 1, "until": []}),
+                task_name="generation_task",
+            )
+        ]
     )
 
     assert captured["axis_resources"] == {"batch": "data"}

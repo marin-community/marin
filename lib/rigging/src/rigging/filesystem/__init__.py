@@ -13,7 +13,7 @@ Focused submodules with one-directional imports:
   instead of the process-wide fsspec config.
 - ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
 - ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
-  points, ``atomic_rename``, and ``fetch_file_atomic``.
+  points with fresh cloud listings, ``atomic_rename``, and ``fetch_file_atomic``.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
@@ -45,6 +45,7 @@ from rigging.filesystem.cluster_config import (
     get_bucket_location,
     load_cluster_config,
     marin_prefix,
+    marin_prefix_for_region,
     marin_region,
     marin_temp_bucket,
     region_from_metadata,

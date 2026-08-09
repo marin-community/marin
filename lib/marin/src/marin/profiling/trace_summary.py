@@ -14,6 +14,7 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from pathlib import Path
@@ -35,7 +36,8 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
-    breakdown_part,
+    empty_category_totals,
+    make_time_breakdown,
 )
 from marin.profiling.semantics import (
     canonical_op_name,
@@ -208,7 +210,7 @@ def summarize_complete_events(
         limit=max(hot_op_limit, 500),
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format=source_format,
         source_path=str(source_path),
         run_metadata=run_metadata or RunMetadata(),
@@ -475,25 +477,8 @@ def _summarize_breakdown(
     raise ValueError(f"Unsupported breakdown mode: {mode}")
 
 
-def _empty_category_totals() -> dict[str, float]:
-    return {"compute": 0.0, "communication": 0.0, "host": 0.0, "stall": 0.0, "other": 0.0}
-
-
-def _time_breakdown(duration_basis: str, totals: dict[str, float], total_duration: float) -> TimeBreakdown:
-    """Assemble a ``TimeBreakdown`` from per-category durations and the total they share."""
-    return TimeBreakdown(
-        duration_basis=duration_basis,
-        total_duration=total_duration,
-        compute=breakdown_part(totals["compute"], total_duration),
-        communication=breakdown_part(totals["communication"], total_duration),
-        host=breakdown_part(totals["host"], total_duration),
-        stall=breakdown_part(totals["stall"], total_duration),
-        other=breakdown_part(totals["other"], total_duration),
-    )
-
-
 def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: list[float]) -> TimeBreakdown:
-    totals = _empty_category_totals()
+    totals = empty_category_totals()
 
     for event, duration in zip(events, exclusive, strict=True):
         # "Steps" is a wrapper timeline and heavily overlaps with lower-level device events.
@@ -502,15 +487,15 @@ def _summarize_breakdown_per_track(events: list[CompleteTraceEvent], exclusive: 
         category = _event_category(event)
         totals[category] += duration
 
-    return _time_breakdown("exclusive_duration_per_track", totals, sum(totals.values()))
+    return make_time_breakdown("exclusive_duration_per_track", totals, sum(totals.values()))
 
 
 def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdown:
-    totals = _empty_category_totals()
+    totals = empty_category_totals()
 
     window = _global_stall_window(events)
     if window is None:
-        return _time_breakdown("exclusive_duration_global_timeline", totals, 0.0)
+        return make_time_breakdown("exclusive_duration_global_timeline", totals, 0.0)
     window_start, window_end = window
     window_duration = max(0.0, window_end - window_start)
 
@@ -559,7 +544,7 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
             uncovered_duration += window_end - previous_ts
 
     totals["stall"] = max(0.0, uncovered_duration)
-    return _time_breakdown("exclusive_duration_global_timeline", totals, window_duration)
+    return make_time_breakdown("exclusive_duration_global_timeline", totals, window_duration)
 
 
 def _global_stall_window(events: list[CompleteTraceEvent]) -> tuple[float, float] | None:
@@ -750,9 +735,16 @@ def _summarize_communication(events: list[CompleteTraceEvent], exclusive: list[f
     ]
 
 
-def _summarize_pre_op_gaps(events: list[CompleteTraceEvent], *, limit: int) -> list[GapBeforeOp]:
-    aggregate: dict[str, _PreOpGapStats] = {}
+def _iter_device_op_gaps(
+    events: list[CompleteTraceEvent],
+) -> Iterator[tuple[CompleteTraceEvent, CompleteTraceEvent, float]]:
+    """Yield ``(marker_event, payload_event, gap)`` for every idle window on a device-op track.
 
+    Device ops are grouped per ``(pid, tid)`` track and walked in start order. A gap is the
+    idle time between the running maximum end of the preceding ops and the next op's start;
+    the op that follows the gap is the marker, and ``_resolve_gap_payload_event`` maps it to
+    the op that actually carries the payload.
+    """
     by_track: dict[tuple[int, int], list[CompleteTraceEvent]] = defaultdict(list)
     for event in events:
         if not _is_device_op_event(event):
@@ -764,15 +756,21 @@ def _summarize_pre_op_gaps(events: list[CompleteTraceEvent], *, limit: int) -> l
         previous_end: float | None = None
         for index, event in enumerate(sorted_events):
             if previous_end is not None and event.ts > previous_end:
-                gap = event.ts - previous_end
                 marker_event, payload_event = _resolve_gap_payload_event(sorted_events, marker_index=index)
-                bucket = aggregate.setdefault(payload_event.name, _PreOpGapStats())
-                bucket.count += 1
-                bucket.total_gap_duration += gap
-                bucket.max_gap_duration = max(bucket.max_gap_duration, gap)
-                bucket.marker_counts[marker_event.name] += 1
+                yield marker_event, payload_event, event.ts - previous_end
             end = event.ts + event.dur
             previous_end = end if previous_end is None else max(previous_end, end)
+
+
+def _summarize_pre_op_gaps(events: list[CompleteTraceEvent], *, limit: int) -> list[GapBeforeOp]:
+    aggregate: dict[str, _PreOpGapStats] = {}
+
+    for marker_event, payload_event, gap in _iter_device_op_gaps(events):
+        bucket = aggregate.setdefault(payload_event.name, _PreOpGapStats())
+        bucket.count += 1
+        bucket.total_gap_duration += gap
+        bucket.max_gap_duration = max(bucket.max_gap_duration, gap)
+        bucket.marker_counts[marker_event.name] += 1
 
     ranked = sorted(
         aggregate.items(),
@@ -889,33 +887,18 @@ def _summarize_gap_region_contexts(events: list[CompleteTraceEvent], *, limit: i
     aggregate: dict[tuple[str, str], dict[str, float | int]] = {}
     preferred_paths = _preferred_region_path_by_op(events)
 
-    by_track: dict[tuple[int, int], list[CompleteTraceEvent]] = defaultdict(list)
-    for event in events:
-        if not _is_device_op_event(event):
-            continue
-        by_track[(event.pid, event.tid)].append(event)
-
-    for track_events in by_track.values():
-        sorted_events = sorted(track_events, key=lambda event: (event.ts, event.ts + event.dur))
-        previous_end: float | None = None
-        for index, event in enumerate(sorted_events):
-            if previous_end is not None and event.ts > previous_end:
-                gap = event.ts - previous_end
-                _, payload_event = _resolve_gap_payload_event(sorted_events, marker_index=index)
-                region_path = _event_gap_region_path(payload_event, preferred_paths=preferred_paths)
-                region_path = _format_gap_region_context_label(payload_event.name, region_path)
-                key = (payload_event.name, region_path)
-                bucket = aggregate.setdefault(
-                    key,
-                    {
-                        "count": 0,
-                        "total_gap_duration": 0.0,
-                    },
-                )
-                bucket["count"] = int(bucket["count"]) + 1
-                bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + gap
-            end = event.ts + event.dur
-            previous_end = end if previous_end is None else max(previous_end, end)
+    for _, payload_event, gap in _iter_device_op_gaps(events):
+        region_path = _event_gap_region_path(payload_event, preferred_paths=preferred_paths)
+        region_path = _format_gap_region_context_label(payload_event.name, region_path)
+        bucket = aggregate.setdefault(
+            (payload_event.name, region_path),
+            {
+                "count": 0,
+                "total_gap_duration": 0.0,
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+        bucket["total_gap_duration"] = float(bucket["total_gap_duration"]) + gap
 
     ranked = sorted(
         aggregate.items(),

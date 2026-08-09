@@ -310,9 +310,10 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
 
 
 def reset_data_config_cache() -> None:
-    """Clear the cluster-config and bucket-registry caches. For tests."""
+    """Clear the cluster-config, region, and bucket-registry caches. For tests."""
     _load_cluster_config_cached.cache_clear()
     data_buckets.cache_clear()
+    _region_from_metadata.cache_clear()
     s3_data_buckets.cache_clear()
     store_configs.cache_clear()
 
@@ -356,7 +357,8 @@ def _known_bucket_region(bucket_name: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def region_from_metadata() -> str | None:
+@functools.cache
+def _region_from_metadata() -> str | None:
     """Derive the GCP region from the instance metadata server, or ``None``."""
     try:
         req = urllib.request.Request(_GCP_METADATA_ZONE_URL, headers={"Metadata-Flavor": "Google"})
@@ -367,6 +369,11 @@ def region_from_metadata() -> str | None:
     if "-" not in zone:
         return None
     return zone.rsplit("-", 1)[0]
+
+
+def region_from_metadata() -> str | None:
+    """Derive the cached GCP region from the instance metadata server."""
+    return _region_from_metadata()
 
 
 def region_from_prefix(prefix: str) -> str | None:
@@ -396,6 +403,16 @@ def marin_region() -> str | None:
 def marin_prefix() -> str:
     """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
     return data_config().resolved_root()
+
+
+def marin_prefix_for_region(region: str) -> str:
+    """Return the configured GCS prefix for a Marin data region."""
+    spec = data_config().region_buckets.get(region.lower())
+    if spec is None:
+        raise ValueError(f"No Marin data bucket configured for region {region!r}.")
+    if spec.store != StoreType.GCS:
+        raise ValueError(f"Marin data region {region!r} does not use GCS: {spec.store.value!r}.")
+    return f"gs://{spec.name}"
 
 
 @functools.cache

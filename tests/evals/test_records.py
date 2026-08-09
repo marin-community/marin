@@ -10,9 +10,11 @@ These tests pin that shape independently of the pydantic model that produces it.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from marin.evaluation.records import (
+    EvalchemyRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -25,6 +27,7 @@ from marin.evaluation.records import (
     ServingParams,
     read_record,
     read_records,
+    scan_records,
     write_record,
 )
 
@@ -52,6 +55,24 @@ _RECORD = EvalRunRecord(
 )
 
 
+class _CachedListingFileSystem:
+    def __init__(self):
+        self._listings = {}
+
+    def ls(self, path, detail):
+        if path not in self._listings:
+            self._listings[path] = [
+                {"name": str(child), "type": "directory" if child.is_dir() else "file"} for child in Path(path).iterdir()
+            ]
+        return self._listings[path]
+
+    def invalidate_cache(self, path):
+        self._listings.pop(path, None)
+
+    def unstrip_protocol(self, path):
+        return path
+
+
 def test_write_read_record_round_trip(tmp_path):
     path = write_record(_RECORD, str(tmp_path))
 
@@ -72,7 +93,17 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert raw["eval"] == {
         "name": "gsm8k",
         "mechanism": "evalchemy",
-        "tasks": [{"name": "gsm8k", "num_fewshot": 8}],
+        "tasks": [
+            {
+                "name": "gsm8k",
+                "num_fewshot": 8,
+                "task_alias": None,
+                "generation": False,
+                "unsafe_code": False,
+                "completion_only": False,
+            }
+        ],
+        "evalchemy": None,
         "harbor": None,
     }
     assert raw["status"] == "succeeded"
@@ -136,6 +167,50 @@ def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_pat
     assert "ValidationError" in failures[0].error
 
 
+def test_read_records_only_discovers_flat_eval_layout(tmp_path):
+    evals = tmp_path / "evals"
+    flat = _RECORD.model_copy(update={"run_id": "flat-run"})
+    nested = _RECORD.model_copy(update={"run_id": "nested-run"})
+    write_record(flat, str(evals))
+    write_record(nested, str(evals / "model" / "suite" / "version"))
+
+    records, failures = read_records(str(evals))
+
+    assert [record.run_id for record in records] == ["flat-run"]
+    assert failures == []
+
+
+def test_scan_records_cache_detects_added_and_deleted_runs(tmp_path):
+    evals = tmp_path / "evals"
+    first = _RECORD.model_copy(update={"run_id": "first-run"})
+    second = _RECORD.model_copy(update={"run_id": "second-run"})
+    first_path = Path(write_record(first, str(evals)))
+    initial = scan_records(str(evals))
+
+    first_path.unlink()
+    first_path.parent.rmdir()
+    write_record(second, str(evals))
+    refreshed = scan_records(str(evals), initial.records_by_path)
+
+    assert [record.run_id for record in refreshed.records] == ["second-run"]
+
+
+def test_scan_records_invalidates_filesystem_listing_cache(tmp_path, monkeypatch):
+    evals = tmp_path / "evals"
+    write_record(_RECORD.model_copy(update={"run_id": "first-run"}), str(evals))
+    filesystem = _CachedListingFileSystem()
+    monkeypatch.setattr(
+        "marin.evaluation.records.url_to_fs",
+        lambda prefix: (filesystem, prefix),
+    )
+    initial = scan_records(str(evals))
+
+    write_record(_RECORD.model_copy(update={"run_id": "second-run"}), str(evals))
+    refreshed = scan_records(str(evals), initial.records_by_path)
+
+    assert [record.run_id for record in refreshed.records] == ["first-run", "second-run"]
+
+
 def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_path):
     record = _RECORD.model_copy(
         update={
@@ -165,6 +240,52 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
+    }
+
+
+def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
+    record = _RECORD.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="ifeval",
+                mechanism="evalchemy",
+                tasks=(
+                    EvalTaskRef(
+                        name="ifeval",
+                        num_fewshot=0,
+                        task_alias="ifeval_0shot",
+                        generation=True,
+                    ),
+                ),
+                evalchemy=EvalchemyRef(
+                    apply_chat_template=True,
+                    max_gen_toks=2048,
+                    max_eval_instances=64,
+                    num_concurrent=16,
+                    batch_size="1",
+                    seed=1234,
+                    extra_gen_kwargs={"temperature": "0"},
+                    extra_model_args={"timeout": 900},
+                    max_length=32768,
+                ),
+            )
+        }
+    )
+
+    path = write_record(record, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["evalchemy"] == {
+        "apply_chat_template": True,
+        "max_gen_toks": 2048,
+        "max_eval_instances": 64,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 1234,
+        "extra_gen_kwargs": {"temperature": "0"},
+        "extra_model_args": {"timeout": 900},
+        "max_length": 32768,
     }
 
 

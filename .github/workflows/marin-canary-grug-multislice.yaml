@@ -111,6 +111,7 @@ jobs:
       # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
       # leaves 45m for diagnostics + triage.
       - name: Wait for Grug multislice smoke
+        id: wait
         timeout-minutes: 135
         shell: bash -l {0}
         run: |
@@ -119,9 +120,11 @@ jobs:
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
             --child-wait-timeout 5400 \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Summarize Grug multislice profile
+        if: steps.wait.outputs.resource_exhausted != 'true'
         continue-on-error: true
         shell: bash -l {0}
         run: |

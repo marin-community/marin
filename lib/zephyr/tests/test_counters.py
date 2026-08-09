@@ -7,12 +7,15 @@ import logging
 import threading
 
 import pytest
-from prometheus_client import REGISTRY, generate_latest
+from rigging import telemetry
 from zephyr import counters
+from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.counters import ScopedCounters
-from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.stage_io import ZephyrTaskResources
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
+
+_COUNTER_TASK_RESOURCES = ZephyrTaskResources(cpu=1, memory=1)
 
 
 def _worker(stage_name: str = "test_stage") -> _InProcessWorkerContext:
@@ -31,9 +34,15 @@ def _make_coordinator(
     """Build a minimal ZephyrCoordinator seeded with canned snapshots for testing."""
     coord = ZephyrCoordinator.__new__(ZephyrCoordinator)
     coord._lock = threading.Lock()
-    coord._completed_counters = list(completed)
+    run = _PipelineExecution(
+        execution_id="run-1",
+        map_cost=_COUNTER_TASK_RESOURCES,
+        reduce_cost=_COUNTER_TASK_RESOURCES,
+    )
+    coord._executions = {run.execution_id: run}
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
-    coord._progress_time_seconds = 0.0
+    for snapshot in completed:
+        run.fold_counters(snapshot)
     return coord
 
 
@@ -244,6 +253,39 @@ def test_aggregation_mixed():
     assert coord.get_counters() == {"total": 30, "peak": 100}
 
 
+def test_counters_combine_completed_and_in_flight():
+    """Live totals fold finished tasks together with the running tasks' snapshots.
+
+    Completed tasks are reduced on arrival while in-flight workers keep
+    reporting fresh snapshots, so this is the one path where a pre-reduced
+    accumulator meets a raw snapshot. AVERAGE must stay weighted by observation
+    count across that boundary rather than treating the accumulator as one
+    sample.
+    """
+    coord = _make_coordinator(
+        completed=[
+            CounterSnapshot(
+                counters={"docs": CounterEntry(10), "cpu": CounterEntry(90, Aggregation.AVERAGE, count=3)},
+                generation=1,
+            ),
+            CounterSnapshot(
+                counters={"docs": CounterEntry(20), "cpu": CounterEntry(30, Aggregation.AVERAGE, count=1)},
+                generation=2,
+            ),
+        ],
+        inflight=[
+            CounterSnapshot(
+                counters={"docs": CounterEntry(5), "cpu": CounterEntry(50, Aggregation.AVERAGE, count=4)},
+                generation=7,
+            ),
+        ],
+    )
+
+    assert coord.get_counters()["docs"] == 35
+    # (90*3 + 30*1 + 50*4) / 8; dropping the observation counts gives 56.7.
+    assert coord.get_counters()["cpu"] == pytest.approx(62.5)
+
+
 def test_aggregation_conflict_drops_counter_and_warns(caplog):
     """Conflicting aggregations drop the counter and warn, never raising.
 
@@ -396,12 +438,8 @@ def test_set_counter_resets_average_count():
         _worker_ctx_var.reset(token)
 
 
-def test_publish_telltale_exports_aggregated_counters_as_gauges():
-    """The coordinator publishes, since it is the only process that both aggregates and serves.
-
-    Shards run under ``SubprocessRunner`` by default, and nobody scrapes a
-    short-lived child's registry.
-    """
+def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkeypatch):
+    """The coordinator publishes the execution-level aggregate snapshot."""
     coord = _make_coordinator(
         [
             CounterSnapshot(counters={"records/in": CounterEntry(10)}, generation=1),
@@ -409,7 +447,13 @@ def test_publish_telltale_exports_aggregated_counters_as_gauges():
         ]
     )
 
-    coord._publish_telltale()
+    emitted = []
 
-    exposition = generate_latest(REGISTRY).decode()
-    assert "records_in 15.0" in exposition
+    class Gauge:
+        def set(self, value, *, attributes=None):
+            emitted.append((value, attributes))
+
+    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+    coord._publish_telemetry()
+
+    assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted

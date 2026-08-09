@@ -56,11 +56,11 @@ from marin.training.training import LevanterCheckpoint
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
-    QUALITY_MODEL,
     SAMPLE_PREFIX,
     SAMPLE_SOURCES,
     SMOKE_SCALE,
     PoolConfig,
+    quality_model_path,
     reference_datakit_steps,
     sample_sources,
 )
@@ -77,7 +77,7 @@ REF_NAME = "references/reference-pipeline"
 
 # The datakit quality scorer is region-specific, so its identity enters the datakit hash as
 # a stable tag, not the path (see reference_pipeline.py). ``pooled-junkgate2`` is the tag for
-# the default ``QUALITY_MODEL`` bytes.
+# the default quality-model bytes.
 QUALITY_MODEL_VERSION = "pooled-junkgate2"
 
 # A nano model: this harness measures path-liveness and delta-vs-baseline, not absolute
@@ -266,7 +266,9 @@ def main() -> None:
         default=None,
         help="comma-separated source names, or 'all' to discover every source; default = curated SAMPLE_SOURCES subset",
     )
-    parser.add_argument("--quality-model", default=QUALITY_MODEL, help="pooled fast-transformer scorer + calib dir")
+    parser.add_argument(
+        "--quality-model", default=quality_model_path(), help="pooled fast-transformer scorer + calib dir"
+    )
     parser.add_argument(
         "--quality-model-version", default=QUALITY_MODEL_VERSION, help="stable identity tag for --quality-model"
     )

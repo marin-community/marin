@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 from fray.cluster import ResourceConfig
 from marin.execution.types import ExecutorStep
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 import experiments.domain_phase_mix.launch_single_phase_average_qsplit240_300m_6b as single_phase_qsplit240_300m
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
@@ -56,9 +56,7 @@ def test_single_phase_qsplit240_300m_launch_graph_is_east5_perplexity_only_by_de
     class DummyExperiment:
         def create_training_step(self, *, name_prefix, run_name, **_):
             config = TrainLmOnPodConfig(
-                train_config=SimpleNamespace(
-                    trainer=SimpleNamespace(num_train_steps=qsplit240_300m.NUM_TRAIN_STEPS)
-                ),
+                train_config=SimpleNamespace(trainer=SimpleNamespace(num_train_steps=qsplit240_300m.NUM_TRAIN_STEPS)),
                 resources=ResourceConfig(cpu=1, ram="1g"),
                 env_vars={},
             )

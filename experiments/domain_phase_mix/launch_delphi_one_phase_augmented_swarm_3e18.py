@@ -29,7 +29,7 @@ from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_delphi_augmented_swarm_3e18 import (
     DEFAULT_ANALYSIS_OUTPUT_PATH,

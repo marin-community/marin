@@ -66,8 +66,8 @@ from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.defaults import default_validation_sets
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig

@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from config import K8sClusterTarget
 from conftest import (
     FINELOG_DEPLOYMENTS_PATH,
     IRIS_DEPLOY,
@@ -103,19 +102,6 @@ def test_control_plane_flattens_components_and_webhooks():
     assert rows[-1] == {"kind": "webhook", "component": "kueue-system/kueue-webhook-service", "ready_endpoints": 2}
 
 
-def test_control_plane_uses_the_cluster_iris_namespace():
-    routes = healthy_k8s_routes()
-    routes["/apis/apps/v1/namespaces/iris-ci/deployments/iris-controller"] = deployment("iris-ci", "iris-controller")
-    routes["/api/v1/namespaces/iris-ci/pods"] = [pod("iris-ci", "iris-controller-abc")]
-    del routes[IRIS_DEPLOY]
-    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
-
-    rows = make_k8s_source(k8s_api(routes), target=target).control_plane()
-
-    iris = next(row for row in rows if row.get("component") == "iris-ci/iris-controller")
-    assert (iris["ready"], iris["desired"]) == (1, 1)
-
-
 def test_missing_deployment_reads_as_degraded_not_healthy():
     routes = healthy_k8s_routes()
     del routes[IRIS_DEPLOY]
@@ -202,22 +188,6 @@ def test_crashloop_scope_separates_watched_components_from_workloads():
     assert [(row["pod"], row["scope"], row["reason"]) for row in rows] == [
         ("iris-controller-7f9-x2", "control-plane", "CrashLoopBackOff"),
         ("some-user-task-0", "workload", "ImagePullBackOff"),
-    ]
-
-
-def test_crashloop_scope_uses_the_cluster_iris_namespace():
-    routes = {
-        "/api/v1/namespaces": [_namespace("iris-ci")],
-        "/api/v1/namespaces/iris-ci/pods": [
-            pod("iris-ci", "iris-controller-7f9-x2", waiting="CrashLoopBackOff"),
-        ],
-    }
-    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
-
-    rows = make_k8s_source(k8s_api(routes), target=target).crashloops()
-
-    assert [(row["pod"], row["scope"]) for row in rows] == [
-        ("iris-controller-7f9-x2", "control-plane"),
     ]
 
 
@@ -501,16 +471,6 @@ def test_finelog_health_reports_http_probe_readiness_for_each_mirror():
     assert (health.cluster, health.server, health.role) == ("cw-a", "finelog-cw-a", FinelogRole.MIRROR)
     assert health.responsive is True
     assert (health.ready, health.desired, health.error_class) == (1, 1, "")
-
-
-def test_finelog_health_omits_clusters_without_a_mirror():
-    mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), name="cw-a")
-    target = K8sClusterTarget("cw-ci", "https://api.example", finelog_expected=False)
-    no_mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), target=target)
-
-    health = K8sFleet([mirror, no_mirror]).finelog_health()
-
-    assert [row.cluster for row in health] == ["cw-a"]
 
 
 def test_finelog_health_reports_not_ready_and_k8s_api_failures():

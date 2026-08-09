@@ -105,7 +105,7 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
-def _accumulate_tables(
+def _accumulate_row_tables(
     records: Iterable,
     *,
     schema: pa.Schema | None = None,
@@ -182,6 +182,8 @@ def _accumulate_tables(
         return pa.Table.from_pylist(dicts, schema=widened), widened
 
     for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
+        if any(isinstance(record, pa.RecordBatch) for record in micro_batch):
+            raise TypeError("A writer input stream cannot mix row records and pyarrow.RecordBatch objects")
         if convert is None:
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
@@ -204,6 +206,63 @@ def _accumulate_tables(
 
     if chunks:
         yield pa.concat_tables(chunks, promote_options="permissive")
+
+
+def _accumulate_record_batch_tables(
+    batches: Iterable,
+    *,
+    schema: pa.Schema | None,
+    target_bytes: int,
+) -> Iterable[pa.Table]:
+    """Yield tables from a schema-stable stream of RecordBatches."""
+    expected_schema = schema
+    schema_origin = "explicitly provided by caller" if schema is not None else "inferred from first RecordBatch"
+    chunks: list[pa.RecordBatch] = []
+    bytesize = 0
+
+    for batch in batches:
+        if not isinstance(batch, pa.RecordBatch):
+            raise TypeError("A writer input stream cannot mix pyarrow.RecordBatch objects and row records")
+        if expected_schema is None:
+            expected_schema = batch.schema
+        elif not expected_schema.equals(batch.schema, check_metadata=True):
+            raise pa.ArrowInvalid(
+                "RecordBatch schema mismatch writing Arrow batches:\n"
+                f"Expected schema ({schema_origin}):\n{expected_schema}\n"
+                f"Got schema:\n{batch.schema}"
+            )
+
+        chunks.append(batch)
+        bytesize += batch.nbytes
+        if bytesize >= target_bytes:
+            assert expected_schema is not None
+            yield pa.Table.from_batches(chunks, schema=expected_schema)
+            chunks = []
+            bytesize = 0
+
+    if chunks:
+        assert expected_schema is not None
+        yield pa.Table.from_batches(chunks, schema=expected_schema)
+
+
+def _accumulate_tables(
+    records: Iterable,
+    *,
+    schema: pa.Schema | None = None,
+    target_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> Iterable[pa.Table]:
+    """Accumulate either row records or RecordBatches without mixing representations."""
+    iterator = iter(records)
+    try:
+        first = next(iterator)
+    except StopIteration:
+        return
+
+    records_with_first = itertools.chain((first,), iterator)
+    if isinstance(first, pa.RecordBatch):
+        yield from _accumulate_record_batch_tables(records_with_first, schema=schema, target_bytes=target_bytes)
+        return
+    yield from _accumulate_row_tables(records_with_first, schema=schema, target_bytes=target_bytes)
 
 
 # Finite network timeouts for the native S3FileSystem, matching the bounds
@@ -291,7 +350,8 @@ def write_parquet_file(
     """Write records to a Parquet file.
 
     Args:
-        records: Records to write (iterable of dicts)
+        records: Row records or ``pyarrow.RecordBatch`` objects to write. One
+            stream cannot mix the two representations.
         output_path: Path to output file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
         target_buffer_bytes: Target buffer size in bytes for accumulating records
@@ -334,7 +394,8 @@ def write_vortex_file(
     """Write records to a Vortex file using streaming writes.
 
     Args:
-        records: Records to write (iterable of dicts)
+        records: Row records or ``pyarrow.RecordBatch`` objects to write. One
+            stream cannot mix the two representations.
         output_path: Path to output .vortex file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
         target_buffer_bytes: Target buffer size in bytes for accumulating records

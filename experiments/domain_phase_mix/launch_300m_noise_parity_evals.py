@@ -34,7 +34,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.execution.remote import remote
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
     _candidate_records,
@@ -470,7 +470,7 @@ def build_eval_steps(
     child_preemptible: bool = True,
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build parity eval steps for rows requiring launch."""
-    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
+    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness  # noqa: PLC0415
 
     launch_tasks_by_alias: dict[str, EvalTaskConfig] = {}
     for row in state_rows:

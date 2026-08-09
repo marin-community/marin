@@ -37,11 +37,13 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize._core import tokenize_pipeline
+from marin.processing.tokenize._core import resolve_window_and_batch, tokenize_batches_with_id, tokenize_pipeline
 
 logger = logging.getLogger(__name__)
+TOKENIZED_ATTR_DATA_VERSION = 3
 
 
 class TokenizedAttrData(BaseModel):
@@ -60,18 +62,17 @@ class TokenizedAttrData(BaseModel):
         version: Schema version.
         output_dirs: Map from split name (e.g. ``"train"``, ``"validation"``) to the
             directory containing that split's attribute parquet shards.
-        source_main_dirs: Map from split name to the source ``NormalizedData.main_output_dir``
-            whose shards this dataset mirrors. Used by consumers to verify
-            co-partitioning.
+        source_keys: Map from split name to the prefix-relative identity of the
+            ``NormalizedData.main_output_dir`` whose shards this dataset mirrors.
         tokenizer: Tokenizer name/path used (informational; consumers should re-verify
             against any other inputs they combine this with).
         tokenizer_backend: Tokenizer backend, as ``TokenizerBackend.value``.
         counters: Aggregated zephyr counters per split.
     """
 
-    version: str = "v1"
-    output_dirs: dict[str, str]
-    source_main_dirs: dict[str, str]
+    version: str = f"v{TOKENIZED_ATTR_DATA_VERSION}"
+    output_dirs: dict[str, DatakitArtifactPath]
+    source_keys: dict[str, str]
     tokenizer: str
     tokenizer_backend: str
     counters: dict[str, dict[str, int | float]]
@@ -103,6 +104,7 @@ class TokenizeAttributesConfig:
     text_field: str = "text"
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    zephyr_context: ZephyrContext | None = None
 
     def __post_init__(self):
         if self.train_source is None and self.validation_source is None:
@@ -115,6 +117,19 @@ _ATTRIBUTE_SCHEMA = pa.schema(
         pa.field("input_ids", pa.list_(pa.int32())),
     ]
 )
+
+
+def _tokenize_text_batch(
+    batch: pa.RecordBatch,
+    *,
+    data_format: TextLmDatasetFormat,
+    window_size: int,
+) -> pa.RecordBatch:
+    """Tokenize one projected Arrow batch and return writer-ready Arrow."""
+    rows = batch.to_pylist()
+    windows = (rows[start : start + window_size] for start in range(0, len(rows), window_size))
+    tokenized = tokenize_batches_with_id(data_format=data_format, batches=windows)
+    return pa.RecordBatch.from_pylist(list(tokenized), schema=_ATTRIBUTE_SCHEMA)
 
 
 def _process_split(
@@ -145,17 +160,31 @@ def _process_split(
         split_dir,
     )
 
-    ds = Dataset.from_list(source_shards).flat_map(load_file)
-    tokenized_ds, _ = tokenize_pipeline(
-        ds,
-        data_format=config.format,
-        text_field=config.text_field,
-        sample_count=config.sample_count,
-        # The first source shard is parquet by construction; pass it for the
-        # row-group-aware window sizing in the shared core.
-        sample_parquet_path=source_shards[0],
-        levanter_batch_size=None,
-    )
+    if isinstance(config.format, TextLmDatasetFormat) and config.sample_count is None:
+        window_size, _ = resolve_window_and_batch(source_shards[0], requested_batch_size=None)
+        tokenized_ds = (
+            Dataset.from_list(source_shards)
+            .load_parquet(columns=["id", config.format.text_key], batch_mode=True)
+            .map(
+                lambda batch, fmt=config.format, size=window_size: _tokenize_text_batch(
+                    batch,
+                    data_format=fmt,
+                    window_size=size,
+                )
+            )
+        )
+    else:
+        ds = Dataset.from_list(source_shards).flat_map(load_file)
+        tokenized_ds, _ = tokenize_pipeline(
+            ds,
+            data_format=config.format,
+            text_field=config.text_field,
+            sample_count=config.sample_count,
+            # The first source shard is parquet by construction; pass it for the
+            # row-group-aware window sizing in the shared core.
+            sample_parquet_path=source_shards[0],
+            levanter_batch_size=None,
+        )
 
     pipeline = tokenized_ds.write_parquet(
         _output_path,
@@ -163,7 +192,7 @@ def _process_split(
         skip_existing=True,
     )
 
-    ctx = ZephyrContext(
+    ctx = config.zephyr_context or ZephyrContext(
         resources=config.worker_resources,
         max_workers=min(config.max_workers, len(source_shards)),
         name=f"tokenize-attributes-{split}",
@@ -171,7 +200,11 @@ def _process_split(
     ctx.put("tokenizer_name", config.tokenizer)
     ctx.put("tokenizer_backend", config.tokenizer_backend)
 
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=config.worker_resources,
+    )
     return split_dir, dict(outcome.counters)
 
 
@@ -203,7 +236,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
         source linkage, tokenizer config, and counters.
     """
     output_dirs: dict[str, str] = {}
-    source_main_dirs: dict[str, str] = {}
+    source_keys: dict[str, str] = {}
     counters: dict[str, dict[str, int | float]] = {}
 
     splits: list[tuple[str, NormalizedData]] = []
@@ -215,12 +248,12 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     for split, source in splits:
         split_dir, split_counters = _process_split(source=source, split=split, config=config)
         output_dirs[split] = split_dir
-        source_main_dirs[split] = source.main_output_dir
+        source_keys[split] = datakit_source_key(source.main_output_dir)
         counters[split] = split_counters
 
     return TokenizedAttrData(
         output_dirs=output_dirs,
-        source_main_dirs=source_main_dirs,
+        source_keys=source_keys,
         tokenizer=config.tokenizer,
         tokenizer_backend=config.tokenizer_backend.value,
         counters=counters,
@@ -240,6 +273,7 @@ def tokenize_attributes_step(
     text_field: str = "text",
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -266,6 +300,7 @@ def tokenize_attributes_step(
             on non-normalized paths (not used here, but mirrored to the config).
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
+        zephyr_context: Optional shared Zephyr context.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -283,6 +318,7 @@ def tokenize_attributes_step(
             "sample_count": sample_count,
             "text_field": text_field,
             "max_workers": max_workers,
+            "zephyr_context": zephyr_context,
         }
         if train_normalize is not None:
             kwargs["train_source"] = read_artifact(train_normalize.output_path, NormalizedData)
@@ -293,6 +329,7 @@ def tokenize_attributes_step(
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))
 
     hash_attrs: dict = {
+        "artifact_version": TOKENIZED_ATTR_DATA_VERSION,
         "tokenizer": tokenizer,
         "tokenizer_backend": tokenizer_backend.value,
         "format": repr(fmt),

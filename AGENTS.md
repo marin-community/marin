@@ -47,6 +47,14 @@ Then inspect the relevant experiment with `fieldbook experiment status
 Record submissions, retries, artifacts, validations, and checkpoints back into
 Fieldbook when the task changes experiment state.
 
+## Handle Requests
+
+If a request comes from Slack or GitHub and appears to be a simple question,
+you may answer it in the originating conversation instead of making a
+repository change. Otherwise, carry the request through the applicable change
+and landing workflow; do not stop after investigation while a safe, in-scope
+fix remains.
+
 ## Search Prior Work
 
 Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
@@ -127,6 +135,9 @@ uv run pytest
   and implementation inventories; put extended history in a linked issue,
   design doc, logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
+- PR monitoring is part of the `commit` skill. After opening or updating a PR,
+  follow its `wait_for.py` loop through an exit condition. Do not substitute
+  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
@@ -214,8 +225,14 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
-- Produce detailed plans with code snippets. Ask questions up front instead of guessing.
-- When a request is too large for one pass, capture a plan in `.agents/projects/` before pausing.
+- Planning applies to change-mode work. Produce a detailed plan, with code
+  snippets when they clarify a concrete implementation, for non-trivial
+  changes. Resolve context from the repository and prior work first; ask only
+  when a missing decision would materially change the implementation.
+- In answer mode, investigate and reply directly. Do not manufacture a plan or
+  `.agents/projects/` artifact.
+- When a change request is too large for one pass, capture a plan in
+  `.agents/projects/` before pausing.
 
 ## Code Reuse
 

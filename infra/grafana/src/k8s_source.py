@@ -379,7 +379,7 @@ class K8sSource:
 
     def control_plane(self) -> list[dict]:
         """One row per watched component, then one per watched webhook service."""
-        rows = [self.component_status(component) for component in self.watched_components]
+        rows = [self.component_status(component) for component in WATCHED_COMPONENTS]
         for webhook in WATCHED_WEBHOOKS:
             rows.append(
                 {
@@ -389,18 +389,6 @@ class K8sSource:
                 }
             )
         return rows
-
-    @property
-    def watched_components(self) -> tuple[WatchedComponent, ...]:
-        """Resolve the Iris controller namespace for this cluster."""
-        return tuple(
-            (
-                WatchedComponent(self._target.iris_namespace, component.deployment)
-                if component.namespace == "iris" and component.deployment == "iris-controller"
-                else component
-            )
-            for component in WATCHED_COMPONENTS
-        )
 
     def finelog_health(self) -> FinelogHealth:
         """Report the mirror's HTTP-probe readiness from its Deployment status."""
@@ -547,7 +535,7 @@ class K8sSource:
                         "container": status.get("name"),
                         "reason": reason,
                         "restarts": status.get("restartCount") or 0,
-                        "scope": _pod_scope(metadata, self.watched_components),
+                        "scope": _pod_scope(metadata, WATCHED_COMPONENTS),
                     }
                 )
         return rows
@@ -889,11 +877,8 @@ class K8sFleet:
         self,
         fn: Callable[[K8sSource], list[_Row]],
         on_error: Callable[[K8sSource, K8sError], list[_Row]],
-        *,
-        sources: Sequence[K8sSource] | None = None,
     ) -> list[_Row]:
-        selected_sources = self._sources if sources is None else sources
-        futures = [(source, self._executor.submit(fn, source)) for source in selected_sources]
+        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
         rows: list[_Row] = []
         for source, future in futures:
             try:
@@ -971,14 +956,12 @@ class K8sFleet:
         return self._collect(
             lambda source: [source.finelog_health()],
             on_error,
-            sources=tuple(source for source in self._sources if source.target.finelog_expected),
         )
 
     def finelog_pods(self) -> list[FinelogPodResult]:
         return self._collect(
             lambda source: source.finelog_pods(),
             lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
-            sources=tuple(source for source in self._sources if source.target.finelog_expected),
         )
 
     def alert_gpu_rack_trays(self) -> list[dict]:
@@ -1045,7 +1028,7 @@ class K8sFleet:
 
         def gaps(source: K8sSource) -> list[dict]:
             rows = []
-            for component in source.watched_components:
+            for component in WATCHED_COMPONENTS:
                 status = source.component_status(component)
                 rows.append({"component": component.key, "value": max(status["desired"] - status["ready"], 0)})
             return rows
@@ -1053,7 +1036,7 @@ class K8sFleet:
         def on_error(source: K8sSource, _err: K8sError) -> list[dict]:
             return [
                 {"cluster": source.target.name, "component": component.key, "value": 0}
-                for component in source.watched_components
+                for component in WATCHED_COMPONENTS
             ]
 
         return self._collect(

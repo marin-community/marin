@@ -18,6 +18,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_EXTRA_PACKAGES,
@@ -25,14 +26,16 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.lm_eval_samples import export_lm_eval_samples
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.evaluation.samples import export_lm_eval_samples
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_MAX_GEN_TOKS = 2048
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -97,10 +100,14 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
-    max_gen_toks: int = 2048
+    max_gen_toks: int = DEFAULT_MAX_GEN_TOKS
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    batch_size: str | None = None
+    seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    max_length: int | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
 
 
@@ -114,13 +121,17 @@ class EvalchemyOutcome:
 
 def _task_dir(task: EvalTaskConfig) -> str:
     """Return the durable subdirectory identity for one task configuration."""
-    return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
+    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
+    return task.task_alias or f"{task.name}_{shots}shot"
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
     tokenizer = model.tokenizer
     if tokenizer is None:
         raise ValueError("Evalchemy requires RunningModel.tokenizer")
+    conflicting_model_args = sorted(RESERVED_ENDPOINT_MODEL_ARGS.intersection(config.extra_model_args))
+    if conflicting_model_args:
+        raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting_model_args}")
     return json.dumps(
         {
             "base_url": model.endpoint.base_url,
@@ -143,6 +154,10 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
+            "batch_size": config.batch_size,
+            "seed": config.seed,
+            "extra_model_args": dict(config.extra_model_args),
+            "max_length": config.max_length,
         }
     )
 
@@ -237,7 +252,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        parquets = export_lm_eval_samples(output_dir)
+        samples_written = export_lm_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -246,9 +261,9 @@ def run_evalchemy(
             log_tails={},
         ) from exc
     logger.info(
-        "Evalchemy run %s wrote %d sample parquet file(s) under %s",
+        "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s",
         config.name,
-        len(parquets),
+        samples_written,
         output_dir,
     )
     return EvalchemyOutcome(
@@ -265,14 +280,14 @@ class EvalchemyExecutor:
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
         try:
-            outcome = run_evalchemy(model, self.config, output_dir, env_vars=env_vars)
+            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
         except EvalPipelineError as exc:
-            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
+            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(
                 str(exc),
                 status=status,
@@ -283,7 +298,7 @@ class EvalchemyExecutor:
         if not metrics:
             raise EvaluationError(
                 f"eval finished but no task metrics were readable under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
+                status=RunStatus.ARTIFACT_FAILED,
                 jobs=outcome.jobs,
             )
         return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)

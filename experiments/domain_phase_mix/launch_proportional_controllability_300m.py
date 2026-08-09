@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -780,7 +780,7 @@ def write_local_manifests(artifacts: LaunchArtifacts, output_dir: Path) -> None:
 
 def _has_iris_context() -> bool:
     try:
-        from iris.client.client import get_iris_ctx
+        from iris.client.client import get_iris_ctx  # noqa: PLC0415
     except ImportError:
         return False
     return get_iris_ctx() is not None

@@ -17,6 +17,7 @@ from marin.execution.step_spec import StepSpec
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
+from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +43,28 @@ def _build(*, scale=SMOKE_SCALE, **kw):
 
 def _steps_by_name(result) -> dict[str, StepSpec]:
     return {s.name: s for s in result.all_steps}
+
+
+def _depends_on(step: StepSpec, dependency: StepSpec) -> bool:
+    return any(parent is dependency or _depends_on(parent, dependency) for parent in step.deps)
+
+
+def test_global_exact_dedup_filters_only_the_store():
+    result = _build()
+    steps = _steps_by_name(result)
+    exact_dedup = steps["datakit/global_exact_dedup"]
+
+    for stage in ("tokenize", "embed", "quality", "decontam", "minhash"):
+        assert not _depends_on(steps[f"datakit/{stage}/a"], exact_dedup)
+    assert _depends_on(steps["datakit/store"], exact_dedup)
+
+
+def test_benchmark_routes_every_stage_under_one_prefix():
+    routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
+    steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
+
+    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
+    assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():

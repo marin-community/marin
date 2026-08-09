@@ -24,8 +24,8 @@ from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
 from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.types import ExecutorStep, InputName, this_output_path
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS
 from experiments.domain_phase_mix.config import WeightConfig

@@ -1,0 +1,7 @@
+tasks: [drop]
+task_options:
+  drop:
+    num_fewshot: 3
+    task_alias: drop_3shot
+    generation: true
+max_tokens: 256

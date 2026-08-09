@@ -41,6 +41,7 @@ from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
@@ -59,7 +60,7 @@ class LevanterSplitStats(BaseModel):
         total_tokens: Total tokens across all documents (``input_ids`` field count).
     """
 
-    path: str
+    path: DatakitArtifactPath
     total_elements: int
     total_tokens: int
 
@@ -81,9 +82,9 @@ class LevanterStoreData(BaseModel):
     """
 
     version: str = "v1"
-    cache_path: str
+    cache_path: DatakitArtifactPath
     splits: dict[str, LevanterSplitStats]
-    source_dirs: list[dict[str, str]]
+    source_dirs: list[dict[str, DatakitArtifactPath]]
     tokenizer: str
 
 
@@ -117,6 +118,7 @@ def build_from_datasets(
     output_path: str,
     batch_size: int | None = None,
     skip_existing: bool = True,
+    task_resources: ResourceConfig | None = None,
 ) -> CacheLedger:
     """Write a Levanter cache from a tokenized records dataset.
 
@@ -140,6 +142,7 @@ def build_from_datasets(
             default (16384). Lower values reduce peak memory for datasets with
             very large documents.
         skip_existing: Skip writing intermediate shards whose output already exists.
+        task_resources: Resources for each Zephyr task.
 
     Returns:
         The merged sharded ``CacheLedger``.
@@ -170,7 +173,7 @@ def build_from_datasets(
     temp_shards = dataset.map(_strip_id).map_shard(_write_shard)
 
     tokenize_start = time.monotonic()
-    shard_results = ctx.execute(temp_shards).results
+    shard_results = ctx.execute(temp_shards, map_task_resources=task_resources).results
     tokenize_elapsed = time.monotonic() - tokenize_start
 
     shard_paths = [path for path, _ in shard_results]

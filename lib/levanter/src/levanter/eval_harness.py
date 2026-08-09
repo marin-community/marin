@@ -84,8 +84,8 @@ from tqdm_loggable.auto import tqdm
 import levanter.config
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
+from levanter.data.utils import batched
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
@@ -530,11 +530,6 @@ class LevanterHarnessLM(TemplateLM):
             tokens = [int(tokens.item())]
         return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
-    def set_current_task(self, task_name: str):
-        self._current_task = task_name
-        if self.sample_logging_config.should_log() and task_name not in self.sample_outputs:
-            self.sample_outputs[task_name] = []
-
     def get_sample_outputs(self) -> dict[str, list[dict]]:
         """
         Get all stored sample outputs.
@@ -609,11 +604,10 @@ class LevanterHarnessLM(TemplateLM):
         """
         pad_token_id = _eval_pad_token_id(self.tokenizer)
 
-        current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(request.task_name)
             if bucket is None:
-                break
+                continue
             prompt = request.args[0]
             continuation = request.args[1]
             bucket.append(
@@ -808,7 +802,7 @@ class LevanterHarnessLM(TemplateLM):
     def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
         raise NotImplementedError()
 
-    def generate_until(self, requests) -> List[str]:
+    def generate_until(self, requests: list[Instance]) -> List[str]:
         # Error out on multihost JAX - Engine doesn't support it yet
         if jax.process_count() > 1:
             raise NotImplementedError(
@@ -962,13 +956,12 @@ class LevanterHarnessLM(TemplateLM):
                 # Engine tokens are generated tokens only (prompt not included)
                 text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
-                # Post-process the generated text using the imported utility function
-                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent or broken
-                text = postprocess_generated_text(
-                    text,
-                    gen_kwargs.get("until"),
-                    None,  # think_end_token - could be made configurable if needed
-                )
+                if postprocess_generated_text is not None:
+                    text = postprocess_generated_text(
+                        text,
+                        gen_kwargs.get("until"),
+                        None,  # think_end_token - could be made configurable if needed
+                    )
                 outputs.append(text)
                 output_idx += 1  # consume one generation per request
             else:
@@ -976,8 +969,7 @@ class LevanterHarnessLM(TemplateLM):
                 logger.info(f"Generation {i} - No tokens available, using empty string")
                 outputs.append(text)
 
-            current_task = getattr(self, "_current_task", "generation_task")
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(requests[i].task_name)
             if bucket is not None:
                 prompt_text = self.tok_decode(toks, skip_special_tokens=False)
                 bucket.append(
@@ -1444,17 +1436,13 @@ def _actually_run_eval_harness(
         averages = _compute_averages(outputs)
         outputs["averages"] = averages
 
-        # Get the collected sample outputs and add them to the results
+        # Attach each benchmark's own samples to its results entry. Group-level entries in
+        # `results` have no requests of their own, so they have no samples to attach.
         sample_outputs = harness.get_sample_outputs()
-        if config.sample_logging.should_log() and sample_outputs:
-            # Add outputs to each benchmark in results
-            for task_name in outputs.get("results", {}):
-                # Get all sample outputs for this task (since we don't track individual tasks yet)
-                all_samples = []
-                for samples in sample_outputs.values():
-                    all_samples.extend(samples)
-                if all_samples:
-                    outputs["results"][task_name]["outputs"] = all_samples
+        for task_name, task_results in outputs.get("results", {}).items():
+            samples = sample_outputs.get(task_name)
+            if samples:
+                task_results["outputs"] = samples
 
         return outputs
     else:

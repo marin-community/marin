@@ -30,7 +30,7 @@ ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
-DATA_DISK_DEVICE_NAME = "loom-data"
+DOCKER_ROOT = "/var/lib/docker"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 LOG_WRITER_ROLE = "roles/logging.logWriter"
 KMS_ENCRYPTER_DECRYPTER_ROLE = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
@@ -40,6 +40,22 @@ WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
+DOCKER_DAEMON_CONFIG = (
+    json.dumps(
+        {
+            "data-root": DOCKER_ROOT,
+            "default-ulimits": {
+                "core": {
+                    "Name": "core",
+                    "Hard": 0,
+                    "Soft": 0,
+                }
+            },
+        },
+        indent=2,
+    )
+    + "\n"
+)
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
 MCP_ACCESS_NONE = "none"
@@ -345,7 +361,6 @@ class DeploymentConfig:
     vm_service_account_name: str
     machine_type: str
     boot_disk_gb: int
-    data_disk_gb: int
     dotenv_secret_version: int
     snapshot_retention_days: int
     prune_deployment: bool = False
@@ -360,7 +375,6 @@ class DeploymentConfig:
             raise ValueError("domain must be a canonical hostname without a scheme, path, or trailing dot")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
-            ("dataDiskGb", self.data_disk_gb),
             ("snapshotRetentionDays", self.snapshot_retention_days),
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
@@ -437,7 +451,6 @@ class DeploymentConfig:
             vm_service_account_name=config.require("vmServiceAccountName"),
             machine_type=config.require("machineType"),
             boot_disk_gb=config.require_int("bootDiskGb"),
-            data_disk_gb=config.require_int("dataDiskGb"),
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             profiles=tuple(profiles),
@@ -546,27 +559,29 @@ def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) 
     return NetworkResources(web_firewall, ssh_firewall, address, dns_record)
 
 
-@dataclass(frozen=True)
-class DataResources:
-    disk: gcp.compute.Disk
-    snapshot_attachment: gcp.compute.DiskResourcePolicyAttachment
-
-
-def _create_data_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> DataResources:
-    data_disk = gcp.compute.Disk(
-        "loom-data",
+def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> gcp.compute.Disk:
+    return gcp.compute.Disk(
+        "loom-root",
         project=config.project,
         zone=config.zone,
-        name=f"{config.instance_name}-data",
+        name=config.instance_name,
+        image="debian-cloud/debian-12",
         type=DEFAULT_DISK_TYPE,
-        size=config.data_disk_gb,
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+        size=config.boot_disk_gb,
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, ignore_changes=["image"]),
     )
+
+
+def _create_boot_disk_snapshots(
+    config: DeploymentConfig,
+    apis: list[gcp.projects.Service],
+    root_disk: gcp.compute.Disk,
+) -> gcp.compute.DiskResourcePolicyAttachment:
     snapshot_policy = gcp.compute.ResourcePolicy(
-        "loom-data-snapshots",
+        "loom-snapshots",
         project=config.project,
         region=config.region,
-        name=f"{config.instance_name}-data-daily",
+        name=f"{config.instance_name}-daily",
         snapshot_schedule_policy={
             "schedule": {"daily_schedule": {"days_in_cycle": 1, "start_time": "04:00"}},
             "retention_policy": {
@@ -577,14 +592,14 @@ def _create_data_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]
         },
         opts=pulumi.ResourceOptions(depends_on=apis),
     )
-    snapshot_attachment = gcp.compute.DiskResourcePolicyAttachment(
-        "loom-data-snapshot-policy",
+    return gcp.compute.DiskResourcePolicyAttachment(
+        "loom-snapshot-policy",
         project=config.project,
         zone=config.zone,
-        disk=data_disk.name,
+        disk=root_disk.name,
         name=snapshot_policy.name,
+        opts=pulumi.ResourceOptions(depends_on=[root_disk]),
     )
-    return DataResources(data_disk, snapshot_attachment)
 
 
 @dataclass(frozen=True)
@@ -782,7 +797,7 @@ def _create_instance(
     vm_account: gcp.serviceaccount.Account,
     vm_log_writer: gcp.projects.IAMMember,
     network: NetworkResources,
-    data: DataResources,
+    root_disk: gcp.compute.Disk,
     image: ImageResources,
     secrets: SecretResources,
     runtime_policy: RuntimePolicyResources,
@@ -794,8 +809,8 @@ def _create_instance(
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
-        "data-disk-device": DATA_DISK_DEVICE_NAME,
         "loom-deployment": runtime_policy.manifest,
+        "docker-daemon-config": DOCKER_DAEMON_CONFIG,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
         "startup-script": STARTUP_SCRIPT,
@@ -804,8 +819,7 @@ def _create_instance(
         network.web_firewall,
         network.ssh_firewall,
         network.dns_record,
-        data.disk,
-        data.snapshot_attachment,
+        root_disk,
         secrets.secret,
         secrets.vm_reader,
         image.vm_reader,
@@ -821,22 +835,9 @@ def _create_instance(
         machine_type=config.machine_type,
         tags=[WEB_FIREWALL_TAG, SSH_FIREWALL_TAG],
         boot_disk={
-            "auto_delete": True,
-            "initialize_params": {
-                "image": "debian-cloud/debian-12",
-                "size": config.boot_disk_gb,
-                "type": DEFAULT_DISK_TYPE,
-            },
+            "auto_delete": False,
+            "source": root_disk.id,
         },
-        attached_disks=[
-            # GCE preserves separately attached persistent disks when an
-            # instance is deleted; the disk resource is protected as well.
-            {
-                "source": data.disk.id,
-                "device_name": DATA_DISK_DEVICE_NAME,
-                "mode": "READ_WRITE",
-            }
-        ],
         network_interfaces=[
             {
                 "network": config.network,
@@ -863,6 +864,7 @@ def _create_activation(
     config: DeploymentConfig,
     instance: InstanceResources,
     dns_record: cloudflare.DnsRecord,
+    snapshot_attachment: gcp.compute.DiskResourcePolicyAttachment,
 ) -> command.local.Command:
     return command.local.Command(
         "loom-activate",
@@ -876,7 +878,7 @@ def _create_activation(
             "LOOM_DOMAIN": config.domain,
         },
         triggers=[instance.instance.id, pulumi.Output.json_dumps(instance.metadata)],
-        opts=pulumi.ResourceOptions(depends_on=[instance.instance, dns_record]),
+        opts=pulumi.ResourceOptions(depends_on=[instance.instance, dns_record, snapshot_attachment]),
     )
 
 
@@ -956,19 +958,20 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     runtime_policy = _create_runtime_policy(config, api_options)
     image = _create_image(config, apis, vm_account)
     network = _create_network(config, apis)
-    data = _create_data_disk(config, apis)
+    root_disk = _create_root_disk(config, apis)
     secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
     instance = _create_instance(
         config,
         vm_account,
         vm_log_writer,
         network,
-        data,
+        root_disk,
         image,
         secrets,
         runtime_policy,
         vm_permissions,
     )
-    activation = _create_activation(config, instance, network.dns_record)
+    snapshot_attachment = _create_boot_disk_snapshots(config, apis, root_disk)
+    activation = _create_activation(config, instance, network.dns_record, snapshot_attachment)
     _export_outputs(config, instance.instance, network, image, runtime_policy)
     return Infrastructure(instance.instance, activation)
