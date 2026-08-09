@@ -10,10 +10,12 @@ def cuda_toolkit_library_directories(nvcc: Path) -> tuple[Path, ...]:
     """Return existing library directories beside an NVCC installation."""
     if not nvcc.is_file():
         raise ValueError(f"CUDA compiler does not exist: {nvcc}")
-    toolkit = nvcc.resolve().parent.parent
-    candidates = [toolkit / "lib64", toolkit / "lib"]
-    if toolkit.parent.name == "nvidia":
-        candidates.extend(sorted(package / "lib" for package in toolkit.parent.iterdir() if package.is_dir()))
+    toolkits = tuple(dict.fromkeys((nvcc.absolute().parent.parent, nvcc.resolve().parent.parent)))
+    candidates: list[Path] = []
+    for toolkit in toolkits:
+        candidates.extend((toolkit / "lib64", toolkit / "lib"))
+        if toolkit.parent.name == "nvidia":
+            candidates.extend(sorted(package / "lib" for package in toolkit.parent.iterdir() if package.is_dir()))
     return tuple(dict.fromkeys(path for path in candidates if path.is_dir()))
 
 

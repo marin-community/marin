@@ -47,6 +47,21 @@ def test_cuda_toolkit_link_flags_cover_split_pip_wheels(tmp_path: Path) -> None:
     assert cuda_toolkit_shared_library(nvcc, "cudart") == cudart
 
 
+def test_cuda_toolkit_link_flags_preserve_supplied_symlink_layout(tmp_path: Path) -> None:
+    toolkit = tmp_path / "site-packages" / "nvidia" / "cu13"
+    installed_nvcc = tmp_path / "site-packages" / "bin" / "nvcc"
+    installed_nvcc.parent.mkdir(parents=True)
+    installed_nvcc.touch()
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.symlink_to(installed_nvcc)
+    library = toolkit / "lib" / "libcudart.so.13"
+    library.parent.mkdir()
+    library.touch()
+
+    assert cuda_toolkit_shared_library(nvcc, "cudart") == library
+
+
 def test_cuda_toolkit_link_flags_reject_missing_compiler(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="CUDA compiler does not exist"):
         cuda_toolkit_link_flags(tmp_path / "bin" / "nvcc", runtime_search_path=False)
