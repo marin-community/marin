@@ -1,0 +1,31 @@
+{
+  "environment": {
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1"
+  },
+  "gpu_execution": false,
+  "identity": {
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_reverse_h100_identity",
+    "handler_symbol_resolved": true,
+    "semantic_digest": "03e1a9fa8d267d9137ebe929cbfa91f0cec8ba188d5681b6dc74f43f2d944411",
+    "source_digest": "4ae2d3594942a2ee5429ec80fd80dfc52982ba19d198a0f43f923134ea890f62",
+    "target": "shuttle.generic.normalized_exp_contract_reverse.h100_identity"
+  },
+  "mode": "compile_and_load_only",
+  "revision": "bc34335320",
+  "shape": {
+    "fold_extent": 128,
+    "reduction": 32,
+    "rows": 8
+  },
+  "tanh_softcap_mutation": {
+    "handler_symbol": "shuttle_generic_normalized_exp_contract_reverse_preflight_softcap",
+    "handler_symbol_resolved": true,
+    "same_physical_extents": true,
+    "semantic_digest": "1e63197e1d9e30180f4e9748150b40ba8da3d717f4e9241439fac50836312d60",
+    "source_contains_generated_derivative": true,
+    "source_contains_tanh": true,
+    "source_digest": "817e7fe3288584ac189e881486bd7cb6e3643bc86c69526786195785bd1ac72a",
+    "target": "shuttle.generic.normalized_exp_contract_reverse.preflight_softcap"
+  }
+}

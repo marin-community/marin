@@ -1,0 +1,123 @@
+HloModule jit__matched_reverse, is_scheduled=true, entry_computation_layout={(bf16[8,32]{1,0}, bf16[32,128]{1,0}, f32[8]{0}, pred[128]{0}, f32[8]{0}, /*index=5*/s32[8]{0}, pred[8]{0})->(bf16[8,32]{1,0}, bf16[32,128]{1,0})}, allow_spmd_sharding_propagation_to_parameters={true,true,true,true,true,true,true}, allow_spmd_sharding_propagation_to_output={true,true}, frontend_attributes={fingerprint_before_lhs="ca92e4edc5de79e5d83f271286c8096d"}
+
+FileNames
+1 "/app/benchmarks/jax_generated_normalized_exp_contract_reverse.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "_gpu_run"
+4 "_gpu_run.<locals>.execute_matched"
+5 "_matched_reverse"
+6 "_score_contract"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=576 end_line=576 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=569 end_line=569 column=64 end_column=84}
+3 {file_name_id=1 function_name_id=3 line=399 end_line=399 column=22 end_column=39}
+4 {file_name_id=1 function_name_id=4 line=388 end_line=396 column=15 end_column=9}
+5 {file_name_id=1 function_name_id=5 line=109 end_line=109 column=16 end_column=41}
+6 {file_name_id=1 function_name_id=6 line=44 end_line=50 column=12 end_column=5}
+7 {file_name_id=1 function_name_id=5 line=115 end_line=121 column=22 end_column=5}
+8 {file_name_id=1 function_name_id=5 line=122 end_line=128 column=24 end_column=5}
+9 {file_name_id=1 function_name_id=5 line=114 end_line=114 column=22 end_column=57}
+10 {file_name_id=1 function_name_id=6 line=51 end_line=51 column=11 end_column=37}
+11 {file_name_id=1 function_name_id=5 line=121 end_line=121 column=6 end_column=26}
+12 {file_name_id=1 function_name_id=5 line=128 end_line=128 column=6 end_column=26}
+13 {file_name_id=1 function_name_id=5 line=113 end_line=113 column=21 end_column=57}
+14 {file_name_id=1 function_name_id=5 line=113 end_line=113 column=60 end_column=108}
+15 {file_name_id=1 function_name_id=5 line=111 end_line=111 column=18 end_column=95}
+16 {file_name_id=1 function_name_id=5 line=111 end_line=111 column=52 end_column=89}
+17 {file_name_id=1 function_name_id=5 line=111 end_line=111 column=60 end_column=88}
+18 {file_name_id=1 function_name_id=5 line=110 end_line=110 column=12 end_column=41}
+19 {file_name_id=1 function_name_id=5 line=112 end_line=112 column=15 end_column=36}
+20 {file_name_id=1 function_name_id=5 line=112 end_line=112 column=40 end_column=65}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=5}
+8 {file_location_id=8 parent_frame_id=5}
+9 {file_location_id=9 parent_frame_id=5}
+10 {file_location_id=10 parent_frame_id=6}
+11 {file_location_id=11 parent_frame_id=5}
+12 {file_location_id=12 parent_frame_id=5}
+13 {file_location_id=13 parent_frame_id=5}
+14 {file_location_id=14 parent_frame_id=1}
+15 {file_location_id=15 parent_frame_id=1}
+16 {file_location_id=16 parent_frame_id=5}
+17 {file_location_id=17 parent_frame_id=5}
+18 {file_location_id=18 parent_frame_id=5}
+19 {file_location_id=19 parent_frame_id=5}
+20 {file_location_id=20 parent_frame_id=5}
+
+
+%gemm_fusion_dot_general.3_computation (parameter_0: bf16[8,32], parameter_1: bf16[32,128]) -> bf16[8,128] {
+  %parameter_1 = bf16[32,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1"}
+  %parameter_0 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="parameter_0"}
+  %dot = f32[128,8]{0,1} dot(%parameter_1, %parameter_0), lhs_contracting_dims={0}, rhs_contracting_dims={1}, operand_precision={highest,highest}, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="dot" stack_frame_id=6}, backend_config={"sizes":["16"]}
+  %bitcast = f32[8,128]{1,0} bitcast(%dot), metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="bitcast" stack_frame_id=6}
+  ROOT %convert_element_type.0 = bf16[8,128]{1,0} convert(%bitcast), metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="convert_element_type.0" stack_frame_id=10}
+}
+
+%gemm_fusion_dot_general.4_computation (parameter_0.1: bf16[8,128], parameter_1.1: bf16[32,128]) -> bf16[8,32] {
+  %parameter_0.1 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="parameter_0.1"}
+  %parameter_1.1 = bf16[32,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1.1"}
+  %dot_general.1 = f32[8,32]{1,0} dot(%parameter_0.1, %parameter_1.1), lhs_contracting_dims={1}, rhs_contracting_dims={1}, operand_precision={highest,highest}, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="dot_general.1" stack_frame_id=7}, backend_config={"sizes":["64"]}
+  ROOT %convert_element_type.1 = bf16[8,32]{1,0} convert(%dot_general.1), metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="convert_element_type.1" stack_frame_id=11}
+}
+
+%gemm_fusion_dot_general.5_computation (parameter_0.2: bf16[8,32], parameter_1.2: bf16[8,128]) -> bf16[32,128] {
+  %parameter_1.2 = bf16[8,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1.2"}
+  %parameter_0.2 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="parameter_0.2"}
+  %dot.1 = f32[128,32]{0,1} dot(%parameter_1.2, %parameter_0.2), lhs_contracting_dims={0}, rhs_contracting_dims={0}, operand_precision={highest,highest}, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="dot.1" stack_frame_id=8}, backend_config={"sizes":["16"]}
+  %bitcast.1 = f32[32,128]{1,0} bitcast(%dot.1), metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="bitcast.1" stack_frame_id=8}
+  ROOT %convert_element_type.2 = bf16[32,128]{1,0} convert(%bitcast.1), metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="convert_element_type.2" stack_frame_id=12}
+}
+
+%fused_convert (param_0.22: f32[8], param_1.27: f32[8], param_2.21: bf16[8,128], param_3.17: pred[128], param_4.12: s32[8], param_5.7: pred[8]) -> bf16[8,128] {
+  %param_3.17 = pred[128]{0} parameter(3), metadata={scheduling_name="param_3.17"}
+  %broadcast_in_dim.2.1 = pred[8,128]{1,0} broadcast(%param_3.17), dimensions={1}, metadata={op_name="jit(_matched_reverse)/jit(_where)/broadcast_in_dim" scheduling_name="broadcast_in_dim.2.1" stack_frame_id=15}
+  %param_2.21 = bf16[8,128]{1,0} parameter(2), metadata={scheduling_name="param_2.21"}
+  %convert_element_type.6.1 = f32[8,128]{1,0} convert(%param_2.21), metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="convert_element_type.6.1" stack_frame_id=18}
+  %param_1.27 = f32[8]{0} parameter(1), metadata={scheduling_name="param_1.27"}
+  %sub.7.3 = f32[8,128]{1,0} broadcast(%param_1.27), dimensions={0}, metadata={op_name="jit(_matched_reverse)/sub" scheduling_name="sub.7.3" stack_frame_id=17}
+  %sub.8.3 = f32[8,128]{1,0} subtract(%convert_element_type.6.1, %sub.7.3), metadata={op_name="jit(_matched_reverse)/sub" scheduling_name="sub.8.3" stack_frame_id=17}
+  %exp.1.7 = f32[8,128]{1,0} exponential(%sub.8.3), metadata={op_name="jit(_matched_reverse)/exp" scheduling_name="exp.1.7" stack_frame_id=16}
+  %constant_1_1 = f32[] constant(0)
+  %broadcast_in_dim.3.1 = f32[8,128]{1,0} broadcast(%constant_1_1), dimensions={}, metadata={op_name="jit(_matched_reverse)/jit(_where)/broadcast_in_dim" scheduling_name="broadcast_in_dim.3.1" stack_frame_id=15}
+  %select_n.0.7 = f32[8,128]{1,0} select(%broadcast_in_dim.2.1, %exp.1.7, %broadcast_in_dim.3.1), metadata={op_name="jit(_matched_reverse)/jit(_where)/select_n" scheduling_name="select_n.0.7" stack_frame_id=15}
+  %param_0.22 = f32[8]{0} parameter(0), metadata={scheduling_name="param_0.22"}
+  %mul.6.10 = f32[8,128]{1,0} broadcast(%param_0.22), dimensions={0}, metadata={op_name="jit(_matched_reverse)/mul" scheduling_name="mul.6.10" stack_frame_id=13}
+  %mul.7.5 = f32[8,128]{1,0} multiply(%select_n.0.7, %mul.6.10), metadata={op_name="jit(_matched_reverse)/mul" scheduling_name="mul.7.5" stack_frame_id=13}
+  %param_5.7 = pred[8]{0} parameter(5), metadata={scheduling_name="param_5.7"}
+  %and.6.3 = pred[8,128]{1,0} broadcast(%param_5.7), dimensions={0}, metadata={op_name="jit(_matched_reverse)/and" scheduling_name="and.6.3" stack_frame_id=19}
+  %param_4.12 = s32[8]{0} parameter(4), metadata={scheduling_name="param_4.12"}
+  %eq.9.5 = s32[8,128]{1,0} broadcast(%param_4.12), dimensions={0}, metadata={op_name="jit(_matched_reverse)/eq" scheduling_name="eq.9.5" stack_frame_id=20}
+  %iota.3.5 = s32[8,128]{1,0} iota(), iota_dimension=1, metadata={op_name="jit(_matched_reverse)/eq" scheduling_name="iota.3.5" stack_frame_id=20}
+  %eq.13.5 = pred[8,128]{1,0} compare(%eq.9.5, %iota.3.5), direction=EQ, metadata={op_name="jit(_matched_reverse)/eq" scheduling_name="eq.13.5" stack_frame_id=20}
+  %and.7.3 = pred[8,128]{1,0} and(%and.6.3, %eq.13.5), metadata={op_name="jit(_matched_reverse)/and" scheduling_name="and.7.3" stack_frame_id=19}
+  %select_n.2.5 = f32[8,128]{1,0} select(%and.7.3, %mul.6.10, %broadcast_in_dim.3.1), metadata={op_name="jit(_matched_reverse)/jit(_where)/select_n" scheduling_name="select_n.2.5" stack_frame_id=14}
+  %sub.9.3 = f32[8,128]{1,0} subtract(%mul.7.5, %select_n.2.5), metadata={op_name="jit(_matched_reverse)/sub" scheduling_name="sub.9.3" stack_frame_id=13}
+  ROOT %convert_element_type.7.1 = bf16[8,128]{1,0} convert(%sub.9.3), metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="convert_element_type.7.1" stack_frame_id=9}
+}
+
+ENTRY %main.3 (lhs.1: bf16[8,32], rhs.1: bf16[32,128], saved_state.1: f32[8], fold_validity.1: pred[128], row_cotangent.1: f32[8], selected_indices.1: s32[8], row_validity.1: pred[8]) -> (bf16[8,32], bf16[32,128]) {
+  %rhs.1 = bf16[32,128]{1,0} parameter(1), metadata={op_name="rhs" scheduling_name="rhs.1"}
+  %lhs.1 = bf16[8,32]{1,0} parameter(0), metadata={op_name="lhs" scheduling_name="lhs.1"}
+  %selected_indices.1 = s32[8]{0} parameter(5), metadata={op_name="selected_indices" scheduling_name="selected_indices.1"}
+  %row_validity.1 = pred[8]{0} parameter(6), metadata={op_name="row_validity" scheduling_name="row_validity.1"}
+  %row_cotangent.1 = f32[8]{0} parameter(4), metadata={op_name="row_cotangent" scheduling_name="row_cotangent.1"}
+  %saved_state.1 = f32[8]{0} parameter(2), metadata={op_name="saved_state" scheduling_name="saved_state.1"}
+  %fold_validity.1 = pred[128]{0} parameter(3), metadata={op_name="fold_validity" scheduling_name="fold_validity.1"}
+  %gemm_fusion_dot_general.3 = bf16[8,128]{1,0} fusion(%lhs.1, %rhs.1), kind=kCustom, calls=%gemm_fusion_dot_general.3_computation, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="gemm_fusion_dot_general.3" stack_frame_id=6}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"2","output_tiles":[{"sizes":["8","16"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %loop_convert_fusion = bf16[8,128]{1,0} fusion(%row_cotangent.1, %saved_state.1, %gemm_fusion_dot_general.3, %fold_validity.1, %selected_indices.1, /*index=5*/%row_validity.1), kind=kLoop, calls=%fused_convert, metadata={op_name="jit(_matched_reverse)/convert_element_type" scheduling_name="loop_convert_fusion" stack_frame_id=9}
+  %gemm_fusion_dot_general.4 = bf16[8,32]{1,0} fusion(%loop_convert_fusion, %rhs.1), kind=kCustom, calls=%gemm_fusion_dot_general.4_computation, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="gemm_fusion_dot_general.4" stack_frame_id=7}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"4","output_tiles":[{"sizes":["16","32"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot_general.5 = bf16[32,128]{1,0} fusion(%lhs.1, %loop_convert_fusion), kind=kCustom, calls=%gemm_fusion_dot_general.5_computation, metadata={op_name="jit(_matched_reverse)/dot_general" scheduling_name="gemm_fusion_dot_general.5" stack_frame_id=8}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"2","output_tiles":[{"sizes":["8","16"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  ROOT %tuple.1.0 = (bf16[8,32]{1,0}, bf16[32,128]{1,0}) tuple(%gemm_fusion_dot_general.4, %gemm_fusion_dot_general.5), metadata={scheduling_name="tuple.1.0"}
+}
+
