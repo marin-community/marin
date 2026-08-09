@@ -1,0 +1,20 @@
+Session: dlwh-shuttle-cmdbuf-h100
+Job: /dlwh/dev-gpu-dlwh-shuttle-cmdbuf-h100
+Pod: iris-dlwh-dev-gpu-dlwh-shuttle-cmdb-155c5a8a-0-4b9a0580d61c60e2
+Allocation: 1 x H100, 1 requested CPU, 32GB memory, 50GB disk, batch priority
+
+Iris job summary after release:
+State: killed  exit=0  failures=0  preemptions=1
+Tasks: 1/1 completed  killed=1
+Error: Terminated by user
+Task duration: 6 minutes and 20.18 seconds
+
+Local session check after release:
+Error: No active dev GPU session at
+/Users/dlwh/.cache/marin/dev_gpu_iris/dlwh-shuttle-cmdbuf-h100.json
+
+Kubernetes selector after release:
+kubectl -n iris get pods \
+  -l iris.task_id=dlwh.dev-gpu-dlwh-shuttle-cmdbuf-h100.0 -o name
+No resources found in iris namespace.
+
