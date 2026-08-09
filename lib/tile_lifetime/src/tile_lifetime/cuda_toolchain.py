@@ -14,6 +14,30 @@ def cuda_toolkit_library_directories(nvcc: Path) -> tuple[Path, ...]:
     return tuple(path for path in (toolkit / "lib64", toolkit / "lib") if path.is_dir())
 
 
+def cuda_toolkit_shared_library(nvcc: Path, name: str) -> Path:
+    """Resolve an unversioned or versioned CUDA shared library beside NVCC."""
+    filename = f"lib{name}.so"
+    directories = cuda_toolkit_library_directories(nvcc)
+    for directory in directories:
+        unversioned = directory / filename
+        if unversioned.is_file():
+            return unversioned
+        versioned = sorted(
+            directory.glob(f"{filename}.*"),
+            key=lambda path: tuple(int(component) for component in path.name.removeprefix(f"{filename}.").split(".")),
+            reverse=True,
+        )
+        if versioned:
+            return versioned[0]
+    searched = ", ".join(str(directory / filename) for directory in directories)
+    raise ValueError(f"CUDA shared library {filename} does not exist beside {nvcc}; searched {searched}")
+
+
+def cuda_toolkit_shared_library_link_flags(nvcc: Path, names: tuple[str, ...]) -> tuple[str, ...]:
+    """Return linker-driver flags for exact CUDA shared-library paths."""
+    return tuple(flag for name in names for flag in ("-Xlinker", str(cuda_toolkit_shared_library(nvcc, name))))
+
+
 def cuda_toolkit_link_flags(nvcc: Path, *, runtime_search_path: bool) -> tuple[str, ...]:
     """Return NVCC flags for pip and system toolkit library layouts."""
     directories = cuda_toolkit_library_directories(nvcc)

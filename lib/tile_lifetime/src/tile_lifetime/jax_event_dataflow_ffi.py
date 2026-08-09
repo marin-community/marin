@@ -21,7 +21,7 @@ from tile_lifetime.cuda_dynamic_event_dataflow_codegen import (
     CudaEventFfiKind,
     CudaEventFfiLowering,
 )
-from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags
+from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
 from tile_lifetime.event_dataflow import EventTensorPlan, event_tensor_runtime_inputs
 from tile_lifetime.ir import DType
 
@@ -160,7 +160,9 @@ def cuda_event_ffi_compile_plan(
         str(source_path),
         "-o",
         str(library_path),
+        "-cudart=none",
         *cuda_toolkit_link_flags(nvcc, runtime_search_path=True),
+        *cuda_toolkit_shared_library_link_flags(nvcc, ("cudart",)),
     )
     return CudaEventFfiCompilePlan(source_path, library_path, argv)
 

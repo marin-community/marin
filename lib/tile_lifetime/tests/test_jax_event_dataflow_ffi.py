@@ -83,7 +83,10 @@ def test_compile_plan_uses_jax_headers_and_selected_cuda_toolkit(tmp_path: Path)
     nvcc = toolkit / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
     nvcc.touch()
-    (toolkit / "lib64").mkdir()
+    library_directory = toolkit / "lib64"
+    library_directory.mkdir()
+    cudart = library_directory / "libcudart.so.13"
+    cudart.touch()
     include = tmp_path / "jaxlib" / "include"
     include.mkdir(parents=True)
     generated = generate_cuda_runtime_event_ffi_lowering(
@@ -105,4 +108,6 @@ def test_compile_plan_uses_jax_headers_and_selected_cuda_toolkit(tmp_path: Path)
     assert "-arch=sm_90a" in plan.argv
     assert str(include) in plan.argv
     assert str(toolkit / "lib64") in plan.argv
+    assert "-cudart=none" in plan.argv
+    assert str(cudart) in plan.argv
     assert all("torch" not in argument.lower() for argument in plan.argv)
