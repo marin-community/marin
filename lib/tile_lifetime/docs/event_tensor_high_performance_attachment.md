@@ -1,9 +1,12 @@
 # Event Tensor attachment to high-throughput GPU skeletons
 
-Status: the SM90 streaming Contract/Fold attachment now compiles and executes
-on H100. Its matched Event/pre-Event latency ratio is 1.001x at the tested
-shape. The grouped-GEMM path remains blocked at an opaque primitive
-synchronization contract.
+Status: the SM90 streaming Contract/Fold attachment compiles and executes on
+H100. Its matched Event/pre-Event latency ratio is 1.001x at the tested shape.
+The SM100 grouped-Contract wrapper now consumes a generated synchronization ABI
+whose ownership, logical counts, buffer stages, transaction bytes, and release
+points are derived from a generic task graph. That wrapper compiled and passed
+correctness on a physical NVIDIA GB200. The external grouped-GEMM primitive
+still owns the placement of its barrier arrival and wait instructions.
 
 ## Boundary
 
@@ -73,28 +76,48 @@ The performance-bearing grouped Contract wrapper is
 contraction primitive extracted from Mixture-of-Kittens, not the complete MoE
 kernel.
 
-| Quantity | Current source | Candidate derivation | Status |
+| Quantity | Previous source | Derivation | Attachment status |
 | --- | --- | --- | --- |
-| Load-pipeline stage count | External `config::MLP_LOAD_PIPE_DEPTH` | Bounded input/weight tile buffers selected for the Contract | Derivable in principle |
-| `inputs_arrived[stage]` count | Literal one | Number of elected input-tile producers per stage | Primitive ownership is opaque |
-| `scales_arrived[stage]` count | Literal one | Number of scale-tile producers per stage | Primitive ownership is opaque |
-| `inputs_finished[stage]` count | Literal one | Number of logical consumers elected to release the input slot | Primitive ownership is opaque |
-| `scales_finished[stage]` count | Literal one | Number of logical consumers elected to release the scale slot | Primitive ownership is opaque |
-| `outputs_arrived` count | Literal one | Completion of the matrix owner producing the output tile | Primitive ownership is opaque |
-| `outputs_finished` count | External `config::CLUSTER_SIZE` | Number of cluster CTAs consuming or acknowledging the output tile | Primitive ownership is opaque |
+| Load-pipeline stage count | External `config::MLP_LOAD_PIPE_DEPTH` | Capacity of the bounded operand-tile buffer selected for the Contract | Derived, generated, and statically checked |
+| Operand producer ownership | Implicit in primitive control flow | One cooperative transfer task per cluster CTA for each K partition | Exposed by generic worker assignment and mutated in tests |
+| Logical operand-ready count | Not represented separately from TMA completion | Notify indegree from cooperative transfer tasks to one operand-stage event | Derived as two for the selected two-CTA cluster |
+| Operand TMA completion | Literal transaction-enabled barrier plus expected bytes | Physical realization of the operand-ready event from tile byte extents and cluster cardinality | Derived as 65,536 bytes; kept distinct from logical indegree |
+| Operand-release count | Literal one | One matrix owner consumes the cluster-wide operand stage | Derived as one |
+| Operand release point | Internal matrix loop | Last consumption of the staged A/B operands | Named `matrix_operand_consumed` by the generated ABI |
+| Output-ready count | Literal one | One matrix owner completes the accumulator tile | Derived as one |
+| Output-release count | External `config::CLUSTER_SIZE` | One epilogue task per cluster CTA reads its output half | Derived as two and mutated with cluster cardinality |
+| Output release point | Internal epilogue | Accumulator-to-register read completes | Named `accumulator_read_complete` by the generated ABI |
+| Per-stage generations | Internal phase loop | Bounded-buffer slot reuse across K partitions | Derived by the task graph; stage mutation changes slots, generations, and fingerprint |
 | Cluster-wide sync before/after call | Handwritten wrapper | Cluster visibility around tensor-memory allocation and teardown | Backend primitive contract |
-| Per-stage generations | Internal primitive implementation | Repeated K-tile traversal and pipeline-slot reuse | Not exposed by the primitive interface |
 
-The correct next step is to expose a generic grouped-Contract synchronization
-descriptor from the primitive: task owners, producer/consumer cardinalities,
-buffer stages, and release points. Generating a header that repeats the current
-literal counts without that information would reverse-engineer and bless an
-opaque contract, not derive synchronization from Shuttle task relations. This
-checkpoint therefore stops at the explicit interface gap.
+The descriptor is generic: it describes cluster participants, task owners,
+bounded stages, logical producer and consumer cardinalities, and release
+points. `derive_grouped_contract_physical_event_schedule` builds the exact task
+relations and mechanically produces the Event Tensor plans. The SM100 codegen
+then emits a fingerprinted include consumed by the wrapper. Static assertions
+reject drift between the descriptor and the selected grouped-Contract tile
+configuration.
+
+The TMA realization deserves special care. The primitive initializes the
+operand-ready barrier with transaction completion enabled and supplies expected
+bytes for both cluster CTAs. The physical barrier's arrival-count argument is
+therefore one, but the logical Event Tensor indegree is two cooperative transfer
+tasks. Shuttle represents both facts instead of mistaking the CUDA barrier
+encoding for the task-dependence cardinality.
 
 Runtime `RelationPlan` indegrees still derive when a segmented Contract becomes
 eligible. They do not determine the internal TMA/WGMMA semaphore counts once a
 Contract tile has been launched. Those are distinct event domains.
+
+Shuttle now owns the synchronization ABI and counts at the grouped-Contract
+wrapper boundary. The remaining ownership gap is narrower: the external
+primitive still contains the actual mbarrier arrival/wait operations, phase-bit
+advancement, TMA issue, and accumulator read/release sites. Closing it requires
+the generic primitive to accept the generated descriptor at those release
+sites, or extracting a generic grouped-Contract template whose synchronization
+operations are emitted from that descriptor. The current result does not claim
+that Shuttle generates those internal instructions. The MXFP8 scale pipeline
+also remains unaudited; this checkpoint covers the BF16 operand pipeline only.
 
 ## Validation and remaining work
 
@@ -107,6 +130,15 @@ CPU tests currently establish:
 - rejection when backend synchronization constants drift from the Event Tensor
   schedule.
 
+The grouped-Contract tests additionally establish:
+
+- mechanical derivation of worker owners, logical cardinalities, and release
+  points;
+- cluster-cardinality mutation from two to four CTAs;
+- pipeline-stage mutation from two to three slots;
+- separation of logical producer indegree from byte-counted TMA completion;
+- rejection of backend-parameter and generated-include drift.
+
 The original H100 replay exposed a CuTe SSA dominance failure in Shuttle's
 normalized-exponential helper. A finalize-only alias change did not repair it.
 Carrying the register state through local SSA values during every Fold update
@@ -117,6 +149,16 @@ the same output hash. The failed and successful replays are preserved under
 `benchmarks/artifacts/event_tensor_sm90_fold_alias_replay_h100_v1/` and
 `benchmarks/artifacts/event_tensor_sm90_fold_state_replay_h100_v1/`.
 
-This is an SM90/H100 result. A B200 run would be a separate portability result.
-A GB200 run would require an SM100 backend attachment and must not be inferred
-from either result.
+The SM100 wrapper was built from Shuttle revision `30c0ba6bfc` on a physical
+NVIDIA GB200 reported by `nvidia-smi`, driver 595.71.05. The build used PyTorch
+2.10.0+cu130, NVCC 13.0.88, pinned MoK `3e1cf43ab9`, and pinned ThunderKittens
+`1c3920d993`. Its generated synchronization fingerprint matched at runtime.
+The W2 correctness probe passed with maximum absolute error 0.0148849, mean
+absolute error 0.00112154, and no NaNs or infinities. PTXAS reported 255
+registers, five barriers, 224 bytes of static shared memory, and no spills for
+the grouped-GEMM kernel. This validates the generated wrapper ABI; it is not a
+claim that Shuttle yet emits the primitive's internal barrier instructions.
+
+The exact five-sample result and provenance are preserved under
+`benchmarks/artifacts/event_tensor_grouped_contract_sm100_gb200_v0/`. B200 is a
+separate hardware target and must not be labeled as GB200 evidence.

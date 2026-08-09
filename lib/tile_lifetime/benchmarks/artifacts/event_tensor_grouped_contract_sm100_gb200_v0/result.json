@@ -1,0 +1,87 @@
+{
+  "benchmark": "mok_sm100_grouped_gemm_primitive_probe",
+  "build": {
+    "architecture": "sm100a",
+    "nvcc_version": "13.0.88"
+  },
+  "component": "w2",
+  "correctness": {
+    "atol": 0.2,
+    "infinity_count": 0,
+    "maximum_absolute_error": 0.01488494873046875,
+    "maximum_relative_error": 0.046357616782188416,
+    "mean_absolute_error": 0.0011215395061299205,
+    "mean_relative_error": 0.0014107556780800223,
+    "nan_count": 0,
+    "p99_absolute_error": 0.006117567420005798,
+    "passed": true,
+    "rtol": 0.1,
+    "shape": {
+      "K": 256,
+      "N": 256,
+      "experts": 2,
+      "padded_counts": [
+        256,
+        512
+      ]
+    }
+  },
+  "environment": {
+    "compute_capability": "10.0",
+    "driver": "595.71.05",
+    "gpu_name": "NVIDIA GB200",
+    "torch_cuda_version": "13.0",
+    "torch_version": "2.10.0+cu130"
+  },
+  "event_tensor_schedule": {
+    "cluster_ctas": 2,
+    "fingerprint": "e0af3d638f53163912c8a0a6834db8c8905c5280dff4287fcbfb9f8a3dfa60cf",
+    "load_pipeline_stages": 6,
+    "logical_event_counts": {
+      "operand_ready": 2,
+      "operand_release": 1,
+      "output_ready": 1,
+      "output_release": 2
+    },
+    "operand_release_point": "matrix_operand_consumed",
+    "operand_transaction_bytes": 65536,
+    "output_release_point": "accumulator_read_complete",
+    "transaction_completion_enabled": true
+  },
+  "kernel_resources": {
+    "barriers": 5,
+    "registers": 255,
+    "spill_load_bytes": 0,
+    "spill_store_bytes": 0,
+    "static_shared_memory_bytes": 224
+  },
+  "schema_version": 1,
+  "scope": "generated_sync_abi_wrapper_proof_not_internal_barrier_codegen",
+  "shape": {
+    "experts": 1,
+    "hidden_size": 256,
+    "intermediate_size": 256,
+    "padded_rows_per_expert": 256
+  },
+  "source": {
+    "mok_commit": "3e1cf43ab93ad040afed52a45ab03cb490ffe4be",
+    "mok_dirty": false,
+    "shuttle_commit": "30c0ba6bfc123f81ec5d4c67cbc2bc91fc162866",
+    "thunderkittens_commit": "1c3920d993404dd49a6d4c7267ea11d583bd5c68",
+    "thunderkittens_dirty": false
+  },
+  "status": "ok",
+  "timing": {
+    "maximum_ms": 0.026688000187277794,
+    "mean_ms": 0.01680000014603138,
+    "median_ms": 0.014431999996304512,
+    "minimum_ms": 0.013439999893307686,
+    "samples_ms": [
+      0.026688000187277794,
+      0.015200000256299973,
+      0.014240000396966934,
+      0.014431999996304512,
+      0.013439999893307686
+    ]
+  }
+}

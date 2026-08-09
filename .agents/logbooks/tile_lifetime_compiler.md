@@ -2588,3 +2588,36 @@ author: dlwh
 - The routed, attention-reverse, collective, and axis-Fold focused suite passes
   35 tests. Changed-file lint, formatting, and type checks pass at canonical
   revision `4c74101ce9`.
+
+### 2026-08-09 - TLTC-EVENT-008 grouped-Contract synchronization ABI
+
+- Hypothesis: the remaining grouped-GEMM event boundary can be expressed as a
+  generic synchronization descriptor and derived Event Tensor task graph
+  without copying MoK's MoE event graph or treating CUDA barrier counts as the
+  semantic dependency relation.
+- Result: a generic grouped-Contract descriptor now exposes cooperative task
+  owners, bounded operand stages, producer/consumer cardinalities, and release
+  points. Mechanical task-relation derivation emits a fingerprinted SM100 ABI.
+  The wrapper statically checks the selected two-CTA cluster, six stages, and
+  BF16 tile bytes against that ABI.
+- Important distinction: the logical operand-ready indegree is two cooperative
+  transfer tasks. Its TMA realization uses transaction completion plus 65,536
+  expected bytes and a physical arrival-count argument of one. Both facts are
+  represented; the physical encoding is not mistaken for the logical count.
+- Mutation evidence: changing cluster cardinality from two to four changes the
+  event domains and counts; changing stages from two to three changes buffer
+  capacity, slots, generations, and the schedule fingerprint. Backend and
+  generated-include drift fail closed.
+- GPU proof: revision `30c0ba6bfc` built for SM100a on a physical NVIDIA GB200,
+  driver 595.71.05, with Torch 2.10.0+cu130 and NVCC 13.0.88. The runtime ABI
+  fingerprint matched. W2 correctness passed with maximum absolute error
+  0.0148849, mean absolute error 0.00112154, and no NaNs or infinities. PTXAS
+  reported 255 registers, five barriers, 224 bytes of static shared memory, and
+  no spills. The allocation was released after the proof.
+- Exact boundary: EventTensor owns the generated synchronization ABI and counts
+  at the wrapper boundary. The external generic grouped-GEMM primitive still
+  owns internal barrier arrival/wait instruction placement, phase advancement,
+  TMA issue, and accumulator release. MXFP8 scale-pipeline synchronization is
+  not covered.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_grouped_contract_sm100_gb200_v0/`.
