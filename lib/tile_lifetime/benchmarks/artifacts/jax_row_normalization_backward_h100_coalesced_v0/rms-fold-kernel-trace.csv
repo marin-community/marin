@@ -1,0 +1,11 @@
+path,order,duration_ns,kernel
+separate_stages,0,6016,"ShuttleAxisFoldKernel0"
+separate_stages,1,21376,"ShuttleAxisFoldKernel1"
+separate_stages,2,62464,"ShuttleAxisFoldKernel2"
+coalesce_compatible_row_stages,0,21824,"ShuttleAxisFoldKernel0And1"
+coalesce_compatible_row_stages,1,61792,"ShuttleAxisFoldKernel2"
+matched_xla,0,7552,"input_reduce_fusion"
+matched_xla,1,1280,"loop_multiply_fusion"
+matched_xla,2,24576,"loop_convert_multiply_fusion"
+matched_xla,3,15200,"input_reduce_fusion_1"
+

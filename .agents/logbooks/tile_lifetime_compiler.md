@@ -2792,3 +2792,28 @@ author: dlwh
 - Resume with one bounded physical-H100 replay of the twelve-call natural Grug
   harness. If it remains above `1.20x`, evaluate generic Contract-plus-nested-
   Fold composition rather than adding workload-specific reverse code.
+
+### 2026-08-09 - TLTC-XLA-041 same-domain RMS Fold coalescing
+
+- A bounded schedule comparison compiled the same ordinary JAX RMS backward VJP
+  and StableHLO graph into separate and same-domain-coalesced generic AxisFold
+  pipelines. Semantic fingerprints, BF16 inputs, and the
+  `allow_rounding_reorder` numerical policy were identical.
+- Thirty H100 samples covered all six execution-order permutations five times.
+  Separate stages measured `0.096221 ms`; coalesced row stages measured
+  `0.089681 ms`; matched XLA measured `0.061414 ms`.
+- Coalescing improved generated median latency by `6.797%` and reduced the
+  generated launch count from three to two. One-call Nsight profiling measured
+  `89.856 us` of separate-stage kernel time and `83.616 us` of coalesced kernel
+  time, a `6.944%` reduction.
+- Both generated schedules produced the same deterministic hashes. Maximum
+  absolute error versus natural JAX was `0.0078125` for the input cotangent and
+  `0.00390625` for the feature-scale cotangent.
+- This schedule choice helps, but does not close the component gap: coalesced
+  execution remains `1.460268x` matched XLA. No additional tuning was run and no
+  acceptance claim is made.
+- The raw Nsight report was copied before stats conversion. Its secure local
+  copy is withheld from Git because Nsight embedded secret-bearing environment
+  records; the publishable artifact retains its checksum and derived launch
+  tables. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_coalesced_v0/`.

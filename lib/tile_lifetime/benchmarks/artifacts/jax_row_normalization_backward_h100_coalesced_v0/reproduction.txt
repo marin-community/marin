@@ -1,0 +1,41 @@
+Host submission (Iris origin/main eafa4d49f7, CoreWeave US-EAST-02A):
+
+MARIN_CLUSTER=coreweave iris --cluster cw-us-east-02a job run --no-wait \
+  --job-name shuttle-rms-coalesced-h100-20260809 \
+  --enable-extra-resources --gpu H100x1 --cpu 1 --memory 16GB --disk 50GB \
+  --priority batch --max-retries 0 --timeout 3600 --extra gpu -- <container command>
+
+Primary container command at Shuttle revision d267adf9c3:
+
+/app/.venv/bin/python /app/benchmarks/jax_generated_row_normalization_backward.py \
+  --rows 2048 --hidden 4096 --threads 256 --column-groups-per-block 32 \
+  --warmups 10 --repeats 30 --iterations 100 \
+  --compare-pipeline-schedules --seed 20260809 \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a --artifact-directory /tmp/shuttle-rms-coalesced-h100/measurement \
+  --xla-dump-directory /tmp/shuttle-rms-coalesced-h100/xla \
+  --json-output /tmp/shuttle-rms-coalesced-h100/summary.json \
+  --shuttle-revision d267adf9c3
+
+Profiler container command:
+
+nsys profile --trace=cuda --capture-range=cudaProfilerApi \
+  --capture-range-end=stop --force-overwrite=true \
+  --output /tmp/shuttle-rms-coalesced-h100/rms-fold-profile \
+  /app/.venv/bin/python /app/benchmarks/jax_generated_row_normalization_backward.py \
+  --rows 2048 --hidden 4096 --threads 256 --column-groups-per-block 32 \
+  --warmups 0 --repeats 6 --iterations 1 --compare-pipeline-schedules \
+  --cuda-profiler-range --seed 20260809 \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a --artifact-directory /tmp/shuttle-rms-coalesced-h100/profile \
+  --json-output /tmp/shuttle-rms-coalesced-h100/profile-summary.json \
+  --shuttle-revision d267adf9c3
+
+cp --preserve=all \
+  /tmp/shuttle-rms-coalesced-h100/rms-fold-profile.nsys-rep \
+  /tmp/shuttle-rms-coalesced-h100/rms-fold-profile-raw-preserved.nsys-rep
+
+nsys stats --force-export=true --report cuda_gpu_kern_sum --format csv \
+  --output /tmp/shuttle-rms-coalesced-h100/rms-fold-kernel-summary \
+  /tmp/shuttle-rms-coalesced-h100/rms-fold-profile.nsys-rep
+

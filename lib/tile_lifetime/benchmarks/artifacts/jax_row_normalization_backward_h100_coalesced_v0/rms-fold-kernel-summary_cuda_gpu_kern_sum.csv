@@ -1,0 +1,9 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+56.0,124256,2,62128.0,62128.0,61792,62464,475.2,"<unnamed>::ShuttleAxisFoldKernel2(const __nv_bfloat16 *, const __nv_bfloat16 *, const float *, __nv_bfloat16 *)"
+11.1,24576,1,24576.0,24576.0,24576,24576,0.0,loop_convert_multiply_fusion
+9.8,21824,1,21824.0,21824.0,21824,21824,0.0,"<unnamed>::ShuttleAxisFoldKernel0And1(const __nv_bfloat16 *, const __nv_bfloat16 *, const __nv_bfloat16 *, float *, __nv_bfloat16 *)"
+9.6,21376,1,21376.0,21376.0,21376,21376,0.0,"<unnamed>::ShuttleAxisFoldKernel1(const __nv_bfloat16 *, const __nv_bfloat16 *, const __nv_bfloat16 *, const float *, __nv_bfloat16 *)"
+6.8,15200,1,15200.0,15200.0,15200,15200,0.0,input_reduce_fusion_1
+3.4,7552,1,7552.0,7552.0,7552,7552,0.0,input_reduce_fusion
+2.7,6016,1,6016.0,6016.0,6016,6016,0.0,"<unnamed>::ShuttleAxisFoldKernel0(const __nv_bfloat16 *, float *)"
+0.6,1280,1,1280.0,1280.0,1280,1280,0.0,loop_multiply_fusion
