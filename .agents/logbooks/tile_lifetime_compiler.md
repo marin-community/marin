@@ -2357,3 +2357,31 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/jax_streaming_attention_backward_ffi_h100_v0/`
   and
   `lib/tile_lifetime/benchmarks/artifacts/jax_streaming_attention_backward_ffi_gb200_v0/`.
+
+### 2026-08-09 - TLTC-EVENT-024 SM90 streaming synchronization attachment
+
+- Hypothesis: the synchronization configuration of the existing generic SM90
+  streaming Contract/Fold skeleton can be derived from exact task dependences
+  and bounded buffer lifetimes without changing its tensor-core payload.
+- Commit Hash: `915fee0b7a`.
+- Result: separate Q, K, and V task families now derive full-event edges,
+  last-consumer reuse edges, physical slots, and phased generations. The Event
+  Tensor attachment supplies one Q stage, the selected K/V pipeline depth, two
+  full/empty barriers per stage, transfer/matrix worker counts, scheduler-ring
+  arrival participants, and Q/K/V transaction bytes to the CuTe skeleton. The
+  backend checks every supplied quantity against its tiled-MMA and layout
+  construction.
+- Mutations: changing pipeline depth changes K/V slots, generations, barrier
+  storage, and the plan fingerprint. Changing the query tile from 128 to 64
+  changes the matrix decomposition from two warpgroups to one and erases the
+  pairwise scheduler event by program order.
+- Validation: 26 focused Event Tensor/streaming tests pass. An H100 replay was
+  attempted, but both the canonical and Event Tensor sources fail identically
+  in the same Shuttle normalized-exponential CuTe dominance check before any
+  samples. This is a compile-blocker record, not a performance result.
+- Grouped-GEMM gap: the generic MoK-derived GMM exposes semaphore storage but
+  not the producer/consumer ownership needed to derive its arrival counts. The
+  work stops at that primitive-interface gap rather than copying literal
+  counts into a generated header.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_sm90_compile_blocker_h100_v0/`.
