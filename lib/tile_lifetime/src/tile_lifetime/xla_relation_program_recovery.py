@@ -26,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from tile_lifetime.cast_scalar_program import CastScalarProgram, GeneratedCudaScalarBody, generate_cuda_scalar_body
 from tile_lifetime.xla_hlo_recovery import (
     HloModuleGraph,
     InlinedHloGraph,
@@ -33,6 +34,7 @@ from tile_lifetime.xla_hlo_recovery import (
     inline_elementwise_fusions,
     parse_hlo_module_text,
 )
+from tile_lifetime.xla_scalar_map_import import import_hlo_scalar_map
 
 _ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]")
 _CALLED_COMPUTATION = re.compile(r"to_apply=%([A-Za-z0-9_.-]+)")
@@ -100,6 +102,8 @@ class PointwiseMapRecord:
 
     opcodes: tuple[str, ...]
     cast_shapes: tuple[tuple[str, str], ...]
+    scalar_program: CastScalarProgram | None
+    generated_cuda: GeneratedCudaScalarBody | None
 
 
 @dataclass(frozen=True)
@@ -178,6 +182,12 @@ class RelationProgramRecoveryReport:
                     "map": {
                         "opcodes": list(chain.map.opcodes),
                         "cast_shapes": [list(shapes) for shapes in chain.map.cast_shapes],
+                        "scalar_program": (
+                            chain.map.scalar_program.to_dict() if chain.map.scalar_program is not None else None
+                        ),
+                        "generated_cuda": (
+                            chain.map.generated_cuda.to_dict() if chain.map.generated_cuda is not None else None
+                        ),
                     },
                     "second": contract(chain.second),
                 }
@@ -213,7 +223,7 @@ def recover_relation_programs(hlo_text: str) -> RelationProgramRecoveryReport:
     analysis = _GraphAnalysis(module, graph)
     relation_plans = _recover_relation_plans(analysis)
     relation_nodes = tuple(plan.destination_sort for plan in relation_plans)
-    chains = _recover_segmented_contract_chains(analysis, relation_nodes)
+    chains = _recover_segmented_contract_chains(analysis, relation_plans)
     folds = _recover_scatter_folds(analysis, chains)
     weight_gradients = _recover_weight_gradients(analysis, relation_nodes, relation_plans)
     collectives = tuple(
@@ -238,8 +248,8 @@ def recover_relation_programs(hlo_text: str) -> RelationProgramRecoveryReport:
             "The pass forms generic ownership boundaries but does not yet replace them with GPU execution.",
             "Physical HLO has already padded the runtime segments; dynamic counts and offsets remain explicit inputs.",
             "Collectives are intentionally reported as external placement boundaries rather than absorbed.",
-            "The pair Map is retained as an opcode/cast program; scalar-AST import from HLO remains to be shared "
-            "with the existing Contract+Map replacement path.",
+            "Forward pair Maps lower to a generic cast-aware scalar AST and generated CUDA device function; "
+            "the concatenated input-adjoint Map still has only structural opcode/cast recovery.",
         ),
     )
 
@@ -343,8 +353,9 @@ def _recover_relation_plans(analysis: _GraphAnalysis) -> tuple[RelationPlanRecor
 
 def _recover_segmented_contract_chains(
     analysis: _GraphAnalysis,
-    relation_nodes: tuple[str, ...],
+    relation_plans: tuple[RelationPlanRecord, ...],
 ) -> tuple[SegmentedContractChainRecord, ...]:
+    relation_nodes = tuple(plan.destination_sort for plan in relation_plans)
     contracts = tuple(
         node
         for node in analysis.graph.nodes
@@ -377,8 +388,6 @@ def _recover_segmented_contract_chains(
         if any(node.opcode not in _DATAFLOW_OPCODES for node in intermediate):
             continue
         opcodes = tuple(node.opcode for node in intermediate if node.opcode in _DATAFLOW_OPCODES)
-        if "multiply" not in opcodes:
-            continue
         if "slice" in opcodes and "concatenate" not in opcodes:
             role = ContractChainRole.FORWARD
             if _nearest_float_scatter(analysis, second.id) is None:
@@ -387,11 +396,26 @@ def _recover_segmented_contract_chains(
             role = ContractChainRole.INPUT_GRADIENT
         else:
             continue
-        relation_plans = tuple(relation for relation in relation_nodes if analysis.is_ancestor(relation, first.id))
+        chain_relation_nodes = tuple(relation for relation in relation_nodes if analysis.is_ancestor(relation, first.id))
+        scalar_program = None
+        generated_cuda = None
+        if role in {ContractChainRole.FORWARD, ContractChainRole.FORWARD_RECOMPUTE}:
+            edge_counts = {
+                plan.edge_count for plan in relation_plans if analysis.is_ancestor(plan.destination_sort, first.id)
+            }
+            if len(edge_counts) != 1:
+                raise ValueError(f"Contract {first.id!r} has {len(edge_counts)} routed edge counts")
+            scalar_program = _import_forward_scalar_map(
+                analysis,
+                first=first,
+                second=second,
+                edge_count=next(iter(edge_counts)),
+            )
+            generated_cuda = generate_cuda_scalar_body(scalar_program)
         records.append(
             SegmentedContractChainRecord(
                 role=role,
-                first=_contract_record(first, relation_plans, analysis),
+                first=_contract_record(first, chain_relation_nodes, analysis),
                 map=PointwiseMapRecord(
                     opcodes=opcodes,
                     cast_shapes=tuple(
@@ -399,11 +423,48 @@ def _recover_segmented_contract_chains(
                         for node in intermediate
                         if node.opcode == "convert" and len(node.operands) == 1
                     ),
+                    scalar_program=scalar_program,
+                    generated_cuda=generated_cuda,
                 ),
-                second=_contract_record(second, relation_plans, analysis),
+                second=_contract_record(second, chain_relation_nodes, analysis),
             )
         )
     return tuple(records)
+
+
+def _import_forward_scalar_map(
+    analysis: _GraphAnalysis,
+    *,
+    first: InlinedHloNode,
+    second: InlinedHloNode,
+    edge_count: int,
+) -> CastScalarProgram:
+    second_operands = tuple(operand for operand in second.operands if analysis.is_ancestor(first.id, operand))
+    if len(second_operands) != 1:
+        raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(second_operands)} data operands")
+    destination = second_operands[0]
+    destination_ancestors = analysis.ancestors(destination)
+    candidates = {
+        node.id
+        for node in analysis.graph.nodes
+        if node.id != first.id
+        and node.id in destination_ancestors
+        and analysis.is_ancestor(first.id, node.id)
+        and (shape := _parse_array_shape(node.shape)) is not None
+        and len(shape[1]) == 2
+        and shape[1][0] == edge_count
+        and node.opcode in _DATAFLOW_OPCODES
+    }
+    terminals = tuple(
+        node_id for node_id in candidates if not any(user in candidates for user in analysis.users.get(node_id, ()))
+    )
+    if len(terminals) != 1:
+        raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(terminals)} scalar Map frontiers")
+    return import_hlo_scalar_map(
+        analysis.graph,
+        source_node=first.id,
+        target_node=terminals[0],
+    )
 
 
 def _recover_scatter_folds(

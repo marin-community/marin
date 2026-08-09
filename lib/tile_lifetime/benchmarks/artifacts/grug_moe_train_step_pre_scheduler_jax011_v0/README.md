@@ -38,15 +38,28 @@ without consulting HLO metadata or source names:
 - two group-batched weight-gradient Contracts with the following all-reduce
   left as an explicit placement boundary.
 
+The executed and rematerialized forward pair Maps now lower from this frozen
+HLO into the same generic cast-aware scalar AST. Recovery follows only opcodes,
+shapes, dataflow, and rank-two slice offsets. It retains 30 source-order
+`convert` nodes in the expression tree, including every BF16 round trip, and
+derives two scalar inputs at feature offsets 0 and 32. The compiler report
+contains the canonical AST, its semantic SHA256
+`208c3f4de95b4dd065af3ebdd69f9d1060f0de237696ecfa83792207a2ed54f9`,
+and a generated CUDA device function using explicit round-to-nearest F32
+arithmetic and BF16 conversions. A multiply-to-add mutation in the HLO changes
+both the AST and generated-source digests without changing the importer or
+physical skeleton.
+
 This identifies what a Shuttle-owned training region must replace while
 allowing communication to remain external. It is not yet an executable GPU
-replacement. In particular, the scalar Map is preserved as an opcode and cast
-program; importing it into the shared scalar AST generator remains the next
-code-generation step. The captured XLA implementation pads 16 logical edges to
-a physical 512-row Contract domain. That 32-times amplification is an artifact
-of this tiny CPU fixture, but it makes the required segmented-GMM replacement
-boundary concrete. The HLO scatter does not establish a source-ordered GPU
-merge; Shuttle must select and generate that numerical policy explicitly.
+replacement. The input-gradient Map includes concatenation and multiple live
+adjoint values; it remains structurally recovered but has not been imported
+into this scalar generator. The captured XLA implementation pads 16 logical
+edges to a physical 512-row Contract domain. That 32-times amplification is an
+artifact of this tiny CPU fixture, but it makes the required segmented-GMM
+replacement boundary concrete. The HLO scatter does not establish a
+source-ordered GPU merge; Shuttle must select and generate that numerical
+policy explicitly.
 
 ## Pinned environment
 
