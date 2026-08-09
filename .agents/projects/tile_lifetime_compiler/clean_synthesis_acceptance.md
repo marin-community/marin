@@ -108,6 +108,78 @@ An accepted end-to-end benchmark may not begin from:
 
 Those remain acceptable for isolated backend/unit tests.
 
+#### 3.1.1 Autodiff ownership and default runtime
+
+JAX owns model-level automatic differentiation in the accepted training path.
+This is the integration boundary, not a restriction on how the prototype
+reaches parity.
+
+During bring-up, Shuttle-owned symbolic differentiation and Torch-based
+execution are acceptable for:
+
+* deriving an independent algebraic oracle;
+* validating a generic reverse skeleton before frontend recovery exists;
+* measuring whether a physical design is worth integrating;
+* reproducing an expert comparison with the least additional infrastructure.
+
+Label such results explicitly as parity scaffolding. They do not establish the
+accepted frontend or runtime boundary, and the implementation should avoid
+making either dependency fundamental to the semantic or schedule IR.
+
+The default path is:
+
+```text
+ordinary JAX forward program
+    ↓
+JAX VJP / grad transformation
+    ↓
+forward + backward StableHLO/HLO
+    ↓
+Shuttle recovery, algebraic rewriting, decomposition, and physical synthesis
+```
+
+Shuttle should not require a model- or workload-specific differentiation rule
+to produce the accepted backward program. It may retain symbolic VJP rules as:
+
+* independent correctness oracles;
+* legality proofs;
+* canonicalization aids after matching generic algebra;
+* tests of the physical skeleton's mutation coverage.
+
+Those rules must not replace recovery from the natural JAX-differentiated
+program in the accepted end-to-end path.
+
+This distinction does not prevent Shuttle from recognizing generic adjoint
+structure or choosing a specialized reverse physical schedule. For example,
+JAX may produce QK/PV contractions, normalized-exponential adjoint Maps/Folds,
+and accumulation Folds; Shuttle may recover that algebra and lower it to a
+streaming reverse skeleton. The semantic source of the backward program remains
+JAX AD.
+
+The final compiler and runtime should be Torch-free by default. PyTorch and
+Torch kernels are permitted only as optional:
+
+* correctness references;
+* performance oracles;
+* benchmark harnesses;
+* sources of low-level implementation ideas.
+
+An accepted final generated executable may not require importing Torch, use
+Torch to construct its semantic program, or call a Torch operator as part of
+Shuttle's runtime path. Where current prototypes use Torch extensions to
+compile or launch generated kernels, record that as transitional infrastructure
+and provide a direct XLA/PJRT/FFI or standalone CUDA path before claiming the
+final Torch-free boundary.
+
+The intended user experience is registration with JAX rather than a separate
+Shuttle model API. An ordinary Grug program should continue to use normal JAX
+operations and JAX AD. At an agreed compiler boundary after differentiation,
+Shuttle recovers replaceable symbolic regions, generates their implementation,
+and returns control to the surrounding JAX/XLA program. Unsupported and
+non-bottleneck regions remain ordinary JAX/XLA execution. No source-level Grug
+rewrite into Shuttle-specific operators should be required except temporary
+diagnostic annotations during prototype development.
+
 #### 3.2 Semantic recognition may name things, but names must erase
 
 Frontend recovery may recognize familiar semantic structures when that
@@ -1070,6 +1142,21 @@ rather than named RMSNorm or `causal_attention` operations.
 
 No opaque FA3 or Transformer-specific CODA execution.
 
+For the training extension, JAX must first differentiate the natural forward
+program. Shuttle then recovers and generates:
+
+* Contract + scalar-Map adjoints and their downstream dX/dW Contracts;
+* RMSNorm and centered LayerNorm backward as generic row/column Folds and Maps;
+* normalized-exponential/streaming-attention backward as recovered Contracts,
+  Maps, Folds, and DomainRestrictions;
+* explicit saved-state, recompute, cast, accumulation-order, and deterministic
+  reduction choices.
+
+The accepted training path may not begin from Shuttle's existing
+`differentiate_*` or `derive_*_backward` helpers. Those helpers remain
+independent algebraic oracles until the same programs are recovered from JAX
+VJP HLO.
+
 #### RMS alternatives
 
 Keep:
@@ -1132,7 +1219,9 @@ Dense passes only if:
 * named semantics erase before scheduling;
 * physical Contract bodies are generated;
 * attention body/pipeline are generated;
+* the accepted backward path originates in JAX-differentiated StableHLO/HLO;
 * no opaque FA3/CODA semantic kernel remains;
+* no Torch dependency appears in the generated execution path;
 * correctness passes;
 * both primary sequence lengths are within 1.20 times their matched oracle;
 * the 1.10-times stretch result is reported for both placements and shapes.
@@ -1146,6 +1235,12 @@ Dense passes only if:
 Ordinary JAX routed MoE → StableHLO.
 
 Accepted path may not begin from a saved routing fixture.
+
+For training, the accepted backward graph must come from JAX AD over this
+ordinary routed program. Shuttle should recover the routed input-gradient
+Contracts/Maps/Folds and group-batched weight-gradient Contracts from that HLO;
+it must not invoke a Shuttle MoE differentiation rule. Placement collectives
+may remain explicit external boundaries during the current milestone.
 
 #### Recover
 
@@ -1228,12 +1323,14 @@ Continue publishing both:
 #### Acceptance
 
 * natural frontend;
+* natural JAX-differentiated backward frontend for the training claim;
 * RelationPlan generated;
 * segmented body generated generically;
 * transport and merge separated;
 * merge generated from Fold semantics;
 * no MoK forward;
 * no opaque semantic combine;
+* no Torch dependency in the generated execution path;
 * correct/deterministic;
 * matched natural-program end-to-end latency ≤1.2× MoK plus the same frontend;
 * post-routing latency reported separately against the provisional 4.274035-ms
