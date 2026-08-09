@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 import numpy as np
@@ -405,6 +405,56 @@ class RoutedForwardTypedFfiCodegenPlan:
     missing_segmented_layout: SegmentedLayoutRequirement | None
 
 
+class RoutedInputAdjointFfiOperandRole(StrEnum):
+    """Structural role of one input-adjoint typed-FFI operand."""
+
+    SECOND_CONTRACT_RHS = "second_contract_rhs"
+    FOLD_INITIAL = "fold_initial"
+    FOLD_INDICES = "fold_indices"
+    SEGMENT_VALIDITY = "segment_validity"
+    FIRST_CONTRACT_LHS = "first_contract_lhs"
+    FIRST_CONTRACT_RHS = "first_contract_rhs"
+    MAP_AUXILIARY = "map_auxiliary"
+
+
+@dataclass(frozen=True)
+class RoutedInputAdjointFfiOperand:
+    """One physical entry value bound to an input-adjoint role."""
+
+    role: RoutedInputAdjointFfiOperandRole
+    value: EntryRegionValue
+
+
+@dataclass(frozen=True)
+class RoutedInputAdjointRegionRecord:
+    """Generated Contract/Map/Contract/Fold input-adjoint region."""
+
+    chain: SegmentedContractChainRecord
+    fold: FoldRecord
+    boundary: RecoveredEntryRegionBoundary
+    contracts: tuple[RoutedForwardContractStage, ...]
+    map_stage: RoutedForwardMapStage
+    fold_stage: RoutedForwardFoldStage
+    map_auxiliary: str
+    numerical_policy: CastScalarNumericalPolicy
+    convex: bool
+    topologically_insertable: bool
+    insertion_instruction: str
+
+
+@dataclass(frozen=True)
+class RoutedInputAdjointTypedFfiCodegenPlan:
+    """Typed-FFI plan for a generic routed input adjoint."""
+
+    region: RoutedInputAdjointRegionRecord
+    api_version: int
+    contracts: tuple[RoutedForwardContractStage, ...]
+    map_stage: RoutedForwardMapStage
+    fold_stage: RoutedForwardFoldStage
+    operands: tuple[RoutedInputAdjointFfiOperand, ...]
+    segmented_layout: SegmentedLayoutRecord
+
+
 @dataclass(frozen=True)
 class RelationProgramRecoveryReport:
     """Inspectable generic ownership boundary for routed forward/backward work."""
@@ -674,6 +724,201 @@ def plan_routed_forward_typed_ffi(hlo_text: str) -> RoutedForwardTypedFfiCodegen
         disposition=disposition,
         missing_segmented_layout=missing_segmented_layout,
     )
+
+
+def form_routed_input_adjoint_region(hlo_text: str) -> RoutedInputAdjointRegionRecord:
+    """Form the generic routed input-adjoint region from physical HLO dataflow."""
+    module = parse_hlo_module_text(hlo_text)
+    graph = inline_elementwise_fusions(module)
+    report = recover_relation_programs(hlo_text)
+    candidates = tuple(chain for chain in report.contract_chains if chain.role is ContractChainRole.INPUT_GRADIENT)
+    if len(candidates) != 1:
+        raise ValueError(f"expected one structurally recovered input-gradient chain, found {len(candidates)}")
+    chain = candidates[0]
+    folds = tuple(fold for fold in report.folds if fold.source_contract == chain.second.node)
+    if len(folds) != 1:
+        raise ValueError(f"input-gradient Contract chain has {len(folds)} source-keyed Folds")
+    fold = folds[0]
+    first_node = graph.node(chain.first.node)
+    second_node = graph.node(chain.second.node)
+    second_data_operands = tuple(
+        operand for operand in second_node.operands if _is_node_descendant(graph, first_node.id, operand)
+    )
+    if len(second_data_operands) != 1:
+        raise ValueError(f"second Contract has {len(second_data_operands)} operands derived from the first Contract")
+    physical_map_output = second_data_operands[0]
+    layout_path = _inlined_path(graph, first_node.id, physical_map_output)
+    logical_feature_extent = sum(output.feature_extent for output in chain.map.scalar_outputs)
+    edge_counts = {
+        plan.edge_count
+        for plan in report.relation_plans
+        if _is_node_descendant(graph, plan.destination_sort, first_node.id)
+    }
+    if len(edge_counts) != 1:
+        raise ValueError(f"input-adjoint Contract has {len(edge_counts)} routed edge counts")
+    map_sources = _input_gradient_map_source_nodes(
+        _GraphAnalysis(module, graph),
+        first=first_node,
+        second=second_node,
+        edge_count=next(iter(edge_counts)),
+    )[0]
+    if len(map_sources) != 2 or map_sources[0] != first_node.id:
+        raise ValueError("input-adjoint Map must consume its first Contract and one auxiliary array")
+    relation_candidates: list[tuple[RelationPlanRecord, SegmentedLayoutRecord]] = []
+    layout_rejections: list[SegmentedLayoutRequirement] = []
+    for relation_plan in report.relation_plans:
+        if not _is_node_descendant(graph, relation_plan.destination_sort, first_node.id):
+            continue
+        segmented_layout, requirement = _recover_segmented_layout(
+            module=module,
+            graph=graph,
+            relation_plan=relation_plan,
+            layout_path=layout_path,
+            first_contract_value=first_node.operands[0],
+            physical_value=physical_map_output,
+            weight_value=second_node.operands[1],
+            fold_value=fold.fold,
+            logical_feature_extent=logical_feature_extent,
+            observed_path_opcodes=tuple(graph.node(node_id).opcode for node_id in layout_path[1:]),
+        )
+        if segmented_layout is not None:
+            relation_candidates.append((relation_plan, segmented_layout))
+        elif requirement is not None:
+            layout_rejections.append(requirement)
+    if len(relation_candidates) != 1:
+        reasons = tuple(reason for rejection in layout_rejections for reason in rejection.reasons)
+        raise ValueError(
+            f"input-adjoint chain has {len(relation_candidates)} verified physical relation plans: {reasons}"
+        )
+    relation_plan, segmented_layout = relation_candidates[0]
+    map_stage = RoutedForwardMapStage(
+        source_contract=chain.first.node,
+        consumer_contract=chain.second.node,
+        logical_row_extent=relation_plan.edge_count,
+        logical_feature_extent=logical_feature_extent,
+        physical_output=physical_map_output,
+        physical_output_shape=graph.node(physical_map_output).shape,
+        layout_path=layout_path,
+        layout_opcodes=tuple(graph.node(node_id).opcode for node_id in layout_path[1:]),
+        scalar_outputs=chain.map.scalar_outputs,
+        has_segmented_layout=True,
+        segmented_layout=segmented_layout,
+        segmented_layout_requirement=None,
+    )
+    fold_stage = RoutedForwardFoldStage(
+        contribution_inputs=fold.contribution_inputs,
+        contribution_program=fold.contribution_scalar_program,
+        generated_contribution_cuda=fold.generated_contribution_cuda,
+        fold=fold.fold,
+        output_shape=fold.output_shape,
+        reducer_program=fold.reducer_scalar_program,
+        generated_reducer_cuda=fold.generated_reducer_cuda,
+    )
+    entry = module.computation(module.entry)
+    first_instruction = _entry_instruction_for_node(module, chain.first.node)
+    fold_instruction = _entry_instruction_for_node(module, fold.fold)
+    internal = _entry_dataflow_interval(entry, first_instruction, fold_instruction)
+    boundary = _entry_region_boundary(entry, internal)
+    numerical_policies = {
+        *(output.scalar_program.numerical_policy for output in chain.map.scalar_outputs),
+        fold.contribution_scalar_program.numerical_policy,
+        fold.reducer_scalar_program.numerical_policy,
+    }
+    if len(numerical_policies) != 1:
+        raise ValueError(f"input-adjoint region contains {len(numerical_policies)} numerical policies")
+    region = RoutedInputAdjointRegionRecord(
+        chain=chain,
+        fold=fold,
+        boundary=boundary,
+        contracts=tuple(_contract_codegen_stage(graph, contract) for contract in (chain.first, chain.second)),
+        map_stage=map_stage,
+        fold_stage=fold_stage,
+        map_auxiliary=map_sources[1],
+        numerical_policy=next(iter(numerical_policies)),
+        convex=_entry_region_is_convex(entry, internal),
+        topologically_insertable=False,
+        insertion_instruction=fold_instruction,
+    )
+    operands = _recover_routed_input_adjoint_ffi_operands(hlo_text, region)
+    order = {instruction.name: index for index, instruction in enumerate(entry.instructions)}
+    topologically_insertable = all(order[operand.value.instruction] < order[fold_instruction] for operand in operands)
+    return replace(region, topologically_insertable=topologically_insertable)
+
+
+def plan_routed_input_adjoint_typed_ffi(hlo_text: str) -> RoutedInputAdjointTypedFfiCodegenPlan:
+    """Plan generated typed-FFI execution for one routed input adjoint."""
+    region = form_routed_input_adjoint_region(hlo_text)
+    if not region.convex or not region.topologically_insertable:
+        raise ValueError("routed input-adjoint region is not convex and topologically insertable")
+    segmented_layout = region.map_stage.segmented_layout
+    if segmented_layout is None:
+        raise ValueError("routed input-adjoint plan lacks a verified segmented layout")
+    return RoutedInputAdjointTypedFfiCodegenPlan(
+        region=region,
+        api_version=1,
+        contracts=region.contracts,
+        map_stage=region.map_stage,
+        fold_stage=region.fold_stage,
+        operands=_recover_routed_input_adjoint_ffi_operands(hlo_text, region),
+        segmented_layout=segmented_layout,
+    )
+
+
+def _recover_routed_input_adjoint_ffi_operands(
+    hlo_text: str,
+    region: RoutedInputAdjointRegionRecord,
+) -> tuple[RoutedInputAdjointFfiOperand, ...]:
+    """Bind physical inputs while keeping the forward recomputation external."""
+    module = parse_hlo_module_text(hlo_text)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+
+    def value(node_id: str) -> EntryRegionValue:
+        name = _entry_instruction_for_node(module, node_id)
+        return EntryRegionValue(name, instructions[name].shape)
+
+    fold_instruction = instructions[_entry_instruction_for_node(module, region.fold_stage.fold)]
+    if len(fold_instruction.operands) != 3:
+        raise ValueError("generated source Fold requires init, indices, and updates")
+    fold_initial, fold_indices, _ = fold_instruction.operands
+    layout = region.map_stage.segmented_layout
+    if layout is None:
+        raise ValueError("input-adjoint typed FFI requires a verified segmented layout")
+    layout_trace = _segmented_map_layout_trace(
+        inline_elementwise_fusions(module),
+        relation_plan=next(
+            plan
+            for plan in recover_relation_programs(hlo_text).relation_plans
+            if plan.destination_sort == layout.relation_plan
+        ),
+        layout_path=region.map_stage.layout_path,
+        physical_value=region.map_stage.physical_output,
+        logical_feature_extent=region.map_stage.logical_feature_extent,
+    )
+    bindings = (
+        RoutedInputAdjointFfiOperand(
+            RoutedInputAdjointFfiOperandRole.SECOND_CONTRACT_RHS, value(region.contracts[1].rhs)
+        ),
+        RoutedInputAdjointFfiOperand(
+            RoutedInputAdjointFfiOperandRole.FOLD_INITIAL,
+            EntryRegionValue(fold_initial, instructions[fold_initial].shape),
+        ),
+        RoutedInputAdjointFfiOperand(
+            RoutedInputAdjointFfiOperandRole.FOLD_INDICES,
+            EntryRegionValue(fold_indices, instructions[fold_indices].shape),
+        ),
+        RoutedInputAdjointFfiOperand(RoutedInputAdjointFfiOperandRole.SEGMENT_VALIDITY, value(layout_trace.predicate)),
+        RoutedInputAdjointFfiOperand(
+            RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_LHS, value(region.contracts[0].lhs)
+        ),
+        RoutedInputAdjointFfiOperand(
+            RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_RHS, value(region.contracts[0].rhs)
+        ),
+        RoutedInputAdjointFfiOperand(RoutedInputAdjointFfiOperandRole.MAP_AUXILIARY, value(region.map_auxiliary)),
+    )
+    if len({binding.value.instruction for binding in bindings}) != len(bindings):
+        raise ValueError("input-adjoint typed FFI operands are not distinct")
+    return bindings
 
 
 def _recover_routed_forward_ffi_operands(
@@ -1082,29 +1327,30 @@ def _verify_segmented_weight_flattening(
     if current.opcode == "copy" and len(current.operands) == 1:
         current = graph.node(current.operands[0])
         proof_nodes.insert(0, current.id)
-    source = graph.node(current.operands[0]) if current.opcode == "transpose" and len(current.operands) == 1 else current
-    source_shape = _physical_array_shape(source.shape)
     physical_source_shape = _physical_array_shape(physical_source.shape)
     bitcast_shape = _physical_array_shape(bitcast.shape)
-    if source_shape is None or physical_source_shape is None or len(physical_source_shape.dimensions) != 3:
+    if physical_source_shape is None or len(physical_source_shape.dimensions) != 3:
         raise _SegmentedLayoutRecoveryError(relation, "weight source is not segment-by-feature-by-output")
     if current.opcode == "transpose":
+        if len(current.operands) != 1:
+            raise _SegmentedLayoutRecoveryError(relation, "weight transpose is not unary")
+        source_shape = _physical_array_shape(graph.node(current.operands[0]).shape)
         axes = _attribute_axes(current.attributes)
-        physical_roles = tuple(("segment", "feature", "output")[axis] for axis in axes)
-    else:
-        physical_roles = ("segment", "feature", "output")
-    physical_dimensions = dict(zip(physical_roles, physical_source_shape.dimensions, strict=True))
-    if (
-        physical_dimensions["segment"] != trace.segment_count
-        or physical_dimensions["feature"] != trace.logical_feature_extent
-    ):
+        if (
+            source_shape is None
+            or len(axes) != 3
+            or tuple(source_shape.dimensions[axis] for axis in axes) != physical_source_shape.dimensions
+        ):
+            raise _SegmentedLayoutRecoveryError(relation, "weight transpose dimensions disagree with its shape")
+    expected_prefixes = {
+        ("segment", "feature"): (trace.segment_count, trace.logical_feature_extent),
+        ("feature", "segment"): (trace.logical_feature_extent, trace.segment_count),
+    }
+    if physical_source_shape.dimensions[:2] != expected_prefixes[trace.flattened_pair_order]:
         raise _SegmentedLayoutRecoveryError(relation, "weight segment/feature axes disagree with the Map layout")
-    flattened_pair_order = physical_roles[:2]
-    if flattened_pair_order != trace.flattened_pair_order:
-        raise _SegmentedLayoutRecoveryError(relation, "Map and weight flatten segment/feature in different orders")
     expected_bitcast = (
         trace.logical_feature_extent * trace.segment_count,
-        physical_dimensions["output"],
+        physical_source_shape.dimensions[2],
     )
     if (
         physical_source_shape.minor_to_major != (2, 1, 0)
@@ -1131,45 +1377,52 @@ def _verify_first_contract_edge_order(
         for node_id in path
         if graph.node(node_id).opcode == "gather" and graph.node(node_id).dtype in {"bf16", "f16", "f32", "f64"}
     )
-    if len(gathers) != 1:
+    if not gathers:
         raise _SegmentedLayoutRecoveryError(
             relation,
-            f"first Contract relation path has {len(gathers)} payload gathers",
+            "first Contract relation path has no payload gather",
         )
-    gather = gathers[0]
-    index_operands = tuple(
-        operand
-        for operand in gather.operands
-        if (shape := _parse_array_shape(graph.node(operand).shape)) is not None and shape[0] in {"s32", "s64"}
-    )
-    if len(index_operands) != 1:
-        raise _SegmentedLayoutRecoveryError(relation, "first Contract payload gather has ambiguous indices")
     edge_count = relation_plan.edge_count
     permutations = (
         np.arange(edge_count, dtype=np.int32),
         np.arange(edge_count - 1, -1, -1, dtype=np.int32),
         np.roll(np.arange(edge_count, dtype=np.int32), 3),
     )
-    expected_shape = (edge_count, 1)
-    for permutation in permutations:
-        try:
-            observed = _evaluate_integer_node(
-                graph,
-                index_operands[0],
-                {relation_plan.stable_permutation: permutation},
-            )
-        except ValueError as error:
-            raise _SegmentedLayoutRecoveryError(
-                relation,
-                f"could not evaluate first Contract edge order: {error}",
-            ) from error
-        expected = (permutation // relation_plan.slots_per_token).reshape(expected_shape)
-        if observed.shape != expected_shape or not np.array_equal(observed, expected):
-            raise _SegmentedLayoutRecoveryError(
-                relation,
-                "first Contract row r does not gather source stable_permutation[r] // route_slots",
-            )
-    return SegmentedLayoutProof(relation=relation, nodes=path)
+    verified_gathers: list[str] = []
+    for gather in gathers:
+        index_operands = tuple(
+            operand
+            for operand in gather.operands
+            if (shape := _parse_array_shape(graph.node(operand).shape)) is not None and shape[0] in {"s32", "s64"}
+        )
+        if len(index_operands) != 1:
+            continue
+        gather_verified = True
+        for permutation in permutations:
+            try:
+                observed = _evaluate_integer_node(
+                    graph,
+                    index_operands[0],
+                    {relation_plan.stable_permutation: permutation},
+                ).reshape(-1)
+            except ValueError:
+                gather_verified = False
+                break
+            expected_edge = permutation
+            expected_source = permutation // relation_plan.slots_per_token
+            if observed.shape != (edge_count,) or not (
+                np.array_equal(observed, expected_edge) or np.array_equal(observed, expected_source)
+            ):
+                gather_verified = False
+                break
+        if gather_verified:
+            verified_gathers.append(gather.id)
+    if not verified_gathers:
+        raise _SegmentedLayoutRecoveryError(
+            relation,
+            "first Contract rows are not indexed by the stable edge permutation or its source projection",
+        )
+    return SegmentedLayoutProof(relation=relation, nodes=(*path, *verified_gathers))
 
 
 def _verify_segmented_validity(
@@ -1679,6 +1932,47 @@ def _import_concatenated_scalar_map(
     second: InlinedHloNode,
     edge_count: int,
 ) -> tuple[ScalarMapOutputRecord, ...]:
+    source_nodes, target, concatenate = _input_gradient_map_source_nodes(
+        analysis,
+        first=first,
+        second=second,
+        edge_count=edge_count,
+    )
+    outputs: list[ScalarMapOutputRecord] = []
+    feature_offset = 0
+    for operand_index, operand in enumerate(concatenate.operands):
+        shape = _parse_array_shape(analysis.nodes[operand].shape)
+        if shape is None or len(shape[1]) != 2 or shape[1][0] != edge_count:
+            raise ValueError(f"concatenated scalar output {operand!r} must be a routed rank-two array")
+        scalar_program = import_hlo_scalar_map(
+            analysis.graph,
+            source_nodes=source_nodes,
+            target_node=target,
+            concatenate_choices={concatenate.id: operand_index},
+        )
+        outputs.append(
+            ScalarMapOutputRecord(
+                feature_offset=feature_offset,
+                feature_extent=shape[1][1],
+                scalar_program=scalar_program,
+                generated_cuda=generate_cuda_scalar_body(
+                    scalar_program,
+                    symbol=f"generated_scalar_map_{operand_index}",
+                ),
+            )
+        )
+        feature_offset += shape[1][1]
+    return tuple(outputs)
+
+
+def _input_gradient_map_source_nodes(
+    analysis: _GraphAnalysis,
+    *,
+    first: InlinedHloNode,
+    second: InlinedHloNode,
+    edge_count: int,
+) -> tuple[tuple[str, ...], str, InlinedHloNode]:
+    """Recover generic source arrays and concatenation for a reverse Map."""
     second_operands = tuple(operand for operand in second.operands if analysis.is_ancestor(first.id, operand))
     if len(second_operands) != 1:
         raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(second_operands)} data operands")
@@ -1720,31 +2014,7 @@ def _import_concatenated_scalar_map(
     if first.id not in leaf_sources:
         raise ValueError(f"input-adjoint Map {target!r} does not consume Contract {first.id!r}")
     source_nodes = (first.id, *sorted(leaf_sources - {first.id}, key=analysis.order.__getitem__))
-    outputs: list[ScalarMapOutputRecord] = []
-    feature_offset = 0
-    for operand_index, operand in enumerate(concatenate.operands):
-        shape = _parse_array_shape(analysis.nodes[operand].shape)
-        if shape is None or len(shape[1]) != 2 or shape[1][0] != edge_count:
-            raise ValueError(f"concatenated scalar output {operand!r} must be a routed rank-two array")
-        scalar_program = import_hlo_scalar_map(
-            analysis.graph,
-            source_nodes=source_nodes,
-            target_node=target,
-            concatenate_choices={concatenate.id: operand_index},
-        )
-        outputs.append(
-            ScalarMapOutputRecord(
-                feature_offset=feature_offset,
-                feature_extent=shape[1][1],
-                scalar_program=scalar_program,
-                generated_cuda=generate_cuda_scalar_body(
-                    scalar_program,
-                    symbol=f"generated_scalar_map_{operand_index}",
-                ),
-            )
-        )
-        feature_offset += shape[1][1]
-    return tuple(outputs)
+    return source_nodes, target, concatenate
 
 
 def _dataflow_leaf_sources(analysis: _GraphAnalysis, target: str) -> set[str]:
