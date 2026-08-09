@@ -10,12 +10,16 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldInput,
     AxisFoldInputLayout,
     AxisFoldOutputKind,
+    AxisFoldPipeline,
+    AxisFoldPipelineStage,
     AxisFoldProgram,
     AxisFoldReassociation,
     AxisFoldReduction,
+    evaluate_axis_fold_pipeline,
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
     generate_cuda_axis_fold_ffi,
+    generate_cuda_axis_fold_pipeline_ffi,
 )
 from tile_lifetime.ir import DType
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input
@@ -171,3 +175,80 @@ def test_axis_fold_ffi_semantic_mutation_regenerates_physical_source() -> None:
 
     assert original.semantic_fingerprints != changed.semantic_fingerprints
     assert original.source_sha256 != changed.source_sha256
+
+
+def test_axis_fold_pipeline_uses_internal_scratch_between_generated_stages() -> None:
+    value = scalar_input("value")
+    row_total = scalar_input("row_total")
+    first = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),),
+        reductions=(AxisFoldReduction("total", value),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("total"),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    second = AxisFoldProgram(
+        rows=5,
+        columns=3,
+        inputs=(
+            AxisFoldInput("value", DType.FP32, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput("row_total", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("ignored", scalar_constant(0.0)),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=scalar_binary(ScalarExpressionKind.ADD, value, row_total),
+        output_dtype=DType.FP32,
+        threads=64,
+    )
+    pipeline = AxisFoldPipeline(
+        (
+            AxisFoldPipelineStage("row_total", first, expose_output=False),
+            AxisFoldPipelineStage("result", second, expose_output=True),
+        )
+    )
+
+    generated = generate_cuda_axis_fold_pipeline_ffi(pipeline, target_name="shuttle.axis_fold_pipeline_v1")
+    values = np.arange(15, dtype=np.float32).reshape(5, 3)
+    (actual,) = evaluate_axis_fold_pipeline(pipeline, {"value": values})
+
+    assert [(item.name, item.shape) for item in generated.inputs] == [("value", (5, 3))]
+    assert [(item.name, item.shape) for item in generated.outputs] == [("result", (5, 3))]
+    assert "row_total_storage = scratch.Allocate" in generated.source
+    assert "ShuttleAxisFoldKernel0" in generated.source
+    assert "ShuttleAxisFoldKernel1" in generated.source
+    np.testing.assert_array_equal(actual, values + np.sum(values, axis=1, keepdims=True))
+
+
+def test_axis_fold_pipeline_scalar_mutation_regenerates_same_physical_family() -> None:
+    program = _scaled_column_sum_program()
+    pipeline = AxisFoldPipeline((AxisFoldPipelineStage("result", program, expose_output=True),))
+    mutated_program = replace(
+        program,
+        output_expression=scalar_binary(
+            ScalarExpressionKind.ADD,
+            program.output_expression,
+            scalar_constant(7.0),
+        ),
+    )
+    mutated = replace(
+        pipeline,
+        stages=(AxisFoldPipelineStage("result", mutated_program, expose_output=True),),
+    )
+
+    original_source = generate_cuda_axis_fold_pipeline_ffi(
+        pipeline,
+        target_name="shuttle.axis_fold_pipeline_mutation_v1",
+    )
+    changed_source = generate_cuda_axis_fold_pipeline_ffi(
+        mutated,
+        target_name="shuttle.axis_fold_pipeline_mutation_v1",
+    )
+
+    assert original_source.semantic_fingerprints != changed_source.semantic_fingerprints
+    assert original_source.source_sha256 != changed_source.source_sha256
+    assert "ShuttleAxisFoldKernel0" in changed_source.source

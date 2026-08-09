@@ -5,15 +5,45 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from tile_lifetime.cuda_axis_fold_codegen import (
+    AxisFoldDirection,
+    AxisFoldInput,
+    AxisFoldInputLayout,
+    AxisFoldOutputKind,
+    AxisFoldPipeline,
+    AxisFoldPipelineStage,
+    AxisFoldProgram,
+    AxisFoldReassociation,
+    AxisFoldReduction,
+    GeneratedCudaAxisFoldFfi,
+    generate_cuda_axis_fold_pipeline_ffi,
+)
 from tile_lifetime.ir import DType
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.row_normalization_training import (
     RowNormalizationAxisFoldPrograms,
     RowStatisticKind,
     build_row_normalization_axis_fold_programs,
 )
-from tile_lifetime.stablehlo_import import ReductionAttributes, StableHLOGraph, StableHLOOperation
+from tile_lifetime.stablehlo_import import (
+    ConstantAttributes,
+    ReductionAttributes,
+    StableHLOGraph,
+    StableHLOOperation,
+)
+from tile_lifetime.tensor_program import (
+    ScalarExpression,
+    ScalarExpressionKind,
+    scalar_binary,
+    scalar_constant,
+    scalar_input,
+    scalar_unary,
+)
+
+SCALAR_LITERAL = re.compile(r"dense<([^>]+)>")
 
 
 class StableHLORowNormalizationBackwardError(ValueError):
@@ -35,6 +65,7 @@ class RecoveredStableHLORowNormalizationBackward:
     hidden: int
     source_dtype: DType
     statistic_kind: RowStatisticKind
+    epsilon: float
     row_fold_operations: tuple[int, ...]
     feature_fold_operations: tuple[int, ...]
 
@@ -45,6 +76,19 @@ class StableHLORowNormalizationBackwardCompilation:
 
     recovered: RecoveredStableHLORowNormalizationBackward
     programs: RowNormalizationAxisFoldPrograms
+
+
+@dataclass(frozen=True)
+class StableHLORowNormalizationBackwardFfiCompilation:
+    """Whole-entry replacement by a generated generic axis-Fold pipeline."""
+
+    recovered: RecoveredStableHLORowNormalizationBackward
+    pipeline: AxisFoldPipeline
+    generated: GeneratedCudaAxisFoldFfi
+    numerical_policy: NumericalPolicy
+    input_bindings: tuple[tuple[str, int], ...]
+    output_bindings: tuple[tuple[str, int], ...]
+    replaced_operation_ids: tuple[int, ...]
 
 
 def recover_stablehlo_row_normalization_backward(
@@ -74,6 +118,7 @@ def recover_stablehlo_row_normalization_backward(
     if len(inverse_operations) != 1 or len(inverse_operations[0].outputs) != 1:
         raise StableHLORowNormalizationBackwardError("expected one inverse-statistic rsqrt")
     inverse_operation = inverse_operations[0]
+    epsilon = _inverse_epsilon(graph, inverse_operation)
     inverse_ancestors = _ancestor_values(graph, inverse_operation.inputs)
     primal_inputs = tuple(value_id for value_id in matrix_inputs if value_id in inverse_ancestors)
     if len(primal_inputs) != 1:
@@ -124,6 +169,7 @@ def recover_stablehlo_row_normalization_backward(
         hidden=hidden,
         source_dtype=source_dtype,
         statistic_kind=statistic_kind,
+        epsilon=epsilon,
         row_fold_operations=tuple(operation.id for operation in row_folds),
         feature_fold_operations=tuple(operation.id for operation in feature_folds),
     )
@@ -144,6 +190,162 @@ def compile_stablehlo_row_normalization_backward(
         threads=threads,
     )
     return StableHLORowNormalizationBackwardCompilation(recovered=recovered, programs=programs)
+
+
+def compile_stablehlo_row_normalization_backward_ffi(
+    graph: StableHLOGraph,
+    *,
+    target_name: str,
+    numerical_policy: NumericalPolicy,
+    threads: int = 256,
+    feature_groups_per_block: int = 1,
+) -> StableHLORowNormalizationBackwardFfiCompilation:
+    """Replace one natural uncentered row-statistic VJP with generated Folds.
+
+    The frontend name is only a recovery boundary. The physical generator sees
+    a three-stage generic dataflow pipeline: row reduction, row reduction plus
+    element Map, and feature reduction. Centered statistics remain supported by
+    the generic semantic recovery path but are not optimized by this bounded
+    executable composition.
+    """
+    recovered = recover_stablehlo_row_normalization_backward(graph)
+    if recovered.statistic_kind is not RowStatisticKind.UNCENTERED_SECOND_MOMENT:
+        raise StableHLORowNormalizationBackwardError(
+            "typed-FFI composition currently requires an uncentered second-moment Fold"
+        )
+    if numerical_policy is NumericalPolicy.BITWISE_EXACT:
+        raise StableHLORowNormalizationBackwardError(
+            "parallel axis-Fold replacement changes source reduction association; " "ALLOW_ROUNDING_REORDER is required"
+        )
+    pipeline = _uncentered_second_moment_backward_pipeline(
+        recovered,
+        threads=threads,
+        feature_groups_per_block=feature_groups_per_block,
+    )
+    generated = generate_cuda_axis_fold_pipeline_ffi(pipeline, target_name=target_name)
+    return StableHLORowNormalizationBackwardFfiCompilation(
+        recovered=recovered,
+        pipeline=pipeline,
+        generated=generated,
+        numerical_policy=numerical_policy,
+        input_bindings=(
+            ("primal", recovered.input),
+            ("feature_scale", recovered.feature_scale),
+            ("output_cotangent", recovered.output_cotangent),
+        ),
+        output_bindings=(
+            ("input_cotangent", recovered.input_cotangent),
+            ("feature_scale_cotangent", recovered.feature_scale_cotangent),
+        ),
+        replaced_operation_ids=tuple(operation.id for operation in graph.operations),
+    )
+
+
+def _uncentered_second_moment_backward_pipeline(
+    recovered: RecoveredStableHLORowNormalizationBackward,
+    *,
+    threads: int,
+    feature_groups_per_block: int,
+) -> AxisFoldPipeline:
+    source_dtype = recovered.source_dtype
+    output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
+    scale_output_dtype = recovered.graph.value(recovered.feature_scale_cotangent).dtype
+    primal = scalar_input("primal")
+    feature_scale = scalar_input("feature_scale")
+    output_cotangent = scalar_input("output_cotangent")
+    inverse_scale = scalar_input("inverse_scale")
+    hidden = scalar_constant(float(recovered.hidden))
+    local = _multiply(output_cotangent, feature_scale)
+
+    inverse_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),),
+        reductions=(AxisFoldReduction("sum_square", _multiply(primal, primal)),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_unary(
+            ScalarExpressionKind.RSQRT,
+            _add(_divide(scalar_input("sum_square"), hidden), scalar_constant(recovered.epsilon)),
+        ),
+        output_dtype=DType.FP32,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    input_cotangent_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(
+            AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput(
+                "feature_scale",
+                recovered.graph.value(recovered.feature_scale).dtype,
+                AxisFoldInputLayout.COLUMN,
+            ),
+            AxisFoldInput(
+                "output_cotangent",
+                recovered.graph.value(recovered.output_cotangent).dtype,
+                AxisFoldInputLayout.ELEMENT,
+            ),
+            AxisFoldInput("inverse_scale", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(AxisFoldReduction("correlation", _multiply(local, primal)),),
+        reduction_axis=AxisFoldDirection.COLUMNS,
+        output_kind=AxisFoldOutputKind.ELEMENT,
+        output_expression=_multiply(
+            inverse_scale,
+            _subtract(
+                local,
+                _multiply(
+                    primal,
+                    _multiply(
+                        _multiply(inverse_scale, inverse_scale),
+                        _divide(scalar_input("correlation"), hidden),
+                    ),
+                ),
+            ),
+        ),
+        output_dtype=output_dtype,
+        threads=threads,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    feature_scale_cotangent_program = AxisFoldProgram(
+        rows=recovered.rows,
+        columns=recovered.hidden,
+        inputs=(
+            AxisFoldInput("primal", source_dtype, AxisFoldInputLayout.ELEMENT),
+            AxisFoldInput(
+                "output_cotangent",
+                recovered.graph.value(recovered.output_cotangent).dtype,
+                AxisFoldInputLayout.ELEMENT,
+            ),
+            AxisFoldInput("inverse_scale", DType.FP32, AxisFoldInputLayout.ROW),
+        ),
+        reductions=(
+            AxisFoldReduction(
+                "scale_cotangent_sum",
+                _multiply(_multiply(output_cotangent, primal), inverse_scale),
+            ),
+        ),
+        reduction_axis=AxisFoldDirection.ROWS,
+        output_kind=AxisFoldOutputKind.REDUCED,
+        output_expression=scalar_input("scale_cotangent_sum"),
+        output_dtype=scale_output_dtype,
+        threads=threads,
+        groups_per_block=feature_groups_per_block,
+        reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
+    )
+    return AxisFoldPipeline(
+        stages=(
+            AxisFoldPipelineStage("inverse_scale", inverse_program, expose_output=False),
+            AxisFoldPipelineStage("input_cotangent", input_cotangent_program, expose_output=True),
+            AxisFoldPipelineStage(
+                "feature_scale_cotangent",
+                feature_scale_cotangent_program,
+                expose_output=True,
+            ),
+        )
+    )
 
 
 def _ancestor_values(graph: StableHLOGraph, roots: tuple[int, ...]) -> frozenset[int]:
@@ -195,3 +397,53 @@ def _matrix_sum_folds(
             continue
         folds.append(operation)
     return tuple(folds)
+
+
+def _inverse_epsilon(graph: StableHLOGraph, inverse_operation: StableHLOOperation) -> float:
+    input_producer = graph.producer(inverse_operation.inputs[0])
+    if input_producer is None or input_producer.kind != "add" or len(input_producer.inputs) != 2:
+        raise StableHLORowNormalizationBackwardError("inverse statistic must consume a binary epsilon add")
+    constants = tuple(
+        value
+        for value in (_constant_expression(graph, value_id) for value_id in input_producer.inputs)
+        if value is not None
+    )
+    if len(constants) != 1 or constants[0] < 0:
+        raise StableHLORowNormalizationBackwardError("inverse statistic must contain one non-negative scalar epsilon")
+    return constants[0]
+
+
+def _constant_expression(graph: StableHLOGraph, value_id: int) -> float | None:
+    producer = graph.producer(value_id)
+    if producer is None:
+        return None
+    if producer.kind == "constant":
+        attributes = producer.attributes
+        if not isinstance(attributes, ConstantAttributes):
+            return None
+        match = SCALAR_LITERAL.search(attributes.literal)
+        if match is None:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    if producer.kind in {"broadcast_in_dim", "convert", "reshape", "transpose"} and len(producer.inputs) == 1:
+        return _constant_expression(graph, producer.inputs[0])
+    return None
+
+
+def _add(left: ScalarExpression, right: ScalarExpression) -> ScalarExpression:
+    return scalar_binary(ScalarExpressionKind.ADD, left, right)
+
+
+def _subtract(left: ScalarExpression, right: ScalarExpression) -> ScalarExpression:
+    return scalar_binary(ScalarExpressionKind.SUBTRACT, left, right)
+
+
+def _multiply(left: ScalarExpression, right: ScalarExpression) -> ScalarExpression:
+    return scalar_binary(ScalarExpressionKind.MULTIPLY, left, right)
+
+
+def _divide(left: ScalarExpression, right: ScalarExpression) -> ScalarExpression:
+    return scalar_binary(ScalarExpressionKind.DIVIDE, left, right)

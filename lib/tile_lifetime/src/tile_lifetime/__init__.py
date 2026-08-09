@@ -273,7 +273,9 @@ from tile_lifetime.stablehlo_row_normalization_backward import (
     RecoveredStableHLORowNormalizationBackward,
     StableHLORowNormalizationBackwardCompilation,
     StableHLORowNormalizationBackwardError,
+    StableHLORowNormalizationBackwardFfiCompilation,
     compile_stablehlo_row_normalization_backward,
+    compile_stablehlo_row_normalization_backward_ffi,
     recover_stablehlo_row_normalization_backward,
 )
 from tile_lifetime.stablehlo_scan_recovery import (
@@ -413,6 +415,14 @@ from tile_lifetime.tiled_fold_finalize import (
     deterministic_weighted_sum_fold_program,
     evaluate_tiled_fold_finalize,
     normalized_exponential_fold_program,
+)
+from tile_lifetime.xla_axis_fold_pipeline_ffi import (
+    AxisFoldPipelineHloInput,
+    AxisFoldPipelineHloReplacementAudit,
+    AxisFoldPipelineHloReplacementPlan,
+    audit_axis_fold_pipeline_hlo_replacement,
+    plan_axis_fold_pipeline_hlo_replacement,
+    replace_axis_fold_pipeline_hlo_with_custom_call,
 )
 from tile_lifetime.xla_streaming_attention_backward_ffi import (
     StreamingReverseHloProvenance,
