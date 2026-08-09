@@ -33,7 +33,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import _scan_checkpoint_root, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
@@ -64,8 +64,6 @@ logger = logging.getLogger(__name__)
 
 SEQ_LEN = 4096
 MARIN_CHECKPOINT_PREFIX = "s3://marin-us-east-02a/marin/grug"
-# The ladder keeps a permanent checkpoint every 1k steps plus the final one at 9,703 (d768 schedule).
-DEFAULT_CHECKPOINT_STEPS = (1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 9703)
 
 
 @dataclass(frozen=True)
@@ -74,7 +72,8 @@ class DroplessEvalConfig:
 
     run: GrugRunConfig
     checkpoint_dir: str
-    checkpoint_steps: tuple[int, ...]
+    # None evaluates every checkpoint found under ``checkpoint_dir``; a tuple keeps only those steps.
+    checkpoint_steps: tuple[int, ...] | None
 
 
 def run_dropless_eval(config: DroplessEvalConfig) -> None:
@@ -120,8 +119,18 @@ def _run_dropless_eval_local(config: DroplessEvalConfig) -> None:
         if evaluator is None:
             raise ValueError("dropless eval has no tagged eval sets")
 
-        for step in config.checkpoint_steps:
-            ckpt_path = f"{config.checkpoint_dir.rstrip('/')}/step-{step}"
+        # Discover the run's saved checkpoints rather than assume a fixed schedule, so this works for
+        # any rung. ``checkpoint_steps``, when set, keeps only those steps.
+        found = [(step, path) for step, _, path in _scan_checkpoint_root(config.checkpoint_dir) if step >= 0]
+        if config.checkpoint_steps:
+            wanted = set(config.checkpoint_steps)
+            found = [(step, path) for step, path in found if step in wanted]
+        found.sort()
+        if not found:
+            raise ValueError(f"no checkpoints found under {config.checkpoint_dir}")
+        logger.info("dropless eval over %d checkpoints: %s", len(found), [s for s, _ in found])
+
+        for step, ckpt_path in found:
             loaded = restore_grug_state_from_checkpoint(
                 state_template,
                 checkpoint_search_paths=[ckpt_path],
@@ -148,7 +157,7 @@ def build_dropless_eval_run(
     num_experts_per_token: int = 4,
     use_latent: bool = True,
     checkpoint_dir: str | None = None,
-    checkpoint_steps: tuple[int, ...] = DEFAULT_CHECKPOINT_STEPS,
+    checkpoint_steps: tuple[int, ...] | None = None,
     source_version: str = "2026.08.08",
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
