@@ -131,6 +131,58 @@ def call_cuda_phased_pipeline_ffi(
     )
 
 
+def call_cuda_segmented_contract_ffi(
+    generated: CudaEventFfiLowering,
+    *,
+    source: jax.Array,
+    weight: jax.Array,
+    event_counts: jax.Array,
+    event_offsets: jax.Array,
+    edge_sources: jax.Array,
+) -> jax.Array:
+    """Execute a generated runtime RelationPlan/SegmentedContract body."""
+    if generated.kind is not CudaEventFfiKind.SEGMENTED_CONTRACT:
+        raise ValueError(f"expected a segmented-Contract FFI lowering, found {generated.kind.value}")
+    arrays = {
+        "source": source,
+        "weight": weight,
+        "event_counts": event_counts,
+        "event_offsets": event_offsets,
+        "edge_sources": edge_sources,
+    }
+    ordered = _validated_arguments(generated.inputs, arrays)
+    return jax.ffi.ffi_call(
+        generated.target_name,
+        _result_shape(generated.outputs[0]),
+        vmap_method="broadcast_all",
+    )(*ordered)
+
+
+def call_cuda_streaming_contract_fold_ffi(
+    generated: CudaEventFfiLowering,
+    *,
+    query: jax.Array,
+    key: jax.Array,
+    value: jax.Array,
+    domain_valid: jax.Array,
+) -> jax.Array:
+    """Execute generated QK/normalized-exp Fold/PV with staged reuse."""
+    if generated.kind is not CudaEventFfiKind.STREAMING_CONTRACT_FOLD:
+        raise ValueError(f"expected a streaming Contract/Fold FFI lowering, found {generated.kind.value}")
+    arrays = {
+        "query": query,
+        "key": key,
+        "value": value,
+        "domain_valid": domain_valid,
+    }
+    ordered = _validated_arguments(generated.inputs, arrays)
+    return jax.ffi.ffi_call(
+        generated.target_name,
+        _result_shape(generated.outputs[0]),
+        vmap_method="broadcast_all",
+    )(*ordered)
+
+
 def cuda_event_ffi_compile_plan(
     generated: CudaEventFfiLowering,
     *,

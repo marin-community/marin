@@ -58,6 +58,8 @@ class CudaEventFfiKind(StrEnum):
 
     RUNTIME_RELATION = "runtime_relation"
     PHASED_PIPELINE = "phased_pipeline"
+    SEGMENTED_CONTRACT = "segmented_contract"
+    STREAMING_CONTRACT_FOLD = "streaming_contract_fold"
 
 
 @dataclass(frozen=True)

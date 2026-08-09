@@ -8,8 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, prod
 
+from tile_lifetime.event_buffering import BoundedBufferPlan, derive_bounded_buffer_plan
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
+    EventGenerationPolicy,
     EventMemoryScope,
     MemoryVisibility,
     TaskAxis,
@@ -18,6 +20,7 @@ from tile_lifetime.event_dataflow import (
     TaskRelation,
     derive_event_tensor_plan,
 )
+from tile_lifetime.relation import RelationPlan
 from tile_lifetime.streaming_attention import AttentionScoreAxis, StreamingAttentionProgram
 
 
@@ -26,6 +29,7 @@ class StreamingFoldTaskDataflow:
     """Task graph derived from one Contract/normalized-Fold/Contract program."""
 
     program: EventDataflowProgram
+    key_value_stage: TaskFamily
     qk_contract: TaskFamily
     fold_partial: TaskFamily
     pv_contract: TaskFamily
@@ -33,6 +37,18 @@ class StreamingFoldTaskDataflow:
     row_tile_count: int
     fold_partition_count: int
     pipeline_depth: int
+    key_value_buffer: BoundedBufferPlan
+
+
+@dataclass(frozen=True)
+class SegmentedContractTaskDataflow:
+    """Runtime relation readiness feeding generic segmented Contract tiles."""
+
+    program: EventDataflowProgram
+    edge_ready: TaskFamily
+    contract: TaskFamily
+    segment_count: int
+    output_tile_count: int
 
 
 def streaming_fold_task_dataflow(
@@ -56,6 +72,7 @@ def streaming_fold_task_dataflow(
     fold_partition_count = ceil(fold_axis.extent / program.schedule.key_value_tile_size)
     tiled_axes = (TaskAxis("row_tile", row_tile_count), TaskAxis("fold_partition", fold_partition_count))
     row_axis = (TaskAxis("row_tile", row_tile_count),)
+    key_value_stage = TaskFamily("key_value_stage", tiled_axes, placement="transfer_workers")
     qk_contract = TaskFamily(program.qk.name, tiled_axes, placement="matrix_workers")
     fold_partial = TaskFamily("normalized_exp_fold_partial", tiled_axes, placement="reduction_workers")
     pv_contract = TaskFamily(program.pv.name, tiled_axes, placement="matrix_workers")
@@ -66,6 +83,8 @@ def streaming_fold_task_dataflow(
         for row_tile in range(row_tile_count)
         for partition in range(fold_partition_count)
     )
+    stage_to_qk = TaskDependence(TaskRelation.from_pairs(key_value_stage, qk_contract, pointwise), visibility)
+    stage_to_pv = TaskDependence(TaskRelation.from_pairs(key_value_stage, pv_contract, pointwise), visibility)
     qk_to_fold = TaskDependence(TaskRelation.from_pairs(qk_contract, fold_partial, pointwise), visibility)
     fold_to_pv = TaskDependence(TaskRelation.from_pairs(fold_partial, pv_contract, pointwise), visibility)
     pv_to_finalize = TaskDependence(
@@ -80,21 +99,54 @@ def streaming_fold_task_dataflow(
         ),
         visibility,
     )
-    dependences = (qk_to_fold, fold_to_pv, pv_to_finalize)
-    event_plans = tuple(
+    initial_dependences = (stage_to_qk, stage_to_pv, qk_to_fold, fold_to_pv, pv_to_finalize)
+    initial_plans = tuple(
         derive_event_tensor_plan(
             dependence,
             name=f"{dependence.relation.source.name}_to_{dependence.relation.target.name}",
         )
+        for dependence in initial_dependences
+    )
+    initial_program = EventDataflowProgram(
+        (key_value_stage, qk_contract, fold_partial, pv_contract, finalize),
+        initial_dependences,
+        initial_plans,
+    )
+    item_coordinates = key_value_stage.coordinates
+    key_value_buffer = derive_bounded_buffer_plan(
+        name="key_value_pipeline",
+        program=initial_program,
+        producer=key_value_stage,
+        uses=(stage_to_qk.relation, stage_to_pv.relation),
+        capacity=row_tile_count * program.schedule.pipeline_depth,
+        slot_for={
+            coordinate: coordinate[0] * program.schedule.pipeline_depth + coordinate[1] % program.schedule.pipeline_depth
+            for coordinate in item_coordinates
+        },
+        generation_for={coordinate: coordinate[1] // program.schedule.pipeline_depth for coordinate in item_coordinates},
+        visibility=visibility,
+    )
+    dependences = (*initial_dependences, *key_value_buffer.reuse_dependences)
+    event_plans = tuple(
+        derive_event_tensor_plan(
+            dependence,
+            name=f"{dependence.relation.source.name}_to_{dependence.relation.target.name}",
+            generation_policy=(
+                EventGenerationPolicy.PHASED
+                if dependence in key_value_buffer.reuse_dependences
+                else EventGenerationPolicy.PER_INVOCATION
+            ),
+        )
         for dependence in dependences
     )
     dataflow = EventDataflowProgram(
-        (qk_contract, fold_partial, pv_contract, finalize),
+        (key_value_stage, qk_contract, fold_partial, pv_contract, finalize),
         dependences,
         event_plans,
     )
     return StreamingFoldTaskDataflow(
         program=dataflow,
+        key_value_stage=key_value_stage,
         qk_contract=qk_contract,
         fold_partial=fold_partial,
         pv_contract=pv_contract,
@@ -102,4 +154,41 @@ def streaming_fold_task_dataflow(
         row_tile_count=row_tile_count,
         fold_partition_count=fold_partition_count,
         pipeline_depth=program.schedule.pipeline_depth,
+        key_value_buffer=key_value_buffer,
+    )
+
+
+def relation_segmented_contract_task_dataflow(
+    relation: RelationPlan,
+    *,
+    output_tile_count: int,
+    visibility_scope: EventMemoryScope = EventMemoryScope.DEVICE,
+) -> SegmentedContractTaskDataflow:
+    """Derive relation-edge readiness for generic segmented Contract tiles."""
+    if output_tile_count <= 0:
+        raise ValueError("segmented Contract output tile count must be positive")
+    edge_ready = TaskFamily("relation_edge_ready", (TaskAxis("edge", relation.route_count),), placement="transport")
+    contract = TaskFamily(
+        "segmented_contract",
+        (TaskAxis("segment", relation.destination_count), TaskAxis("output_tile", output_tile_count)),
+        placement="matrix_workers",
+    )
+    offsets = relation.destination_edge_offsets
+    pairs = tuple(
+        ((edge,), (segment, output_tile))
+        for segment, count in enumerate(relation.group_count)
+        for output_tile in range(output_tile_count)
+        for edge in range(int(offsets[segment]), int(offsets[segment]) + int(count))
+    )
+    dependence = TaskDependence(
+        TaskRelation.from_pairs(edge_ready, contract, pairs),
+        MemoryVisibility(visibility_scope),
+    )
+    plan = derive_event_tensor_plan(dependence, name="relation_edges_to_segmented_contract")
+    return SegmentedContractTaskDataflow(
+        program=EventDataflowProgram((edge_ready, contract), (dependence,), (plan,)),
+        edge_ready=edge_ready,
+        contract=contract,
+        segment_count=relation.destination_count,
+        output_tile_count=output_tile_count,
     )
