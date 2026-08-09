@@ -50,15 +50,26 @@ arithmetic and BF16 conversions. A multiply-to-add mutation in the HLO changes
 both the AST and generated-source digests without changing the importer or
 physical skeleton.
 
+The input-adjoint Map lowers through the same importer as two generated scalar
+outputs occupying feature ranges `[0,32)` and `[32,64)` on either side of the
+recovered concatenation. Both consume the sliced Contract cotangent. The first
+also consumes both feature halves of the rematerialized forward Contract, while
+the second consumes its first half. Outer BF16/F32 conversions after the
+concatenation remain inside both scalar ASTs. Mutating one HLO scalar operation
+changes only the affected output's semantic and CUDA-source digests; neither
+the importer nor generator contains an activation or model switch.
+
 This identifies what a Shuttle-owned training region must replace while
 allowing communication to remain external. It is not yet an executable GPU
-replacement. The input-gradient Map includes concatenation and multiple live
-adjoint values; it remains structurally recovered but has not been imported
-into this scalar generator. The captured XLA implementation pads 16 logical
-edges to a physical 512-row Contract domain. That 32-times amplification is an
-artifact of this tiny CPU fixture, but it makes the required segmented-GMM
-replacement boundary concrete. The HLO scatter does not establish a
-source-ordered GPU merge; Shuttle must select and generate that numerical
+replacement. In particular, the generated scalar bodies have not yet been
+plugged into a grouped-Contract epilogue, and the input/weight-gradient
+Contracts have not been replaced. Scalar import currently supports rank-two
+sources, unit-stride slices, scalar broadcasts, and feature-axis
+concatenation—not arbitrary affine indexing. The captured XLA implementation
+pads 16 logical edges to a physical 512-row Contract domain. That 32-times
+amplification is an artifact of this tiny CPU fixture, but it makes the required
+segmented-GMM replacement boundary concrete. The HLO scatter does not establish
+a source-ordered GPU merge; Shuttle must select and generate that numerical
 policy explicitly.
 
 ## Pinned environment

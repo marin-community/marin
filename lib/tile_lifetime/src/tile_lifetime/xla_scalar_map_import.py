@@ -25,8 +25,9 @@ _CONSTANT = re.compile(r"constant\((?P<value>true|false|[-+0-9.eE]+)\)")
 def import_hlo_scalar_map(
     graph: InlinedHloGraph,
     *,
-    source_node: str,
+    source_nodes: tuple[str, ...],
     target_node: str,
+    concatenate_choices: dict[str, int] | None = None,
 ) -> CastScalarProgram:
     """Import scalar semantics between one Contract output and a Map output.
 
@@ -36,9 +37,14 @@ def import_hlo_scalar_map(
     trips.
     """
     nodes = {node.id: node for node in graph.nodes}
-    source_shape = _array_shape(nodes[source_node].shape)
-    if source_shape is None or len(source_shape[1]) != 2:
-        raise ValueError(f"scalar Map source must be a rank-two array: {nodes[source_node].shape}")
+    if not source_nodes or len(set(source_nodes)) != len(source_nodes):
+        raise ValueError("scalar Map sources must be nonempty and unique")
+    source_indices = {node_id: index for index, node_id in enumerate(source_nodes)}
+    for source_node in source_nodes:
+        source_shape = _array_shape(nodes[source_node].shape)
+        if source_shape is None or len(source_shape[1]) != 2:
+            raise ValueError(f"scalar Map source must be a rank-two array: {nodes[source_node].shape}")
+    selected_concatenation_operands = concatenate_choices or {}
     memo: dict[tuple[str, int, int], CastScalarExpression] = {}
 
     def import_node(node_id: str, row_offset: int, feature_offset: int) -> CastScalarExpression:
@@ -47,8 +53,10 @@ def import_hlo_scalar_map(
             return memo[key]
         node = nodes[node_id]
         dtype = _scalar_dtype(node.shape)
-        if node_id == source_node:
-            name = f"input_r{row_offset}_f{feature_offset}"
+        if node_id in source_indices:
+            source_index = source_indices[node_id]
+            prefix = "input" if len(source_nodes) == 1 else f"input{source_index}"
+            name = f"{prefix}_r{row_offset}_f{feature_offset}"
             result = CastScalarExpression(
                 kind=CastScalarKind.INPUT,
                 dtype=dtype,
@@ -68,6 +76,14 @@ def import_hlo_scalar_map(
             if len(starts) != 2:
                 raise ValueError(f"scalar Map slice {node.id!r} must have rank two")
             result = import_node(node.operands[0], row_offset + starts[0], feature_offset + starts[1])
+        elif node.opcode == "concatenate":
+            try:
+                operand_index = selected_concatenation_operands[node.id]
+            except KeyError as error:
+                raise ValueError(f"concatenate {node.id!r} requires an output-segment choice") from error
+            if operand_index < 0 or operand_index >= len(node.operands):
+                raise ValueError(f"concatenate {node.id!r} has no operand {operand_index}")
+            result = import_node(node.operands[operand_index], row_offset, feature_offset)
         elif node.opcode == "broadcast":
             source_shape = _array_shape(nodes[node.operands[0]].shape) if len(node.operands) == 1 else None
             if source_shape is None or source_shape[1]:

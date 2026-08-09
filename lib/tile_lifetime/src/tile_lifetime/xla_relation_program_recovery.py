@@ -97,13 +97,22 @@ class SegmentedContractRecord:
 
 
 @dataclass(frozen=True)
+class ScalarMapOutputRecord:
+    """One generated scalar result placed in a pointwise output feature range."""
+
+    feature_offset: int
+    feature_extent: int
+    scalar_program: CastScalarProgram
+    generated_cuda: GeneratedCudaScalarBody
+
+
+@dataclass(frozen=True)
 class PointwiseMapRecord:
     """Pointwise/shape program between two segmented Contracts."""
 
     opcodes: tuple[str, ...]
     cast_shapes: tuple[tuple[str, str], ...]
-    scalar_program: CastScalarProgram | None
-    generated_cuda: GeneratedCudaScalarBody | None
+    scalar_outputs: tuple[ScalarMapOutputRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -182,12 +191,15 @@ class RelationProgramRecoveryReport:
                     "map": {
                         "opcodes": list(chain.map.opcodes),
                         "cast_shapes": [list(shapes) for shapes in chain.map.cast_shapes],
-                        "scalar_program": (
-                            chain.map.scalar_program.to_dict() if chain.map.scalar_program is not None else None
-                        ),
-                        "generated_cuda": (
-                            chain.map.generated_cuda.to_dict() if chain.map.generated_cuda is not None else None
-                        ),
+                        "scalar_outputs": [
+                            {
+                                "feature_offset": output.feature_offset,
+                                "feature_extent": output.feature_extent,
+                                "scalar_program": output.scalar_program.to_dict(),
+                                "generated_cuda": output.generated_cuda.to_dict(),
+                            }
+                            for output in chain.map.scalar_outputs
+                        ],
                     },
                     "second": contract(chain.second),
                 }
@@ -248,8 +260,10 @@ def recover_relation_programs(hlo_text: str) -> RelationProgramRecoveryReport:
             "The pass forms generic ownership boundaries but does not yet replace them with GPU execution.",
             "Physical HLO has already padded the runtime segments; dynamic counts and offsets remain explicit inputs.",
             "Collectives are intentionally reported as external placement boundaries rather than absorbed.",
-            "Forward pair Maps lower to a generic cast-aware scalar AST and generated CUDA device function; "
-            "the concatenated input-adjoint Map still has only structural opcode/cast recovery.",
+            "Forward and concatenated input-adjoint Maps lower to generic cast-aware scalar AST outputs and "
+            "generated CUDA device functions; execution inside a grouped Contract remains unimplemented.",
+            "Scalar HLO import currently accepts rank-two sources, unit-stride slices, scalar broadcasts, and "
+            "feature-axis concatenation; broader affine index maps remain unsupported.",
         ),
     )
 
@@ -397,21 +411,39 @@ def _recover_segmented_contract_chains(
         else:
             continue
         chain_relation_nodes = tuple(relation for relation in relation_nodes if analysis.is_ancestor(relation, first.id))
-        scalar_program = None
-        generated_cuda = None
+        scalar_outputs: tuple[ScalarMapOutputRecord, ...] = ()
         if role in {ContractChainRole.FORWARD, ContractChainRole.FORWARD_RECOMPUTE}:
             edge_counts = {
                 plan.edge_count for plan in relation_plans if analysis.is_ancestor(plan.destination_sort, first.id)
             }
             if len(edge_counts) != 1:
                 raise ValueError(f"Contract {first.id!r} has {len(edge_counts)} routed edge counts")
-            scalar_program = _import_forward_scalar_map(
+            scalar_program, feature_extent = _import_forward_scalar_map(
                 analysis,
                 first=first,
                 second=second,
                 edge_count=next(iter(edge_counts)),
             )
-            generated_cuda = generate_cuda_scalar_body(scalar_program)
+            scalar_outputs = (
+                ScalarMapOutputRecord(
+                    feature_offset=0,
+                    feature_extent=feature_extent,
+                    scalar_program=scalar_program,
+                    generated_cuda=generate_cuda_scalar_body(scalar_program),
+                ),
+            )
+        elif role is ContractChainRole.INPUT_GRADIENT:
+            edge_counts = {
+                plan.edge_count for plan in relation_plans if analysis.is_ancestor(plan.destination_sort, first.id)
+            }
+            if len(edge_counts) != 1:
+                raise ValueError(f"Contract {first.id!r} has {len(edge_counts)} routed edge counts")
+            scalar_outputs = _import_concatenated_scalar_map(
+                analysis,
+                first=first,
+                second=second,
+                edge_count=next(iter(edge_counts)),
+            )
         records.append(
             SegmentedContractChainRecord(
                 role=role,
@@ -423,8 +455,7 @@ def _recover_segmented_contract_chains(
                         for node in intermediate
                         if node.opcode == "convert" and len(node.operands) == 1
                     ),
-                    scalar_program=scalar_program,
-                    generated_cuda=generated_cuda,
+                    scalar_outputs=scalar_outputs,
                 ),
                 second=_contract_record(second, chain_relation_nodes, analysis),
             )
@@ -438,7 +469,7 @@ def _import_forward_scalar_map(
     first: InlinedHloNode,
     second: InlinedHloNode,
     edge_count: int,
-) -> CastScalarProgram:
+) -> tuple[CastScalarProgram, int]:
     second_operands = tuple(operand for operand in second.operands if analysis.is_ancestor(first.id, operand))
     if len(second_operands) != 1:
         raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(second_operands)} data operands")
@@ -460,11 +491,111 @@ def _import_forward_scalar_map(
     )
     if len(terminals) != 1:
         raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(terminals)} scalar Map frontiers")
-    return import_hlo_scalar_map(
-        analysis.graph,
-        source_node=first.id,
-        target_node=terminals[0],
+    target = analysis.nodes[terminals[0]]
+    target_shape = _parse_array_shape(target.shape)
+    assert target_shape is not None and len(target_shape[1]) == 2
+    return (
+        import_hlo_scalar_map(
+            analysis.graph,
+            source_nodes=(first.id,),
+            target_node=target.id,
+        ),
+        target_shape[1][1],
     )
+
+
+def _import_concatenated_scalar_map(
+    analysis: _GraphAnalysis,
+    *,
+    first: InlinedHloNode,
+    second: InlinedHloNode,
+    edge_count: int,
+) -> tuple[ScalarMapOutputRecord, ...]:
+    second_operands = tuple(operand for operand in second.operands if analysis.is_ancestor(first.id, operand))
+    if len(second_operands) != 1:
+        raise ValueError(f"Contract pair {first.id!r} -> {second.id!r} has {len(second_operands)} data operands")
+    destination = second_operands[0]
+    destination_ancestors = analysis.ancestors(destination)
+    candidates = {
+        node.id
+        for node in analysis.graph.nodes
+        if node.id != first.id
+        and node.id in destination_ancestors
+        and analysis.is_ancestor(first.id, node.id)
+        and (shape := _parse_array_shape(node.shape)) is not None
+        and len(shape[1]) == 2
+        and shape[1][0] == edge_count
+        and node.opcode in _DATAFLOW_OPCODES
+    }
+    terminals = tuple(
+        node_id for node_id in candidates if not any(user in candidates for user in analysis.users.get(node_id, ()))
+    )
+    concatenations = (
+        tuple(
+            node_id
+            for node_id in candidates
+            if analysis.nodes[node_id].opcode == "concatenate" and node_id in analysis.ancestors(terminals[0])
+        )
+        if len(terminals) == 1
+        else ()
+    )
+    if len(terminals) != 1 or len(concatenations) != 1:
+        raise ValueError(
+            f"Contract pair {first.id!r} -> {second.id!r} has {len(terminals)} Map frontiers and "
+            f"{len(concatenations)} concatenations"
+        )
+    target = terminals[0]
+    concatenate = analysis.nodes[concatenations[0]]
+    if "dimensions={1}" not in concatenate.attributes:
+        raise ValueError(f"scalar output concatenation {concatenate.id!r} must join the feature axis")
+    leaf_sources = _dataflow_leaf_sources(analysis, target)
+    if first.id not in leaf_sources:
+        raise ValueError(f"input-adjoint Map {target!r} does not consume Contract {first.id!r}")
+    source_nodes = (first.id, *sorted(leaf_sources - {first.id}, key=analysis.order.__getitem__))
+    outputs: list[ScalarMapOutputRecord] = []
+    feature_offset = 0
+    for operand_index, operand in enumerate(concatenate.operands):
+        shape = _parse_array_shape(analysis.nodes[operand].shape)
+        if shape is None or len(shape[1]) != 2 or shape[1][0] != edge_count:
+            raise ValueError(f"concatenated scalar output {operand!r} must be a routed rank-two array")
+        scalar_program = import_hlo_scalar_map(
+            analysis.graph,
+            source_nodes=source_nodes,
+            target_node=target,
+            concatenate_choices={concatenate.id: operand_index},
+        )
+        outputs.append(
+            ScalarMapOutputRecord(
+                feature_offset=feature_offset,
+                feature_extent=shape[1][1],
+                scalar_program=scalar_program,
+                generated_cuda=generate_cuda_scalar_body(
+                    scalar_program,
+                    symbol=f"generated_scalar_map_{operand_index}",
+                ),
+            )
+        )
+        feature_offset += shape[1][1]
+    return tuple(outputs)
+
+
+def _dataflow_leaf_sources(analysis: _GraphAnalysis, target: str) -> set[str]:
+    leaves: set[str] = set()
+    pending = [target]
+    seen = {target}
+    while pending:
+        current = pending.pop()
+        node = analysis.nodes[current]
+        if node.opcode == "constant":
+            continue
+        if current != target and node.opcode not in _DATAFLOW_OPCODES:
+            leaves.add(current)
+            continue
+        for operand in node.operands:
+            if operand not in seen:
+                seen.add(operand)
+                pending.append(operand)
+    return leaves
 
 
 def _recover_scatter_folds(

@@ -49,26 +49,49 @@ def test_grug_hlo_recovers_generic_routed_forward_and_backward_program() -> None
     assert "slice" in forward.map.opcodes
     assert "multiply" in forward.map.opcodes
     assert any(source.startswith("f32") and result.startswith("bf16") for source, result in forward.map.cast_shapes)
-    assert forward.map.scalar_program is not None
-    assert forward.map.generated_cuda is not None
+    assert len(forward.map.scalar_outputs) == 1
+    forward_output = forward.map.scalar_outputs[0]
     assert tuple(
         (value.input_index.row_offset, value.input_index.feature_offset)
-        for value in forward.map.scalar_program.inputs
+        for value in forward_output.scalar_program.inputs
         if value.input_index is not None
     ) == ((0, 0), (0, 32))
-    assert _count_kind(forward.map.scalar_program.expression, CastScalarKind.CONVERT) == 30
-    assert "__float2bfloat16_rn" in forward.map.generated_cuda.source
-    assert "MoE" not in forward.map.generated_cuda.source
+    assert _count_kind(forward_output.scalar_program.expression, CastScalarKind.CONVERT) == 30
+    assert "__float2bfloat16_rn" in forward_output.generated_cuda.source
+    assert "MoE" not in forward_output.generated_cuda.source
     recompute = chains_by_role[ContractChainRole.FORWARD_RECOMPUTE]
-    assert recompute.map.scalar_program is not None
-    assert recompute.map.scalar_program.digest == forward.map.scalar_program.digest
+    assert len(recompute.map.scalar_outputs) == 1
+    assert recompute.map.scalar_outputs[0].scalar_program.digest == forward_output.scalar_program.digest
 
     input_gradient = chains_by_role[ContractChainRole.INPUT_GRADIENT]
     assert "concatenate" in input_gradient.map.opcodes
     assert "multiply" in input_gradient.map.opcodes
     assert input_gradient.first.output_shape == input_gradient.second.output_shape == "f32[512,32]{1,0}"
-    assert input_gradient.map.scalar_program is None
-    assert input_gradient.map.generated_cuda is None
+    assert tuple((output.feature_offset, output.feature_extent) for output in input_gradient.map.scalar_outputs) == (
+        (0, 32),
+        (32, 32),
+    )
+    assert tuple(
+        tuple(
+            (value.input_name, value.input_index.feature_offset)
+            for value in output.scalar_program.inputs
+            if value.input_index is not None
+        )
+        for output in input_gradient.map.scalar_outputs
+    ) == (
+        (("input0_r0_f0", 0), ("input1_r0_f0", 0), ("input1_r0_f32", 32)),
+        (("input0_r0_f0", 0), ("input1_r0_f0", 0)),
+    )
+    assert tuple(
+        _count_kind(output.scalar_program.expression, CastScalarKind.CONVERT)
+        for output in input_gradient.map.scalar_outputs
+    ) == (86, 30)
+    assert all(
+        output.scalar_program.expression.kind is CastScalarKind.CONVERT
+        and output.scalar_program.expression.operands[0].kind is CastScalarKind.CONVERT
+        for output in input_gradient.map.scalar_outputs
+    )
+    assert all("__float2bfloat16_rn" in output.generated_cuda.source for output in input_gradient.map.scalar_outputs)
 
     assert len(report.folds) == 2
     assert {fold.reducer for fold in report.folds} == {"add"}
@@ -100,7 +123,8 @@ def test_grug_hlo_forward_map_ast_preserves_source_bf16_boundaries() -> None:
         for chain in recover_relation_programs(_frozen_hlo()).contract_chains
         if chain.role is ContractChainRole.FORWARD
     )
-    assert forward.map.scalar_program is not None
+    assert len(forward.map.scalar_outputs) == 1
+    program = forward.map.scalar_outputs[0].scalar_program
     left = 0.78125
     right = -1.3125
 
@@ -116,7 +140,7 @@ def test_grug_hlo_forward_map_ast_preserves_source_bf16_boundaries() -> None:
     expected = bf16(activated * right_source)
 
     observed = evaluate_cast_scalar_program(
-        forward.map.scalar_program,
+        program,
         {"input_r0_f0": left, "input_r0_f32": right},
     )
 
@@ -139,16 +163,40 @@ def test_grug_hlo_forward_map_mutation_regenerates_scalar_cuda() -> None:
         for chain in recover_relation_programs(mutated_hlo).contract_chains
         if chain.role is ContractChainRole.FORWARD
     )
-    assert baseline.map.scalar_program is not None and mutated.map.scalar_program is not None
-    assert baseline.map.generated_cuda is not None and mutated.map.generated_cuda is not None
+    baseline_output = baseline.map.scalar_outputs[0]
+    mutated_output = mutated.map.scalar_outputs[0]
 
-    assert mutated.map.scalar_program.digest != baseline.map.scalar_program.digest
-    assert mutated.map.generated_cuda.source_digest != baseline.map.generated_cuda.source_digest
-    assert _count_kind(mutated.map.scalar_program.expression, CastScalarKind.ADD) == (
-        _count_kind(baseline.map.scalar_program.expression, CastScalarKind.ADD) + 1
+    assert mutated_output.scalar_program.digest != baseline_output.scalar_program.digest
+    assert mutated_output.generated_cuda.source_digest != baseline_output.generated_cuda.source_digest
+    assert _count_kind(mutated_output.scalar_program.expression, CastScalarKind.ADD) == (
+        _count_kind(baseline_output.scalar_program.expression, CastScalarKind.ADD) + 1
     )
-    assert _count_kind(mutated.map.scalar_program.expression, CastScalarKind.MULTIPLY) == (
-        _count_kind(baseline.map.scalar_program.expression, CastScalarKind.MULTIPLY) - 1
+    assert _count_kind(mutated_output.scalar_program.expression, CastScalarKind.MULTIPLY) == (
+        _count_kind(baseline_output.scalar_program.expression, CastScalarKind.MULTIPLY) - 1
+    )
+
+
+def test_grug_hlo_input_adjoint_mutation_regenerates_only_affected_scalar_output() -> None:
+    baseline = next(
+        chain
+        for chain in recover_relation_programs(_frozen_hlo()).contract_chains
+        if chain.role is ContractChainRole.INPUT_GRADIENT
+    )
+    mutated_hlo = _frozen_hlo().replace(
+        "multiply(%convert.3441, %convert.3459)",
+        "add(%convert.3441, %convert.3459)",
+        1,
+    )
+    mutated = next(
+        chain
+        for chain in recover_relation_programs(mutated_hlo).contract_chains
+        if chain.role is ContractChainRole.INPUT_GRADIENT
+    )
+
+    assert mutated.map.scalar_outputs[0].scalar_program.digest == baseline.map.scalar_outputs[0].scalar_program.digest
+    assert mutated.map.scalar_outputs[1].scalar_program.digest != baseline.map.scalar_outputs[1].scalar_program.digest
+    assert mutated.map.scalar_outputs[1].generated_cuda.source_digest != (
+        baseline.map.scalar_outputs[1].generated_cuda.source_digest
     )
 
 
