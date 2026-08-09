@@ -738,3 +738,33 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Optimizer/timing contract: `schedule_steps=17,652,512` represents approximately 750 tokens per 24.680B active parameters at 1,048,576 tokens/step, while `stop_after_steps=25` bounds the experiment. Watch, eval, profiler, checkpoint, and periodic metric work are disabled. Score steps 5-24.
 - Runtime: pinned JAX 0.11 default one-shot, PGLE off, `NCCL_BUFFSIZE=1048576`, latency hiding on, overlap limit 4, command buffers off. This is the ideal-kernel exact baseline before forcing fallback or decomposition.
 - Scheduling: four pods request four GB200s, 16 CPU, 256 GiB RAM, 1 TiB disk, and one NVLink domain. Kueue reports only three CPU and four GPU exclusions; production memory occupancy excludes 195 nodes. Leave the bounded shape queued rather than weakening placement.
+
+### 2026-08-09 16:23 UTC - Private NCCL fallback stalls at EP8 E96
+
+- Run: `ra2a-s16-ep8-e96-nccl-fallback-watch-20260809`; workers `sbxsxs64` and `sdgwxs64`, both in `DH1-126-US-EAST-08A`. This reused the same hardware as stable E24, failing one-shot E96, ring, and dense-decomposer controls while the exact four-node baseline stayed queued.
+- Geometry/runtime: d768/L8, E96, EP8, 524,288 tokens/step, 65,536 tokens and 12 resident experts per rank, eight one-device processes, stable JAX 0.11.0, PGLE off, `NCCL_BUFFSIZE=1048576`, latency hiding on, overlap limit 1 for inline watch, and command buffers off.
+- Controlled change from failing one-shot S10n: `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`, selecting the private grouped NCCL send/receive implementation.
+- Progress boundary: data loading completed and a thread sample moved the worker mains into the first `train_step` executable at `train.py:691` / `pxla.py:420`. More than three minutes later W&B still had no step, loss, timing, or gradient metric.
+- Device signature: sampled GPUs were all at 100% utilization with 146,687 MiB allocated and 195-227 W power. Bounded logs contained no allocator, CUDA, NCCL, or numerical error. This matches the generic fallback's low-power no-progress signature at a smaller peer count.
+- Terminal state: stopped the coordinator at 16:22:43 UTC. Iris killed both workers and released the eight GPUs; no retry ran. The job summary's two preemptions reflect the two user-terminated tasks.
+- Interpretation: the private fallback cannot provide a correctness or performance baseline even at EP8/process-per-GPU. Restore one-shot and disable asynchronous `RAGGEDALLTOALL` wrapping next to test whether the zero-copy gradient corruption depends on async buffer lifetime.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5232524890
+
+### 2026-08-09 16:30 UTC - Synchronous one-shot reproduces the E96 NaN
+
+- Run: `ra2a-s17-ep8-e96-sync-oneshot-watch-20260809`; same `sbxsxs64` and `sdgwxs64` workers in `DH1-126-US-EAST-08A` as S10m-S14 and S16. The pods initially waited for S16 memory release, then ran normally with no production preemption.
+- Controlled change from failing S10n: add only `--xla_gpu_disable_async_collectives=RAGGEDALLTOALL`. Default one-shot remained enabled; process-per-GPU, stable JAX 0.11.0, PGLE off, `NCCL_BUFFSIZE=1048576`, latency hiding on, overlap 1, command buffers off, model, data, and gradient watch remained fixed.
+- Compile boundary: 16:27 and 16:28 UTC thread samples showed `backend_compile_and_load`, first for state initialization at line 593 and then for the watched train step at line 691. No no-progress clock was started during compilation.
+- Result: step 0 loss 11.8040695, zero drops, 32.275512 seconds, and 16,244.14 tokens/s. Total gradient norm was NaN. Token embeddings, routed expert `w_down`, and router gradients were NaN; final norm and output-projection gradients were finite at 0.00299966 and 0.1653454. This matches the S10n/S12 localization.
+- Terminal state: the non-finite update aborted the first attempt and Iris began an identical retry. Stopped the coordinator at 16:30:24 UTC before the retry reached model execution.
+- Interpretation: XLA's asynchronous collective wrapper is not necessary for the corruption. Remaining suspects are inside the zero-copy one-shot implementation: symmetric output buffer assignment, direct-P2P kernel synchronization, or offset/index handling. Run VLOG-5 bounds checking next if the exact four-node job remains gated.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5232556528
+
+### 2026-08-09 16:43 UTC - VLOG-5 bounds checking is itself racy
+
+- Run: `ra2a-s18-ep8-e96-oneshot-bounds-watch-20260809`; same EP8/E96 process-per-GPU diagnostic geometry and stable JAX 0.11.0 one-shot path as S10n/S17. The only new process setting was `TF_CPP_VMODULE=ragged_all_to_all_thunk=5`.
+- Result: all eight ranks failed before W&B recorded a step at `ragged_all_to_all_thunk.cc:297` with `send_sz >= 0 && recv_sz >= 0` and `RaggedAllToAll: Negative sizes detected!`. The failure then produced rank-local segmentation faults and coordinator disconnects. Iris began a retry; the coordinator was stopped at 16:38:59 UTC, leaving the job terminal as user-killed.
+- Pinned-source check: `CheckRaggedAllToAllBounds` runs after the pre-kernel NCCL barrier and before the one-shot CUDA kernel. It copies each metadata buffer with `StreamExecutor::SynchronousMemcpyD2H`, which is not enqueued on the collective's execution stream and does not first block that stream. The metadata-producing GPU work can therefore still be in flight when the checker reads it.
+- Dtype check: JAX 0.11 accepts any integer metadata and initially lowers the four arrays unchanged, but OpenXLA's `RaggedAllToAllCanonicalizer` converts all four to S64 before `RaggedAllToAllThunk::CheckImplementable`. The runtime's `int64_t` reads are therefore not an i32/i64 mismatch in the executable.
+- Interpretation: this arm exposes a broken VLOG diagnostic, not yet a production metadata bug. The negative values are consistent with the checker racing the metadata producers; its failure happens before the one-shot kernel that normally returns finite forward values and corrupts the first backward. Do not use S18 to claim that Marin produced negative routing counts.
+- Next action: force CUDA launch synchronization on the same EP8/E96 arm. If that restores finite gradients, the one-shot kernel has a stream-ordering bug. If it still produces NaNs, combine launch blocking with VLOG-5 so the bounds checker can inspect initialized metadata and validate offsets/output-buffer bounds.
