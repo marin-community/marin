@@ -16,7 +16,16 @@ author: dlwh
 
 ## Current TL;DR
 
-- Dense and distributed-MoE checkpoints are frozen. The active experiment is a clean MiniMax Sparse Attention (MSA) proof on one GB200: ordinary JAX/StableHLO must recover index projections, causal block routing, a generic Relation, and exact selected attention; the device path must synthesize its Contract/Map/Fold/DomainRestriction body rather than call the official MSA kernel. The official SM100 implementation is the matched oracle and a source of low-level physical machinery only.
+- The active path replaces generic forward and reverse regions in a natural
+  one-layer Grug training step after JAX-owned AD. A seven-call H100 replay owns
+  routed forward, a shared Contract with two scalar Maps, two expert-weight
+  Contracts, streaming-attention reverse, and two row Folds. It measured
+  `1.142374x` XLA and passed ordered-FP correctness, but three of 30 generated
+  executions produced a second output hash. The result is unaccepted. Per-leaf
+  hash evidence is now recorded before the next bounded replay. Generic RMS
+  reverse measurement and absorption of the remaining two Contracts plus the
+  source-indexed Fold are in progress. H100, B200, and GB200 evidence remain
+  separate; Schmidt provides B200, not GB200.
 
 ## Hypothesis Queue
 
@@ -2621,3 +2630,34 @@ author: dlwh
   not covered.
 - Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_grouped_contract_sm100_gb200_v0/`.
+
+### 2026-08-09 - TLTC-XLA-032 shared Contract and exact target audit
+
+- The natural Grug replacement now has a shared-map composition. One recovered
+  Contract emits two generated scalar-Map outputs and leaves only the
+  nonoverlapping input-adjoint remainder in XLA. The scalar Maps are generated
+  from recovered expressions and do not dispatch on MoE or activation names.
+- The transformed-HLO audit parses exact `custom_call_target` attributes. Every
+  selected target must occur exactly once before correctness, warmup, or timing.
+  Generated adapter names containing target text no longer inflate the count.
+- Post-execution failures preserve raw timing samples, hashes, handler counts,
+  and numerical comparison in an explicitly unaccepted result.
+- Canonical revisions: `fdd8380cf0` for shared-map composition and `9798ebd794`
+  for the exact target audit.
+
+### 2026-08-09 - TLTC-XLA-033 H100 shared-map replay rejected by determinism
+
+- A physical H100 replay executed all seven selected handlers 35 times. Each
+  exact custom-call target occurred once in the transformed HLO.
+- Ordered-FP correctness passed against XLA across 53 leaves. Thirty-eight leaves
+  were bitwise equal; maximum absolute error was `9.760261e-7` and mean absolute
+  error was `7.976652e-11`.
+- XLA produced one output hash in 30 runs. Shuttle produced the dominant hash in
+  27 runs and an alternate hash in 3 runs. The determinism guard rejected the
+  run.
+- Median latency was `0.528433 ms` for XLA and `0.603667 ms` for Shuttle, or
+  `1.142374x`. The timing is diagnostic because determinism failed.
+- The benchmark now records per-leaf hashes so the next replay can identify the
+  varying state or metric before a component-level rerun.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_unaccepted_v0/`.

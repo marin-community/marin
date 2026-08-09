@@ -229,13 +229,36 @@ def _compare_under_ordered_fp(expected: Any, actual: Any) -> dict[str, Any]:
 
 
 def _tree_hash(tree: Any) -> str:
+    tree_hash, _ = _tree_hash_evidence(tree)
+    return tree_hash
+
+
+def _tree_hash_evidence(tree: Any) -> tuple[str, list[dict[str, Any]]]:
     digest = hashlib.sha256()
-    for leaf in jax.tree.leaves(tree):
+    leaf_evidence = []
+    path_leaves, _ = jax.tree_util.tree_flatten_with_path(tree)
+    for index, (path, leaf) in enumerate(path_leaves):
         array = np.asarray(leaf)
-        digest.update(array.dtype.str.encode())
-        digest.update(str(array.shape).encode())
-        digest.update(array.tobytes())
-    return digest.hexdigest()
+        payload = array.tobytes()
+        dtype = array.dtype.str
+        shape = tuple(int(dimension) for dimension in array.shape)
+        digest.update(dtype.encode())
+        digest.update(str(shape).encode())
+        digest.update(payload)
+        leaf_digest = hashlib.sha256()
+        leaf_digest.update(dtype.encode())
+        leaf_digest.update(str(shape).encode())
+        leaf_digest.update(payload)
+        leaf_evidence.append(
+            {
+                "index": index,
+                "path": jax.tree_util.keystr(path),
+                "dtype": dtype,
+                "shape": shape,
+                "sha256": leaf_digest.hexdigest(),
+            }
+        )
+    return digest.hexdigest(), leaf_evidence
 
 
 def run_smoke(

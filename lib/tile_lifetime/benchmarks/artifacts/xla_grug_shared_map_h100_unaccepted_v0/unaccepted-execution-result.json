@@ -1,0 +1,587 @@
+{
+  "baseline_output_hashes": [
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460",
+    "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+  ],
+  "baseline_samples_ms": [
+    0.5212500000197906,
+    0.5364799981180113,
+    0.5278959979477804,
+    0.5292320020089392,
+    0.5218209989834577,
+    0.5300960001477506,
+    0.5304139995132573,
+    0.5298340001900215,
+    0.5397829991125036,
+    0.5314429981808644,
+    0.5276459996821359,
+    0.536448998900596,
+    0.52295299974503,
+    0.529658002051292,
+    0.5233169977145735,
+    0.5251889997452963,
+    0.5214709999563638,
+    0.532181999005843,
+    0.524056998983724,
+    0.5341700016288087,
+    0.5284590006340295,
+    0.5278850003378466,
+    0.5229700000199955,
+    0.540493998414604,
+    0.5273829992802348,
+    0.5412200007413048,
+    0.5332959990482777,
+    0.5284060025587678,
+    0.5262079976091627,
+    0.520737001352245
+  ],
+  "comparison": {
+    "bitwise_equal_leaf_count": 38,
+    "maximum_absolute_error": 9.760260581970215e-07,
+    "mean_absolute_error": 7.976652347623191e-11,
+    "result_leaf_count": 53
+  },
+  "custom_call_handler_executions": {
+    "attention_backward": 35,
+    "axis_folds": [
+      35,
+      35
+    ],
+    "forward": 35,
+    "shared_contract_multi_map": 35,
+    "weight_gradients": [
+      35,
+      35
+    ]
+  },
+  "custom_call_occurrences_in_transformed_hlo": {
+    "attention_backward": 1,
+    "axis_folds": [
+      1,
+      1
+    ],
+    "forward": 1,
+    "shared_contract_multi_map": 1,
+    "weight_gradients": [
+      1,
+      1
+    ]
+  },
+  "generated_output_hashes": [
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1",
+    "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+  ],
+  "generated_samples_ms": [
+    0.607026999205118,
+    0.6119659992691595,
+    0.6002679983794224,
+    0.6017380001139827,
+    0.6062930006009992,
+    0.6044540023140144,
+    0.6063590008125175,
+    0.61019599888823,
+    0.5797570011054631,
+    0.5901000004087109,
+    0.608634996751789,
+    0.6035579972376581,
+    0.5996809995849617,
+    0.6024979993526358,
+    0.5873400004929863,
+    0.6002610025461763,
+    0.6037769999238662,
+    0.6049929979781155,
+    0.5999140012136195,
+    0.6022110028425232,
+    0.6025449984008446,
+    0.6048060022294521,
+    0.6042200002411846,
+    0.6021180015522987,
+    0.607141999353189,
+    0.6098390003899112,
+    0.610841998422984,
+    0.6052910030120984,
+    0.6018700005370192,
+    0.6026900009601377
+  ],
+  "minimum_custom_call_handler_executions": 35,
+  "raw_samples": [
+    {
+      "baseline": {
+        "latency_ms": 0.5212500000197906,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.607026999205118,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5364799981180113,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6119659992691595,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5278959979477804,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6002679983794224,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5292320020089392,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6017380001139827,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5218209989834577,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6062930006009992,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5300960001477506,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6044540023140144,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5304139995132573,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6063590008125175,
+        "output_hash": "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5298340001900215,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.61019599888823,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5397829991125036,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.5797570011054631,
+        "output_hash": "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5314429981808644,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.5901000004087109,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5276459996821359,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.608634996751789,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.536448998900596,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6035579972376581,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.52295299974503,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.5996809995849617,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.529658002051292,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6024979993526358,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5233169977145735,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.5873400004929863,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5251889997452963,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6002610025461763,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5214709999563638,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6037769999238662,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.532181999005843,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6049929979781155,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.524056998983724,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.5999140012136195,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5341700016288087,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6022110028425232,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5284590006340295,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6025449984008446,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5278850003378466,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6048060022294521,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5229700000199955,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6042200002411846,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.540493998414604,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6021180015522987,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5273829992802348,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.607141999353189,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5412200007413048,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6098390003899112,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5332959990482777,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.610841998422984,
+        "output_hash": "ab9195d2672701bfa18fcb2d1d30eef41cafac721b4b41cfe9ea71db5a275d00"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5284060025587678,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6052910030120984,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.5262079976091627,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "baseline",
+        "transformed"
+      ],
+      "transformed": {
+        "latency_ms": 0.6018700005370192,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    },
+    {
+      "baseline": {
+        "latency_ms": 0.520737001352245,
+        "output_hash": "b68f033ead18c4e9ba2431d06c4da643dcf0689a7ce5377eb254957ee5d28460"
+      },
+      "order": [
+        "transformed",
+        "baseline"
+      ],
+      "transformed": {
+        "latency_ms": 0.6026900009601377,
+        "output_hash": "df4c794bf8aa1f412cddc7c53764b1170a46659982378784ea59ce3ad62816d1"
+      }
+    }
+  ],
+  "reason": "generated seven-call result is not bitwise deterministic",
+  "status": "unaccepted"
+}

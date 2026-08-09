@@ -27,7 +27,7 @@ from haliax.partitioning import set_mesh
 
 from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call_smoke import (
     _compare_under_ordered_fp,
-    _tree_hash,
+    _tree_hash_evidence,
 )
 from lib.tile_lifetime.benchmarks.xla_grug_pair_map_custom_call_smoke import _mesh, _natural_train_step
 from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
@@ -626,12 +626,14 @@ def run_smoke(
             jax.block_until_ready(actual)
             comparison = _compare_under_ordered_fp(expected, actual)
 
-            def timed_execution(executable: Any) -> tuple[float, str]:
+            def timed_execution(executable: Any) -> tuple[float, str, list[dict[str, Any]]]:
                 timing_state, timing_batch = fresh_inputs()
                 start = time.perf_counter()
                 output = executable(timing_state, timing_batch)
                 jax.block_until_ready(output)
-                return (time.perf_counter() - start) * 1e3, _tree_hash(output)
+                latency_ms = (time.perf_counter() - start) * 1e3
+                output_hash, leaf_hashes = _tree_hash_evidence(output)
+                return latency_ms, output_hash, leaf_hashes
 
             for index in range(warmup):
                 order = (baseline, transformed) if index % 2 == 0 else (transformed, baseline)
@@ -648,8 +650,12 @@ def run_smoke(
                 sample: dict[str, Any] = {"order": order}
                 for name in order:
                     executable = baseline if name == "baseline" else transformed
-                    latency, output_hash = timed_execution(executable)
-                    sample[name] = {"latency_ms": latency, "output_hash": output_hash}
+                    latency, output_hash, leaf_hashes = timed_execution(executable)
+                    sample[name] = {
+                        "latency_ms": latency,
+                        "output_hash": output_hash,
+                        "output_leaf_hashes": leaf_hashes,
+                    }
                     if name == "baseline":
                         baseline_samples.append(latency)
                         baseline_hashes.append(output_hash)

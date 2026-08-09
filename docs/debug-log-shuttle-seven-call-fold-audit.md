@@ -66,3 +66,30 @@ routed-training, and shared-Contract/multi-Map tests pass after integration.
 
 The previous H100 run remains unaccepted because its raw timing samples existed
 only in process memory. One bounded H100 replay is still required.
+
+## Hypothesis 3
+
+The exact `9798ebd794` replay passed structural auditing and ordered-FP
+correctness, but three of 30 generated executions produced a second output hash.
+The baseline hash was stable in all 30 executions. The current whole-tree hash
+does not identify which of the 53 output leaves changed.
+
+The H100 was released and verified inactive. The replay measured `0.528433 ms`
+for XLA and `0.603667 ms` for the generated path, or `1.142374x`, but this is an
+unaccepted diagnostic result because the determinism gate failed.
+
+## Changes to make
+
+Record a path, dtype, shape, and hash for every output leaf after each execution.
+Preserve those hashes in both successful and unaccepted artifacts. Use the first
+varying leaf to select the next component-level audit; do not rerun all components
+independently before locating the affected output.
+
+## Results
+
+The replay artifact is preserved under
+`lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_unaccepted_v0/`.
+It contains all 60 raw counterbalanced samples, original and transformed HLO,
+generated CUDA, numerical comparison, and checksums. The benchmark now records
+per-leaf hashes. A CPU regression verifies that mutating one leaf changes only
+that leaf's hash.

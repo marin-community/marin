@@ -9,6 +9,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from lib.tile_lifetime.benchmarks.xla_grug_backward_multi_output_gpu_custom_call_smoke import _tree_hash_evidence
 from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call import (
     _ROUTED_ATTENTION_TARGETS,
     _SHARED_ROUTED_TARGETS,
@@ -66,6 +67,19 @@ def _hlo() -> str:
 
 def _bf16(value: np.ndarray) -> np.ndarray:
     return np.asarray(jnp.asarray(value, dtype=jnp.bfloat16).astype(jnp.float32))
+
+
+def test_output_hash_evidence_identifies_the_changed_leaf() -> None:
+    original = {"state": (np.asarray([1.0], dtype=np.float32), np.asarray([2], dtype=np.int32))}
+    mutated = {"state": (np.asarray([1.0], dtype=np.float32), np.asarray([3], dtype=np.int32))}
+
+    original_hash, original_leaves = _tree_hash_evidence(original)
+    mutated_hash, mutated_leaves = _tree_hash_evidence(mutated)
+
+    assert original_hash != mutated_hash
+    assert [leaf["path"] for leaf in original_leaves] == ["['state'][0]", "['state'][1]"]
+    assert original_leaves[0]["sha256"] == mutated_leaves[0]["sha256"]
+    assert original_leaves[1]["sha256"] != mutated_leaves[1]["sha256"]
 
 
 def test_natural_hlo_recovers_one_shared_contract_with_two_live_scalar_maps() -> None:
