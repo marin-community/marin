@@ -165,10 +165,10 @@ def _phased_reference(query: jax.Array, key: jax.Array, value: jax.Array) -> np.
     return output
 
 
-def _determinism(function: Callable[[], Any], *, repeats: int) -> dict[str, Any]:
+def _determinism(function: Callable[..., Any], arguments: tuple[jax.Array, ...], *, repeats: int) -> dict[str, Any]:
     hashes: list[list[str]] = []
     for _ in range(repeats):
-        result = function()
+        result = function(*arguments)
         jax.block_until_ready(result)
         values = result if isinstance(result, tuple) else (result,)
         hashes.append([_hash(value) for value in values])
@@ -178,25 +178,25 @@ def _determinism(function: Callable[[], Any], *, repeats: int) -> dict[str, Any]
 
 
 def _measure(
-    variants: tuple[tuple[str, Callable[[], Any]], ...],
+    variants: tuple[tuple[str, Callable[..., Any], tuple[jax.Array, ...]], ...],
     *,
     warmups: int,
     repeats: int,
     iterations: int,
 ) -> dict[str, Any]:
     for _ in range(warmups):
-        for _, function in variants:
-            jax.block_until_ready(function())
-    samples: dict[str, list[float]] = {name: [] for name, _ in variants}
+        for _, function, arguments in variants:
+            jax.block_until_ready(function(*arguments))
+    samples: dict[str, list[float]] = {name: [] for name, _, _ in variants}
     execution_order: list[list[str]] = []
     for repeat in range(repeats):
         ordered = variants if repeat % 2 == 0 else tuple(reversed(variants))
-        execution_order.append([name for name, _ in ordered])
-        for name, function in ordered:
+        execution_order.append([name for name, _, _ in ordered])
+        for name, function, arguments in ordered:
             started = time.perf_counter()
             result = None
             for _ in range(iterations):
-                result = function()
+                result = function(*arguments)
             jax.block_until_ready(result)
             samples[name].append((time.perf_counter() - started) * 1e3 / iterations)
     return {
@@ -225,6 +225,24 @@ def _write_source(generated: CudaEventFfiLowering, path: Path) -> dict[str, str]
         "path": str(path),
         "source_sha256": generated.source_sha256,
         "device_source_sha256": generated.device_source_sha256,
+    }
+
+
+def _write_optimized_hlo(executable: Any, path: Path, *, target_name: str) -> dict[str, Any]:
+    text = executable.as_text()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    if target_name not in text:
+        raise RuntimeError(f"optimized HLO does not contain expected FFI target {target_name!r}")
+    lowered_lines = text.lower().splitlines()
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "parameter_occurrences": text.count("parameter("),
+        "ffi_target_occurrences": text.count(target_name),
+        "constant_lines": sum("constant(" in line for line in lowered_lines),
+        "copy_lines": sum(" copy(" in line or "= copy(" in line for line in lowered_lines),
+        "audit": "FFI operands remain executable parameters; constants and copies are counted, not hidden",
     }
 
 
@@ -259,18 +277,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     first_runtime_call = _runtime_callable(generated_runtime, first_arguments.maximum_count)
     second_runtime_call = _runtime_callable(mutated_runtime, second_arguments.maximum_count)
 
-    first_runtime = first_runtime_call(
+    first_runtime_inputs = (
         first_arguments.input,
         first_arguments.event_counts,
         first_arguments.event_source_offsets,
         first_arguments.event_sources,
     )
-    second_runtime = second_runtime_call(
+    second_runtime_inputs = (
         second_arguments.input,
         second_arguments.event_counts,
         second_arguments.event_source_offsets,
         second_arguments.event_sources,
     )
+    first_runtime_executable = first_runtime_call.lower(*first_runtime_inputs).compile()
+    second_runtime_executable = second_runtime_call.lower(*second_runtime_inputs).compile()
+    first_runtime = first_runtime_executable(*first_runtime_inputs)
+    second_runtime = second_runtime_executable(*second_runtime_inputs)
     jax.block_until_ready((first_runtime, second_runtime))
     if not np.array_equal(np.asarray(first_runtime[0]), np.asarray(payload)):
         raise RuntimeError("runtime relation did not write every source partial exactly once")
@@ -331,8 +353,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     primary_phased_call = _phased_callable(generated_phased)
     mutation_phased_call = _phased_callable(mutated_phased)
-    primary_output = primary_phased_call(query, key, value)
-    mutation_output = mutation_phased_call(mutation_query, mutation_key_tensor, mutation_value)
+    primary_phased_inputs = (query, key, value)
+    mutation_phased_inputs = (mutation_query, mutation_key_tensor, mutation_value)
+    primary_phased_executable = primary_phased_call.lower(*primary_phased_inputs).compile()
+    mutation_phased_executable = mutation_phased_call.lower(*mutation_phased_inputs).compile()
+    primary_output = primary_phased_executable(*primary_phased_inputs)
+    mutation_output = mutation_phased_executable(*mutation_phased_inputs)
     jax.block_until_ready((primary_output, mutation_output))
     primary_reference = _phased_reference(query, key, value)
     mutation_reference = _phased_reference(mutation_query, mutation_key_tensor, mutation_value)
@@ -343,41 +369,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not np.allclose(np.asarray(mutation_output), mutation_reference, rtol=2e-5, atol=2e-5):
         raise RuntimeError(f"mutated phased result has maximum error {mutation_error.max()}")
 
-    def runtime_primary():
-        return first_runtime_call(
-            first_arguments.input,
-            first_arguments.event_counts,
-            first_arguments.event_source_offsets,
-            first_arguments.event_sources,
-        )
-
-    def runtime_mutation():
-        return second_runtime_call(
-            second_arguments.input,
-            second_arguments.event_counts,
-            second_arguments.event_source_offsets,
-            second_arguments.event_sources,
-        )
-
-    def phased_primary():
-        return primary_phased_call(query, key, value)
-
-    def phased_mutation():
-        return mutation_phased_call(mutation_query, mutation_key_tensor, mutation_value)
-
     determinism = {
-        "runtime_primary": _determinism(runtime_primary, repeats=args.determinism_repeats),
-        "runtime_mutation": _determinism(runtime_mutation, repeats=args.determinism_repeats),
-        "phased_primary": _determinism(phased_primary, repeats=args.determinism_repeats),
-        "phased_mutation": _determinism(phased_mutation, repeats=args.determinism_repeats),
+        "runtime_primary": _determinism(
+            first_runtime_executable, first_runtime_inputs, repeats=args.determinism_repeats
+        ),
+        "runtime_mutation": _determinism(
+            second_runtime_executable, second_runtime_inputs, repeats=args.determinism_repeats
+        ),
+        "phased_primary": _determinism(
+            primary_phased_executable, primary_phased_inputs, repeats=args.determinism_repeats
+        ),
+        "phased_mutation": _determinism(
+            mutation_phased_executable, mutation_phased_inputs, repeats=args.determinism_repeats
+        ),
     }
     telemetry_before = nvidia_smi_snapshot()
     timing = _measure(
         (
-            ("runtime_primary", runtime_primary),
-            ("runtime_mutation", runtime_mutation),
-            ("phased_primary", phased_primary),
-            ("phased_mutation", phased_mutation),
+            ("runtime_primary", first_runtime_executable, first_runtime_inputs),
+            ("runtime_mutation", second_runtime_executable, second_runtime_inputs),
+            ("phased_primary", primary_phased_executable, primary_phased_inputs),
+            ("phased_mutation", mutation_phased_executable, mutation_phased_inputs),
         ),
         warmups=args.warmups,
         repeats=args.repeats,
@@ -448,6 +460,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ffi_handler_call_count": phased_count_symbol(),
         },
         "determinism": determinism,
+        "optimized_hlo": {
+            "runtime_primary": _write_optimized_hlo(
+                first_runtime_executable,
+                args.json_output.parent / "runtime_primary_optimized_hlo.txt",
+                target_name=_RUNTIME_TARGET,
+            ),
+            "runtime_mutation": _write_optimized_hlo(
+                second_runtime_executable,
+                args.json_output.parent / "runtime_mutation_optimized_hlo.txt",
+                target_name=_RUNTIME_TARGET,
+            ),
+            "phased_primary": _write_optimized_hlo(
+                primary_phased_executable,
+                args.json_output.parent / "phased_primary_optimized_hlo.txt",
+                target_name=_PHASED_TARGET,
+            ),
+            "phased_mutation": _write_optimized_hlo(
+                mutation_phased_executable,
+                args.json_output.parent / "phased_mutation_optimized_hlo.txt",
+                target_name=_PHASED_TARGET,
+            ),
+        },
         "timing": timing,
         "toolchain": toolchain_snapshot(str(args.nvcc)),
         "jax": {

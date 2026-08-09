@@ -20,6 +20,23 @@ pipeline. Runtime relation mutations and phased shape mutations reuse the same
 generated bodies. This validates the physical attachment boundary, not a
 production MoE or attention kernel.
 
+The follow-up structural adapter now derives QK Contract, normalized-exponential
+partial Fold, PV Contract, and finalization task families from an actual generic
+`StreamingAttentionProgram`. It computes row-tile and Fold-partition domains
+from the program's logical axes and tile schedule. Changing the Fold domain
+changes event counts without a workload dispatch. Runtime segment readiness
+also consumes the same executable `RelationPlan` type used by the MoE path.
+
+This is not yet an end-to-end attention/MoE Event Tensor integration. The
+accurate streaming graph has one task per row tile and K/V Fold partition,
+whereas the bounded CUDA validation template currently assumes that its
+pipeline-slot count is also the complete Fold-partition count and adds a
+conservative finalize-before-next-generation reuse edge. Connecting the exact
+graph to circular storage needs a separate buffer-slot assignment and reuse
+dependence derivation. Until that exists, the branch proves structural reuse
+and a physical attachment point, not replacement of current attention or MoE
+readiness logic.
+
 ## Acceptance answers
 
 ### 1. Is Event Tensor a necessary first-class IR object?
