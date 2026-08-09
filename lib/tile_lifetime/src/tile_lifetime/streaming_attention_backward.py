@@ -12,6 +12,12 @@ import numpy as np
 
 from tile_lifetime.autodiff import differentiate_scalar_expression
 from tile_lifetime.event_dataflow import TaskAxis, TaskFamily, TaskRelation
+from tile_lifetime.fold_placement import (
+    FoldAttachment,
+    FoldResultDisposition,
+    OwnerTileAvailability,
+    attach_fold_to_owner_preparation,
+)
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.shared_reverse_fusion import SharedReverseFusionPlan, plan_shared_producer_reverse_fusion
@@ -24,8 +30,19 @@ from tile_lifetime.streaming_attention import (
     _evaluate_map,
     _slice_array,
     _validated_inputs,
+    execute_tensor_program,
 )
-from tile_lifetime.tensor_program import MapPrimitive, ProgramValue, ScalarExpressionKind, scalar_expression_inputs
+from tile_lifetime.tensor_program import (
+    FoldPrimitive,
+    FoldReducer,
+    MapPrimitive,
+    ProgramValue,
+    ScalarExpressionKind,
+    TensorProgram,
+    scalar_binary,
+    scalar_expression_inputs,
+    scalar_input,
+)
 
 
 class StreamingAttentionBackwardStage(StrEnum):
@@ -90,6 +107,7 @@ class StreamingAttentionBackwardTileSchedule:
     query_heads_per_key_value_tile: int
     domain_traversal: StreamingAttentionBackwardDomainTraversal
     key_value_fold_order: StreamingAttentionBackwardFoldOrder
+    query_owner_attachments: tuple[FoldAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         extents = (
@@ -149,6 +167,8 @@ class StreamingAttentionBackwardProgram:
 
     forward: StreamingAttentionProgram
     output_cotangent: ProgramValue
+    output_dot_map: MapPrimitive
+    output_dot_fold: FoldPrimitive
     score_map_vjp: MapPrimitive
     output_scale: float
     stages: tuple[StreamingAttentionBackwardStage, ...]
@@ -179,6 +199,34 @@ def derive_streaming_attention_backward(
         forward.finalize.output.axes,
         DType.FP32,
     )
+    output_product = ProgramValue(
+        "streaming_output_times_cotangent",
+        forward.finalize.output.axes,
+        DType.FP32,
+    )
+    output_dot = ProgramValue(
+        "streaming_output_dot_cotangent",
+        forward.finalize.output.axes[:-1],
+        DType.FP32,
+    )
+    output_dot_map = MapPrimitive(
+        name="multiply output by output cotangent",
+        inputs=(forward.finalize.output, output_cotangent),
+        output=output_product,
+        expression=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_input(forward.finalize.output.name),
+            scalar_input(output_cotangent.name),
+        ),
+    )
+    output_dot_fold = FoldPrimitive(
+        name="fold output feature products",
+        input=output_product,
+        output=output_dot,
+        reduction_axes=(forward.finalize.output.axes[-1],),
+        reducer=FoldReducer.SUM,
+        accumulation_dtype=DType.FP32,
+    )
     score_map_derivative = differentiate_scalar_expression(
         forward.score_map.expression,
         forward.qk.output.name,
@@ -199,10 +247,12 @@ def derive_streaming_attention_backward(
     return StreamingAttentionBackwardProgram(
         forward=forward,
         output_cotangent=output_cotangent,
+        output_dot_map=output_dot_map,
+        output_dot_fold=output_dot_fold,
         score_map_vjp=score_map_vjp,
         output_scale=output_scale,
         stages=tuple(StreamingAttentionBackwardStage),
-        materialized_values=cotangents,
+        materialized_values=(*cotangents, output_dot),
         provenance=StreamingAttentionBackwardProvenance.REFERENCE_SYMBOLIC_VJP,
     )
 
@@ -281,12 +331,23 @@ def derive_streaming_attention_backward_tile_schedule(
     index_map = matching_maps[0]
     if query_head.extent != key_value_head.extent * index_map.divisor:
         raise ValueError("query-head index relation must partition query heads evenly")
+    output_dot_attachment = attach_fold_to_owner_preparation(
+        program.output_dot_map,
+        program.output_dot_fold,
+        owner_axes=program.output_dot_fold.output.axes,
+        input_availability=tuple(
+            OwnerTileAvailability(value, program.output_dot_fold.reduction_axes)
+            for value in program.output_dot_map.inputs
+        ),
+        result_disposition=FoldResultDisposition.MATERIALIZE_FOR_CONSUMERS,
+    )
     return StreamingAttentionBackwardTileSchedule(
         query_tile_size=query_tile_size,
         key_value_tile_size=key_value_tile_size,
         query_heads_per_key_value_tile=index_map.divisor,
         domain_traversal=domain_traversal,
         key_value_fold_order=StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE,
+        query_owner_attachments=(output_dot_attachment,),
     )
 
 
@@ -448,17 +509,31 @@ def execute_streaming_attention_backward(
     query_cotangent = np.zeros(query_value.shape, dtype=np.float32)
     key_cotangent = np.zeros(key_value.shape, dtype=np.float32)
     value_cotangent = np.zeros(value_value.shape, dtype=np.float32)
+    output_dot_state = execute_tensor_program(
+        TensorProgram(
+            inputs=program.output_dot_map.inputs,
+            operations=(program.output_dot_map, program.output_dot_fold),
+            outputs=(program.output_dot_fold.output,),
+        ),
+        {
+            forward.finalize.output.name: forward_execution.output,
+            program.output_cotangent.name: output_cotangent,
+        },
+    )[program.output_dot_fold.output.name]
 
     for query_start in range(0, query_axis.extent, forward.schedule.query_tile_size):
         query_stop = min(query_start + forward.schedule.query_tile_size, query_axis.extent)
         query_slices = {query_axis: slice(query_start, query_stop)}
         query_tile = _slice_array(query, query_value, query_slices).astype(np.float32)
-        output_tile = _slice_array(forward_execution.output, forward.finalize.output, query_slices).astype(np.float32)
         output_cotangent_tile = _slice_array(output_cotangent, forward.finalize.output, query_slices).astype(np.float32)
         row_slices = tuple(slice(query_start, query_stop) if axis == query_axis else slice(None) for axis in row_axes)
+        output_dot_slices = tuple(
+            slice(query_start, query_stop) if axis == query_axis else slice(None)
+            for axis in program.output_dot_fold.output.axes
+        )
         row_max = forward_execution.row_max[row_slices]
         row_sum_exp = forward_execution.row_sum_exp[row_slices]
-        output_dot = np.sum(output_cotangent_tile * output_tile, axis=-1)
+        output_dot = output_dot_state[output_dot_slices]
         query_gradient_tile = np.zeros(query_tile.shape, dtype=np.float32)
 
         def reverse_tile_data(

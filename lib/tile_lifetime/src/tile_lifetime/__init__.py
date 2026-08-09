@@ -59,6 +59,14 @@ from tile_lifetime.expert_parallel_plan import (
     TransportSelection,
     TransportSemantics,
 )
+from tile_lifetime.fold_placement import (
+    FoldAttachment,
+    FoldAttachmentSite,
+    FoldResultDisposition,
+    OwnerTileAvailability,
+    attach_fold_to_owner_preparation,
+    verify_owner_preparation_fold_attachment,
+)
 from tile_lifetime.gated_delta_scan import (
     GatedDeltaScanCompilation,
     chunkwise_gated_delta_reference,

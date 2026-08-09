@@ -32,6 +32,7 @@ from tile_lifetime import (
     estimate_streaming_attention_backward_work,
     export_debug_streaming_attention_backward,
     recover_stablehlo_streaming_attention_backward,
+    verify_owner_preparation_fold_attachment,
 )
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
@@ -48,39 +49,11 @@ LOG2_E = 1.4426950408889634
 
 
 @triton.jit
-def _output_dot_kernel(
-    output,
-    output_cotangent,
-    output_dot,
-    sequence_length,
-    query_heads,
-    stride_ob: tl.constexpr,
-    stride_os: tl.constexpr,
-    stride_oh: tl.constexpr,
-    stride_od: tl.constexpr,
-    stride_db: tl.constexpr,
-    stride_ds: tl.constexpr,
-    stride_dh: tl.constexpr,
-    stride_dd: tl.constexpr,
-    head_dimension: tl.constexpr,
-):
-    row = tl.program_id(0)
-    batch_index = row // (query_heads * sequence_length)
-    query_head = (row // sequence_length) % query_heads
-    query_token = row % sequence_length
-    feature = tl.arange(0, head_dimension)
-    output_offset = batch_index * stride_ob + query_token * stride_os + query_head * stride_oh + feature * stride_od
-    cotangent_offset = batch_index * stride_db + query_token * stride_ds + query_head * stride_dh + feature * stride_dd
-    value = tl.load(output + output_offset).to(tl.float32)
-    cotangent = tl.load(output_cotangent + cotangent_offset).to(tl.float32)
-    tl.store(output_dot + row, tl.sum(value * cotangent, axis=0))
-
-
-@triton.jit
 def _streaming_dq_kernel(
     query,
     key,
     value,
+    output,
     output_cotangent,
     log_sum_exp,
     output_dot,
@@ -104,6 +77,10 @@ def _streaming_dq_kernel(
     stride_vs: tl.constexpr,
     stride_vh: tl.constexpr,
     stride_vd: tl.constexpr,
+    stride_ob: tl.constexpr,
+    stride_os: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
     stride_db: tl.constexpr,
     stride_ds: tl.constexpr,
     stride_dh: tl.constexpr,
@@ -144,6 +121,12 @@ def _streaming_dq_kernel(
         + query_heads_for_rows[:, None] * stride_dh
         + features[None, :] * stride_dd
     )
+    output_offsets = (
+        batch_index * stride_ob
+        + query_tokens[:, None] * stride_os
+        + query_heads_for_rows[:, None] * stride_oh
+        + features[None, :] * stride_od
+    )
     query_cotangent_offsets = (
         batch_index * stride_dqb
         + query_tokens[:, None] * stride_dqs
@@ -151,10 +134,12 @@ def _streaming_dq_kernel(
         + features[None, :] * stride_dqd
     )
     query_tile = tl.load(query + query_offsets)
+    output_tile = tl.load(output + output_offsets).to(tl.float32)
     output_cotangent_tile = tl.load(output_cotangent + output_cotangent_offsets)
     row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
     lse = tl.load(log_sum_exp + row_offset)
-    delta = tl.load(output_dot + row_offset)
+    delta = tl.sum(output_tile * output_cotangent_tile.to(tl.float32), axis=1)
+    tl.store(output_dot + row_offset, delta)
     query_gradient = tl.zeros((packed_query_rows, head_dimension), tl.float32)
     key_stop = sequence_length
     if causal:
@@ -345,13 +330,11 @@ def _streaming_dkdv_kernel(
 class StreamingAttentionBackwardLaunches:
     """Validated component launches for one generated reverse schedule."""
 
-    output_dot: Callable[[], None]
     query_cotangent: Callable[[], None]
     key_value_cotangents: Callable[[], None]
 
     def execute(self) -> None:
         """Launch every reverse stage in dependency order."""
-        self.output_dot()
         self.query_cotangent()
         self.key_value_cotangents()
 
@@ -378,6 +361,15 @@ def prepare_streaming_attention_backward_launches(
             "normalized-exp maximum-VJP invariant"
         )
     verify_streaming_attention_backward_score_map_vjp(program)
+    if len(schedule.query_owner_attachments) != 1:
+        raise ValueError("the reverse emitter requires one query-owner Fold attachment")
+    output_dot_attachment = schedule.query_owner_attachments[0]
+    verify_owner_preparation_fold_attachment(output_dot_attachment)
+    if output_dot_attachment.producer != program.output_dot_map or output_dot_attachment.fold != program.output_dot_fold:
+        raise ValueError("the query-owner Fold attachment must implement the recovered output-dot program")
+    if len(output_dot_attachment.fold.reduction_axes) != 1:
+        raise ValueError("the first reverse emitter supports one complete Fold reduction axis")
+    complete_feature_axis = output_dot_attachment.fold.reduction_axes[0]
     forward = program.forward
     lowered = lower_score_map(forward)
     block_m = schedule.query_tile_size
@@ -399,6 +391,10 @@ def prepare_streaming_attention_backward_launches(
         raise ValueError("the first reverse emitter requires tile-aligned sequence lengths")
     if query.shape[-1] not in (64, 128) or key.shape[-1] != query.shape[-1]:
         raise ValueError("the first reverse emitter supports head dimensions 64 and 128")
+    if complete_feature_axis != program.forward.finalize.output.axes[-1]:
+        raise ValueError("the attached Fold reduction axis must be the physical output feature axis")
+    if query.shape[-1] != complete_feature_axis.extent:
+        raise ValueError("the dQ owner tile must contain the complete attached Fold reduction axis")
     if query.shape[2] % key.shape[2]:
         raise ValueError("query heads must be divisible by key/value heads")
     head_group_size = query.shape[2] // key.shape[2]
@@ -443,29 +439,26 @@ def prepare_streaming_attention_backward_launches(
     )
     common_strides = (*query.stride(), *key.stride(), *value.stride(), *output_cotangent.stride())
 
-    def emit_output_dot() -> None:
-        _output_dot_kernel[(output_dot.numel(),)](
-            output,
-            output_cotangent,
-            output_dot,
-            query.shape[1],
-            query.shape[2],
-            *output.stride(),
-            *output_cotangent.stride(),
-            query.shape[-1],
-            num_warps=1,
-        )
-
     def emit_query_cotangent() -> None:
         _streaming_dq_kernel[(triton.cdiv(query.shape[1], block_m), query.shape[0] * key.shape[2])](
-            *common,
+            query,
+            key,
+            value,
+            output,
+            output_cotangent,
+            log_sum_exp,
+            output_dot,
             query_cotangent,
             *scalar_arguments,
-            *common_strides,
+            *query.stride(),
+            *key.stride(),
+            *value.stride(),
+            *output.stride(),
+            *output_cotangent.stride(),
             *query_cotangent.stride(),
             block_m,
             block_n,
-            query.shape[-1],
+            complete_feature_axis.extent,
             head_group_size,
             lowered.causal,
             lowered.softcap is not None,
@@ -484,7 +477,7 @@ def prepare_streaming_attention_backward_launches(
             *value_cotangent.stride(),
             block_m,
             block_n,
-            query.shape[-1],
+            complete_feature_axis.extent,
             head_group_size,
             lowered.causal,
             lowered.softcap is not None,
@@ -493,7 +486,6 @@ def prepare_streaming_attention_backward_launches(
         )
 
     return StreamingAttentionBackwardLaunches(
-        output_dot=emit_output_dot,
         query_cotangent=emit_query_cotangent,
         key_value_cotangents=emit_key_value_cotangents,
     )
@@ -780,8 +772,7 @@ def main() -> None:
     if args.profile_components:
         component_measurements = _benchmark_variants(
             (
-                ("output_dot", generated_launches.output_dot),
-                ("query_cotangent", generated_launches.query_cotangent),
+                ("query_cotangent_with_output_dot", generated_launches.query_cotangent),
                 ("key_value_cotangents", generated_launches.key_value_cotangents),
             ),
             warmups=args.warmups,
@@ -848,6 +839,26 @@ def main() -> None:
             "domain_traversal": backward_schedule.domain_traversal.value,
             "key_value_fold_order": backward_schedule.key_value_fold_order.value,
             "atomic_accumulation": False,
+            "standalone_output_dot_launch": False,
+            "query_owner_fold_attachments": [
+                {
+                    "producer": attachment.producer.name,
+                    "fold": attachment.fold.name,
+                    "site": attachment.site.value,
+                    "result_disposition": attachment.result_disposition.value,
+                    "input_availability": [
+                        {
+                            "value": available.value.name,
+                            "complete_axes": [
+                                {"id": axis.id, "extent": axis.extent, "label": axis.label}
+                                for axis in available.complete_axes
+                            ],
+                        }
+                        for available in attachment.input_availability
+                    ],
+                }
+                for attachment in backward_schedule.query_owner_attachments
+            ],
             "static_work": {
                 "logical_query_key_tile_pairs": work_estimate.logical_query_key_tile_pairs,
                 "fully_restricted_tile_pairs": work_estimate.fully_restricted_tile_pairs,

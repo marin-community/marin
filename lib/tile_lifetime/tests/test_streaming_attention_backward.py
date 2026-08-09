@@ -10,14 +10,23 @@ import pytest
 
 from tile_lifetime import (
     DType,
+    FoldAttachmentSite,
+    FoldPrimitive,
+    FoldReducer,
+    FoldResultDisposition,
+    MapPrimitive,
     OwnerComputeTraversal,
+    OwnerTileAvailability,
+    ProgramValue,
     SharedReverseFusionDisposition,
     StreamingAttentionBackwardDomainTraversal,
     StreamingAttentionBackwardFoldOrder,
     StreamingAttentionBackwardProvenance,
     StreamingTileSchedule,
+    TensorAxis,
     apply_causal_score_mask,
     apply_tanh_softcap,
+    attach_fold_to_owner_preparation,
     build_attention_tensor_program,
     derive_streaming_attention,
     derive_streaming_attention_backward,
@@ -27,9 +36,10 @@ from tile_lifetime import (
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
     scaled_score_map,
+    verify_owner_preparation_fold_attachment,
     verify_streaming_attention_backward_score_map_vjp,
 )
-from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant
+from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input
 
 
 def _program(
@@ -154,6 +164,7 @@ def test_score_map_mutation_reuses_one_backward_stage_family() -> None:
         "cotangent.query",
         "cotangent.key",
         "cotangent.value",
+        "streaming_output_dot_cotangent",
     )
     verify_streaming_attention_backward_score_map_vjp(baseline)
     verify_streaming_attention_backward_score_map_vjp(mutated)
@@ -184,6 +195,12 @@ def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() ->
 
     assert schedule.query_heads_per_key_value_tile == 2
     assert schedule.key_value_fold_order is StreamingAttentionBackwardFoldOrder.QUERY_ROW_MAJOR_MAPPED_HEAD_MINOR_TREE
+    assert len(schedule.query_owner_attachments) == 1
+    attachment = schedule.query_owner_attachments[0]
+    assert attachment.producer == recovered.output_dot_map
+    assert attachment.fold == recovered.output_dot_fold
+    assert attachment.site is FoldAttachmentSite.OWNER_PREPARATION
+    assert attachment.result_disposition is FoldResultDisposition.MATERIALIZE_FOR_CONSUMERS
     assert work.logical_query_key_tile_pairs == 60
     assert work.fully_restricted_tile_pairs == 40
     assert work.query_gradient_contract_invocations == 90
@@ -201,6 +218,107 @@ def test_grouped_key_value_schedule_is_derived_from_contract_index_relation() ->
     assert work.peak_score_tile_elements == 2
     assert work.peak_query_tile_elements == 6
     assert work.key_value_gradient_accumulator_elements == 6
+
+
+def test_owner_fold_attachment_uses_only_generic_axes_and_values() -> None:
+    row = TensorAxis(100, 4, "arbitrary_row")
+    feature = TensorAxis(101, 8, "arbitrary_feature")
+    left = ProgramValue("left_value", (row, feature), DType.FP32)
+    right = ProgramValue("right_value", (row, feature), DType.FP32)
+    product = ProgramValue("product_value", (row, feature), DType.FP32)
+    reduced = ProgramValue("reduced_value", (row,), DType.FP32)
+    producer = MapPrimitive(
+        "arbitrary pointwise producer",
+        (left, right),
+        product,
+        scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_input(left.name),
+            scalar_input(right.name),
+        ),
+    )
+    fold = FoldPrimitive(
+        "arbitrary row Fold",
+        product,
+        reduced,
+        (feature,),
+        FoldReducer.SUM,
+        DType.FP32,
+    )
+
+    attachment = attach_fold_to_owner_preparation(
+        producer,
+        fold,
+        owner_axes=(row,),
+        input_availability=(
+            OwnerTileAvailability(left, (feature,)),
+            OwnerTileAvailability(right, (feature,)),
+        ),
+        result_disposition=FoldResultDisposition.MATERIALIZE_FOR_CONSUMERS,
+    )
+
+    assert attachment.fold.output == reduced
+    assert attachment.owner_axes == (row,)
+    assert attachment.site is FoldAttachmentSite.OWNER_PREPARATION
+
+
+def test_owner_fold_attachment_rejects_partial_reduction_axis() -> None:
+    row = TensorAxis(100, 4, "arbitrary_row")
+    feature = TensorAxis(101, 8, "arbitrary_feature")
+    left = ProgramValue("left_value", (row, feature), DType.FP32)
+    right = ProgramValue("right_value", (row, feature), DType.FP32)
+    product = ProgramValue("product_value", (row, feature), DType.FP32)
+    reduced = ProgramValue("reduced_value", (row,), DType.FP32)
+    producer = MapPrimitive(
+        "arbitrary pointwise producer",
+        (left, right),
+        product,
+        scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_input(left.name),
+            scalar_input(right.name),
+        ),
+    )
+    fold = FoldPrimitive(
+        "arbitrary row Fold",
+        product,
+        reduced,
+        (feature,),
+        FoldReducer.SUM,
+        DType.FP32,
+    )
+
+    with pytest.raises(ValueError, match="complete along the Fold reduction axes"):
+        attach_fold_to_owner_preparation(
+            producer,
+            fold,
+            owner_axes=(row,),
+            input_availability=(
+                OwnerTileAvailability(left, (feature,)),
+                OwnerTileAvailability(right, ()),
+            ),
+            result_disposition=FoldResultDisposition.MATERIALIZE_FOR_CONSUMERS,
+        )
+
+    valid = attach_fold_to_owner_preparation(
+        producer,
+        fold,
+        owner_axes=(row,),
+        input_availability=(
+            OwnerTileAvailability(left, (feature,)),
+            OwnerTileAvailability(right, (feature,)),
+        ),
+        result_disposition=FoldResultDisposition.MATERIALIZE_FOR_CONSUMERS,
+    )
+    forged = replace(
+        valid,
+        input_availability=(
+            OwnerTileAvailability(left, (feature,)),
+            OwnerTileAvailability(right, ()),
+        ),
+    )
+    with pytest.raises(ValueError, match="complete along the Fold reduction axes"):
+        verify_owner_preparation_fold_attachment(forged)
 
 
 @pytest.mark.parametrize(
