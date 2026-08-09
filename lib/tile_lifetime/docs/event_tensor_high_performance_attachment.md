@@ -119,6 +119,42 @@ operations are emitted from that descriptor. The current result does not claim
 that Shuttle generates those internal instructions. The MXFP8 scale pipeline
 also remains unaudited; this checkpoint covers the BF16 operand pipeline only.
 
+## Natural Grug weight-gradient collective boundary
+
+The natural Grug replacement already recovers each generated group-batched
+weight Contract's direct all-reduce consumer as a generic partial-value
+completion:
+
+```text
+generated Contract result
+  -> placement transition
+  -> completion Fold over the replica group
+```
+
+Replica membership mechanically determines the Event Tensor count, and the
+completion requires system-scoped release/acquire visibility. JAX/XLA retains
+AD and physical transport ownership. The current generated Contract executor
+is one cuBLAS call and exposes only whole-result completion, so the attached
+schedule honestly uses one producer task rather than inventing internal tiles.
+
+The smallest next attachment point is the output-task boundary of a future
+tiled generic weight Contract. Its exact tile TaskFamily should notify one
+coarsened collective-launch event after all output tiles are complete. The
+ordinary XLA all-reduce remains the placement-transition task, and its result
+data dependency realizes the completion event for downstream consumers. This
+adds no custom communication kernel and does not require a model- or MoE-named
+event. If the transport later accepts tile streams, the same exact dependence
+can use finer event coordinates instead of the coarsened launch event.
+
+Three limitations remain explicit:
+
+- the preserved natural Grug GPU HLO has a singleton replica group; its
+  two-participant Event count is currently covered by a structural mutation;
+- the real two-H100 JAX collective proof starts from the generic completion
+  plan rather than the natural Grug weight-Contract producer;
+- the current Event Tensor attachment is an audited schedule object and does
+  not change XLA's collective launch or completion scheduling.
+
 ## Validation and remaining work
 
 CPU tests currently establish:
@@ -138,6 +174,15 @@ The grouped-Contract tests additionally establish:
 - pipeline-stage mutation from two to three slots;
 - separation of logical producer indegree from byte-counted TMA completion;
 - rejection of backend-parameter and generated-include drift.
+
+Artifact-boundary tests seal both GPU records. The SM90 test rederives the
+streaming schedule from the recorded Contract/Fold semantics and checks the
+H100 correctness, determinism, and performance-neutrality boundary. The SM100
+test rederives the current wrapper ABI and checks its fingerprint, logical
+counts, transaction bytes, physical GB200 identity, correctness, and kernel
+resource record. The existing JAX collective test independently seals the
+two-H100 completion artifact and verifies that JAX emits ordinary all-reduces
+with no semantic custom call.
 
 The original H100 replay exposed a CuTe SSA dominance failure in Shuttle's
 normalized-exponential helper. A finalize-only alias change did not repair it.
