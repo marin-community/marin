@@ -141,3 +141,5 @@ for the JAX coordinator, and the default 8476 is shared by every run on the clus
 
 The experiment record is in [`.agents/logbooks/7279-moe-hero-ep.md`](../../../.agents/logbooks/7279-moe-hero-ep.md).
 Issue [#7279](https://github.com/marin-community/marin/issues/7279) is the coordination record.
+The MoK hot/cold-placement and shared-PGLE results are in
+[`MOK_TREATMENT_BENCHMARKS.md`](MOK_TREATMENT_BENCHMARKS.md).
