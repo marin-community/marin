@@ -324,3 +324,34 @@ limit the audit to the first failure exposed by Bazel.
 - [ ] Make `bazel build @shuttle_mlir//:mlir_tests` pass analysis.
 - [ ] Run `@shuttle_mlir//:mlir_tests`.
 - [ ] Run the four patched XLA tests.
+
+## Hypothesis 9
+
+The comprehensive lit-label patch should make the external Shuttle suite fully
+analyzable, but the fixtures have not run against the pinned native lit
+environment. Source-only parsing cannot validate lit tool runfiles, native
+diagnostic locations, or verifier diagnostic precedence.
+
+Apply both XLA patches in order, prove all seven anchored runtime labels, build
+the suite separately, then execute it before the four XLA tests. Stop at the
+first failed gate.
+
+## Results 9
+
+- Remote proof confirms both reviewed XLA patches applied at exact XLA commit
+  `9b635916ecc6`, both reverse-application checks passed, the combined diff was
+  clean, every expected anchored label was present, and the exact anchored
+  XLA-owned runtime-label count was seven.
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, `@shuttle_mlir//:ShuttlePasses`,
+  `@shuttle_mlir//:shuttle-opt`, and the separate
+  `bazel build @shuttle_mlir//:mlir_tests` gate passed against the exact pins.
+- Lit executed all 11 fixtures: eight passed. `fail-closed.mlir` lacked the
+  LLVM `not` tool at runtime, `map-errors.mlir` reached the newer result-map
+  verifier before two expected diagnostics, and `no-shuttle-errors.mlir`
+  emitted matching error text at different MLIR source locations.
+- The four patched XLA tests did not run because the runner stopped at the lit
+  failure.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-execution/`.
+- This run used one submission with zero retries. No relaunch occurred.
