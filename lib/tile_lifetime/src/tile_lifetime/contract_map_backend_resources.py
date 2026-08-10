@@ -88,7 +88,7 @@ def contract_map_compile_plan(
     """Form compile/disassembly commands without running a tool or GPU."""
     if architecture != "sm_90a":
         raise ValueError("the reviewed backend slice is limited to sm_90a")
-    stem = f"contract_map_{generated.policy.value}_{generated.semantic_fingerprint[:16]}"
+    stem = f"contract_map_{generated.policy.value}_{generated.physical_digest}"
     source_path = artifact_directory / f"{stem}.cu"
     shared_library_path = artifact_directory / f"{stem}.so"
     ptx_path = artifact_directory / f"{stem}.ptx"

@@ -76,6 +76,27 @@ class ContractMapBackendProgram:
 
 
 @dataclass(frozen=True)
+class ContractMapReverseLoweringPlan:
+    """Closed five-operation reverse graph accepted by CUDA lowering."""
+
+    hidden_adjoint_contract: ContractPrimitive
+    second_weight_adjoint_contract: ContractPrimitive
+    pointwise_adjoint: MapPrimitive
+    input_adjoint_contract: ContractPrimitive
+    first_weight_adjoint_contract: ContractPrimitive
+
+    @property
+    def operations(self) -> tuple[ContractPrimitive | MapPrimitive, ...]:
+        return (
+            self.hidden_adjoint_contract,
+            self.second_weight_adjoint_contract,
+            self.pointwise_adjoint,
+            self.input_adjoint_contract,
+            self.first_weight_adjoint_contract,
+        )
+
+
+@dataclass(frozen=True)
 class ContractMapForwardReference:
     """Forward output and explicit values retained by the reverse."""
 
@@ -211,7 +232,7 @@ def form_contract_map_backend_program(
     )
     input_adjoint, first_weight_adjoint, second_weight_adjoint = differentiated.input_gradients
     fingerprint = _semantic_fingerprint(source, numerical_policy)
-    return ContractMapBackendProgram(
+    program = ContractMapBackendProgram(
         source=source,
         differentiated=differentiated,
         numerical_policy=numerical_policy,
@@ -227,6 +248,52 @@ def form_contract_map_backend_program(
         second_weight_adjoint=second_weight_adjoint,
         semantic_fingerprint=fingerprint,
     )
+    contract_map_reverse_lowering_plan(program)
+    return program
+
+
+def contract_map_reverse_lowering_plan(program: ContractMapBackendProgram) -> ContractMapReverseLoweringPlan:
+    """Parse and validate the authoritative five-operation reverse program."""
+    differentiated = program.differentiated
+    if differentiated.source != program.source:
+        raise ValueError("differentiated program must retain the exact source program")
+    if differentiated.output_cotangents != (program.output_cotangent,):
+        raise ValueError("reverse lowering requires one source-output cotangent")
+    if differentiated.input_gradients != (
+        program.input_adjoint,
+        program.first_weight_adjoint,
+        program.second_weight_adjoint,
+    ):
+        raise ValueError("reverse lowering gradients must preserve source-input order")
+    expected_inputs = (*program.source.inputs, program.output_cotangent)
+    if differentiated.program.inputs != expected_inputs:
+        raise ValueError("differentiated program inputs must be source inputs followed by the output cotangent")
+    source_operation_count = len(program.source.operations)
+    if differentiated.program.operations[:source_operation_count] != program.source.operations:
+        raise ValueError("differentiated program must retain the exact source-operation prefix")
+    reverse_operations = differentiated.program.operations[source_operation_count:]
+    if len(reverse_operations) != 5:
+        raise ValueError("Contract/Map reverse lowering requires exactly five differentiated operations")
+    hidden_adjoint, second_weight_adjoint, pointwise_adjoint, input_adjoint, first_weight_adjoint = reverse_operations
+    if not isinstance(hidden_adjoint, ContractPrimitive):
+        raise ValueError("reverse operation 0 must be the hidden-adjoint Contract")
+    if not isinstance(second_weight_adjoint, ContractPrimitive):
+        raise ValueError("reverse operation 1 must be the second-weight-adjoint Contract")
+    if not isinstance(pointwise_adjoint, MapPrimitive):
+        raise ValueError("reverse operation 2 must be the pointwise adjoint Map")
+    if not isinstance(input_adjoint, ContractPrimitive):
+        raise ValueError("reverse operation 3 must be the input-adjoint Contract")
+    if not isinstance(first_weight_adjoint, ContractPrimitive):
+        raise ValueError("reverse operation 4 must be the first-weight-adjoint Contract")
+    plan = ContractMapReverseLoweringPlan(
+        hidden_adjoint_contract=hidden_adjoint,
+        second_weight_adjoint_contract=second_weight_adjoint,
+        pointwise_adjoint=pointwise_adjoint,
+        input_adjoint_contract=input_adjoint,
+        first_weight_adjoint_contract=first_weight_adjoint,
+    )
+    _validate_reverse_lowering_plan(program, plan)
+    return plan
 
 
 def execute_contract_map_source_ordered_forward(
@@ -340,6 +407,91 @@ def _validate_forward_structure(
         raise ValueError("second Contract must map row-by-feature back to the activation shape")
 
 
+def _validate_reverse_lowering_plan(
+    program: ContractMapBackendProgram,
+    plan: ContractMapReverseLoweringPlan,
+) -> None:
+    row_axis, reduction_axis = program.activation.axes
+    feature_axis = program.first_weight.axes[1]
+    hidden_adjoint = plan.hidden_adjoint_contract
+    second_weight_adjoint = plan.second_weight_adjoint_contract
+    pointwise_adjoint = plan.pointwise_adjoint
+    input_adjoint = plan.input_adjoint_contract
+    first_weight_adjoint = plan.first_weight_adjoint_contract
+
+    if hidden_adjoint.inputs != (program.output_cotangent, program.second_weight):
+        raise ValueError("hidden-adjoint Contract operands do not match the differentiated graph")
+    _require_adjoint_contract(
+        hidden_adjoint,
+        output_axes=program.hidden.axes,
+        reduction_axes=(reduction_axis,),
+        context="hidden-adjoint Contract",
+    )
+    if second_weight_adjoint.inputs != (program.output_cotangent, program.hidden):
+        raise ValueError("second-weight-adjoint Contract operands do not match the differentiated graph")
+    if second_weight_adjoint.output != program.second_weight_adjoint:
+        raise ValueError("second-weight-adjoint Contract output is not the requested source-input gradient")
+    _require_adjoint_contract(
+        second_weight_adjoint,
+        output_axes=program.second_weight.axes,
+        reduction_axes=(row_axis,),
+        context="second-weight-adjoint Contract",
+    )
+    if pointwise_adjoint.inputs != (program.preactivation, hidden_adjoint.output):
+        raise ValueError("pointwise adjoint Map must consume preactivation and the hidden-adjoint Contract")
+    if pointwise_adjoint.output.axes != program.preactivation.axes:
+        raise ValueError("pointwise adjoint Map output axes must match preactivation axes")
+    if pointwise_adjoint.output.dtype is not DType.BF16:
+        raise ValueError("pointwise adjoint Map output must be BF16")
+    if input_adjoint.inputs != (pointwise_adjoint.output, program.first_weight):
+        raise ValueError("input-adjoint Contract operands do not match the differentiated graph")
+    if input_adjoint.output != program.input_adjoint:
+        raise ValueError("input-adjoint Contract output is not the requested source-input gradient")
+    _require_adjoint_contract(
+        input_adjoint,
+        output_axes=program.activation.axes,
+        reduction_axes=(feature_axis,),
+        context="input-adjoint Contract",
+    )
+    if first_weight_adjoint.inputs != (pointwise_adjoint.output, program.activation):
+        raise ValueError("first-weight-adjoint Contract operands do not match the differentiated graph")
+    if first_weight_adjoint.output != program.first_weight_adjoint:
+        raise ValueError("first-weight-adjoint Contract output is not the requested source-input gradient")
+    _require_adjoint_contract(
+        first_weight_adjoint,
+        output_axes=program.first_weight.axes,
+        reduction_axes=(row_axis,),
+        context="first-weight-adjoint Contract",
+    )
+    if program.differentiated.program.outputs != (
+        input_adjoint.output,
+        first_weight_adjoint.output,
+        second_weight_adjoint.output,
+    ):
+        raise ValueError("differentiated returns must be the three authoritative adjoint Contract outputs")
+
+
+def _require_adjoint_contract(
+    operation: ContractPrimitive,
+    *,
+    output_axes: tuple[TensorAxis, ...],
+    reduction_axes: tuple[TensorAxis, ...],
+    context: str,
+) -> None:
+    if len(operation.inputs) != 2:
+        raise ValueError(f"{context} must have exactly two operands")
+    if operation.output.axes != output_axes:
+        raise ValueError(f"{context} has incompatible output axes")
+    if operation.reduction_axes != reduction_axes:
+        raise ValueError(f"{context} has incompatible reduction axes")
+    if operation.accumulation_dtype is not DType.FP32:
+        raise ValueError(f"{context} must accumulate in FP32")
+    if operation.input_index_maps:
+        raise ValueError(f"{context} does not support Contract index maps")
+    if any(value.dtype is not DType.BF16 for value in (*operation.inputs, operation.output)):
+        raise ValueError(f"{context} requires BF16 operand and output boundaries")
+
+
 def _semantic_fingerprint(source: TensorProgram, policy: ContractMapNumericalPolicy) -> str:
     first_contract, scalar_map, second_contract = source.operations
     assert isinstance(first_contract, ContractPrimitive)
@@ -409,12 +561,7 @@ def _expression_input_names(expression: ScalarExpression) -> set[str]:
 
 
 def _derived_map_adjoint(program: ContractMapBackendProgram) -> MapPrimitive:
-    source_operation_count = len(program.source.operations)
-    backward_operations = program.differentiated.program.operations[source_operation_count:]
-    maps = tuple(operation for operation in backward_operations if isinstance(operation, MapPrimitive))
-    if len(maps) != 1 or maps[0].output.shape != program.preactivation.shape:
-        raise ValueError("mechanical reverse did not produce one pointwise preactivation adjoint")
-    return maps[0]
+    return contract_map_reverse_lowering_plan(program).pointwise_adjoint
 
 
 def _bf16_input(value: ProgramValue, array: np.ndarray) -> np.ndarray:
