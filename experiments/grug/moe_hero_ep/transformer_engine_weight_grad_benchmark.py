@@ -94,6 +94,7 @@ class BenchmarkResult(BaseModel):
     install_stderr_tail: str
     platform_machine: str
     cuda_home: str | None
+    cccl_include: str | None
     cuda_version: int | None
     cublas_lt_version: int | None
     grouped_gemm_workspace_size: int | None
@@ -118,6 +119,18 @@ def _pip_cuda_home() -> Path | None:
     return None
 
 
+def _pip_cccl_include() -> Path | None:
+    for package_root in site.getsitepackages():
+        candidates = (
+            Path(package_root) / "nvidia" / "cu13" / "include" / "cccl",
+            Path(package_root) / "nvidia" / "cuda_cccl" / "include",
+        )
+        for include_path in candidates:
+            if (include_path / "nv" / "target").is_file():
+                return include_path
+    return None
+
+
 def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
@@ -126,10 +139,14 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     cuda_home = _pip_cuda_home()
     if cuda_home is None:
         return None, 0.0, "", "", "CUDA 13 pip toolkit headers were not found", None
+    cccl_include = _pip_cccl_include()
+    if cccl_include is None:
+        return None, 0.0, "", "", "CUDA 13 CCCL headers were not found", str(cuda_home)
     env["CUDA_HOME"] = str(cuda_home)
     env["PATH"] = f"{target}/bin:{cuda_home}/bin:{env['PATH']}"
     env["PYTHONPATH"] = f"{target}:{env.get('PYTHONPATH', '')}"
     env["LIBRARY_PATH"] = f"{cuda_home}/lib:{env.get('LIBRARY_PATH', '')}"
+    env["CPLUS_INCLUDE_PATH"] = f"{cccl_include}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     setup = subprocess.run(
         [
@@ -297,6 +314,7 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
 
 def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
     te_jax, install_time, install_stdout, install_stderr, install_error, cuda_home = _install_transformer_engine()
+    cccl_include = _pip_cccl_include()
     cuda_version = None
     cublas_lt_version = None
     grouped_gemm_workspace_size = None
@@ -319,6 +337,7 @@ def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
         install_stderr_tail=install_stderr,
         platform_machine=os.uname().machine,
         cuda_home=cuda_home,
+        cccl_include=str(cccl_include) if cccl_include is not None else None,
         cuda_version=cuda_version,
         cublas_lt_version=cublas_lt_version,
         grouped_gemm_workspace_size=grouped_gemm_workspace_size,
