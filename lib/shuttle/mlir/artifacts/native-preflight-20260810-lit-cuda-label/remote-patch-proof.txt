@@ -1,0 +1,10 @@
+[10:57:09] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:45: XLA_PATCHES=('/app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch' '/app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch')
+[10:57:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:91: git -C /app/sources/xla apply --check /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+[10:57:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:91: git -C /app/sources/xla apply --check /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+[10:57:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+[10:57:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+[10:57:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:97: git -C /app/sources/xla diff --check
+[10:57:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:98: git -C /app/sources/xla diff --stat
+[10:57:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 |  11 files changed, 189 insertions(+), 14 deletions(-)
+[10:57:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:100: grep -F 'Label("//xla:sh_test_with_runfiles.py")' /app/sources/xla/xla/lit.bzl
+[10:57:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 |     data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]

@@ -1,0 +1,15 @@
+0e61e48f7b89367742ddb6ea352074de65ecf7cbc79a0e4fa99a4738f4f55e0f  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/README.md
+68bd5cb2dc471d82451c7780cbbe48df0db2d05656ab9d58556d389e3e7a9078  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/bundle-proof.txt
+ba9d45f7eb36f9cbeef7985654e94f1487cee8f233c8f3860d96da00e8d6bf0e  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/client-proof.txt
+b9bdade77756c3cc8681b536fbace00e2ac578756673752692050527211c1dd0  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/gate-and-failure-context.txt
+4e17a15ecdbff08ed573e5bcd218b375d1d63b3411825a14cc3cb226eca42939  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/launch-command.txt
+29db89a796bfc6fc628549d811a9b2a85a54910dc306c92aed050a84490541ca  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/local-applied-xla.patch.gz
+d6a1ae98978569ca06b6ac2521773a8c8be0fc1b99b993d383f39060003618ee  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/local-runner-proof.txt
+9a6ea4ec7261993a5357284cdb52cf4ea9dec7cc601cae7aebc0c9f9dc10f678  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/manifest.env
+95bcb8a65509f26adcc62cfdeba0be8a7bee1d0e55e9b2cbcb974c7ef2594d71  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/monitoring-state.json
+226a30400654c6d7172979eb18d10f1d666382f15b627a475409605d0ff0e019  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/raw-attempt.log.gz
+2a262df47b0ced5100c65a8015c52b6576ec0ad74cdda90ce794b6ccd6f22154  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/remote-patch-proof.txt
+0ab3ebb0046b2ce0f52e361dabdccb20d77145a699c4fb67ff76c2b36670ab6f  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/run_native_preflight.sh
+dd63d8ef8e844eb7b522d226c07ff72022cebd3cf955ca13144f9c8c1964d08a  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/source-sha256.txt
+5b5e0458820e7f73a5e29a7caaa4030b7764c8b8f783af0148e4bd95667ef242  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/terminal-summary.txt
+4bde82d71c75ef19e9900434012026d2d4b13bad363eb9728a9b8188af60e153  lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/toolchain.txt

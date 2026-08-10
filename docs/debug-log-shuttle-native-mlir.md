@@ -260,10 +260,45 @@ Keep the macro implementation and Shuttle's fixture wiring unchanged.
   inside the pinned macro. They require the same audit before Shuttle uses
   those modes.
 
+## Hypothesis 8
+
+Anchoring only the unconditional lit runner datum is insufficient for
+Shuttle's OSS CPU/custom-config invocation. The generated target still reaches
+another string label in XLA's lit macro, and Bazel resolves that label against
+the external Shuttle repository.
+
+The exact native run applied patches `0001` and `0002` in order, reverse-checked
+both, and verified `Label("//xla:sh_test_with_runfiles.py")` before Bazel. It
+then passed operation generation, both library builds, and the complete
+`shuttle-opt` build and link. The separate `mlir_tests` build gate failed on
+`@@shuttle_mlir//xla/tsl/cuda`, referenced by the generated
+`semantic-erasure-errors.mlir.test_tools_on_path` target.
+
+Audit every string label evaluated by the exact OSS CPU/custom-config macro
+path and construct each repository-owned dependency with `Label(...)`. Do not
+limit the audit to the first failure exposed by Bazel.
+
+## Results 8
+
+- Remote proof confirms both reviewed XLA patches applied at exact XLA commit
+  `9b635916ecc6`, both reverse-application checks passed, the combined diff was
+  clean, and the anchored runner label was present.
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, `@shuttle_mlir//:ShuttlePasses`, and
+  `@shuttle_mlir//:shuttle-opt` passed against the exact pins.
+- `bazel build @shuttle_mlir//:mlir_tests` failed during analysis on
+  `@@shuttle_mlir//xla/tsl/cuda`; lit execution and all four patched XLA tests
+  did not run.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/`.
+- This run used one submission with zero retries. No relaunch occurred.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
 - [x] Build the narrower `@shuttle_mlir//:ShuttleDialect` target.
 - [x] Build `@shuttle_mlir//:ShuttlePasses`.
 - [x] Link `@shuttle_mlir//:shuttle-opt`.
-- [ ] If compilation succeeds, run `@shuttle_mlir//:mlir_tests`.
+- [ ] Make `bazel build @shuttle_mlir//:mlir_tests` pass analysis.
+- [ ] Run `@shuttle_mlir//:mlir_tests`.
+- [ ] Run the four patched XLA tests.
