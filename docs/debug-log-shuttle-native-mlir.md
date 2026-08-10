@@ -562,3 +562,37 @@ failed XLA test gate.
 - The retained evidence is under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-statusmacros/`.
 - This run used one submission with zero retries. No relaunch occurred.
+
+## Hypothesis 15
+
+The status-macro fix should let all four XLA tests compile and execute. The
+remaining conversion test must provide the `@main` entry function required by
+the pinned StableHLO-to-HLO importer; naming its only function `@negate` tests a
+malformed fixture instead of options forwarding.
+
+Rename that function to `@main`. Keep the existing success assertion around
+`MlirToXlaComputationWithPjRtOptions` and the exact
+`{"numerics":"source_ordered"}` module-attribute assertion so the test still
+checks conversion and serialized-options forwarding through the public path.
+
+## Results 15
+
+- The exact native run passed all six Shuttle gates, including 11/11 lit tests.
+  All four XLA targets then compiled and executed: three targets passed, while
+  `//xla/pjrt:mlir_to_hlo_test` passed eight of nine internal tests.
+- `MlirToHloTest.EnabledModuleTransformReceivesOptions` was the only failure.
+  The pinned importer reported `conversion requires module with main function`;
+  its dumped fixture had `sym_name = "negate"`. The missing forwarded-options
+  attribute was a secondary assertion failure after conversion failed.
+- The fixture now names its only function `@main`. Its existing assertions
+  still require successful conversion, the exact forwarded JSON string, and
+  the expected compile-option override behavior.
+- The two patched tests that call
+  `MlirToXlaComputationWithPjRtOptions` were audited. The fail-closed
+  unregistered-transform fixture already uses `@main`; no other patched
+  conversion fixture has an entry-name mismatch.
+- Patch `0001` was regenerated from exact XLA commit `9b635916ecc6`. Its applied
+  files byte-match the audited source. Patches `0001` and `0002` apply in order,
+  pass `diff --check`, reverse in order, and leave a clean exact-pin tree.
+- Native execution of this fixture correction remains pending. No remote build
+  was launched for this source-only fix.

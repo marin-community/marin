@@ -185,7 +185,7 @@ index f21c0c2..908620d 100644
 +
  // Converts an MHLO/CHLO module string to an XLA computation.
 diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
-index 4a560ef..8947e3d 100644
+index 4a560ef..a3e1487 100644
 --- a/xla/pjrt/mlir_to_hlo_test.cc
 +++ b/xla/pjrt/mlir_to_hlo_test.cc
 @@ -25,2 +25,3 @@ limitations under the License.
@@ -220,7 +220,7 @@ index 4a560ef..8947e3d 100644
 +TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
 +  constexpr absl::string_view kProgram =
 +      R"(
-+    func.func @negate(%arg0: tensor<f32>) -> tensor<f32> {
++    func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
 +      %0 = stablehlo.negate %arg0 : tensor<f32>
 +      return %0 : tensor<f32>
 +    }
