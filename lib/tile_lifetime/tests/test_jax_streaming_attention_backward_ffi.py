@@ -10,13 +10,13 @@ import jax.numpy as jnp
 import pytest
 
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
-    StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
     _run_triton_aot_compile,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
     compile_streaming_attention_backward_ffi,
+    derive_dense_minor_to_major_layout,
     generate_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
@@ -145,10 +145,6 @@ def test_training_plan_returns_recomputed_forward_output_without_output_scratch(
         schedule,
         target_name="shuttle.streaming_training.recompute_test_v1",
         result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
-        output_layouts=tuple(
-            StreamingAttentionBackwardFfiBufferLayout(name, (3, 1, 2, 0))
-            for name in ("forward_output", "query_cotangent", "key_cotangent", "value_cotangent")
-        ),
     )
 
     assert generated.state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE
@@ -159,13 +155,42 @@ def test_training_plan_returns_recomputed_forward_output_without_output_scratch(
         "key_cotangent",
         "value_cotangent",
     )
-    assert generated.aot_kernels[0].signature[26:30] == tuple(str(stride) for stride in generated.outputs[0].strides)
-    assert generated.aot_kernels[1].signature[27:31] == tuple(str(stride) for stride in generated.outputs[0].strides)
+    assert tuple(output.layout for output in generated.outputs) == ((3, 2, 1, 0),) * 4
+    assert tuple(output.strides for output in generated.outputs) == (
+        (16384, 256, 64, 1),
+        (16384, 256, 64, 1),
+        (8192, 128, 64, 1),
+        (8192, 128, 64, 1),
+    )
+    forward, dq, dkdv = generated.aot_kernels
+    assert forward.signature[26:30] == tuple(str(stride) for stride in generated.outputs[0].strides)
+    assert dq.signature[27:31] == tuple(str(stride) for stride in generated.outputs[0].strides)
+    assert dq.signature[35:39] == tuple(str(stride) for stride in generated.outputs[1].strides)
+    assert dkdv.signature[31:35] == tuple(str(stride) for stride in generated.outputs[2].strides)
+    assert dkdv.signature[35:39] == tuple(str(stride) for stride in generated.outputs[3].strides)
     assert tuple(kernel.kernel_name for kernel in generated.aot_kernels) == (
         "_streaming_grouped_query_forward",
         "_streaming_dq_kernel",
         "_streaming_dkdv_kernel",
     )
+
+
+def test_dense_layout_derivation_matches_zero_copy_bshd_results() -> None:
+    cases = (
+        ((1, 2048, 32, 128), (8388608, 4096, 128, 1)),
+        ((2, 320, 7, 64), (143360, 448, 64, 1)),
+        ((1, 2048, 8, 128), (2097152, 1024, 128, 1)),
+    )
+
+    for shape, strides in cases:
+        assert derive_dense_minor_to_major_layout(shape, strides) == (3, 2, 1, 0)
+
+
+def test_dense_layout_derivation_rejects_non_dense_or_mismatched_strides() -> None:
+    with pytest.raises(ValueError, match="rank mismatch"):
+        derive_dense_minor_to_major_layout((2, 3), (3,))
+    with pytest.raises(ValueError, match="unpadded dense"):
+        derive_dense_minor_to_major_layout((2, 3, 5), (30, 10, 1))
 
 
 def test_training_and_reverse_calls_require_their_explicit_result_policy() -> None:
