@@ -24,7 +24,8 @@ JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
 PINNED_XLA_REVISION = "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
 FINGERPRINT_PATTERN = re.compile(r"(?m)^([0-9A-Fa-f]{64})$")
-NORMALIZER_DIAGNOSTIC_LIMIT = 2_048
+NORMALIZER_DIAGNOSTIC_FIELD_LIMIT = 1_024
+NORMALIZER_DIAGNOSTIC_MESSAGE_LIMIT = 4_096
 ACCEPTANCE_FIXTURE_FILENAMES = frozenset(
     {
         "jax-0.10.1-tanh-dot-forward.mlir",
@@ -116,26 +117,38 @@ def normalized_fingerprint(payload: str, normalizer: Path) -> str:
         try:
             result = subprocess.run(command, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as error:
-            stdout = _bounded_diagnostic(error.stdout or "")
-            stderr = _bounded_diagnostic(error.stderr or "")
-            raise RuntimeError(
+            message = (
                 "normalizer subprocess failed: "
-                f"exit_code={error.returncode}; argv={json.dumps(command)}; "
-                f"stdout={json.dumps(stdout)}; stderr={json.dumps(stderr)}"
-            ) from error
+                f"exit_code={error.returncode}; argv={_bounded_serialized(command)}; "
+                f"stdout={_bounded_serialized(error.stdout or '')}; "
+                f"stderr={_bounded_serialized(error.stderr or '')}"
+            )
+            raise RuntimeError(_bounded_message(message)) from error
     match = FINGERPRINT_PATTERN.search(result.stdout)
     if not match:
-        stdout = _bounded_diagnostic(result.stdout)
-        details = f"argv={json.dumps(command)}; stdout={json.dumps(stdout)}"
-        raise RuntimeError(f"normalizer did not report a structural SHA-256: {details}")
+        message = (
+            "normalizer did not report a structural SHA-256: "
+            f"argv={_bounded_serialized(command)}; stdout={_bounded_serialized(result.stdout)}"
+        )
+        raise RuntimeError(_bounded_message(message))
     return match.group(1).upper()
 
 
-def _bounded_diagnostic(value: str) -> str:
-    if len(value) <= NORMALIZER_DIAGNOSTIC_LIMIT:
-        return value
-    omitted = len(value) - NORMALIZER_DIAGNOSTIC_LIMIT
-    return f"{value[:NORMALIZER_DIAGNOSTIC_LIMIT]}\n... {omitted} characters omitted"
+def _bounded_serialized(value: object) -> str:
+    serialized = json.dumps(value)
+    if len(serialized) <= NORMALIZER_DIAGNOSTIC_FIELD_LIMIT:
+        return serialized
+    suffix = "...<serialized field truncated>"
+    retained = NORMALIZER_DIAGNOSTIC_FIELD_LIMIT - len(suffix)
+    return serialized[:retained] + suffix
+
+
+def _bounded_message(message: str) -> str:
+    if len(message) <= NORMALIZER_DIAGNOSTIC_MESSAGE_LIMIT:
+        return message
+    suffix = "...<diagnostic truncated>"
+    retained = NORMALIZER_DIAGNOSTIC_MESSAGE_LIMIT - len(suffix)
+    return message[:retained] + suffix
 
 
 def xla_hook_boundary_stablehlo(payload: str) -> str:
