@@ -38,6 +38,7 @@ class SM100RoutedSchedule:
     score_stages: int
     output_stages: int
     right_stages: int
+    right_edges_per_task: int
     relation_metadata_stages: int
     threads: int
     split_probability_rows: int
@@ -56,6 +57,7 @@ class SM100RoutedSchedule:
                 self.score_stages,
                 self.output_stages,
                 self.right_stages,
+                self.right_edges_per_task,
                 self.relation_metadata_stages,
             )
             <= 0
@@ -175,6 +177,7 @@ def default_sm100_routed_schedules() -> tuple[SM100RoutedSchedule, ...]:
         "score_stages": 2,
         "output_stages": 2,
         "right_stages": 1,
+        "right_edges_per_task": 4096,
         "relation_metadata_stages": 16,
         "threads": 512,
         "split_probability_rows": 96,

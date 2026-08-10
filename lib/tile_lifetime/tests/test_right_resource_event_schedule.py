@@ -11,6 +11,7 @@ import inspect
 import numpy as np
 
 import tile_lifetime.right_resource_event_schedule as right_resource_schedule
+import tile_lifetime.right_resource_jax_tables as right_resource_tables
 from tile_lifetime.event_buffering import EventRealizationKind
 from tile_lifetime.event_dataflow import EventSchedulingMode, execute_event_dataflow
 from tile_lifetime.relation import RelationPlan, build_relation_plan
@@ -19,15 +20,26 @@ from tile_lifetime.right_resource_event_schedule import (
     RightResourcePipelineDescriptor,
     derive_right_resource_fold_event_schedule,
 )
+from tile_lifetime.right_resource_jax_tables import (
+    derive_right_resource_work_tables,
+    right_resource_work_tables_as_jax,
+)
 
 
-def _relation(destination: np.ndarray, valid: np.ndarray) -> RelationPlan:
+def _relation(
+    destination: np.ndarray,
+    valid: np.ndarray,
+    *,
+    destination_local_item: np.ndarray | None = None,
+) -> RelationPlan:
+    if destination_local_item is None:
+        destination_local_item = np.arange(5, dtype=np.int32)
     return build_relation_plan(
         destination,
         np.ones(destination.shape, dtype=np.float32),
         edge_valid=valid,
         destination_rank_by_item=np.zeros(5, dtype=np.int32),
-        destination_local_item_by_item=np.arange(5, dtype=np.int32),
+        destination_local_item_by_item=destination_local_item,
         padding_quantum=1,
     )
 
@@ -39,6 +51,7 @@ def _descriptor(*, buffer_depth: int = 2) -> RightResourcePipelineDescriptor:
         edge_partition_by_slot=(0, 1, 0, 1),
         edge_partition_count=2,
         edge_capacity_per_task=2,
+        right_item_extent=64,
         resource_buffer_depth=buffer_depth,
         resource_payload_bytes=4096,
     )
@@ -174,11 +187,73 @@ def test_buffer_depth_is_a_schedule_choice() -> None:
     np.testing.assert_array_equal(_execute(shallow, relation), _execute(deeper, relation))
 
 
+def test_jax_work_tables_preserve_relation_and_fold_slot_ownership() -> None:
+    relation = _fixture()
+    schedule = derive_right_resource_fold_event_schedule(relation, _descriptor())
+    tables = derive_right_resource_work_tables(relation, schedule)
+
+    assert tables.work_capacity == schedule.grouping.task_count
+    assert tables.work_count.tolist() == [schedule.grouping.task_count]
+    assert tables.left_offsets.tolist() == [0, relation.source_item_count]
+    assert tables.right_payload_offsets.tolist() == [0, relation.destination_count * 64]
+    np.testing.assert_array_equal(
+        np.diff(tables.right_to_left_offsets, axis=1),
+        np.asarray(
+            [
+                [
+                    sum(
+                        bool(relation.edge_valid[source, slot])
+                        and _descriptor().edge_partition_by_slot[slot] == partition
+                        and int(
+                            relation.destination_item.reshape(relation.source_item_count, relation.route_slots)[
+                                source, slot
+                            ]
+                        )
+                        == right
+                        for source in range(relation.source_item_count)
+                        for slot in range(relation.route_slots)
+                    )
+                    for right in range(relation.destination_count)
+                ]
+                for partition in range(_descriptor().edge_partition_count)
+            ],
+            dtype=np.int32,
+        ),
+    )
+    for partition in range(_descriptor().edge_partition_count):
+        valid_count = int(tables.right_to_left_offsets[partition, -1])
+        packed = tables.partial_slot_sources[partition, :valid_count]
+        left_items = packed & ((1 << 24) - 1)
+        selected_slots = (packed >> 24) & 0xFF
+        assert np.all(left_items >= 0)
+        assert np.all(selected_slots < 2)
+    np.testing.assert_array_equal(tables.split_counts, np.asarray([[2, 1], [1, 2], [2, 1], [2, 2]], dtype=np.int32))
+
+    jax_tables = right_resource_work_tables_as_jax(tables)
+    np.testing.assert_array_equal(np.asarray(jax_tables.scheduler_metadata), tables.scheduler_metadata)
+    np.testing.assert_array_equal(np.asarray(jax_tables.split_counts), tables.split_counts)
+    assert jax_tables.work_capacity == tables.work_capacity
+
+
+def test_jax_work_tables_separate_semantic_resource_from_physical_storage() -> None:
+    relation = _relation(
+        _fixture().destination_item.reshape(4, 4),
+        _fixture().edge_valid,
+        destination_local_item=np.asarray([3, 0, 4, 1, 2], dtype=np.int32),
+    )
+    schedule = derive_right_resource_fold_event_schedule(relation, _descriptor())
+
+    tables = derive_right_resource_work_tables(relation, schedule)
+
+    for row in tables.scheduler_metadata:
+        semantic_right = int(row[1])
+        assert int(row[5]) == [3, 0, 4, 1, 2][semantic_right]
+
+
 def test_schedule_module_has_no_workload_role_vocabulary() -> None:
-    source = inspect.getsource(right_resource_schedule).lower()
-    tree = ast.parse(source)
-    local_names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    sources = tuple(inspect.getsource(module).lower() for module in (right_resource_schedule, right_resource_tables))
+    local_names = {node.id for source in sources for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Name)}
 
     for forbidden in ("attention", "moe", "expert"):
-        assert forbidden not in source
+        assert all(forbidden not in source for source in sources)
     assert not {"query", "key", "value", "q", "k", "v"} & local_names

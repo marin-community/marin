@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 
 from tile_lifetime.event_dataflow_adapters import sm100_routed_right_resource_descriptor
+from tile_lifetime.ffi_command_buffer import finalize_ffi_handler_source
 from tile_lifetime.ir import DType
 from tile_lifetime.right_resource_event_schedule import (
     RightResourceFoldEventSchedule,
@@ -322,6 +323,22 @@ class ExtractedSM100Sources:
     relation_builder_audit: SourceAudit
     scheduler_audit: SourceAudit
     lineage: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GeneratedPartialMergeFfi:
+    """Torch-free typed-FFI binding for one generated Fold finalizer."""
+
+    target: str
+    handler_symbol: str
+    source: str
+    source_sha256: str
+    partial_count: int
+    query_count: int
+    query_heads: int
+    key_value_heads: int
+    value_width: int
+    value_dtype: PartialValueDType
 
 
 def emitter_plan_from_lowering(
@@ -1444,6 +1461,114 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
   module.def("merge", &shuttle_merge_normalized_exp_partials_cuda);
 }}
 """.strip()
+
+
+def render_partial_merge_ffi_cuda(
+    program: PartialStateMergeProgram,
+    *,
+    target: str,
+    partial_count: int,
+    query_count: int,
+    query_heads: int,
+    key_value_heads: int,
+    value_width: int,
+) -> GeneratedPartialMergeFfi:
+    """Generate a Torch-free JAX typed-FFI wrapper for one Fold finalizer."""
+    if program.schedule_kind is PartialMergeScheduleKind.TILED_PIPELINED:
+        raise ValueError("the first typed-FFI Fold finalizer supports row-block and warp-row schedules")
+    if min(partial_count, query_count, query_heads, key_value_heads, value_width) <= 0:
+        raise ValueError("typed-FFI Fold extents must be positive")
+    if query_heads % key_value_heads:
+        raise ValueError("Fold query-head count must divide by the partition count")
+    symbol = target.replace(".", "_").replace("-", "_")
+    if not symbol.isidentifier():
+        raise ValueError(f"typed-FFI target {target!r} cannot form a C++ symbol")
+    handler_symbol = f"{symbol}_handler"
+    torch_source = render_partial_merge_cuda(program)
+    namespace_begin = torch_source.index("namespace {")
+    namespace_end = torch_source.index("}  // namespace", namespace_begin) + len("}  // namespace")
+    kernel_source = torch_source[namespace_begin:namespace_end]
+    value_ffi_dtype = {
+        PartialValueDType.BF16: "ffi::BF16",
+        PartialValueDType.FP32: "ffi::F32",
+    }[program.value_dtype]
+    q_heads_per_partition = query_heads // key_value_heads
+    blocks = math.ceil(query_count * query_heads / program.rows_per_block)
+    source_template = f"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic Shuttle partial-state Fold semantics.
+#include <atomic>
+#include <cstdint>
+
+#include <cuda_bf16.h>
+#include <math_constants.h>
+#include <cuda_runtime.h>
+#include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
+
+{kernel_source}
+
+namespace {{
+std::atomic<int> call_count{{0}};
+
+ffi::Error ShuttlePartialStateFoldFinalize(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32, 3> scalar_state,
+    ffi::Buffer<{value_ffi_dtype}, 4> value_state,
+    ffi::Buffer<ffi::S32, 2> partial_counts,
+    ffi::Result<ffi::Buffer<ffi::BF16, 3>> output) {{
+  constexpr int kBlocks = {blocks};
+  constexpr int kThreads = {program.threads};
+  shuttle_merge_normalized_exp_partials<<<kBlocks, kThreads, 0, stream>>>(
+      scalar_state.typed_data(),
+      reinterpret_cast<const {"__nv_bfloat16" if program.value_dtype is PartialValueDType.BF16 else "float"}*>(
+          value_state.typed_data()),
+      partial_counts.typed_data(),
+      reinterpret_cast<__nv_bfloat16*>(output->typed_data()),
+      {partial_count},
+      {query_count},
+      {query_heads},
+      {q_heads_per_partition},
+      {value_width});
+  call_count.fetch_add(1, std::memory_order_relaxed);
+  return ffi::Error::Success();
+}}
+
+auto ShuttlePartialStateFoldFinalizeBinding() {{
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::F32, 3>>()
+      .Arg<ffi::Buffer<{value_ffi_dtype}, 4>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 3>>();
+}}
+}}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    {handler_symbol},
+    ShuttlePartialStateFoldFinalize,
+    ShuttlePartialStateFoldFinalizeBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
+
+extern "C" int shuttle_partial_state_fold_finalize_call_count() {{
+  return call_count.load(std::memory_order_relaxed);
+}}
+""".strip()
+    source = finalize_ffi_handler_source(source_template, command_buffer_compatible=True)
+    return GeneratedPartialMergeFfi(
+        target=target,
+        handler_symbol=handler_symbol,
+        source=source,
+        source_sha256=_sha256(source),
+        partial_count=partial_count,
+        query_count=query_count,
+        query_heads=query_heads,
+        key_value_heads=key_value_heads,
+        value_width=value_width,
+        value_dtype=program.value_dtype,
+    )
 
 
 def extract_clean_sm100_sources(

@@ -19,6 +19,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+import jax_right_resource_runtime  # noqa: E402
 from clean_routed_streaming_emitter import (  # noqa: E402
     GENERATED_PHYSICAL_CLASS,
     GENERATED_RELATION_BUILDER_CLASS,
@@ -33,6 +34,7 @@ from clean_routed_streaming_emitter import (  # noqa: E402
     emitter_plan_from_lowering,
     import_extracted_python_sources,
     render_partial_merge_cuda,
+    render_partial_merge_ffi_cuda,
     render_relation_builder_source,
     render_relation_scheduler_source,
 )
@@ -75,6 +77,7 @@ def _lowering(
             packed_left_rows=128,
             right_block_size=128,
             right_stages=2,
+            right_edges_per_task=32,
         ),
         score_map=SimpleNamespace(causal=causal, scale=score_scale, softcap=None),
         head_group_size=4,
@@ -214,6 +217,16 @@ def update():
     assert "tcgen05" in audit.required_physical_tokens
 
 
+def test_jax_runtime_keeps_cutlass_lazy_and_has_no_torch_import() -> None:
+    source = inspect.getsource(jax_right_resource_runtime)
+
+    assert "import torch" not in source
+    assert "torch." not in source
+    assert 'importlib.import_module("cutlass")' in source
+    assert 'importlib.import_module("cutlass.jax")' in source
+    assert "cjax.cutlass_call(" in source
+
+
 def test_generated_merge_is_compiler_owned_and_deterministic() -> None:
     source = render_partial_merge_cuda(
         PartialStateMergeProgram(
@@ -238,6 +251,42 @@ def test_generated_merge_is_compiler_owned_and_deterministic() -> None:
     assert 'module.def("merge"' in source
     assert "SparseAttentionForwardCombine" not in source
     assert "atomic" not in source.lower()
+
+
+def test_generated_merge_ffi_exposes_the_same_fold_without_torch() -> None:
+    baseline = PartialStateMergeProgram(
+        representation="log_normalizer_normalized_value",
+        output_scale=1.0,
+        value_dtype=PartialValueDType.BF16,
+    )
+    generated = render_partial_merge_ffi_cuda(
+        baseline,
+        target="shuttle.partial_state_fold_finalize",
+        partial_count=16,
+        query_count=32,
+        query_heads=64,
+        key_value_heads=4,
+        value_width=128,
+    )
+    mutated = render_partial_merge_ffi_cuda(
+        replace(baseline, output_scale=0.5),
+        target="shuttle.partial_state_fold_finalize_mutated",
+        partial_count=16,
+        query_count=32,
+        query_heads=64,
+        key_value_heads=4,
+        value_width=128,
+    )
+
+    assert generated.handler_symbol == "shuttle_partial_state_fold_finalize_handler"
+    assert generated.source_sha256 != mutated.source_sha256
+    assert "ffi::PlatformStream<cudaStream_t>" in generated.source
+    assert "ffi::Traits::kCmdBufferCompatible" in generated.source
+    assert "shuttle_merge_normalized_exp_partials<<<" in generated.source
+    assert "torch" not in generated.source.lower()
+    assert "aten" not in generated.source.lower()
+    assert "pybind11" not in generated.source.lower()
+    assert "sparse_attention_forward" not in generated.source.lower()
 
 
 def test_partial_value_storage_policy_changes_generated_load_not_physical_family() -> None:
@@ -465,13 +514,13 @@ class SparseAttentionSchedule: pass
 class SparseAttentionScheduleModel: pass
 SPARSE_SCHEDULE_MODEL = SparseAttentionScheduleModel()
 def prepare_sparse_fwd_schedule_and_split(): pass
-"""
+""",
     )
     builder = render_relation_builder_source(
         """
 from src.sm100.prepare_scheduler import SparseAttentionSchedule, SPARSE_SCHEDULE_MODEL
 class SparseK2qCsrBuilderSm100: pass
-"""
+""",
     )
 
     assert "SparseAttention" not in scheduler

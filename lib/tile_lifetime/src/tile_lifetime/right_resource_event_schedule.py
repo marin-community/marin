@@ -47,6 +47,7 @@ class RightResourcePipelineDescriptor:
     edge_partition_by_slot: tuple[int, ...]
     edge_partition_count: int
     edge_capacity_per_task: int
+    right_item_extent: int
     resource_buffer_depth: int
     resource_payload_bytes: int
 
@@ -60,8 +61,8 @@ class RightResourcePipelineDescriptor:
             raise ValueError("edge partition map must not be empty")
         if any(partition < 0 or partition >= self.edge_partition_count for partition in self.edge_partition_by_slot):
             raise ValueError("edge partition map contains an out-of-range partition")
-        if self.edge_capacity_per_task <= 0:
-            raise ValueError("right-resource edge capacity must be positive")
+        if self.edge_capacity_per_task <= 0 or self.right_item_extent <= 0:
+            raise ValueError("right-resource edge capacity and item extent must be positive")
         if self.resource_buffer_depth <= 0 or self.resource_payload_bytes <= 0:
             raise ValueError("right-resource buffer depth and payload size must be positive")
 
@@ -223,6 +224,7 @@ def derive_right_resource_fold_event_schedule(
         "left_items": relation.source_item_count,
         "edge_partitions": descriptor.edge_partition_count,
         "edge_capacity_per_task": descriptor.edge_capacity_per_task,
+        "right_item_extent": descriptor.right_item_extent,
         "resource_tasks": grouping.task_count,
         "buffer_depth": descriptor.resource_buffer_depth,
         "resource_payload_bytes": descriptor.resource_payload_bytes,

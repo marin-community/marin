@@ -124,15 +124,22 @@ runtime RelationPlan tables
 ## Allocation gate
 
 The static schedule, verifier, mutation, emitter attachment, and CPU tests are
-green. The remaining allocation blocker is the host/runtime boundary: the
-current clean SM100 emitter executes through a Torch extension, whereas the
-project default is JAX-owned AD and a Torch-free accepted runtime. Before the
-GB200 run, either:
+green. A Torch-free JAX boundary now exists before device execution:
 
-1. expose the extracted physical constructor and generated Fold finalizer as
-   JAX typed-FFI handlers; or
-2. explicitly classify one Torch-hosted run as a temporary physical parity
-   point that cannot satisfy the final Torch-free acceptance boundary.
+- the generic `RelationPlan` and `RightResourceFoldEventSchedule` derive the
+  right-major CSR, bounded work list, split ownership, and count tables;
+- those tables become JAX operands rather than Torch tensors;
+- the extracted physical class is passed to `cutlass.jax.cutlass_call` without
+  an opaque routed-attention entry point;
+- the compiler-generated Fold finalizer is wrapped as a command-buffer-safe
+  JAX typed-FFI handler;
+- only the routed semantic adapter names query/key/value roles. The schedule
+  and table construction remain generic left/right-resource machinery.
 
-The first option is preferred. No GPU allocation should be made until that
-choice is explicit and the selected wrapper passes a CPU/static ABI audit.
+Before allocating a GPU, run
+`preflight_jax_right_resource_runtime.py` on a dependency-matched Linux host.
+The preflight compiles and registers the Fold finalizer, imports the extracted
+CuTe physical source, constructs the `cutlass_call`, verifies that Torch was
+not imported, and records source plus EventTensor fingerprints. It does not
+execute a device kernel. A GB200 allocation remains blocked until that
+dependency-only preflight is preserved and green.
