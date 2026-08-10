@@ -29,8 +29,8 @@ enabled:
 3. Resource collectors for generated and ordinary-XLA executables.
 4. A review that removes the `architecture_nonconforming` status.
 
-`require_gpu_execution_ready()` fails before importing JAX or inspecting an
-accelerator while any item is missing.
+The benchmark CLI's `--execute-gpu` preflight fails before importing
+`tile_lifetime` or JAX, creating an output file, or inspecting an accelerator.
 
 ## Reused prototype evidence
 
@@ -96,7 +96,7 @@ state that another backend silently excludes.
 Timing uses isolated processes and records four costs independently:
 
 1. process start through executable compilation;
-2. first execution and ten untimed warmups;
+2. first execution and all ten warmup samples;
 3. counterbalanced steady-state samples;
 4. persistent-cache cold and hit processes under isolated cache roots.
 
@@ -105,7 +105,10 @@ Compile and persistent-cache samples are not folded into steady-state latency.
 ## Numerical gates
 
 Numerical floors are immutable fields of schema version 1. They are serialized
-before a run and cannot be supplied by the result producer.
+before a run and cannot be supplied by the result producer. The schema records
+the canonical SHA-256 digest of the complete floor tuple. Plan construction and
+result validation reject a different tuple or digest even when every replacement
+value is finite and internally consistent.
 
 `SOURCE_ORDERED` uses an explicit source-ordered FP32 reference, a maximum
 absolute error of `0.0078125`, a mean absolute error of `0.0005`, a maximum ULP
@@ -144,6 +147,15 @@ A missing resource field, missing raw sample, unexpected copy, or launch-count
 mismatch rejects the headline row. PTXAS text alone is insufficient when SASS
 or profiler evidence is missing.
 
+The machine result schema requires one record for each of the six backend and
+measurement-boundary pairs. Kernel records bind
+PTX and SASS paths and hashes to registers, spills, static and dynamic shared
+memory, block size, active blocks per SM, limiting occupancy resource, and
+achieved occupancy. Numerical records contain separate forward, `dx`, `dw0`,
+and `dw1` metrics, repeat hashes, and pairwise drift. Timing records embed the
+exact 24-row schedule, four rows for each backend permutation, and reject raw
+rows that omit a backend, boundary, or scheduled order.
+
 ## External comparator admission
 
 FA4 requires attention-score, normalized-exponential, and Fold structure. Grug
@@ -166,6 +178,7 @@ uv run --frozen --package marin-tile-lifetime python \
   --json-output /tmp/shuttle-h100-contract-map-plan.json
 ```
 
-Passing `--execute-gpu` writes the same plan, then fails at the launch gate. It
-will remain disabled until the ordinary-JAX SOURCE_ORDERED and FAST backends,
-resource collectors, and architecture review are present.
+Passing `--execute-gpu` fails before importing `tile_lifetime` or JAX and before
+creating the output file. It will remain disabled until the ordinary-JAX
+SOURCE_ORDERED and FAST backends, resource collectors, and architecture review
+are present.
