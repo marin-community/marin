@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax.random as jr
 import numpy as np
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
@@ -83,14 +83,30 @@ class PooledScorer:
         return out
 
 
+def _model_stem(model_dir: str) -> str:
+    """The artifact stem a model directory actually holds.
+
+    Training names its artifacts after the run, so a directory is not required to
+    hold the deployed stem — and a comparison between two models is exactly the case
+    where they differ. Read the stem from the directory rather than assuming it.
+    """
+    found = sorted(str(p).rsplit("/", 1)[-1] for p in StoragePath(f"{model_dir}/*.eqx").glob())
+    if not found:
+        raise ValueError(f"no .eqx artifact under {model_dir}")
+    if len(found) > 1:
+        raise ValueError(f"{model_dir} holds several models ({', '.join(found)}); it must hold one")
+    return found[0][: -len(".eqx")]
+
+
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
     """Load a `PooledScorer` from a model dir (streams the .eqx to a local path,
     which eqx deserialisation requires)."""
     model_dir = model_dir.rstrip("/")
+    eqx_name, remap_name, meta_name = artifact_names(_model_stem(model_dir))
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
-    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{MODEL_EQX}", "rb") as fh:
+    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{eqx_name}", "rb") as fh:
         out.write(fh.read())
-    return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
+    return PooledScorer.load(local_eqx, f"{model_dir}/{remap_name}", f"{model_dir}/{meta_name}")
 
 
 def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
