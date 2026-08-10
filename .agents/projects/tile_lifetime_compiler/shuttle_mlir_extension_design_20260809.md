@@ -43,10 +43,8 @@ The public Python API is:
 jax.jit(
     function,
     compiler_options=shuttle.compiler_options(
-        shuttle.Options(
-            numerics=shuttle.Numerics.SOURCE_ORDERED,
-            tuning=shuttle.Tuning(...),
-        )
+        numerics=shuttle.Numerics.SOURCE_ORDERED,
+        tuning=shuttle.Tuning(...),
     ),
 )
 ```

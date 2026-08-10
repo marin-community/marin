@@ -13,10 +13,11 @@ StableHLO MLIR
   -> physical layouts, pipelines, and generated kernels
 ```
 
-The current package scaffold owns the shared `DType` vocabulary. The MLIR pass
-and JAX compiler-options integration remain target-1 work. The package does not
-expose workload-named compiler entrypoints, kernel selectors, benchmark
-references, or performance oracles.
+The current package owns the shared `DType` vocabulary and the closed,
+canonical compiler-options schema. Stock jaxlib rejects these options; a
+Shuttle-enabled build must recognize them and run the native MLIR pass. The
+package does not expose workload-named compiler entrypoints, kernel selectors,
+benchmark references, or performance oracles.
 
 The Python StableHLO parser is retained under `shuttle.experimental` for
 historical executable specifications. It is not the production compiler path.
