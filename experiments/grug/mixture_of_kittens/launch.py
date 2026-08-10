@@ -42,7 +42,7 @@ MAX_MOK_NODES = 16
 MOK_PROCESSES_PER_TASK = 1
 MOK_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 MOK_FUSED_MACROBATCH_SIZE = 65536
-MOK_FUSED_MINIBATCH_SIZE = 8192
+MOK_FUSED_MINIBATCH_SIZE = 4096
 # The model keeps its MuonH state on pinned host memory. This leaves room for both ragged
 # all-to-all arms under the same allocation.
 MOK_OFFLOAD_OPT_STATE = True
