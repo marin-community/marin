@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import sys
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -20,6 +21,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 import jax_right_resource_runtime  # noqa: E402
+import torch_free_physical_support  # noqa: E402
 from clean_routed_streaming_emitter import (  # noqa: E402
     GENERATED_PHYSICAL_CLASS,
     GENERATED_RELATION_BUILDER_CLASS,
@@ -225,6 +227,74 @@ def test_jax_runtime_keeps_cutlass_lazy_and_has_no_torch_import() -> None:
     assert 'importlib.import_module("cutlass")' in source
     assert 'importlib.import_module("cutlass.jax")' in source
     assert "cjax.cutlass_call(" in source
+
+
+def test_physical_support_loads_only_audited_quack_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "quack"
+    source_root.mkdir()
+    safe_source = "VALUE = 3\n"
+    for name in torch_free_physical_support.SAFE_QUACK_MODULES:
+        (source_root / f"{name}.py").write_text(safe_source)
+    (source_root / "cute_dsl_utils.py").write_text(
+        """
+from dataclasses import dataclass, fields
+import torch
+
+StaticTypes = ()
+
+@dataclass
+class ParamsBase:
+    value: int = 0
+
+    def __extract_mlir_values__(self):
+        return [self.value]
+"""
+    )
+
+    class Distribution:
+        version = torch_free_physical_support.QUACK_VERSION
+
+        @staticmethod
+        def locate_file(name: str) -> Path:
+            assert name == "quack"
+            return source_root
+
+    fake_cutlass = SimpleNamespace(Constexpr=type("Constexpr", (), {}))
+    fake_dsl = SimpleNamespace(NumericMeta=type("NumericMeta", (), {}))
+    monkeypatch.setitem(sys.modules, "cutlass", fake_cutlass)
+    monkeypatch.setitem(sys.modules, "cutlass.cutlass_dsl", fake_dsl)
+    monkeypatch.setattr(
+        torch_free_physical_support.importlib.metadata,
+        "distribution",
+        lambda name: Distribution(),
+    )
+    for name in (
+        "quack",
+        "quack.activation",
+        "quack.copy_utils",
+        "quack.layout_utils",
+        "quack.cute_dsl_utils",
+    ):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    support = torch_free_physical_support.install_torch_free_physical_support()
+
+    assert support.version == torch_free_physical_support.QUACK_VERSION
+    assert support.loaded_modules == (
+        "quack.activation",
+        "quack.copy_utils",
+        "quack.layout_utils",
+        "quack.cute_dsl_utils",
+    )
+    assert dict(support.source_sha256)["quack.activation"] == sha256(safe_source.encode()).hexdigest()
+    assert "torch" not in sys.modules
+    assert sys.modules["quack.activation"].VALUE == 3
+    assert sys.modules["quack.cute_dsl_utils"].ParamsBase(7).__extract_mlir_values__() == [7]
+    for name in ("quack", *support.loaded_modules):
+        sys.modules.pop(name, None)
 
 
 def test_generated_merge_is_compiler_owned_and_deterministic() -> None:

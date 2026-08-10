@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.metadata
+import importlib.util
 import json
 import platform
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -33,6 +36,17 @@ from tile_lifetime.sm100_routed_lowering import (  # noqa: E402
     lower_sm100_routed_streaming_program,
 )
 from tile_lifetime.streaming_attention import derive_streaming_attention, scaled_score_map  # noqa: E402
+
+EXPECTED_MSA_REVISION = "80434d7f67877c6570ca19cac444b84bc9855dac"
+EXPECTED_DISTRIBUTIONS = {
+    "cuda-python": "13.3.1",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "nvidia-cuda-nvcc": "13.3.73",
+    "nvidia-cutlass-dsl": "4.5.3",
+    "quack-kernels": "0.2.10",
+}
 
 
 def _arguments() -> argparse.Namespace:
@@ -105,6 +119,20 @@ def main() -> None:
         raise RuntimeError("the CUTLASS/CUDA dependency preflight must run on Linux")
     if "torch" in sys.modules:
         raise RuntimeError("Torch was imported before the JAX runtime preflight")
+    if importlib.util.find_spec("torch") is not None:
+        raise RuntimeError("the dependency-only JAX runtime environment contains Torch")
+
+    msa_revision = subprocess.run(
+        ("git", "-C", str(arguments.msa_root), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if msa_revision != EXPECTED_MSA_REVISION:
+        raise RuntimeError(f"expected MSA {EXPECTED_MSA_REVISION}, found {msa_revision}")
+    dependency_versions = {name: importlib.metadata.version(name) for name in EXPECTED_DISTRIBUTIONS}
+    if dependency_versions != EXPECTED_DISTRIBUTIONS:
+        raise RuntimeError(f"dependency versions differ from the pinned preflight: {dependency_versions}")
 
     baseline = prepare_jax_right_resource_runtime(arguments.msa_root, _lowering(destination_shift=0))
     mutation = prepare_jax_right_resource_runtime(
@@ -145,6 +173,7 @@ def main() -> None:
         "python": platform.python_version(),
         "jax": jax.__version__,
         "architecture": arguments.architecture,
+        "msa_revision": msa_revision,
         "event_program_fingerprint": baseline.sources.emitter_plan.event_schedule.program_fingerprint,
         "event_runtime_fingerprint": baseline.sources.emitter_plan.event_schedule.runtime_fingerprint,
         "mutation_runtime_fingerprint": mutation.sources.emitter_plan.event_schedule.runtime_fingerprint,
@@ -152,8 +181,19 @@ def main() -> None:
         "partial_merge_source_sha256": baseline.merge_ffi.source_sha256,
         "partial_merge_handler": baseline.merge_ffi.handler_symbol,
         "partial_merge_library": str(Path(merge_library._name).resolve()),
-        "physical_call_type": type(physical_call).__qualname__,
-        "dependency_modules": {name: str(module.__file__) for name, module in dependency_modules.items()},
+        "physical_call_type": type(physical_call.call).__qualname__,
+        "dependency_versions": dependency_versions,
+        "dependency_modules": {
+            name: str(getattr(module, "__file__", None)) for name, module in dependency_modules.items()
+        },
+        "physical_support": {
+            "distribution": physical_call.physical_support.distribution,
+            "version": physical_call.physical_support.version,
+            "source_root": str(physical_call.physical_support.source_root),
+            "source_sha256": dict(physical_call.physical_support.source_sha256),
+            "loaded_modules": list(physical_call.physical_support.loaded_modules),
+        },
+        "torch_installed": importlib.util.find_spec("torch") is not None,
         "torch_loaded": "torch" in sys.modules,
         "external_semantic_kernels": list(baseline.sources.emitter_plan.external_semantic_kernels),
         "work_capacity": tables.work_capacity,

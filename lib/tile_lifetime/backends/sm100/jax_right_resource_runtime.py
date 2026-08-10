@@ -25,6 +25,7 @@ from clean_routed_streaming_emitter import (
     import_extracted_python_sources,
     render_partial_merge_ffi_cuda,
 )
+from torch_free_physical_support import TorchFreePhysicalSupport, install_torch_free_physical_support
 
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
 from tile_lifetime.right_resource_jax_tables import (
@@ -53,6 +54,17 @@ class JaxRightResourceInputs:
     resident: jax.Array
     first_streamed: jax.Array
     second_streamed: jax.Array
+
+
+@dataclass(frozen=True)
+class CompiledRightResourcePhysicalCall:
+    """CUTLASS JAX callable plus its audited low-level source lineage."""
+
+    call: Any
+    physical_support: TorchFreePhysicalSupport
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.call(*args, **kwargs)
 
 
 def prepare_jax_right_resource_runtime(
@@ -188,7 +200,7 @@ def compile_right_resource_physical_call(
     *,
     msa_root: Path,
     source_directory: Path | None = None,
-) -> Any:
+) -> CompiledRightResourcePhysicalCall:
     """Compile the extracted grouped body through CUTLASS JAX TVM-FFI."""
     if plan.lowering.head_group_size in (1, 2, 4):
         raise ValueError("the first JAX binding excludes the optional gather-descriptor operand")
@@ -196,6 +208,7 @@ def compile_right_resource_physical_call(
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     cuda = importlib.import_module("cuda.bindings.driver")
+    physical_support = install_torch_free_physical_support()
     physical_module = import_extracted_python_sources(
         plan.sources,
         msa_root=msa_root,
@@ -272,12 +285,15 @@ def compile_right_resource_physical_call(
     query_heads = lowering.key_value_heads * lowering.head_group_size
     value_shape = jax.ShapeDtypeStruct((partial_count * lowering.query_length * query_heads, 128), jnp.bfloat16)
     scalar_shape = jax.ShapeDtypeStruct((partial_count, lowering.query_length, query_heads), jnp.float32)
-    return cjax.cutlass_call(
-        launch,
-        output_shape_dtype=(value_shape, scalar_shape),
-        input_spec=input_spec,
-        output_spec=output_spec,
-        use_static_tensors=True,
+    return CompiledRightResourcePhysicalCall(
+        call=cjax.cutlass_call(
+            launch,
+            output_shape_dtype=(value_shape, scalar_shape),
+            input_spec=input_spec,
+            output_spec=output_spec,
+            use_static_tensors=True,
+        ),
+        physical_support=physical_support,
     )
 
 
