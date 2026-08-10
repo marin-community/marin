@@ -9,7 +9,7 @@ import os
 import click
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
@@ -145,7 +145,16 @@ def build_mok_run(
             seed=0,
             train_batch_size=train_batch_size,
             num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=True, start_step=5, num_steps=5),
+            profiler=ProfilerConfig(
+                enabled=True,
+                start_step=5,
+                num_steps=5,
+                profile_options=ProfileOptionsConfig(
+                    host_tracer_level=1,
+                    python_tracer_level=0,
+                    enable_hlo_proto=True,
+                ),
+            ),
             mp=jmp.get_policy(MOK_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",

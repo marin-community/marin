@@ -242,6 +242,10 @@ def test_gate_keeps_the_per_gpu_batch_constant(num_nodes: int, expected_batch_si
 
     config = json.loads(step.fingerprint_payload())
     assert config["trainer"]["trainer"]["train_batch_size"] == expected_batch_size
+    profiler = config["trainer"]["trainer"]["profiler"]
+    assert profiler["start_step"] == 5
+    assert profiler["num_steps"] == 5
+    assert profiler["profile_options"]["enable_hlo_proto"] is True
 
 
 def test_expert_bank_must_divide_requested_topology():
