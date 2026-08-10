@@ -10,6 +10,7 @@ The current prototype has already demonstrated substantial proof of life on dens
 
 Current prototype records:
 
+- [Current compiler boundary and legacy ledger](CURRENT_ARCHITECTURE.md)
 - [Routed sparse-attention conclusion](seer_delta_analysis.md)
 - [StatefulScan brief](stateful_scan_brief.md)
 - [StatefulScan background](stateful_scan_background.md)

@@ -3,10 +3,13 @@
 
 """End-to-end compiler entry points."""
 
+import hashlib
+from dataclasses import dataclass
+from enum import StrEnum
+
 import numpy as np
 
-from tile_lifetime.attention import compile_attention_region
-from tile_lifetime.compiler import RMSScalePlacement, compile_region
+from tile_lifetime.compiler import RMSScalePlacement
 from tile_lifetime.dense_region import compile_dense_transformer_region
 from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_parallel_region
 from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
@@ -18,7 +21,7 @@ from tile_lifetime.msa_recovery import (
     compile_natural_projected_routed_attention,
     recover_projected_routed_attention_program,
 )
-from tile_lifetime.plan import NumericalPolicy, RegionPlan
+from tile_lifetime.plan import NumericalPolicy, RegionPlan, SemanticErasureReport, SemanticLoweringStep
 from tile_lifetime.routed_attention_plan import RoutedAttentionPlanConfig
 from tile_lifetime.routed_attention_recovery import (
     NaturalRoutedAttentionCompilation,
@@ -26,10 +29,15 @@ from tile_lifetime.routed_attention_recovery import (
     compile_natural_routed_attention,
     recover_routed_attention_program,
 )
+from tile_lifetime.semantic_erasure import (
+    ErasedTensorProgram,
+    SemanticErasureError,
+    build_tensor_erasure_report,
+    validate_erased_tensor_program,
+)
 from tile_lifetime.semantic_recovery import (
     recover_attention_region,
     recover_dense_transformer_region,
-    recover_rms_region,
 )
 from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.streaming_attention import (
@@ -37,6 +45,31 @@ from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,
     streaming_attention_from_semantic_operation,
 )
+
+
+class FrontendSourceKind(StrEnum):
+    """Verified source boundary for a current Shuttle compilation."""
+
+    STABLEHLO_ARTIFACT = "stablehlo_artifact"
+    HAND_AUTHORED_SEMANTIC_IR = "hand_authored_semantic_ir"
+
+
+@dataclass(frozen=True)
+class FrontendProvenance:
+    """Source evidence carried across semantic erasure."""
+
+    source_kind: FrontendSourceKind
+    artifact_sha256: str
+    source_operation_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class StableHLOStreamingAttentionCompilation:
+    """Generic streaming program with frontend and erasure evidence."""
+
+    program: StreamingAttentionProgram
+    provenance: FrontendProvenance
+    semantic_erasure_report: SemanticErasureReport
 
 
 def recover_stablehlo_moe_region(
@@ -71,56 +104,51 @@ def compile_stablehlo_expert_parallel_region(
     )
 
 
-def compile_stablehlo_rms_region(
-    artifact: bytes,
-    *,
-    input_names: tuple[str, ...],
-    output_name: str,
-    gemm_accumulation_dtype: DType,
-    numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_EPILOGUE,
-) -> RegionPlan:
-    """Compile the first supported StableHLO region into an execution plan."""
-    stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
-    recovered = recover_rms_region(
-        stablehlo_graph,
-        gemm_accumulation_dtype=gemm_accumulation_dtype,
-        output_name=output_name,
-    )
-    return compile_region(
-        recovered.graph,
-        numerical_policy=numerical_policy,
-        rms_scale_placement=rms_scale_placement,
-    )
-
-
-def compile_stablehlo_attention_region(
-    artifact: bytes,
-    *,
-    input_names: tuple[str, ...],
-    output_name: str,
-    numerical_policy: NumericalPolicy,
-) -> RegionPlan:
-    """Recover and lower exact causal GQA from portable StableHLO."""
-    stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
-    recovered = recover_attention_region(stablehlo_graph, output_name=output_name)
-    return compile_attention_region(recovered.graph, numerical_policy=numerical_policy)
-
-
 def compile_stablehlo_streaming_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
     output_name: str,
     schedule: StreamingTileSchedule,
-) -> StreamingAttentionProgram:
+) -> StableHLOStreamingAttentionCompilation:
     """Recover ordinary StableHLO attention into generic Contract/Map/Fold."""
     stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
     recovered = recover_attention_region(stablehlo_graph, output_name=output_name)
     operations = recovered.graph.operations
     if len(operations) != 1 or not isinstance(operations[0], ScaledDotProductAttentionOp):
         raise ValueError("expected exactly one recovered semantic attention operation")
-    return streaming_attention_from_semantic_operation(operations[0], schedule=schedule)
+    program = streaming_attention_from_semantic_operation(operations[0], schedule=schedule)
+    report = build_tensor_erasure_report(
+        program.source,
+        source_semantics=("stablehlo.normalized_exponential_attention",),
+        lowering_steps=(
+            SemanticLoweringStep(
+                source_semantic="stablehlo.normalized_exponential_attention",
+                generic_primitives=("Contract", "Map", "DomainRestriction", "Fold", "Contract", "Map"),
+            ),
+        ),
+    )
+    compilation = StableHLOStreamingAttentionCompilation(
+        program=program,
+        provenance=FrontendProvenance(
+            source_kind=FrontendSourceKind.STABLEHLO_ARTIFACT,
+            artifact_sha256=hashlib.sha256(artifact).hexdigest(),
+            source_operation_ids=recovered.source_operation_ids,
+        ),
+        semantic_erasure_report=report,
+    )
+    validate_stablehlo_streaming_attention_compilation(compilation)
+    return compilation
+
+
+def validate_stablehlo_streaming_attention_compilation(
+    compilation: StableHLOStreamingAttentionCompilation,
+) -> None:
+    """Reject hand-authored or named scheduling inputs on the current path."""
+    if compilation.provenance.source_kind is not FrontendSourceKind.STABLEHLO_ARTIFACT:
+        raise SemanticErasureError("current frontend candidates must originate from a StableHLO artifact")
+    erased = ErasedTensorProgram(compilation.program.source, compilation.semantic_erasure_report)
+    validate_erased_tensor_program(erased)
 
 
 def recover_stablehlo_routed_attention_program(
@@ -180,42 +208,6 @@ def compile_stablehlo_projected_routed_attention_program(
         schedule=schedule,
         config=config,
         padding_quantum=padding_quantum,
-    )
-
-
-def compile_stablehlo_rms_attention_program(
-    artifact: bytes,
-    *,
-    input_names: tuple[str, ...],
-    rms_output_name: str,
-    attention_output_name: str,
-    gemm_accumulation_dtype: DType,
-    numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_EPILOGUE,
-) -> RegionPlan:
-    """Compile one StableHLO module containing RMS/GEMM and attention regions."""
-    stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
-    recovered_rms = recover_rms_region(
-        stablehlo_graph,
-        gemm_accumulation_dtype=gemm_accumulation_dtype,
-        output_name=rms_output_name,
-        output_index=0,
-    )
-    recovered_attention = recover_attention_region(
-        stablehlo_graph,
-        output_name=attention_output_name,
-        output_index=1,
-    )
-    coda_plan = compile_region(
-        recovered_rms.graph,
-        numerical_policy=numerical_policy,
-        rms_scale_placement=rms_scale_placement,
-    )
-    attention_plan = compile_attention_region(recovered_attention.graph, numerical_policy=numerical_policy)
-    return RegionPlan(
-        skeletons=(*coda_plan.skeletons, *attention_plan.skeletons),
-        materializations=(*coda_plan.materializations, *attention_plan.materializations),
-        rewrites=(*coda_plan.rewrites, *attention_plan.rewrites),
     )
 
 

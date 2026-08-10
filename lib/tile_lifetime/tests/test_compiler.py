@@ -17,7 +17,6 @@ from tile_lifetime import (
     StreamingAttentionSkeleton,
     TensorGraph,
     TransformSkeleton,
-    compile_attention_region,
     compile_erased_dense_program,
     compile_gemm_program,
     compile_region,
@@ -26,6 +25,7 @@ from tile_lifetime import (
     validate_erased_tensor_program,
     validate_plan_semantic_erasure,
 )
+from tile_lifetime.attention import compile_reference_attention_region
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.plan import NumericalEquivalence
 from tile_lifetime.semantic_erasure import SemanticErasureError
@@ -505,8 +505,11 @@ def _attention_region() -> TensorGraph:
     return graph
 
 
-def test_compile_attention_region_streams_exact_causal_gqa() -> None:
-    plan = compile_attention_region(_attention_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+def test_reference_attention_region_streams_exact_causal_gqa() -> None:
+    plan = compile_reference_attention_region(
+        _attention_region(),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
 
     assert len(plan.skeletons) == 1
     skeleton = plan.skeletons[0]
@@ -535,8 +538,8 @@ def test_compile_attention_region_streams_exact_causal_gqa() -> None:
     assert plan.rewrites[0].applied
 
 
-def test_compile_attention_region_bitwise_policy_keeps_quadratic_intermediates() -> None:
-    plan = compile_attention_region(_attention_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
+def test_reference_attention_region_bitwise_policy_keeps_quadratic_intermediates() -> None:
+    plan = compile_reference_attention_region(_attention_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
 
     assert isinstance(plan.skeletons[0], TransformSkeleton)
     assert plan.materialization("attention_output.scores").disposition is MaterializationDisposition.MATERIALIZE

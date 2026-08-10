@@ -26,10 +26,10 @@ from tile_lifetime import (
     make_causal_block_relation,
     merge_attention_partials,
     query_major_block_index_plan,
-    routed_attention_reference,
     scaled_score_map,
     summarize_attention_partial,
 )
+from tile_lifetime.routed_attention import routed_attention_reference
 
 
 def _inputs():

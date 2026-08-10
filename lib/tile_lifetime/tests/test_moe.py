@@ -5,15 +5,11 @@ import pytest
 
 from tile_lifetime import (
     DType,
-    MoELegalityError,
-    MoERoutedPrecision,
-    MoKOracleConfig,
     NumericalPolicy,
-    OpaqueMoKOracleSkeleton,
     TensorGraph,
-    compile_mok_oracle_region,
 )
-from tile_lifetime.plan import PersistentTaskPlacement
+from tile_lifetime.moe import MoELegalityError, MoERoutedPrecision, MoKOracleConfig, compile_mok_oracle_region
+from tile_lifetime.plan import OpaqueMoKOracleSkeleton, PersistentTaskPlacement
 
 
 def _moe_region(

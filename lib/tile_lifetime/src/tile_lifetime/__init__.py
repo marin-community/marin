@@ -6,7 +6,6 @@
 from tile_lifetime.attention import (
     AttentionPartial,
     NormalizedAttentionPartial,
-    compile_attention_region,
     finalize_attention_partial,
     finalize_normalized_attention_partial,
     merge_attention_partials,
@@ -189,22 +188,10 @@ from tile_lifetime.linear_pair_map import (
     pair_silu_product_expression,
     pair_tanh_product_expression,
 )
-from tile_lifetime.moe import (
-    MoELegalityError,
-    MoERoutedPrecision,
-    MoKOracleConfig,
-    compile_mok_oracle_region,
-)
 from tile_lifetime.moe_recovery import (
     MoESemanticRecoveryError,
     RecoveredMoERegion,
     recover_moe_region,
-)
-from tile_lifetime.msa_frontend import (
-    MSA_INPUT_NAMES,
-    MSADebugConfig,
-    export_debug_msa,
-    msa_region,
 )
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
@@ -222,17 +209,18 @@ from tile_lifetime.normalized_exp_contract_training import (
     tanh_soft_cap_score_expression,
 )
 from tile_lifetime.pipeline import (
-    compile_stablehlo_attention_region,
+    FrontendProvenance,
+    FrontendSourceKind,
+    StableHLOStreamingAttentionCompilation,
     compile_stablehlo_dense_transformer_region,
     compile_stablehlo_expert_parallel_region,
     compile_stablehlo_projected_routed_attention_program,
-    compile_stablehlo_rms_attention_program,
-    compile_stablehlo_rms_region,
     compile_stablehlo_routed_attention_program,
     compile_stablehlo_streaming_attention_program,
     recover_stablehlo_moe_region,
     recover_stablehlo_projected_routed_attention_program,
     recover_stablehlo_routed_attention_program,
+    validate_stablehlo_streaming_attention_compilation,
 )
 from tile_lifetime.plan import (
     AttachmentSite,
@@ -240,7 +228,6 @@ from tile_lifetime.plan import (
     GemmSkeleton,
     MaterializationDisposition,
     NumericalPolicy,
-    OpaqueMoKOracleSkeleton,
     ReductionSkeleton,
     ScanNumericalContract,
     SemanticErasureReport,
@@ -251,7 +238,6 @@ from tile_lifetime.plan import (
     StreamingAttentionSkeleton,
     TransformSkeleton,
 )
-from tile_lifetime.qkv_rope import compile_qkv_rope_attention_region
 from tile_lifetime.relation import (
     OrderedRelationFoldProgram,
     RelationPlan,
@@ -277,13 +263,6 @@ from tile_lifetime.routed_attention import (
     execute_query_major_attention,
     execute_relation_selection,
     make_causal_block_relation,
-    routed_attention_reference,
-)
-from tile_lifetime.routed_attention_frontend import (
-    ROUTED_ATTENTION_INPUT_NAMES,
-    RoutedAttentionDebugConfig,
-    export_debug_routed_attention,
-    routed_attention_region,
 )
 from tile_lifetime.routed_attention_plan import (
     BoundedKVReusePlan,
@@ -471,15 +450,6 @@ from tile_lifetime.streaming_attention_backward import (
     estimate_streaming_attention_backward_work,
     execute_streaming_attention_backward,
     verify_streaming_attention_backward_score_map_vjp,
-)
-from tile_lifetime.streaming_attention_backward_reference import (
-    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
-    StreamingAttentionBackwardDebugConfig,
-    causal_gqa_attention,
-    causal_gqa_attention_training,
-    causal_gqa_attention_vjp,
-    export_debug_streaming_attention_backward,
-    export_debug_streaming_attention_training,
 )
 from tile_lifetime.swiglu import compile_swiglu_region
 from tile_lifetime.tensor_program import (

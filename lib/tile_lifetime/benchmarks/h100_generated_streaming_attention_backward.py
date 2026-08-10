@@ -23,14 +23,11 @@ import triton.language as tl
 from h100_generated_streaming_attention import _inputs, _program, emit_streaming_attention, lower_score_map
 
 from tile_lifetime import (
-    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
-    StreamingAttentionBackwardDebugConfig,
     StreamingAttentionBackwardDomainTraversal,
     StreamingTileSchedule,
     derive_streaming_attention_backward,
     derive_streaming_attention_backward_tile_schedule,
     estimate_streaming_attention_backward_work,
-    export_debug_streaming_attention_backward,
     recover_stablehlo_streaming_attention_backward,
     verify_owner_preparation_fold_attachment,
 )
@@ -42,6 +39,11 @@ from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardTileSchedule,
     eliminate_normalized_exp_maximum_vjp,
     verify_streaming_attention_backward_score_map_vjp,
+)
+from tile_lifetime.streaming_attention_backward_reference import (
+    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    StreamingAttentionBackwardDebugConfig,
+    export_debug_streaming_attention_backward,
 )
 from tile_lifetime.tensor_program import serialize_scalar_expression
 

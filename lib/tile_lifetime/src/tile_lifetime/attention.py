@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lower semantic attention to a bounded Hopper streaming template family."""
+"""Generic attention Fold algebra and historical named-operation planning."""
 
 from dataclasses import dataclass
 
@@ -167,8 +167,8 @@ def finalize_normalized_attention_partial(partial: NormalizedAttentionPartial) -
 
 
 @dataclass(frozen=True)
-class AttentionPhysicalConfig:
-    """One supported physical configuration in the official FA3 template family."""
+class ReferenceAttentionPhysicalConfig:
+    """Historical physical configuration for the opaque FA3 comparison path."""
 
     backend: str
     query_block_size: int
@@ -185,8 +185,10 @@ class AttentionPhysicalConfig:
     output_layout: str = "bshd_contiguous"
 
 
-def select_hopper_attention_config(operation: ScaledDotProductAttentionOp) -> AttentionPhysicalConfig:
-    """Select a conservative initial H100 configuration for a supported head dimension."""
+def select_reference_hopper_attention_config(
+    operation: ScaledDotProductAttentionOp,
+) -> ReferenceAttentionPhysicalConfig:
+    """Select the historical opaque-FA3 comparison configuration."""
     if operation.head_dimension not in (64, 128):
         raise ValueError(f"FA3-style template does not support head dimension {operation.head_dimension}")
     if operation.head_dimension == 64:
@@ -196,7 +198,7 @@ def select_hopper_attention_config(operation: ScaledDotProductAttentionOp) -> At
         query_block_size = 128
         key_value_block_size = 128 if operation.causal else 176
     mma_pv_is_rs = operation.causal
-    return AttentionPhysicalConfig(
+    return ReferenceAttentionPhysicalConfig(
         backend="official_flashattention_3_hopper",
         query_block_size=query_block_size,
         key_value_block_size=key_value_block_size,
@@ -211,8 +213,8 @@ def select_hopper_attention_config(operation: ScaledDotProductAttentionOp) -> At
     )
 
 
-def compile_attention_region(graph: TensorGraph, *, numerical_policy: NumericalPolicy) -> RegionPlan:
-    """Compile the graph's single attention operation into a streaming or fallback plan."""
+def compile_reference_attention_region(graph: TensorGraph, *, numerical_policy: NumericalPolicy) -> RegionPlan:
+    """Compile one named attention operation through the historical physical planner."""
     operations = tuple(operation for operation in graph.operations if isinstance(operation, ScaledDotProductAttentionOp))
     if len(operations) != 1:
         raise ValueError(f"expected one semantic attention operation, found {len(operations)}")
@@ -220,7 +222,7 @@ def compile_attention_region(graph: TensorGraph, *, numerical_policy: NumericalP
     if numerical_policy is NumericalPolicy.BITWISE_EXACT:
         return _materialized_attention_plan(operation)
 
-    config = select_hopper_attention_config(operation)
+    config = select_reference_hopper_attention_config(operation)
     batch, query_length, query_heads, value_dimension = operation.output.shape
     key_length = operation.key.shape[1]
     score_shape = (batch, query_heads, query_length, key_length)

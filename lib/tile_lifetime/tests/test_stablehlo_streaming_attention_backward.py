@@ -10,23 +10,25 @@ import numpy as np
 import pytest
 
 from tile_lifetime import (
-    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
-    StreamingAttentionBackwardDebugConfig,
     StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProvenance,
     StreamingTileSchedule,
-    causal_gqa_attention_training,
-    causal_gqa_attention_vjp,
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
-    export_debug_streaming_attention_backward,
-    export_debug_streaming_attention_training,
     recover_stablehlo_streaming_attention_backward,
 )
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import CompareAttributes, import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import StableHLOStreamingAttentionBackwardError
 from tile_lifetime.streaming_attention_backward import eliminate_normalized_exp_maximum_vjp
+from tile_lifetime.streaming_attention_backward_reference import (
+    STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    StreamingAttentionBackwardDebugConfig,
+    causal_gqa_attention_training,
+    causal_gqa_attention_vjp,
+    export_debug_streaming_attention_backward,
+    export_debug_streaming_attention_training,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "causal_gqa_attention_vjp_v1_17_0.mlir.bc.b64"
 SCHEDULE = StreamingTileSchedule(query_tile_size=2, key_value_tile_size=2, pipeline_depth=2)

@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from tile_lifetime.ir import DType
 from tile_lifetime.pipeline import (
-    compile_stablehlo_attention_region,
-    compile_stablehlo_rms_attention_program,
-    compile_stablehlo_rms_region,
+    FrontendSourceKind,
     compile_stablehlo_streaming_attention_program,
+    validate_stablehlo_streaming_attention_compilation,
 )
 from tile_lifetime.plan import (
     GemmSkeleton,
@@ -18,7 +20,12 @@ from tile_lifetime.plan import (
     ReductionSkeleton,
     StreamingAttentionSkeleton,
 )
-from tile_lifetime.semantic_erasure import validate_plan_semantic_erasure
+from tile_lifetime.reference_pipeline import (
+    compile_reference_stablehlo_attention_region,
+    compile_reference_stablehlo_rms_attention_program,
+    compile_reference_stablehlo_rms_region,
+)
+from tile_lifetime.semantic_erasure import SemanticErasureError, validate_plan_semantic_erasure
 from tile_lifetime.semantic_recovery import recover_attention_region, recover_rms_region
 from tile_lifetime.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from tile_lifetime.streaming_attention import StreamingTileSchedule
@@ -68,7 +75,7 @@ def test_import_stablehlo_preserves_reduction_semantics_and_provenance() -> None
     assert "reduce_sum" in reductions[0].source_location
 
 
-def test_recover_and_compile_stablehlo_rms_region_selects_delayed_scale_plan() -> None:
+def test_reference_stablehlo_rms_region_selects_delayed_scale_plan() -> None:
     artifact = base64.b64decode(FIXTURE.read_text())
     imported = import_stablehlo(artifact, input_names=INPUT_NAMES)
     recovered = recover_rms_region(
@@ -76,7 +83,7 @@ def test_recover_and_compile_stablehlo_rms_region_selects_delayed_scale_plan() -
         gemm_accumulation_dtype=DType.FP32,
         output_name="output",
     )
-    plan = compile_stablehlo_rms_region(
+    plan = compile_reference_stablehlo_rms_region(
         artifact,
         input_names=INPUT_NAMES,
         output_name="output",
@@ -112,11 +119,11 @@ def test_import_stablehlo_preserves_attention_axes_and_causal_comparison() -> No
     assert comparisons[0].attributes == CompareAttributes(direction="LE", compare_type="SIGNED")
 
 
-def test_recover_and_compile_stablehlo_attention_selects_streaming_gqa_plan() -> None:
+def test_reference_stablehlo_attention_selects_opaque_streaming_plan() -> None:
     artifact = base64.b64decode(ATTENTION_FIXTURE.read_text())
     imported = import_stablehlo(artifact, input_names=ATTENTION_INPUT_NAMES)
     recovered = recover_attention_region(imported, output_name="attention_output")
-    plan = compile_stablehlo_attention_region(
+    plan = compile_reference_stablehlo_attention_region(
         artifact,
         input_names=ATTENTION_INPUT_NAMES,
         output_name="attention_output",
@@ -146,13 +153,14 @@ def test_recover_and_compile_stablehlo_attention_selects_streaming_gqa_plan() ->
 
 
 def test_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> None:
-    program = compile_stablehlo_streaming_attention_program(
+    compilation = compile_stablehlo_streaming_attention_program(
         base64.b64decode(ATTENTION_FIXTURE.read_text()),
         input_names=ATTENTION_INPUT_NAMES,
         output_name="attention_output",
         schedule=StreamingTileSchedule(query_tile_size=64, key_value_tile_size=128, pipeline_depth=2),
     )
 
+    program = compilation.program
     assert program.qk.inputs[0].shape == (1, 5, 6, 64)
     assert program.qk.inputs[1].shape == (1, 5, 2, 64)
     assert program.pv.inputs[1].shape == (1, 5, 2, 64)
@@ -160,10 +168,50 @@ def test_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> No
     assert program.pv.index_maps_for_input(1)[0].divisor == 3
     assert program.schedule == StreamingTileSchedule(64, 128, 2)
     assert not hasattr(program, "backend")
+    assert compilation.provenance.source_kind is FrontendSourceKind.STABLEHLO_ARTIFACT
+    assert compilation.semantic_erasure_report.is_clean
 
 
-def test_compile_one_stablehlo_program_recovers_coda_and_fa3() -> None:
-    plan = compile_stablehlo_rms_attention_program(
+def test_current_streaming_frontend_rejects_hand_authored_provenance() -> None:
+    compilation = compile_stablehlo_streaming_attention_program(
+        base64.b64decode(ATTENTION_FIXTURE.read_text()),
+        input_names=ATTENTION_INPUT_NAMES,
+        output_name="attention_output",
+        schedule=StreamingTileSchedule(query_tile_size=64, key_value_tile_size=128, pipeline_depth=2),
+    )
+    bypass = replace(
+        compilation,
+        provenance=replace(
+            compilation.provenance,
+            source_kind=FrontendSourceKind.HAND_AUTHORED_SEMANTIC_IR,
+        ),
+    )
+
+    with pytest.raises(SemanticErasureError, match="must originate from a StableHLO artifact"):
+        validate_stablehlo_streaming_attention_compilation(bypass)
+
+
+def test_current_streaming_frontend_rejects_named_kernel_scheduling_key() -> None:
+    compilation = compile_stablehlo_streaming_attention_program(
+        base64.b64decode(ATTENTION_FIXTURE.read_text()),
+        input_names=ATTENTION_INPUT_NAMES,
+        output_name="attention_output",
+        schedule=StreamingTileSchedule(query_tile_size=64, key_value_tile_size=128, pipeline_depth=2),
+    )
+    named = replace(
+        compilation,
+        semantic_erasure_report=replace(
+            compilation.semantic_erasure_report,
+            scheduling_keys=(*compilation.semantic_erasure_report.scheduling_keys, "flashattention_3"),
+        ),
+    )
+
+    with pytest.raises(SemanticErasureError, match="retains named semantics"):
+        validate_stablehlo_streaming_attention_compilation(named)
+
+
+def test_reference_stablehlo_program_recovers_coda_and_fa3() -> None:
+    plan = compile_reference_stablehlo_rms_attention_program(
         base64.b64decode(PROGRAM_FIXTURE.read_text()),
         input_names=PROGRAM_INPUT_NAMES,
         rms_output_name="rms_output",
