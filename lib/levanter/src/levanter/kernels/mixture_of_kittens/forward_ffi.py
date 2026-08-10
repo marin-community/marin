@@ -38,6 +38,7 @@ _LAST_ERROR_SYMBOL = "levanter_mok_last_error"
 _BUILD_SCHEMA = "mok_forward_backward_ffi_v3"
 _NUM_DEVICES = 4
 _TILE_ROWS = 256
+_SWIGLU_TILE_COLUMNS = 128
 _CLUSTER_SIZE = 2
 
 
@@ -539,7 +540,7 @@ def backward_bf16_local(
         jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((hidden_dim, intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((routed_rows,), jnp.float32),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_col_blocks), jnp.float32),
+        jax.ShapeDtypeStruct((routed_rows, intermediate_dim // _SWIGLU_TILE_COLUMNS), jnp.float32),
         jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),

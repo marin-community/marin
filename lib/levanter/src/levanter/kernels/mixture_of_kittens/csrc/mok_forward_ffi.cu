@@ -581,6 +581,10 @@ ffi::Error BackwardBf16(
         d_w_routed_down->dimensions()[3] != intermediate_dim) {
       return ffi::Error::InvalidArgument("backward routed weight-gradient shape mismatch");
     }
+    if (d_router_weight_partials->dimensions()[0] != macrobatch_size ||
+        d_router_weight_partials->dimensions()[1] != intermediate_dim / MoK::config::SWIGLU_Nb) {
+      return ffi::Error::InvalidArgument("backward router-gradient partial shape mismatch");
+    }
 
     const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
     const size_t routed_x_bytes = static_cast<size_t>(local_tokens) * top_k * hidden_dim * sizeof(uint16_t);
