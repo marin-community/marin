@@ -91,7 +91,10 @@ def evaluate_component(data, full_panel, column: str, seed: int) -> tuple[float,
             total = 0.0
             for a, b in inner:
                 head, amplitudes = model.fit_head(free[a], constrained[a], target[a], ridge, model.pooled_width(sub))
-                residual = free[b] @ head + constrained[b] @ amplitudes - target[b]
+                predictions = free[b] @ head + constrained[b] @ amplitudes
+                if model.predictions_escape_range(predictions, target[a]):
+                    return 1e6
+                residual = predictions - target[b]
                 total += float(residual @ residual)
             return total
 

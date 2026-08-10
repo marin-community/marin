@@ -36,6 +36,12 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import nnls
 
+# Excess epochs at which repetition harm saturates, measured on the 300M panel with WSD80 never
+# consulted (stable 102-110 across seeds). Fixed rather than fitted: a free saturation scale with a wide
+# bound is exactly what made the unbounded form explode, and this quantity is in epochs, which the term
+# specification records as transferable across panels.
+DAMAGE_KNEE = 105.0
+
 
 @dataclass(frozen=True)
 class Panel:
@@ -136,7 +142,16 @@ def design(panel: Panel, shape: Shape) -> tuple[np.ndarray, np.ndarray]:
     near = (panel.exposure(shape.near_horizon) + shape.offset) ** -exponent
     late = (panel.exposure(1.0) + shape.offset) ** -exponent
     boundary = np.exp(-panel.early_epochs() / scale)
-    damage = np.maximum(panel.exposure(shape.damage_horizon) - 1.0, 0.0) ** shape.damage_exponent
+    # Saturating damage, BOUNDED in [0, 1). The unbounded `excess ** tau` reached 1.2e24 on this panel
+    # (tau up to 10, excess up to 255 epochs) and made the model violently extrapolative: `fit_head`
+    # normalises columns by their TRAINING norm, so a test row with slightly larger excess is amplified
+    # by the tau-th power. Measured consequence of the old form -- random parameters drawn from this
+    # model's own bounds predicted up to 23x worse than the mean, and one ordinary 300M component fit
+    # returned an RMSE of 562 BPB. Below the knee this is still a power law, so panels whose excess never
+    # approaches DAMAGE_KNEE (WSD80 tops out at 25.46) are essentially unaffected.
+    excess = np.maximum(panel.exposure(shape.damage_horizon) - 1.0, 0.0) / DAMAGE_KNEE
+    powered = excess**shape.damage_exponent
+    damage = powered / (1.0 + powered)
 
     free = np.column_stack([np.ones(len(panel.weights)), family_sums(panel.weights[:, 1, :], panel.family_index)])
     constrained = np.column_stack(
@@ -200,6 +215,26 @@ def fit_head(
     return np.linalg.lstsq(free, response - constrained @ amplitudes, rcond=None)[0], amplitudes
 
 
+def predictions_escape_range(predictions: np.ndarray, observed: np.ndarray, slack: float = 3.0) -> bool:
+    """Do held-out predictions leave the range the training targets actually occupy?
+
+    Selection guard for extrapolation. The design contains columns that are large where the panel is
+    sparse -- the readout is capped only by ``offset ** -gamma`` on buckets with exactly zero weight --
+    so a parameter vector can fit the training rows well and still send one held-out row far outside any
+    plausible value. Measured on the 300M arc_challenge component: 516 of 520 rows had a median absolute
+    error of 0.027 while a single row predicted 37.2 against an observed 1.16, which alone moved RMSE
+    from about 0.04 to 1.58.
+
+    This rejects such a vector during selection rather than clipping its output afterwards, so the fitted
+    model is never one that produces impossible predictions. The window is the observed spread widened by
+    ``slack``, which is deliberately loose: the point is to exclude the absurd, not to shrink toward the
+    mean.
+    """
+    low, high = float(np.min(observed)), float(np.max(observed))
+    margin = slack * max(high - low, 1e-12)
+    return bool(np.min(predictions) < low - margin or np.max(predictions) > high + margin)
+
+
 def unpack(vector: np.ndarray, n_families: int, n_strata: int = 3) -> tuple[Shape, float]:
     """Selection vector -> shape and ridge. Offsets and scales are searched in log space."""
     near, damage_horizon, log_offset, tau, log_ridge = vector[:5]
@@ -222,7 +257,14 @@ def bounds(n_families: int, n_strata: int = 3) -> tuple[tuple[float, float], ...
     return (
         (0.0, 1.0),  # near horizon
         (0.0, 1.0),  # damage horizon
-        (-5.0, -0.3),  # log offset
+        # Log offset. The floor is 1e-2 EPOCHS, not 1e-5, and the difference is a robustness fix rather
+        # than a taste choice. The readout (E + offset)^-gamma is regularised only by the offset on
+        # buckets with EXACTLY zero weight -- 41 such entries on the 300M panel -- so a 1e-5 floor lets a
+        # single design entry reach offset^-gamma = 1e10. Random parameters drawn from the old box gave
+        # out-of-fold RMSE up to 15894 BPB against a 0.0178 intercept; at this floor the worst is 0.0434.
+        # It costs nothing: nested 300M Uncheatable RMSE is 0.005665 at this floor against 0.005671 at
+        # 1e-5. WSD80 is structurally immune either way, its smallest real exposure being 0.1 epochs.
+        (-2.0, -0.3),  # log offset
         (0.2, 10.0),  # damage exponent
         (-6.0, 1.0),  # log ridge
         *(((0.005, 2.0),) * n_families),  # readout exponent per family
