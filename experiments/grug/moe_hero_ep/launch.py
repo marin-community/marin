@@ -141,6 +141,7 @@ def build_hero_run(
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
+    offload_opt_state: bool = HERO_OFFLOAD_OPT_STATE,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     jax_nightly_version: str | None = None,
@@ -230,7 +231,7 @@ def build_hero_run(
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        offload_opt_state=offload_opt_state,
         watch_mode=watch_mode,
         # A 25-step throughput gate does not need checkpoints, and writing the offloaded optimizer
         # state costs more than the gate itself. A multi-thousand-step run on a contended rack does:
@@ -467,6 +468,12 @@ def build_hero_run(
     help="First traced step. Keep it past compile and warmup.",
 )
 @click.option(
+    "--offload-opt-state/--no-offload-opt-state",
+    default=HERO_OFFLOAD_OPT_STATE,
+    show_default=True,
+    help="Stage MuonH state through pinned host memory each step or keep it resident in HBM.",
+)
+@click.option(
     "--jax-nightly-version",
     default=None,
     help="Install this exact JAX nightly on workers after the locked GPU environment sync.",
@@ -498,6 +505,7 @@ def main(
     eval_every: int,
     watch_interval: int,
     watch_mode: str,
+    offload_opt_state: bool,
     profile_steps: int,
     profile_start_step: int,
     jax_nightly_version: str | None,
@@ -522,6 +530,7 @@ def main(
         eval_every=eval_every,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),
+        offload_opt_state=offload_opt_state,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         jax_nightly_version=jax_nightly_version,
