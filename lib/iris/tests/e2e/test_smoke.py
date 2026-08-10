@@ -270,7 +270,7 @@ def _open_job_detail(page, cluster_url: str, job_id: str) -> None:
 
 def _open_task_detail(page, cluster_url: str, job_id: str, task_id: str) -> None:
     _open_job_detail(page, cluster_url, job_id)
-    page.get_by_text(task_id, exact=True).locator("..").click()
+    page.get_by_role("link", name=task_id, exact=True).click()
     page.wait_for_function(
         "(taskId) => decodeURIComponent(location.hash).startsWith('#/task/') "
         "&& document.body.textContent.includes(taskId) "
@@ -333,7 +333,8 @@ def test_dashboard_groups_jobs_by_starred_user_and_opens_job(smoke_cluster, smok
     _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
     smoke_page.get_by_role("link", name="Jobs").click()
     wait_for_dashboard_ready(smoke_page)
-    assert smoke_page.url.endswith("/#/")
+    smoke_page.get_by_role("heading", name=f"{user}'s jobs", exact=True).wait_for()
+    smoke_page.get_by_role("link", name=quick.job_id.to_wire(), exact=True).wait_for()
 
     smoke_cluster.kill(running)
 
@@ -391,7 +392,7 @@ def test_dashboard_failed_task_retains_terminal_attempt(smoke_cluster, smoke_pag
 
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
-    """Retained placement constraints render in the typed Job specification."""
+    """Retained placement constraints render in the Job scheduling section."""
     # Use soft constraints to avoid submit-time routing feasibility rejection;
     # the test only checks that constraint chips render on the dashboard.
     constraints = [
@@ -412,9 +413,9 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
         _open_job_detail(smoke_page, smoke_cluster.url, job.job_id.to_wire())
-        assert_visible(smoke_page, "text=Specification")
+        smoke_page.locator("summary").filter(has_text="Scheduling").click()
         assert_visible(smoke_page, "text=region")
-        smoke_screenshot("constraints", "Typed Job specification showing retained placement constraints")
+        smoke_screenshot("constraints", "Job scheduling section showing retained placement constraints")
 
 
 def test_dashboard_nodes_tab(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
@@ -633,10 +634,11 @@ def test_endpoint_registration(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
     smoke_page.get_by_placeholder("Name prefix").fill(prefix)
     smoke_page.get_by_role("button", name="Filter", exact=True).click()
-    smoke_page.get_by_role("link", name=endpoint_name, exact=True).wait_for()
-    smoke_page.get_by_role("button", name="Details", exact=True).click()
-    smoke_page.get_by_text("Address", exact=True).wait_for()
-    smoke_page.get_by_text("Access", exact=True).wait_for()
+    endpoint_link = smoke_page.get_by_role("link", name=endpoint_name, exact=True)
+    endpoint_link.wait_for()
+    endpoint_link.locator("xpath=ancestor::tr").get_by_role("button", name="Details", exact=True).click()
+    smoke_page.get_by_text("localhost:5000", exact=True).wait_for()
+    smoke_page.get_by_text("actor", exact=True).wait_for()
     smoke_page.get_by_role("link", name=job.job_id.task(0).to_wire(), exact=True).wait_for()
     smoke_screenshot("endpoints-tab", "Endpoint inventory with proxy, Task, Job, lease, and metadata links")
 
