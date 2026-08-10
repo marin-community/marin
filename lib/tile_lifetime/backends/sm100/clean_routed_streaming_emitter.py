@@ -30,7 +30,12 @@ from typing import Any
 
 import numpy as np
 
+from tile_lifetime.event_dataflow_adapters import sm100_routed_right_resource_descriptor
 from tile_lifetime.ir import DType
+from tile_lifetime.right_resource_event_schedule import (
+    RightResourceFoldEventSchedule,
+    derive_right_resource_fold_event_schedule,
+)
 from tile_lifetime.sm100_routed_lowering import (
     SM100RelationOrientation,
     SM100RoutedStreamingLowering,
@@ -257,6 +262,7 @@ class SM100EmitterPlan:
     partial_merge: PartialStateMergeProgram
     partial_value_dtype: PartialValueDType
     relation_encoding: SM100RelationEncoding
+    event_schedule: RightResourceFoldEventSchedule
     physical_class: str
     physical_constructor: dict[str, Any]
     external_semantic_kernels: tuple[str, ...]
@@ -398,12 +404,17 @@ def emitter_plan_from_lowering(
         key_value_heads=lowering.key_value_heads,
         selected_count=lowering.selected_count,
     )
+    event_schedule = derive_right_resource_fold_event_schedule(
+        lowering.relation,
+        sm100_routed_right_resource_descriptor(lowering),
+    )
     return SM100EmitterPlan(
         domain_restriction=restriction,
         normalized_exp_fold=fold,
         partial_merge=merge,
         partial_value_dtype=partial_value_dtype,
         relation_encoding=relation_encoding,
+        event_schedule=event_schedule,
         physical_class=GENERATED_PHYSICAL_CLASS,
         physical_constructor={
             "head_dim": 128,
@@ -1540,6 +1551,20 @@ def extract_clean_sm100_sources(
                 "NormalizedExpFoldSm100",
                 "DomainRestrictionSm100",
             ),
+            "event_tensor": {
+                "program_fingerprint": plan.event_schedule.program_fingerprint,
+                "runtime_fingerprint": plan.event_schedule.runtime_fingerprint,
+                "resource_tasks": plan.event_schedule.grouping.task_count,
+                "resource_buffer_depth": plan.event_schedule.resource_buffer.capacity,
+                "realizations": tuple(
+                    (entry.plan_name, entry.kind.value, entry.mechanism)
+                    for entry in plan.event_schedule.realization.entries
+                ),
+                "physical_boundary": (
+                    "right-resource staging and slot reuse are primitive-owned; "
+                    "the generated Fold finalizer follows on the same device stream"
+                ),
+            },
             "numerical_policy": {
                 "partial_log_normalizer": "fp32",
                 "partial_normalized_value": partial_value_dtype.value,

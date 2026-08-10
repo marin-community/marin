@@ -43,6 +43,20 @@ Contract/Fold schedule. The KV-major routed-attention relation and inverse
 partial-state movement do not yet execute through an equivalent tensor-core
 Event Tensor attachment.
 
+The first routed attachment is now statically linked to the clean SM100
+emitter. A generic `RightResourceFoldEventSchedule` groups runtime relation
+edges by partition and right-side resource, splits them by the physical task
+capacity, derives bounded staging slots and generations, and connects grouped
+body tasks to generated Fold finalizers. Program and runtime fingerprints are
+separate, and a relation permutation mutation changes only the runtime
+fingerprint. The schedule module contains no attention, MoE, expert, or Q/K/V
+roles; the routed-attention adapter alone supplies the route-slot partition map
+and physical payload dimensions.
+
+This is not yet GPU evidence. The current clean SM100 executable runtime is
+Torch-hosted. The bounded GB200 plan and its Torch-free JAX typed-FFI allocation
+gate are documented in [Routed relation Event Tensor GPU plan](event_tensor_routed_attention_gpu_plan.md).
+
 ## MoE and segmented work
 
 The generated RelationPlan/SegmentedContract body executes this edge on a

@@ -38,6 +38,7 @@ from clean_routed_streaming_emitter import (  # noqa: E402
 )
 
 from tile_lifetime.ir import DType  # noqa: E402
+from tile_lifetime.relation import build_relation_plan  # noqa: E402
 from tile_lifetime.sm100_routed_lowering import SM100RelationOrientation  # noqa: E402
 from tile_lifetime.tensor_program import TensorAxis  # noqa: E402
 from tile_lifetime.tiled_fold_finalize import (  # noqa: E402
@@ -50,7 +51,21 @@ from tile_lifetime.tiled_fold_finalize import (  # noqa: E402
 )
 
 
-def _lowering(*, causal: bool, score_scale: float = 128**-0.5, output_scale: float = 1.0) -> SimpleNamespace:
+def _lowering(
+    *,
+    causal: bool,
+    score_scale: float = 128**-0.5,
+    output_scale: float = 1.0,
+    relation_shift: int = 0,
+) -> SimpleNamespace:
+    destination = np.mod(np.arange(64, dtype=np.int32).reshape(8, 8) * 3 + 1 + relation_shift, 8)
+    relation = build_relation_plan(
+        destination,
+        np.ones(destination.shape, dtype=np.float32),
+        destination_rank_by_item=np.zeros(8, dtype=np.int32),
+        destination_local_item_by_item=np.arange(8, dtype=np.int32),
+        padding_quantum=1,
+    )
     return SimpleNamespace(
         schedule=SimpleNamespace(
             orientation=SM100RelationOrientation.RIGHT_MAJOR,
@@ -59,6 +74,7 @@ def _lowering(*, causal: bool, score_scale: float = 128**-0.5, output_scale: flo
             partial_merge_tile_rows=8,
             packed_left_rows=128,
             right_block_size=128,
+            right_stages=2,
         ),
         score_map=SimpleNamespace(causal=causal, scale=score_scale, softcap=None),
         head_group_size=4,
@@ -66,6 +82,8 @@ def _lowering(*, causal: bool, score_scale: float = 128**-0.5, output_scale: flo
         query_length=8,
         selected_count=4,
         output_scale=output_scale,
+        relation=relation,
+        query_tokens_per_task=32,
     )
 
 
@@ -81,6 +99,28 @@ def test_emitter_plan_changes_domain_restriction_without_changing_physical_famil
     assert causal.physical_class == unrestricted.physical_class
     assert causal.physical_constructor | {"causal": False} == unrestricted.physical_constructor
     assert not causal.external_semantic_kernels
+
+
+def test_emitter_plan_attaches_generic_relation_event_schedule() -> None:
+    baseline = emitter_plan_from_lowering(_lowering(causal=False), paged_key_value=True)
+    mutated = emitter_plan_from_lowering(
+        _lowering(causal=False, relation_shift=1),
+        paged_key_value=True,
+    )
+
+    assert baseline.event_schedule.program_fingerprint == mutated.event_schedule.program_fingerprint
+    assert baseline.event_schedule.runtime_fingerprint != mutated.event_schedule.runtime_fingerprint
+    assert baseline.event_schedule.resource_buffer.capacity == 2
+    assert {family.name for family in baseline.event_schedule.program.task_families} == {
+        "right_resource_stage",
+        "grouped_contract_fold_body",
+        "partial_state_fold_finalize",
+    }
+    assert all(
+        forbidden not in family.name
+        for family in baseline.event_schedule.program.task_families
+        for forbidden in ("query", "key", "value", "attention", "moe", "expert")
+    )
 
 
 def test_score_domain_and_finalization_mutations_reuse_one_physical_class() -> None:
