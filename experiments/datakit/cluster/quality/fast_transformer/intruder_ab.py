@@ -29,16 +29,22 @@ from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.intruder import Bucket, BucketPool, default_panel, run_intruder_test
+from experiments.datakit.cluster.intruder import (
+    DEFAULT_PANEL_SIZE,
+    IN_GROUP_COUNT,
+    Bucket,
+    BucketPool,
+    default_panel,
+    run_intruder_test,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_GROUPING = "domain_id"
-DEFAULT_PANEL_SIZE = 3
 # Documents per (group, bucket). Four is the floor a trial needs; this leaves room
 # for distinct trials without holding the whole evaluation set in memory.
 DEFAULT_PER_BUCKET = 64
-MIN_BUCKET_DOCS = 4
+MIN_BUCKET_DOCS = IN_GROUP_COUNT  # a trial needs this many in-group documents
 # Bands for domain-quantile bucketing: matches the deployed 5-bucket scale so the
 # two bucketings are compared at the same granularity.
 N_BUCKETS = 5

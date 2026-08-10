@@ -12,6 +12,8 @@ these tests assert both halves: the compressed type recovers, and the poor type
 does not.
 """
 
+from itertools import pairwise
+
 import numpy as np
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
@@ -106,12 +108,24 @@ def test_a_type_below_the_support_floor_falls_back_to_the_default():
 
 
 def test_apply_calibration_accepts_a_global_calibration_unchanged():
-    """Callers should not have to branch on which calibration shape they were given."""
+    """Callers should not have to branch on which calibration shape they were given.
+
+    `score.py` hands whatever the model directory holds straight through, so a
+    global calibration has to score without a type and land documents in the
+    bucket their oracle level implies.
+    """
     rng = np.random.default_rng(3)
-    levels = _levels(rng, 500, [1, 1, 1, 1, 1])
+    levels = _levels(rng, 2000, [1, 1, 1, 1, 1])
     raw = _raw_from(levels, rng, scale=1.0, offset=0.0)
-    knots = calibration_knots(raw, levels)
-    assert np.allclose(apply_calibration(raw, None, knots), np.interp(raw, knots["xk"], knots["yk"]))
+
+    calibrated = apply_calibration(raw, None, calibration_knots(raw, levels))
+    buckets = np.digitize(calibrated, BUCKET_EDGES)
+
+    assert calibrated.min() >= 0.0 and calibrated.max() <= 1.0
+    # Monotone in the oracle level: each level sits in a higher bucket than the last.
+    means = [buckets[levels == level].mean() for level in (1, 2, 3, 4, 5)]
+    assert all(a < b for a, b in pairwise(means)), means
+    assert np.mean(np.abs(buckets - (levels - 1)) <= 1) > 0.9
 
 
 def test_a_thin_oracle_level_does_not_place_a_cutpoint():
