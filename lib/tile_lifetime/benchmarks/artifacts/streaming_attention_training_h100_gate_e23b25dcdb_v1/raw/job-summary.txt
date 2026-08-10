@@ -1,0 +1,24 @@
+CPU preflight job: /dlwh/shuttle-attn-environment-preflight-v1-20260809
+CPU preflight state: succeeded
+CPU preflight duration: 10.72 seconds
+CPU preflight failures: 0
+CPU preflight preemptions: 0
+
+H100 job: /dlwh/shuttle-attn-training-h100-fixed-20260809
+H100 state: failed before benchmark execution
+H100 duration: 16.89 seconds
+H100 failures: 1
+H100 preemptions: 0
+H100 retries configured: 0
+GPU: NVIDIA H100 80GB HBM3
+GPU UUID: GPU-87333bd6-8e3c-d187-e433-a290b2da8e1b
+Driver: 595.71.05
+Power limit: 700 W
+NVCC: 13.3.73
+JAX/JAXLIB: 0.10.1
+Torch: 2.11.0+cu130
+Triton: 3.6.0
+Failure: cuda_fp16.h could not include nv/target because CCCL headers were absent
+Correctness executed: no
+Timing executed: no
+GB200 launched: no
