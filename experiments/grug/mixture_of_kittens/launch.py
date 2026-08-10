@@ -86,6 +86,7 @@ def build_mok_run(
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
+    num_layers: int | None = None,
     capacity_factor: float | None = None,
     watch_interval: int = 0,
     version: str | None = None,
@@ -116,6 +117,7 @@ def build_mok_run(
             ("num_experts", num_experts),
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
+            ("num_layers", num_layers),
             ("capacity_factor", capacity_factor),
         )
         if value is not None
@@ -275,6 +277,12 @@ def build_mok_run(
     help="Override the routed expert width.",
 )
 @click.option(
+    "--num-layers",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the transformer layer count for a reduced-shape gate.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -297,6 +305,7 @@ def main(
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
+    num_layers: int | None,
     capacity_factor: float | None,
     watch_interval: int,
 ) -> ArtifactStep[MokThroughputResult]:
@@ -309,6 +318,7 @@ def main(
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        num_layers=num_layers,
         capacity_factor=capacity_factor,
         watch_interval=watch_interval,
     )

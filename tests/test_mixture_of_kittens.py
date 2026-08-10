@@ -316,6 +316,20 @@ def test_gate_can_log_optimizer_boundary_norms():
     assert watch["interval"] == 1
 
 
+def test_gate_can_reduce_the_layer_count():
+    step = launch.build_mok_run(
+        run_id="one-layer",
+        num_steps=2,
+        execution=launch.MokExecution.FUSED,
+        implementation=train.RaggedAllToAllImplementation.DEVICE,
+        num_nodes=1,
+        num_layers=1,
+        version="dev",
+    )
+
+    assert json.loads(step.fingerprint_payload())["model"]["num_layers"] == 1
+
+
 def test_fused_schedule_capacity_adds_headroom_and_expert_padding():
     capacity = schedule_capacity(
         num_tokens=16 * 4096,
