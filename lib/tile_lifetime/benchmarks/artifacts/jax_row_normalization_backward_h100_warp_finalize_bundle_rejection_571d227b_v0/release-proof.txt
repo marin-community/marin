@@ -1,0 +1,8 @@
+I20260809 19:32:15 8418467456 iris.cluster.config Loading config from lib/iris/config/cw-us-east-02a.yaml
+I20260809 19:32:15 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 19:32:16 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+No jobs found.
+
+Exact task-label pod query:
+
+Local dev_gpu sessions matching warp-finalize:

@@ -1,0 +1,38 @@
+Candidate source revision:
+
+  571d227bb83935db1e878f309157672551594d06
+
+Exact rejected submission:
+
+  /Users/dlwh/src/marin/.venv/bin/iris \
+    --config lib/iris/config/cw-us-east-02a.yaml \
+    job run --no-wait \
+    --job-name shuttle-rms-warp-finalize-h100-20260809 \
+    --enable-extra-resources --gpu H100x1 --cpu 1 \
+    --memory 16GB --disk 50GB --priority batch \
+    --max-retries 0 --timeout 3600 --extra gpu -- \
+    bash -lc \
+    '/app/lib/tile_lifetime/benchmarks/run_jax_row_normalization_warp_finalize_h100.sh 571d227bb89731c7068600cb63ea88d0c9f7b5a0'
+
+The revision argument in the rejected command was a transcription error. It
+would only have labeled benchmark metadata; the Iris workspace contained
+revision `571d227bb83935db1e878f309157672551594d06`. The client rejected the
+bundle before the command or any benchmark code ran.
+
+The intended benchmark geometry was fixed in the checked-in harness:
+
+  rows=2048
+  hidden=4096
+  threads=256
+  feature groups per block=32
+  outputs per group=1
+  feature reduction strategy=warp_finalize
+  selected pipeline=coalesce_compatible_row_stages
+  compare pipeline schedules=true
+  warmups=10
+  samples=30
+  iterations per sample=100
+  seed=20260809
+  dtype=BF16
+  numerical policy=allow_rounding_reorder
+

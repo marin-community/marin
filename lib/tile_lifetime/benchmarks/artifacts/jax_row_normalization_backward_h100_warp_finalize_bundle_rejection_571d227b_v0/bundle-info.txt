@@ -1,0 +1,6 @@
+file_count=4374
+bundle_bytes=37568983
+bundle_mib=35.828574
+bundle_sha256=897f10a6feae9a35b2b28f6faea570162c81ffce76e068b323a79c481015a650
+controller_limit_bytes=26214400
+
