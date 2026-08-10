@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and input preparation for delta-rule experiments."""
+"""Reference-only delta-rule fixtures and NumPy input preparation.
+
+``delta_rule_update_expression`` is intentionally limited to recovery unit tests.
+Accepted compiler entrypoints and performance harnesses must recover expressions
+from a structured StableHLO ``while`` instead.
+"""
 
 from dataclasses import dataclass
 
@@ -37,7 +42,7 @@ def delta_rule_update_expression(
     gate_operation: str = "exp",
     update_rank: int = 1,
 ) -> DeltaRuleExpressionFixture:
-    """Build a delta-rule fixture for model-independent affine recovery tests."""
+    """Build a hand-authored expression for isolated recovery unit tests only."""
     if any(value <= 0 for value in (batch_size, heads, key_dimension, value_dimension, update_rank)):
         raise ValueError("delta-rule expression dimensions must be positive")
     if decay_axes not in ("scalar", "key"):

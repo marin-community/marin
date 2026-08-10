@@ -15,10 +15,14 @@ from typing import Any
 
 import torch
 from triton_affine_scan import execute_recurrent_affine_scan
-from triton_factored_chunk_scan import execute_ordered_factored_chunks, prepare_factored_affine_chunks
+from triton_factored_chunk_scan import (
+    execute_ordered_factored_chunks,
+    prepare_factored_affine_chunks,
+)
 
-from tile_lifetime.delta_rule_reference import delta_rule_update_expression
-from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate, recover_affine_state_update
+from tile_lifetime.stablehlo_scan_recovery import compile_natural_affine_scan
+from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate
+from tile_lifetime.stateful_scan_reference import NaturalAffineScanConfig, ScanDecayAxes
 
 
 def _arguments() -> argparse.Namespace:
@@ -52,11 +56,19 @@ def _inputs(args: argparse.Namespace) -> dict[str, torch.Tensor]:
         generator=generator,
     ) * (args.key_dimension**-0.5)
     diagonal_width = 1 if args.decay_axes == "scalar" else args.key_dimension
-    log_decay = -torch.rand((*prefix, diagonal_width), device="cuda", dtype=torch.float32, generator=generator) * 0.01
+    log_decay = (
+        -torch.rand(
+            (*prefix, diagonal_width),
+            device="cuda",
+            dtype=torch.float32,
+            generator=generator,
+        )
+        * 0.01
+    )
     diagonal = torch.exp(log_decay).expand(*prefix, args.key_dimension).contiguous()
     vector_shape = (*prefix, args.update_rank, args.key_dimension)
     left = torch.randn(vector_shape, device="cuda", dtype=torch.bfloat16, generator=generator) * 0.03
-    right = torch.randn(vector_shape, device="cuda", dtype=torch.bfloat16, generator=generator) * 0.03
+    right = left
     additive = (
         torch.randn(
             (*prefix, args.update_rank, args.value_dimension),
@@ -155,7 +167,11 @@ def _error(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, Any]:
 def _environment() -> dict[str, Any]:
     gpu = torch.cuda.get_device_properties(0)
     driver = subprocess.run(
-        ["nvidia-smi", "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit", "--format=csv,noheader"],
+        [
+            "nvidia-smi",
+            "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit",
+            "--format=csv,noheader",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -175,16 +191,19 @@ def _environment() -> dict[str, Any]:
 def main() -> None:
     args = _arguments()
     torch.set_float32_matmul_precision("high")
-    fixture = delta_rule_update_expression(
-        batch_size=args.batch_size,
-        heads=args.heads,
-        key_dimension=args.key_dimension,
-        value_dimension=args.value_dimension,
-        decay_axes=args.decay_axes,
-        gate_operation="exp",
-        update_rank=args.update_rank,
+    compilation = compile_natural_affine_scan(
+        NaturalAffineScanConfig(
+            batch=args.batch_size,
+            sequence=args.sequence_length,
+            heads=args.heads,
+            key_dimension=args.key_dimension,
+            value_dimension=args.value_dimension,
+            update_rank=args.update_rank,
+            decay_axes=ScanDecayAxes(args.decay_axes),
+        ),
+        chunk_sizes=(args.chunk_size,),
     )
-    recovery = recover_affine_state_update(fixture.update, fixture.state_name)
+    recovery = compilation.recovered_update
     inputs = _inputs(args)
 
     def eager_prepare():
@@ -252,6 +271,8 @@ def main() -> None:
             "seed": args.seed,
         },
         "recovery": {
+            "source_kind": compilation.provenance.source_kind.value,
+            "source_artifact_sha256": compilation.provenance.artifact_sha256,
             "transition_structure": recovery.transition_structure.value,
             "maximum_low_rank": recovery.maximum_low_rank,
             "diagonal_scale_axes": [axis.label for axis in recovery.diagonal_scale_axes],

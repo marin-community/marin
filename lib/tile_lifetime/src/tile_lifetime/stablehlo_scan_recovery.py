@@ -3,7 +3,9 @@
 
 """Recover a generic affine ``StatefulScan`` from exported StableHLO ``while``."""
 
+import hashlib
 from dataclasses import dataclass, replace
+from enum import StrEnum
 
 from tile_lifetime.plan import (
     ScanNumericalContract,
@@ -37,11 +39,36 @@ from tile_lifetime.stateful_scan import (
     input_expression,
 )
 from tile_lifetime.stateful_scan_planner import compile_affine_scan_candidates
-from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate, recover_affine_state_update
+from tile_lifetime.stateful_scan_recovery import (
+    RecoveredAffineStateUpdate,
+    recover_affine_state_update,
+)
+from tile_lifetime.stateful_scan_reference import (
+    NATURAL_AFFINE_SCAN_INPUT_NAMES,
+    NaturalAffineScanConfig,
+    export_natural_affine_scan,
+)
 
 
 class StableHLOScanRecoveryError(ValueError):
     """Raised when structured StableHLO is not a supported ordered affine scan."""
+
+
+class StatefulScanSourceKind(StrEnum):
+    """Verified source boundary for an accepted StatefulScan compilation."""
+
+    JAX_EXPORT_STABLEHLO_WHILE = "jax_export_stablehlo_while"
+    STABLEHLO_WHILE = "stablehlo_while"
+    REFERENCE_TENSOR_EXPRESSION = "reference_tensor_expression"
+
+
+@dataclass(frozen=True)
+class StatefulScanProvenance:
+    """Immutable evidence that candidate generation began at structured StableHLO."""
+
+    source_kind: StatefulScanSourceKind
+    artifact_sha256: str
+    structured_while_count: int
 
 
 @dataclass(frozen=True)
@@ -53,6 +80,7 @@ class StableHLOStatefulScanCompilation:
     candidates: tuple[StatefulScanSkeleton, ...]
     source_operation_count: int
     semantic_erasure_report: SemanticErasureReport
+    provenance: StatefulScanProvenance
 
 
 @dataclass(frozen=True)
@@ -105,9 +133,36 @@ def compile_stablehlo_stateful_scan(
         candidates=candidates,
         source_operation_count=len(step.step_graph.operations),
         semantic_erasure_report=report,
+        provenance=StatefulScanProvenance(
+            source_kind=StatefulScanSourceKind.STABLEHLO_WHILE,
+            artifact_sha256=hashlib.sha256(artifact).hexdigest(),
+            structured_while_count=1,
+        ),
     )
     validate_stateful_scan_semantic_erasure(compilation)
     return compilation
+
+
+def compile_natural_affine_scan(
+    config: NaturalAffineScanConfig,
+    *,
+    chunk_sizes: tuple[int, ...] = (32, 64),
+) -> StableHLOStatefulScanCompilation:
+    """Compile ordinary JAX ``lax.scan`` math through exported StableHLO."""
+    compilation = compile_stablehlo_stateful_scan(
+        export_natural_affine_scan(config),
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
+        chunk_sizes=chunk_sizes,
+    )
+    natural = replace(
+        compilation,
+        provenance=replace(
+            compilation.provenance,
+            source_kind=StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
+        ),
+    )
+    validate_stateful_scan_semantic_erasure(natural)
+    return natural
 
 
 def stateful_scan_scheduling_keys(
@@ -135,8 +190,17 @@ def stateful_scan_scheduling_keys(
     )
 
 
-def validate_stateful_scan_semantic_erasure(compilation: StableHLOStatefulScanCompilation) -> None:
+def validate_stateful_scan_semantic_erasure(
+    compilation: StableHLOStatefulScanCompilation,
+) -> None:
     """Reject a stale or named scheduling report before scan candidates execute."""
+    if compilation.provenance.source_kind not in (
+        StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
+        StatefulScanSourceKind.STABLEHLO_WHILE,
+    ):
+        raise SemanticErasureError("accepted StatefulScan candidates must originate from structured StableHLO while")
+    if compilation.provenance.structured_while_count != 1:
+        raise SemanticErasureError("accepted StatefulScan candidates require exactly one structured StableHLO while")
     _validate_stateful_scan_report(
         compilation.program,
         compilation.recovered_update,
@@ -252,7 +316,10 @@ def _recover_step_input_names(
         if index == state_input_index:
             names.append("state_prev")
             continue
-        producer = next((operation for operation in body.operations if value in operation.outputs), None)
+        producer = next(
+            (operation for operation in body.operations if value in operation.outputs),
+            None,
+        )
         if producer is None or not isinstance(producer.attributes, CallAttributes) or not producer.inputs:
             names.append(f"scan_input_{index}")
             continue
@@ -351,7 +418,10 @@ def _infer_logical_axes(graph: StableHLOGraph) -> dict[tuple[int, int], LogicalA
                 input_extent = graph.value(operation.inputs[0]).shape[input_dimension]
                 output_extent = graph.value(output).shape[output_dimension]
                 if input_extent == output_extent:
-                    axes.union((operation.inputs[0], input_dimension), (output, output_dimension))
+                    axes.union(
+                        (operation.inputs[0], input_dimension),
+                        (output, output_dimension),
+                    )
         elif operation.kind == "transpose":
             attributes = operation.attributes
             if not isinstance(attributes, TransposeAttributes):
@@ -472,7 +542,13 @@ def _build_tensor_expressions(
             expression = contract_expression(*inputs, axes=output_axes, reduction_axes=reduction_axes)
         elif operation.kind == "broadcast_in_dim":
             expression = inputs[0]
-        elif operation.kind in ("convert", "exponential", "negate", "reshape", "transpose"):
+        elif operation.kind in (
+            "convert",
+            "exponential",
+            "negate",
+            "reshape",
+            "transpose",
+        ):
             operation_name = "exp" if operation.kind == "exponential" else operation.kind
             semantic_axes = inputs[0].axes if operation.kind in ("convert", "exponential", "negate") else output_axes
             expression = TensorExpression(

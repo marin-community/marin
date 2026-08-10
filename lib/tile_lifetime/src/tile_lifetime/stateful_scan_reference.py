@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ordinary JAX affine-state scan used by StableHLO recovery tests."""
+"""Ordinary JAX affine-state scan used by the natural StableHLO frontend."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,9 +17,16 @@ class ScanDecayAxes(StrEnum):
     KEY = "key"
 
 
+class ScanDiagonalOperation(StrEnum):
+    """Natural JAX expression used to form the diagonal state transition."""
+
+    EXP = "exp"
+    EXP_SQUARED = "exp_squared"
+
+
 @dataclass(frozen=True)
-class StatefulScanDebugConfig:
-    """Small static shape for an ordinary paper-style affine recurrence."""
+class NaturalAffineScanConfig:
+    """Static shape and algebra choices for an ordinary affine recurrence."""
 
     batch: int = 1
     sequence: int = 4
@@ -28,6 +35,7 @@ class StatefulScanDebugConfig:
     value_dimension: int = 12
     update_rank: int = 1
     decay_axes: ScanDecayAxes = ScanDecayAxes.SCALAR
+    diagonal_operation: ScanDiagonalOperation = ScanDiagonalOperation.EXP
 
     def __post_init__(self) -> None:
         dimensions = (
@@ -42,16 +50,25 @@ class StatefulScanDebugConfig:
             raise ValueError("stateful-scan dimensions must be positive")
 
 
-STATEFUL_SCAN_INPUT_NAMES = ("query", "key", "value", "log_decay", "beta", "initial_state")
+NATURAL_AFFINE_SCAN_INPUT_NAMES = (
+    "query",
+    "key",
+    "value",
+    "log_decay",
+    "beta",
+    "initial_state",
+)
 
 
-def stateful_scan_region(config: StatefulScanDebugConfig):
+def natural_affine_scan_region(config: NaturalAffineScanConfig):
     """Return natural JAX tensor/state math for a bounded-rank affine scan."""
 
     def region(query, key, value, log_decay, beta, initial_state):
         def step(state, inputs):
             query_token, key_token, value_token, log_decay_token, beta_token = inputs
             decay = jnp.exp(log_decay_token)
+            if config.diagonal_operation is ScanDiagonalOperation.EXP_SQUARED:
+                decay = decay * decay
             if config.decay_axes is ScanDecayAxes.SCALAR:
                 decay = decay[..., None, None]
             else:
@@ -85,7 +102,9 @@ def stateful_scan_region(config: StatefulScanDebugConfig):
     return region
 
 
-def export_debug_stateful_scan(config: StatefulScanDebugConfig = StatefulScanDebugConfig()) -> bytes:
+def export_natural_affine_scan(
+    config: NaturalAffineScanConfig = NaturalAffineScanConfig(),
+) -> bytes:
     """Export the natural recurrence as portable StableHLO containing ``while``."""
     bf16 = jnp.bfloat16
     decay_shape = (
@@ -96,11 +115,23 @@ def export_debug_stateful_scan(config: StatefulScanDebugConfig = StatefulScanDeb
     specifications = (
         jax.ShapeDtypeStruct((config.batch, config.sequence, config.heads, config.key_dimension), bf16),
         jax.ShapeDtypeStruct(
-            (config.batch, config.sequence, config.heads, config.update_rank, config.key_dimension),
+            (
+                config.batch,
+                config.sequence,
+                config.heads,
+                config.update_rank,
+                config.key_dimension,
+            ),
             bf16,
         ),
         jax.ShapeDtypeStruct(
-            (config.batch, config.sequence, config.heads, config.update_rank, config.value_dimension),
+            (
+                config.batch,
+                config.sequence,
+                config.heads,
+                config.update_rank,
+                config.value_dimension,
+            ),
             bf16,
         ),
         jax.ShapeDtypeStruct(decay_shape, jnp.float32),
@@ -113,5 +144,5 @@ def export_debug_stateful_scan(config: StatefulScanDebugConfig = StatefulScanDeb
             jnp.float32,
         ),
     )
-    exported = jax.export.export(jax.jit(stateful_scan_region(config)))(*specifications)
+    exported = jax.export.export(jax.jit(natural_affine_scan_region(config)))(*specifications)
     return exported.mlir_module_serialized
