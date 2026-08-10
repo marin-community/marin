@@ -395,5 +395,31 @@ def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
         ),
     )
 
-    with pytest.raises(RuntimeError, match="does not follow a chunk 0"):
+    with pytest.raises(RuntimeError, match="chunk 1 of b, but chunk 1 of a must come next"):
         list(_iter_tokenized_documents(orphan_path))
+
+    # Out of order within one id: concatenating in file order would silently
+    # reverse a document's tokens.
+    shuffled_path = str(tmp_path / "shuffled.parquet")
+    _write_parquet(
+        shuffled_path,
+        pa.table(
+            {
+                "id": ["a", "a", "a"],
+                "chunk_index": pa.array([0, 2, 1], type=pa.int32()),
+                "input_ids": pa.array([[1], [3], [2]]),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk 2 of a, but chunk 1 of a must come next"):
+        list(_iter_tokenized_documents(shuffled_path))
+
+
+def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
+    """A shard written before the column existed fails legibly, not with a KeyError."""
+    path = str(tmp_path / "old.parquet")
+    _write_parquet(path, pa.table({"id": ["a"], "input_ids": pa.array([[1, 2]])}))
+
+    with pytest.raises(RuntimeError, match="no chunk_index column"):
+        list(_iter_tokenized_documents(path))

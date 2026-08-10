@@ -89,19 +89,17 @@ class LevanterStoreData(BaseModel):
     tokenizer: str
 
 
-# Datakit attribute columns that identify a row. They are not cache payload.
 _JOIN_COLUMNS = frozenset({"id", CHUNK_INDEX_FIELD})
 
 
 def _strip_join_columns(record: dict) -> dict:
     """Drop the join columns from a record. Levanter ``TreeStore`` is positional, not keyed.
 
-    ``chunk_index`` goes with ``id``: it orders the rows of a document that the
-    tokenizer split (see :func:`marin.processing.tokenize._core.split_oversized_token_record`),
-    and it would otherwise land in the cache as a data field. Such rows stay
-    adjacent and in order here, because this path writes shards positionally and
-    never shuffles, so the token stream in the cache is the same as it would be
-    from an unsplit document. Only the document count grows.
+    ``chunk_index`` goes with ``id``: it orders the rows of a split document (see
+    :func:`marin.processing.tokenize._core.split_oversized_token_record`) and would
+    otherwise land in the cache as a data field. Dropping it is safe here because
+    this path writes shards positionally and never shuffles, so a split document's
+    rows stay adjacent and its token stream is unchanged.
     """
     return {k: v for k, v in record.items() if k not in _JOIN_COLUMNS}
 

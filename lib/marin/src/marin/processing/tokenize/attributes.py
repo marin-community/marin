@@ -228,7 +228,7 @@ def _process_split(
 def _attribute_schema(data_format: LmDatasetFormatBase) -> pa.Schema | None:
     """Return the parquet schema for attribute output, or ``None`` to let zephyr infer.
 
-    For text formats we pin ``id: string`` and ``input_ids: list<int32>`` to keep
+    For text formats we pin ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int32>`` to keep
     files compact and stable across workers. For chat or other multi-output formats,
     we let zephyr infer from the first record so additional columns like
     ``assistant_masks`` flow through unchanged.
@@ -242,7 +242,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """Tokenize :class:`NormalizedData` source(s) into datakit attribute parquet.
 
     Each split's source shards become co-partitioned attribute parquet files
-    sharing basenames with the source. Output records carry ``{id, input_ids}``
+    sharing basenames with the source. Output rows carry ``{id, chunk_index, input_ids}``
     (plus any extra fields produced by the format processor for non-text formats).
 
     Args:

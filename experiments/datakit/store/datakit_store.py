@@ -262,9 +262,18 @@ def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
     ``chunk_index == 0`` marks the first row of a document. A rule that instead
     started a document on a change of ``id`` would merge two adjacent documents
     that share an id, which some sources produce.
+
+    Raises ``RuntimeError`` on a shard with no ``chunk_index`` column (written
+    before the column existed) and on rows that do not run 0, 1, 2 ... within one
+    id. Concatenating out-of-order rows would corrupt the token stream silently.
     """
     with StoragePath(path).open("rb") as fh:
         parquet = pq.ParquetFile(fh)
+        if CHUNK_INDEX_FIELD not in parquet.schema_arrow.names:
+            raise RuntimeError(
+                f"{path}: tokenize shard has no {CHUNK_INDEX_FIELD} column. It predates the column, "
+                "so its step identity does not match this code. Re-run tokenize for this source."
+            )
         doc_id: str | None = None
         chunks: list[np.ndarray] = []
         for batch in parquet.iter_batches(
@@ -278,9 +287,10 @@ def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
                     if chunks:
                         yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
                     doc_id, chunks = row_id, []
-                elif row_id != doc_id:
+                elif row_id != doc_id or chunk_indices[i] != len(chunks):
                     raise RuntimeError(
-                        f"{path}: chunk {chunk_indices[i]} of {row_id} does not follow a chunk 0 of that id"
+                        f"{path}: row {i} is chunk {chunk_indices[i]} of {row_id}, but chunk "
+                        f"{len(chunks)} of {doc_id} must come next"
                     )
                 chunks.append(input_ids[i].values.to_numpy())
         if chunks:
@@ -329,8 +339,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
                 f"{where}: tokenize holds more documents than decon rows ({n_decon}) -- co-partitioning broken"
             )
         n_in += 1
-        position = doc_idx
-        doc_idx += 1
+        position, doc_idx = doc_idx, doc_idx + 1
         if contaminated[position]:
             n_contaminated += 1
             continue

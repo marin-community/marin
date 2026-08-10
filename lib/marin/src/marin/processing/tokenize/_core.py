@@ -45,10 +45,8 @@ _MAX_WINDOW_SIZE = 64
 # with room for the repetition-level data that rides along with the values.
 MAX_TOKENS_PER_RECORD = 16 * 1024 * 1024
 
-# Zero-based position of a row inside its source document. The column is always
-# present: an unsplit document is chunk 0. Reassemble a document by a sort on
-# (id, CHUNK_INDEX_FIELD); ``id`` alone stays the join key against the other
-# datakit attribute datasets.
+# Zero-based position of a row inside its source document. See
+# :func:`split_oversized_token_record` for the contract.
 CHUNK_INDEX_FIELD = "chunk_index"
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
@@ -233,10 +231,13 @@ def split_oversized_token_record(
 
     for chunk_index, start in enumerate(range(0, num_tokens, max_tokens)):
         end = min(start + max_tokens, num_tokens)
-        chunk: dict = {CHUNK_INDEX_FIELD: chunk_index}
-        for key, value in record.items():
-            chunk[key] = value[start:end] if _splits_with_tokens(value, num_tokens) else value
-        yield chunk
+        # Same key order as the unsplit branch above: a writer that infers its
+        # schema from the first record must see one column order per shard,
+        # whether or not that record happened to be oversized.
+        chunk = {
+            key: value[start:end] if _splits_with_tokens(value, num_tokens) else value for key, value in record.items()
+        }
+        yield {**chunk, CHUNK_INDEX_FIELD: chunk_index}
 
 
 def tokenize_batches_with_id(
@@ -287,21 +288,20 @@ def tokenize_batches_with_id(
         counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
         record_count += len(records)
         token_count += batch_token_count
+        oversized = 0
         for record in records:
             num_tokens = len(record.get("input_ids", []))
             if num_tokens > MAX_TOKENS_PER_RECORD:
-                counters.pipeline.update_counter("tokenize/oversized_docs", 1)
+                oversized += 1
                 logger.warning(
-                    "Document %s has %d tokens, above the %d limit of one Parquet row. "
-                    "It becomes several rows that share the id, ordered by %s.",
+                    "Document %s has %d tokens, above the %d limit of one Parquet row.",
                     record["id"],
                     num_tokens,
                     MAX_TOKENS_PER_RECORD,
-                    CHUNK_INDEX_FIELD,
                 )
-            for chunk in split_oversized_token_record(record):
-                counters.pipeline.update_counter("tokenize/chunks_out", 1)
-                yield chunk
+            yield from split_oversized_token_record(record)
+        if oversized:
+            counters.pipeline.update_counter("tokenize/oversized_docs", oversized)
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
@@ -377,7 +377,7 @@ def tokenize_pipeline(
     """Build the tokenize pipeline tail.
 
     Attaches ``id`` to each input record, optionally subsamples per shard, windows,
-    and tokenizes. Returns the dataset of ``{id, input_ids, ...}`` records and the
+    and tokenizes. Returns the dataset of ``{id, chunk_index, input_ids, ...}`` rows and the
     chosen Levanter cache batch size (``None`` keeps Levanter's default).
     """
     window_size, batch_size = resolve_window_and_batch(sample_parquet_path, levanter_batch_size)
