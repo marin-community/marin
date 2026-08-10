@@ -60,3 +60,22 @@ worker-emitted evidence archive and contains the generated CUDA handler,
 Triton AOT sources with embedded CUBIN, registered DSO, StableHLO fixture,
 environment, and benchmark sources. Its SHA-256 is
 `0d30440bce61d26947f45cd917af0731c61644a61816ec481d23b9158498ce9a`.
+
+## Follow-up repeatability policy
+
+The sealed failure above is unchanged. Follow-up benchmark code distinguishes
+generated implementation determinism from expert-oracle admissibility.
+Generated Shuttle execution remains subject to bitwise repeatability. For an
+expert oracle under `allow_rounding_reorder`, non-bitwise repetition is
+admissible only after at least three untimed executions each pass the same
+semantic-reference finite, maximum-error, and mean-error gates. Every output
+is also compared across every repeat pair using an explicit dtype-specific
+drift tolerance no weaker than the semantic error contract.
+
+The pre-timing audit serializes each output hash, every repeat's semantic
+error, and every pairwise repeat drift before verification. Excess semantic
+error or repeat drift still aborts before warmup. A source-ordered or
+bitwise-exact numerical contract cannot use bounded-drift oracle admission; it
+requires bitwise oracle repeatability. These checks establish whether an
+expert implementation is a usable timing comparison. They do not weaken or
+reclassify generated-kernel correctness.
