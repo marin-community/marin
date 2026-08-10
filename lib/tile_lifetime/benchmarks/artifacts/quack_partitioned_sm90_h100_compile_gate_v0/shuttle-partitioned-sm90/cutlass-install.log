@@ -1,0 +1,28 @@
+Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+Resolved 13 packages in 564ms
+Downloading nvidia-cutlass-dsl-libs-base (2.7MiB)
+Downloading nvidia-cutlass-dsl-libs-cu12 (84.4MiB)
+Downloading nvidia-cutlass-dsl-libs-cu13 (83.9MiB)
+ Downloaded nvidia-cutlass-dsl-libs-base
+ Downloaded nvidia-cutlass-dsl-libs-cu13
+ Downloaded nvidia-cutlass-dsl-libs-cu12
+Prepared 5 packages in 3.17s
+Uninstalled 2 packages in 2ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 12 packages in 91ms
+ - cuda-bindings==13.0.3
+ + cuda-bindings==13.3.1
+ + cuda-core==1.0.1
+ - cuda-pathfinder==1.2.2
+ + cuda-pathfinder==1.6.0
+ + cuda-python==13.3.1
+ + numpy==2.5.2
+ + nvidia-cuda-nvdisasm==13.3.73
+ + nvidia-cutlass-dsl==4.6.1
+ + nvidia-cutlass-dsl-libs-base==4.6.1
+ + nvidia-cutlass-dsl-libs-core==4.6.1
+ + nvidia-cutlass-dsl-libs-cu12==4.6.1
+ + nvidia-cutlass-dsl-libs-cu13==4.6.1
+ + protobuf==6.33.6

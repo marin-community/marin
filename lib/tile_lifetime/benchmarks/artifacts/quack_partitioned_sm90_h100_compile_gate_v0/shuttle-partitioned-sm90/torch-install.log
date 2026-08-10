@@ -1,0 +1,76 @@
+Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+Resolved 29 packages in 409ms
+Downloading setuptools (1.2MiB)
+Downloading nvidia-cuda-runtime (2.1MiB)
+Downloading cuda-bindings (11.6MiB)
+Downloading triton (188.0MiB)
+Downloading nvidia-cusolver (191.6MiB)
+Downloading torch (502.1MiB)
+Downloading nvidia-cufft (204.2MiB)
+Downloading nvidia-cufile (1.2MiB)
+Downloading nvidia-nvjitlink (39.5MiB)
+Downloading nvidia-cuda-cupti (10.2MiB)
+Downloading nvidia-curand (56.8MiB)
+Downloading nvidia-cudnn-cu13 (349.2MiB)
+Downloading nvidia-cusparse (139.2MiB)
+Downloading nvidia-nvshmem-cu13 (57.6MiB)
+Downloading nvidia-cuda-nvrtc (86.0MiB)
+Downloading nvidia-cublas (403.5MiB)
+Downloading networkx (2.0MiB)
+Downloading nvidia-cusparselt-cu13 (162.3MiB)
+Downloading nvidia-nccl-cu13 (196.4MiB)
+Downloading sympy (6.0MiB)
+ Downloaded nvidia-cufile
+ Downloaded nvidia-cuda-runtime
+ Downloaded nvidia-cuda-cupti
+ Downloaded cuda-bindings
+ Downloaded setuptools
+ Downloaded nvidia-nvjitlink
+ Downloaded nvidia-cusolver
+ Downloaded networkx
+ Downloaded nvidia-curand
+ Downloaded triton
+ Downloaded nvidia-cufft
+ Downloaded nvidia-nvshmem-cu13
+ Downloaded nvidia-cusparse
+ Downloaded sympy
+ Downloaded nvidia-cuda-nvrtc
+ Downloaded nvidia-cudnn-cu13
+ Downloaded nvidia-cusparselt-cu13
+ Downloaded nvidia-nccl-cu13
+ Downloaded nvidia-cublas
+ Downloaded torch
+Prepared 29 packages in 14.28s
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 29 packages in 596ms
+ + cuda-bindings==13.0.3
+ + cuda-pathfinder==1.2.2
+ + cuda-toolkit==13.0.3.0
+ + filelock==3.29.0
+ + fsspec==2026.4.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.3
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + nvidia-cublas==13.1.1.3
+ + nvidia-cuda-cupti==13.0.85
+ + nvidia-cuda-nvrtc==13.0.88
+ + nvidia-cuda-runtime==13.0.96
+ + nvidia-cudnn-cu13==9.20.0.48
+ + nvidia-cufft==12.0.0.61
+ + nvidia-cufile==1.15.1.6
+ + nvidia-curand==10.4.0.35
+ + nvidia-cusolver==12.0.4.66
+ + nvidia-cusparse==12.6.3.3
+ + nvidia-cusparselt-cu13==0.8.1
+ + nvidia-nccl-cu13==2.29.7
+ + nvidia-nvjitlink==13.2.78
+ + nvidia-nvshmem-cu13==3.4.5
+ + nvidia-nvtx==13.0.85
+ + setuptools==78.1.0
+ + sympy==1.14.0
+ + torch==2.13.0+cu130
+ + triton==3.7.1
+ + typing-extensions==4.15.0

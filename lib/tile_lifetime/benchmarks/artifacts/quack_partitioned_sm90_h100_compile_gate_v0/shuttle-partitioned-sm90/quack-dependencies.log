@@ -1,0 +1,10 @@
+Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+Resolved 34 packages in 286ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 4 packages in 21ms
+ + apache-tvm-ffi==0.1.13.post2
+ + einops==0.8.2
+ + ml-dtypes==0.5.4
+ + torch-c-dlpack-ext==0.1.5

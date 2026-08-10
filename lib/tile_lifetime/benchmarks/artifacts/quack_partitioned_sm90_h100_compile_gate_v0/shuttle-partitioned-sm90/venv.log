@@ -1,0 +1,3 @@
+Using CPython 3.12.13 interpreter at: /usr/local/bin/python3.12
+Creating virtual environment at: /tmp/quack-partitioned-env
+Activate with: source /tmp/quack-partitioned-env/bin/activate
