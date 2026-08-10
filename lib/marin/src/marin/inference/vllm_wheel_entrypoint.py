@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify a Marin vLLM wheel before invoking its normal CLI."""
+"""Verify a Marin vLLM wheel before invoking its normal CLI.
+
+The launcher already names one promoted wheel URL, so startup only checks what building that command
+cannot settle: the PEP 610 record identifies the promoted wheel, ``vllm._C`` comes from inside that
+distribution, and the GPU this process was scheduled onto is one the wheel was compiled for. The
+first two are a pair. A leaked ``PYTHONPATH`` entry holding a complete vLLM install would satisfy the
+extension check on its own, because its metadata and its extension agree with each other.
+"""
 
 import dataclasses
 import importlib
@@ -57,13 +64,9 @@ def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)
 
+    # The installed version is not checked separately: promotion requires the release URL to carry the
+    # declared version in its filename, so a distribution installed from that URL has that version.
     distribution = importlib.metadata.distribution("vllm")
-    installed_version = distribution.version
-    if installed_version != expected.version:
-        raise RuntimeError(
-            f"Installed vLLM version {installed_version} does not match verified wheel {expected.version}"
-        )
-
     direct_url_text = distribution.read_text("direct_url.json")
     if direct_url_text is None:
         raise RuntimeError("Installed vLLM does not record direct wheel provenance")

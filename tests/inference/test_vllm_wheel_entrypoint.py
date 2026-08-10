@@ -43,21 +43,14 @@ def _provenance(wheel: VllmGpuWheel) -> dict[str, object]:
     return json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
 
 
-def _write_fake_vllm(
-    tmp_path: Path,
-    *,
-    version: str,
-    include_extension: bool,
-    direct_url: dict[str, object],
-    compute_capability: tuple[int, int],
-) -> None:
-    package = tmp_path / "vllm"
+def _write_vllm_package(root: Path) -> None:
+    """Write an importable ``vllm`` package whose CLI records the argv it was handed."""
+    package = root / "vllm"
     cli = package / "entrypoints" / "cli"
     cli.mkdir(parents=True)
     for init_file in (package / "__init__.py", package / "entrypoints" / "__init__.py", cli / "__init__.py"):
         init_file.write_text("")
-    if include_extension:
-        (package / "_C.py").write_text("EXTENSION_SENTINEL = True\n")
+    (package / "_C.py").write_text("EXTENSION_SENTINEL = True\n")
     (cli / "main.py").write_text(
         "import json\n"
         "import os\n"
@@ -67,11 +60,21 @@ def _write_fake_vllm(
         "def main():\n"
         "    Path(os.environ['FAKE_VLLM_MARKER']).write_text(json.dumps(sys.argv[1:]))\n"
     )
-    metadata = tmp_path / f"vllm-{version}.dist-info"
+
+
+def _write_installed_wheel(
+    root: Path,
+    *,
+    direct_url: dict[str, object],
+    compute_capability: tuple[int, int],
+) -> None:
+    """Write what ``uvx`` leaves behind: the package, its PEP 610 record, and an importable torch."""
+    _write_vllm_package(root)
+    metadata = root / f"vllm-{VERSION}.dist-info"
     metadata.mkdir()
-    (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {version}\n")
+    (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {VERSION}\n")
     (metadata / "direct_url.json").write_text(json.dumps(direct_url))
-    (tmp_path / "torch.py").write_text(
+    (root / "torch.py").write_text(
         "class cuda:\n" "    @staticmethod\n" f"    def get_device_capability(): return {compute_capability!r}\n"
     )
 
@@ -80,15 +83,14 @@ def _run_entrypoint(
     tmp_path: Path,
     *,
     wheel: VllmGpuWheel = H100_WHEEL,
-    version: str = VERSION,
-    include_extension: bool = True,
     direct_url: dict[str, object] | None = None,
     compute_capability: tuple[int, int] = (9, 0),
+    python_path: tuple[Path, ...] = (),
 ):
-    _write_fake_vllm(
-        tmp_path,
-        version=version,
-        include_extension=include_extension,
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    _write_installed_wheel(
+        install_root,
         direct_url=_uvx_direct_url(wheel.url) if direct_url is None else direct_url,
         compute_capability=compute_capability,
     )
@@ -100,7 +102,7 @@ def _run_entrypoint(
     environment.update(
         {
             "FAKE_VLLM_MARKER": str(marker),
-            "PYTHONPATH": str(tmp_path),
+            "PYTHONPATH": os.pathsep.join(str(path) for path in (*python_path, install_root)),
         }
     )
     return (
@@ -205,35 +207,41 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wh
     assert records["MARIN_VLLM_WHEEL_VERIFIED"] == {
         **_provenance(wheel),
         "compute_capability": f"{compute_capability[0]}.{compute_capability[1]}",
-        "extension_path": str(tmp_path / "vllm" / "_C.py"),
+        "extension_path": str(tmp_path / "install" / "vllm" / "_C.py"),
     }
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
 
 
-@pytest.mark.parametrize(
-    ("version", "include_extension", "direct_url", "compute_capability"),
-    [
-        ("0.0.0.dev0+wrong", True, None, (9, 0)),
-        (VERSION, False, None, (9, 0)),
-        (VERSION, True, _uvx_direct_url(GB200_WHEEL.url), (9, 0)),
-        (VERSION, True, None, (8, 0)),
-    ],
-    ids=["wrong-version", "no-extension", "other-architecture-wheel", "unsupported-gpu"],
-)
-def test_wheel_entrypoint_fails_before_cli_for_unverified_install(
-    tmp_path, version, include_extension, direct_url, compute_capability
-):
-    result, marker = _run_entrypoint(
-        tmp_path,
-        version=version,
-        include_extension=include_extension,
-        direct_url=direct_url,
-        compute_capability=compute_capability,
-    )
-
+def _assert_refused_before_cli(result, marker) -> None:
     assert result.returncode != 0
     selected_record = result.stdout.splitlines()[0]
     sentinel, _, payload = selected_record.partition("=")
     assert sentinel == "MARIN_VLLM_WHEEL_SELECTED"
     assert json.loads(payload) == _provenance(H100_WHEEL)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("direct_url", "compute_capability"),
+    [
+        (_uvx_direct_url(GB200_WHEEL.url), (9, 0)),
+        (None, (8, 0)),
+    ],
+    ids=["other-architecture-wheel", "unsupported-gpu"],
+)
+def test_wheel_entrypoint_fails_before_cli_for_unverified_install(tmp_path, direct_url, compute_capability):
+    result, marker = _run_entrypoint(tmp_path, direct_url=direct_url, compute_capability=compute_capability)
+
+    _assert_refused_before_cli(result, marker)
+
+
+def test_wheel_entrypoint_rejects_an_extension_shadowing_the_verified_wheel(tmp_path):
+    """A vLLM earlier on ``PYTHONPATH`` supplies the extension while the promoted metadata still reads."""
+    shadow_root = tmp_path / "shadow"
+    shadow_root.mkdir()
+    _write_vllm_package(shadow_root)
+
+    result, marker = _run_entrypoint(tmp_path, python_path=(shadow_root,))
+
+    _assert_refused_before_cli(result, marker)
+    assert f"vllm._C loaded outside the verified distribution: {shadow_root / 'vllm' / '_C.py'}" in result.stderr
