@@ -1,0 +1,31 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-litruntime (/dlwh/shuttle-native-mlir-preflight-20260810-litruntime)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: /sources/xla/tensorflow.bazelrc: --host_copt=-w --define=PREFIX=/usr --define=LIBDIR=$(PREFIX)/lib --define=INCLUDEDIR=$(PREFIX)/include --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include --cxxopt=-std=c++17 --host_cxxopt=-std=c++17 --experimental_guard_against_concurrent_changes
+WARNING: Option 'local_cpu_resources' is deprecated: --local_cpu_resources is deprecated, please use --local_resources=cpu= instead.
+WARNING: Option 'local_ram_resources' is deprecated: --local_ram_resources is deprecated, please use --local_resources=memory= instead.
+INFO: Analyzed 4 targets (157 packages loaded, 4357 targets configured).
+ERROR: /app/sources/xla/xla/pjrt/BUILD:941:11: Compiling xla/pjrt/stablehlo_module_transform.cc failed: (Exit 1): clang failed: error executing CppCompile command (from target //xla/pjrt:stablehlo_module_transform) external/rules_ml_toolchain/cc/impls/linux_x86_64_linux_x86_64/wrappers/clang -MD -MF bazel-out/k8-opt/bin/xla/pjrt/_objs/stablehlo_module_transform/stablehlo_module_transform.d ... (remaining 215 arguments skipped)
+xla/pjrt/stablehlo_module_transform.cc:98:33: error: no member named 'getAttrs' in 'mlir::ModuleOp'
+   98 |   module->setAttrs(transformed->getAttrs());
+      |                    ~~~~~~~~~~~~~^
+1 error generated.
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 19.247s, Critical Path: 13.01s
+INFO: 2188 processes: 1499 internal, 689 local.
+ERROR: Build did NOT complete successfully
+//xla/pjrt:mlir_to_hlo_test                                           NO STATUS
+//xla/pjrt:pjrt_executable_test                                       NO STATUS
+//xla/pjrt:stablehlo_module_transform_test                            NO STATUS
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test              FAILED TO BUILD
+
+Executed 0 out of 4 tests: 1 fails to build and 3 were skipped.
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T12:07:52Z
+
+
+  TASK  STATE      EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  10 minutes and 44.17 seconds  -           -          /sources/xla/tensorflow.bazelrc: --host_copt=-w --define=PREFIX=/usr --define=LIBDIR=$(PREFIX)/lib --define=INCLUDEDI...

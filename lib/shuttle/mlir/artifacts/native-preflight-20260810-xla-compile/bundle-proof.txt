@@ -1,0 +1,10 @@
+verified_zip_entries=32
+verified_zip_bytes=37601
+verified_zip_sha256=5da6bc9be8c252c3b643d490b93e258b09b457bb89d3dafa694fc5e33fddfe5d
+verified_zip_config_entries=0
+verified_zip_pyproject_entries=0
+verified_zip_git_entries=0
+verified_zip_proof_entries=0
+verified_zip_runner_entries=1
+verified_zip_patch1_entries=1
+verified_zip_patch2_entries=1

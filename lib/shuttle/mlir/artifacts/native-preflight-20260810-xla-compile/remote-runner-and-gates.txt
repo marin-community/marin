@@ -1,0 +1,53 @@
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:97: git -C /app/sources/xla diff --check
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:100: EXPECTED_LIT_RUNTIME_LABELS=('Label("//xla/backends/gpu/target_config:all_gpu_specs")' 'Label("//xla:lit.cfg.py")' 'Label("//xla:sh_test_with_runfiles.py")' 'Label("//xla/stream_executor/cuda:all_runtime")' 'Label("//xla/tsl/cuda:nvshmem_stub")' 'Label("//xla/tsl/cuda:nccl")' 'Label("//xla:lit_google_cfg.py")')
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/backends/gpu/target_config:all_gpu_specs")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 225:            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:lit.cfg.py")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 256:        cfg = Label("//xla:lit.cfg.py"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:sh_test_with_runfiles.py")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 419:    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/stream_executor/cuda:all_runtime")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 451:            Label("//xla/stream_executor/cuda:all_runtime"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/tsl/cuda:nvshmem_stub")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 452:            Label("//xla/tsl/cuda:nvshmem_stub"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/tsl/cuda:nccl")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 454:            Label("//xla/tsl/cuda:nccl"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:lit_google_cfg.py")' /app/sources/xla/xla/lit.bzl
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | 510:                   Label("//xla:lit_google_cfg.py"),
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | ++ run_native_preflight.sh:113: grep -Fc 'Label("//xla' /app/sources/xla/xla/lit.bzl
+[11:57:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Analyzed target @@shuttle_mlir//:shuttle_ops_inc_gen (84 packages loaded, 14124 targets configured).
+[11:57:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 1 total action
+[11:57:59] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Analyzed target @@shuttle_mlir//:ShuttleDialect (0 packages loaded, 1577 targets configured).
+[11:58:46] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 952 total actions
+[11:58:46] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Analyzed target @@shuttle_mlir//:ShuttlePasses (0 packages loaded, 192 targets configured).
+[11:58:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 91 total actions
+[11:58:54] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Analyzed target @@shuttle_mlir//:shuttle-opt (2 packages loaded, 8466 targets configured).
+[12:07:19] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 5951 total actions
+[12:07:30] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 143 total actions
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | INFO: Build completed successfully, 12 total actions
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/annotate-source.mlir.test                           PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/contract-errors.mlir.test                           PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/coverage-errors.mlir.test                           PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/dialect.mlir.test                                   PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/fail-closed.mlir.test                               PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/fold-contract-errors.mlir.test                      PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/map-errors.mlir.test                                PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/no-shuttle-errors.mlir.test                         PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/scalar-body-errors.mlir.test                        PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/semantic-erasure-errors.mlir.test                   PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | @shuttle_mlir//:test/verifier-errors.mlir.test                           PASSED in 0.2s
+[12:07:32] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | Executed 11 out of 11 tests: 11 tests pass.
+[12:07:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | xla/pjrt/stablehlo_module_transform.cc:98:33: error: no member named 'getAttrs' in 'mlir::ModuleOp'
+[12:07:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | Executed 0 out of 4 tests: 1 fails to build and 3 were skipped.
+[12:07:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | preflight_exit_code=1
+[12:07:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | preflight_finished_utc=2026-08-10T12:07:52Z
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:91: git -C /app/sources/xla apply --check /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:92: git -C /app/sources/xla apply /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:91: git -C /app/sources/xla apply --check /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:92: git -C /app/sources/xla apply /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:97: git -C /app/sources/xla diff --check
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:98: git -C /app/sources/xla diff --stat
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:99: git -C /app/sources/xla diff --binary
+[11:57:20] task=/dlwh/shuttle-native-mlir-preflight-20260810-litruntime/0 | + run_native_preflight.sh:115: test 7 = 7

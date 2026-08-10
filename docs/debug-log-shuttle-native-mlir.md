@@ -393,3 +393,31 @@ first failed gate.
 - The retained evidence is under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-execution/`.
 - This run used one submission with zero retries. No relaunch occurred.
+
+## Hypothesis 10
+
+The lit runtime fixes should close the three fixture failures and expose the
+first native result from the four patched XLA tests. Apply both XLA patches,
+retain the seven-label proof, rerun all six Shuttle gates, and stop at the
+first failure in the XLA test gate.
+
+## Results 10
+
+- Remote proof confirms both reviewed XLA patches applied at exact XLA commit
+  `9b635916ecc6`, both reverse-application checks passed, the combined diff was
+  clean, every expected anchored label was present, and the exact anchored
+  XLA-owned runtime-label count was seven.
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, `@shuttle_mlir//:ShuttlePasses`,
+  `@shuttle_mlir//:shuttle-opt`, and the separate
+  `bazel build @shuttle_mlir//:mlir_tests` gate passed against the exact pins.
+- Lit executed all 11 fixtures and all 11 passed, including the three failures
+  retained by Results 9.
+- The four-test XLA gate analyzed all four targets, then failed compiling
+  `xla/pjrt/stablehlo_module_transform.cc`. The reviewed patch calls
+  `getAttrs()` on `mlir::ModuleOp`, which has no such member at the pinned MLIR
+  revision.
+- Zero of four XLA tests executed: one failed to build and three were skipped.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-xla-compile/`.
+- This run used one submission with zero retries. No relaunch occurred.
