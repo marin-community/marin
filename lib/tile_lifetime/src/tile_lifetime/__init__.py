@@ -94,6 +94,12 @@ from tile_lifetime.expert_parallel_plan import (
     TransportSelection,
     TransportSemantics,
 )
+from tile_lifetime.expert_parallel_training import (
+    ExpertParallelTrainingPlan,
+    ExpertParallelTrainingStage,
+    ExpertParallelTrainingStageKind,
+    derive_expert_parallel_training_plan,
+)
 from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
 from tile_lifetime.fold_placement import (
     FoldAttachment,

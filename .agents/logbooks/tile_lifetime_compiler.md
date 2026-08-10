@@ -3731,3 +3731,28 @@ author: dlwh
   final-HLO topology and rejects a repeated-site mismatch.
 - AxisFold and handlers with scratch allocation, lazy cuBLAS handles, or the
   Triton attention wrapper remain excluded. No GPU replay was run.
+
+### 2026-08-09 - TLTC-MOE-001 distributed training parity boundary
+
+- The ownership audit separates the accepted four-rank primary-shape forward
+  from the accepted single-device differentiated Grug arithmetic. There is no
+  existing result that combines both properties, so neither artifact is
+  relabeled as distributed forward/backward parity.
+- An ordinary JAX program now exposes output, selected experts, normalized
+  route weights, input cotangent, post-selection route-weight cotangent,
+  router-weight cotangent, and all shared/routed expert-weight cotangents. JAX
+  owns both VJPs. A small numerical test is exactly equal to the direct whole-
+  program JAX gradient, and exported StableHLO contains no custom call.
+- `derive_expert_parallel_training_plan` mechanically derives payload-only
+  adjoint transports, segmented input/weight Contracts, pair-Map VJPs,
+  route-weight Fold, deterministic source Fold, shared reverse, and router VJP
+  from the generic forward plan. A pair-product mutation changes the generated
+  VJP while retaining the stage family.
+- Exact missing execution boundaries are output-cotangent dispatch, routed
+  input-cotangent return, route-weight-cotangent return, and primary-shape
+  segmented weight adjoints in one four-rank executor. The existing one-device
+  Grug proof leaves relation construction and collectives under XLA; the old
+  four-rank executor is forward-only and uses a Torch runtime adapter.
+- No GB200 allocation was made. The bounded replay remains blocked until a
+  generated primary-shape executor passes multi-rank cotangent correctness,
+  source-lineage, determinism, and toolchain preflight.
