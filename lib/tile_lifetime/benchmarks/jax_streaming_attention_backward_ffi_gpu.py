@@ -30,6 +30,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
     compile_streaming_attention_backward_ffi,
+    derive_dense_minor_to_major_layout,
     generate_streaming_attention_backward_ffi,
     register_streaming_attention_backward_ffi,
 )
@@ -248,9 +249,6 @@ def main() -> None:
         if training_boundary
         else ("query_cotangent", "key_cotangent", "value_cotangent")
     )
-    torch_compatible_output_layouts = tuple(
-        StreamingAttentionBackwardFfiBufferLayout(name, (3, 1, 2, 0)) for name in output_names
-    )
     generated = generate_streaming_attention_backward_ffi(
         program,
         schedule,
@@ -261,7 +259,6 @@ def main() -> None:
         ),
         state_policy=StreamingAttentionBackwardStatePolicy.RECOMPUTE,
         result_policy=result_policy,
-        output_layouts=torch_compatible_output_layouts,
         num_warps=args.num_warps,
         num_stages=args.num_stages,
     )
@@ -318,16 +315,45 @@ def main() -> None:
         )
         expert_outputs = oracle_bound()
         oracle_block(expert_outputs)
-        expert_result_strides = tuple(tuple(tensor.stride()) for tensor in expert_outputs)
-        generated_result_strides_bhsd = tuple(
-            (output.strides[0], output.strides[2], output.strides[1], output.strides[3]) for output in generated.outputs
+        expert_result_shapes_bshd = tuple(
+            (tensor.shape[0], tensor.shape[2], tensor.shape[1], tensor.shape[3]) for tensor in expert_outputs
         )
-        if expert_result_strides != generated_result_strides_bhsd:
-            raise ValueError(
-                "Flash-SDPA result strides do not match the generated physical output boundary: "
-                f"{expert_result_strides} != {generated_result_strides_bhsd}"
+        expert_result_strides_bshd = tuple(
+            (tensor.stride(0), tensor.stride(2), tensor.stride(1), tensor.stride(3)) for tensor in expert_outputs
+        )
+        expert_result_layouts_bshd = tuple(
+            StreamingAttentionBackwardFfiBufferLayout(
+                name,
+                derive_dense_minor_to_major_layout(tuple(shape), tuple(strides)),
             )
-        oracle_metadata["result_strides_bhsd"] = expert_result_strides
+            for name, shape, strides in zip(
+                output_names,
+                expert_result_shapes_bshd,
+                expert_result_strides_bshd,
+                strict=True,
+            )
+        )
+        generated_result_strides_bshd = tuple(output.strides for output in generated.outputs)
+        generated_result_layouts_bshd = tuple(
+            StreamingAttentionBackwardFfiBufferLayout(output.name, output.layout) for output in generated.outputs
+        )
+        generated_result_shapes_bshd = tuple(output.shape for output in generated.outputs)
+        if (
+            expert_result_shapes_bshd != generated_result_shapes_bshd
+            or expert_result_strides_bshd != generated_result_strides_bshd
+            or expert_result_layouts_bshd != generated_result_layouts_bshd
+        ):
+            raise ValueError(
+                "Flash-SDPA results do not match the generated BSHD physical output boundary: "
+                f"shapes {expert_result_shapes_bshd} != {generated_result_shapes_bshd}; "
+                f"strides {expert_result_strides_bshd} != {generated_result_strides_bshd}; "
+                f"layouts {expert_result_layouts_bshd} != {generated_result_layouts_bshd}"
+            )
+        oracle_metadata["result_shapes_bshd"] = expert_result_shapes_bshd
+        oracle_metadata["result_strides_bshd"] = expert_result_strides_bshd
+        oracle_metadata["result_layouts_bshd"] = {
+            layout.buffer_name: layout.minor_to_major for layout in expert_result_layouts_bshd
+        }
         expert_correctness = {
             name: _error(actual, expected)
             for name, actual, expected in zip(
