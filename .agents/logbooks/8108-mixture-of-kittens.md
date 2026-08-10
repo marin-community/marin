@@ -212,3 +212,23 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: Tracing passed and the adapter built. XLA estimated 295.75 GiB before rematerialization and could reduce it only to 290.81 GiB, above its 170.60 GiB target. The later device-versus-pinned-host sharding assertion followed that failed memory schedule. No training step ran.
 - Interpretation: A four-times worst-case route reserve is not a viable training configuration. The matched XLA arm uses bounded receiver capacity. The fused schedule must also bound capacity, clip safely at full expert blocks, and report dropped routes.
 - Next action: Use 1.1-times route capacity plus expert padding, make schedule clipping kernel-safe, return its dropped-route count, and repeat the exact gradient and full-shape gates.
+
+### 2026-08-10 09:45 UTC - Bounded-capacity full-mesh gradient gate passed
+
+- Hypothesis: The 1.1-times bounded schedule and explicit production mesh preserve the fused forward and exact fallback gradient.
+- Commit Hash: `11bf9bfbc`.
+- Commands: One four-GPU GB200 Iris correctness job with the full `replica_dcn`, `data`, `expert`, and `model` mesh.
+- Config: 256 tokens per GPU, hidden and intermediate dimensions 256, four routed experts at top-1, one shared expert, bounded schedule capacity, and production weight sharding.
+- Result: The job succeeded without a retry. The fused forward had a maximum absolute error of 0.03125 and a mean absolute error of 0.00350. All eight gradient groups matched the JAX fallback exactly.
+- Interpretation: Bounded capacity, the explicit mesh, and sharded shared weights do not change the verified gradient. The remaining gate is full model memory and one completed training step.
+- Next action: Repeat the one-step full-model run with the bounded schedule, then profile a longer run if it succeeds.
+
+### 2026-08-10 09:49 UTC - Custom backward needs an internal rematerialization boundary
+
+- Hypothesis: Reducing the fused route reserve from four times to 1.1 times is enough for one full-model step.
+- Commit Hash: `11bf9bfbc`.
+- Commands: One four-GPU GB200 Iris run with one requested training step and no retry.
+- Config: E8, top-4, global batch 64, BF16 compute, fused forward, bounded schedule capacity, and the exact ragged all-to-all JAX fallback gradient.
+- Result: XLA reduced its original estimate from 224.04 GiB to 219.11 GiB, still above its 170.60 GiB target. Execution then failed on a 12.66 GiB collective-memory allocation. This is 71.71 GiB lower than the four-times reserve result, but no step ran.
+- Interpretation: Route capacity was one large cause, but the custom backward still builds its JAX fallback VJP outside the model block rematerialization boundary. The fallback forward activations stay live inside the custom backward and add about 48.5 GiB above the target.
+- Next action: Put an explicit JAX checkpoint around the reference function before its VJP, repeat the exact gradient gate, and retry the one-step full-model run.

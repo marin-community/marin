@@ -248,7 +248,7 @@ def _custom_forward(
             )
 
         differentiable = (x, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down)
-        _, pullback = jax.vjp(reference, *differentiable)
+        _, pullback = jax.vjp(jax.checkpoint(reference), *differentiable)
         gradients = pullback(output_gradient)
         return gradients[0], None, *gradients[1:]
 
