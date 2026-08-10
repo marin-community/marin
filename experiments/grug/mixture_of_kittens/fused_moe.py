@@ -448,7 +448,9 @@ def _custom_forward(
         )
         return gradients[0], None, *gradients[1:]
 
-    fused.defvjp(fused_fwd, fused_bwd)
+    # An enclosing checkpoint must rebuild the opaque forward residuals instead of
+    # keeping one full context for every transformer layer.
+    fused.defvjp(fused_fwd, fused_bwd, optimize_remat=True)
     return fused
 
 
