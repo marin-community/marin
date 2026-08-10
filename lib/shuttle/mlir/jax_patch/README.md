@@ -64,7 +64,7 @@ then run `shuttle_jaxlib_acceptance.py` with an empty `--work-directory` and a
 workers and the separate cache-disabled concurrency/lifetime worker; the Iris
 runner must not replace those semantics with inline Python.
 
-Before building, run the pure fixture-contract regression suite explicitly:
+Before building, run the pinned fixture-contract regression suite explicitly:
 
 ```bash
 PYTHONPATH=lib/shuttle/mlir/jax_patch \
@@ -76,10 +76,14 @@ PYTHONPATH=lib/shuttle/mlir/jax_patch \
 ```
 
 The contract is audited from the checked-in pinned forward and JAX-owned VJP
-StableHLO fixtures. It requires exact normalized selected regions, the complete
-algebra/lowered manifest, the VJP constant/broadcast/subtract exclusion island,
-phase-specific provenance erasure, and the final normalized module fingerprint.
-The validator does not select behavior from callable names or workload keys.
+StableHLO fixtures at XLA's module-transform hook boundary. The fixture audit
+reapplies the pinned StableHLO complex-math expander and rejects a changed
+hook-boundary digest. This matters for the VJP: XLA moves its scalar constant
+ahead of the first dot before Shuttle assigns source ordinals. The contract
+requires exact normalized selected regions, the complete algebra/lowered
+manifest, the VJP constant/broadcast/subtract exclusion island, phase-specific
+provenance erasure, and the final normalized module fingerprint. The validator
+does not select behavior from callable names or workload keys.
 
 The repository overrides avoid checked-in machine-specific paths. A Bazel
 dependency query against the exact JAX release and patched XLA revision proves

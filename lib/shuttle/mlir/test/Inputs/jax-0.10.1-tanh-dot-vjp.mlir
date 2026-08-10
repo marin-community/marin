@@ -9,6 +9,9 @@
 // JAX: 0.10.1; jaxlib: 0.10.1; XLA: 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
 // Raw StableHLO SHA-256: 9A079C16D0BADFEF97282BB89FDB022B64DA52AC83F9C6CA4F171B479D3B5E1B
 // Normalized StableHLO SHA-256: 2D557BD5D2F259A053335A6E004F9C5290D19713961E2C41787ED197ED042891
+// XLA hook-boundary preprocessing: stablehlo-complex-math-expander
+// XLA hook-boundary StableHLO SHA-256: B73249E4F90133826C587798D8DFB424A1756BAE6691F5AD82390DFE3094236A
+// XLA hook-boundary normalized StableHLO SHA-256: D4DAD86C0C4ABF2F4A98BDD19879CBFB789C8D6CBA8B18FA56DECC4589A8DDB5
 
 module @jit_reference_vjp attributes {mhlo.num_partitions = 1 : i32, mhlo.num_replicas = 1 : i32} {
   func.func public @main(%arg0: tensor<2x3xf32>, %arg1: tensor<3x4xf32>, %arg2: tensor<4x5xf32>, %arg3: tensor<2x5xf32>) -> (tensor<2x3xf32> {jax.result_info = "result[0]"}, tensor<3x4xf32> {jax.result_info = "result[1]"}, tensor<4x5xf32> {jax.result_info = "result[2]"}) {

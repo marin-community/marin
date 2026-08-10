@@ -102,20 +102,24 @@ def _mlir_string(value: str) -> str:
     return '"' + value.replace('"', r"\22") + '"'
 
 
-# These immutable structural oracles are audited from the pinned ordinary-JAX
-# exports in ../test/Inputs/jax-0.10.1-tanh-dot-{forward,vjp}.mlir. They encode
-# source ordinals and normalized operation structure, never callable names.
+# These immutable structural oracles are audited at XLA's StableHLO-transform
+# hook boundary from the pinned ordinary-JAX exports in
+# ../test/Inputs/jax-0.10.1-tanh-dot-{forward,vjp}.mlir. XLA preprocessing is a
+# no-op for the forward fixture. Its complex-math expander moves the VJP scalar
+# constant ahead of dot_general before Shuttle assigns source ordinals. The
+# oracles encode those hook-boundary ordinals and normalized operation
+# structure, never callable names.
 VJP_EXCLUDED_MANIFEST = (
     "[{fingerprint = {attributes = {value = dense<1.000000e+00> : tensor<f32>}, "
     'name = "stablehlo.constant", result_types = [tensor<f32>]}, operands = [], '
-    'reason = "unsupported_operation", source = #shuttle.source_ref<0, 0, 2, 0>}, '
+    'reason = "unsupported_operation", source = #shuttle.source_ref<0, 0, 0, 0>}, '
     "{fingerprint = {attributes = {broadcast_dimensions = array<i64>}, "
     'name = "stablehlo.broadcast_in_dim", result_types = [tensor<2x4xf32>]}, '
-    'operands = [#shuttle.source_ref<0, 0, 2, 0>], reason = "unsupported_operation", '
+    'operands = [#shuttle.source_ref<0, 0, 0, 0>], reason = "unsupported_operation", '
     "source = #shuttle.source_ref<0, 0, 3, 0>}, "
     '{fingerprint = {attributes = {}, name = "stablehlo.subtract", '
     "result_types = [tensor<2x4xf32>]}, operands = [#shuttle.source_ref<0, 0, 3, 0>, "
-    '#shuttle.source_ref<0, 0, 1, 0>], reason = "unsupported_operation", '
+    '#shuttle.source_ref<0, 0, 2, 0>], reason = "unsupported_operation", '
     "source = #shuttle.source_ref<0, 0, 4, 0>}]"
 )
 
@@ -130,10 +134,10 @@ FORWARD_EXPECTATION = FixtureExpectation(
 VJP_EXPECTATION = FixtureExpectation(
     name="vjp",
     complete_operations=tuple(range(14)),
-    selected_regions=((0, 1), (5, 6), (7, 8, 9, 10, 11, 12, 13)),
+    selected_regions=((1, 2), (5, 6), (7, 8, 9, 10, 11, 12, 13)),
     excluded_manifest=VJP_EXCLUDED_MANIFEST,
     function_result_anchors=(13, 12, 6),
-    final_normalized_fingerprint="2d557bd5d2f259a053335a6e004f9c5290d19713961e2c41787ed197ed042891",
+    final_normalized_fingerprint="d4dad86c0c4abf2f4a98bdd19879cbfb789c8d6cba8b18fa56decc4589a8ddb5",
 )
 FIXTURE_EXPECTATIONS = (FORWARD_EXPECTATION, VJP_EXPECTATION)
 
