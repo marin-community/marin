@@ -3550,3 +3550,34 @@ author: dlwh
   reports the holder killed by user; the exact pod, namespace pod-name search,
   local cache session, and holder process are absent. Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_capture_accounting_9ddaabd942_unaccepted_v0/`.
+
+### 2026-08-09 - TLTC-XLA-069 partitioned Contract auxiliary Folds
+
+- Revision `c8053853d6` recovers two unambiguous scalar-contribution Folds from
+  the natural post-rewrite Contract `%dot.87`. The generic program retains all
+  four raw BF16 partitions with widths `[32, 16, 16, 2]` and adds FP32 Fold
+  outputs with shapes `[2, 4, 2]` and `[2, 4, 1]` from partitions 0 and 2.
+- Each auxiliary contribution is imported as an explicit
+  `BF16 -> FP32 -> multiply` scalar AST. The reducer is an imported FP32 add
+  AST. The physical contract is ordered FP32 Contract accumulation, BF16
+  round-to-nearest-even partition storage, then the contribution and FP32
+  Fold. The program permits rounding reassociation; the bounded scalar CUDA
+  and CPU realizations use deterministic source-order feature loops.
+- Exact HLO replacement removes the concatenation, Contract, old slices,
+  self-product intermediates, and two reductions. It re-emits the four raw
+  partitions and two Fold results as typed-FFI outputs. Their original users
+  remain unchanged, as do all 10 collectives. A `(-x) * x` contribution
+  mutation reuses the same partition/Fold structure and regenerates the scalar
+  source and semantic digest.
+- Seventeen focused tests pass. The full tile-lifetime suite has 576 passing
+  tests and one unrelated snapshot failure because
+  `stateful_scan_generated_h100/raw/mutation_per_key_r1_b1_t64_h32_k128_v128_bv32.stdout.log`
+  is absent from the worktree artifact. Changed-files pre-commit and Pyrefly
+  pass. No GPU allocation or performance claim was made.
+- The downstream boundary is still structural. The next pass must recover the
+  scale, epsilon, `rsqrt`, broadcast, and cast finalization after each emitted
+  statistic, then attach that generated scalar preparation to the batched
+  downstream Contract while preserving the transpose/broadcast index maps.
+  A high-throughput backend also needs the segmented QuACK mainloop to emit
+  these per-view partial statistics; the current one-CTA scalar generator is
+  only a correctness and source-generation proof.
