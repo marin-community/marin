@@ -150,7 +150,34 @@ command. A hand-authored equivalent is insufficient for this gate.
 
 ### Selected regions
 
-The forward module has one selected contiguous region:
+Region partitioning is deterministic and generic. For each source block, the
+formation pass:
+
+1. classifies each operation from its registered conversion, types, indexing
+   maps, regions, effects, and control or alias obligations;
+2. splits the block into maximal contiguous intervals of supported pure
+   operations, with every unsupported or nonlocal operation ending an
+   interval;
+3. builds an undirected graph within each interval whose vertices are
+   operations and whose edges are direct SSA producer-consumer relationships;
+4. partitions that graph into weakly connected components; and
+5. orders components by their minimum source operation ordinal, breaking any
+   remaining tie by the lexicographic sequence of member ordinals.
+
+Each weakly connected component is one candidate region. Its member operations
+retain source order. Simultaneously selected disconnected components are
+materialized in the deterministic component order after boundary verification;
+their purity and lack of SSA edges make this reordering semantics-preserving.
+An unsupported operation is never crossed when constructing an interval. A
+shared external operand does not connect two components.
+
+No pass option, fixture metadata, or test assertion supplies a target region
+count. Tests run the partition rule, compare the exact normalized membership,
+and treat the count only as a derived result. A component that fails boundary
+verification is classified as excluded with its structural reason; it is not
+silently split or dropped.
+
+Applying this rule to the forward module produces one region:
 
 ```text
 dot_general(x, w0) -> tanh -> dot_general(_, w1)
@@ -180,13 +207,19 @@ dot_general(_, w0)
 
 The first slice deliberately does not convert `constant`,
 `broadcast_in_dim`, or `subtract`. They form a hard boundary and remain
-StableHLO. The supported operations form three contiguous regions in program
-order:
+StableHLO. The first two supported operations form the first interval. The
+remaining supported suffix is a second interval containing two weakly
+connected components. The derived VJP regions, in deterministic order, are:
 
 1. the primal `dot_general -> tanh` prefix, exporting the activation;
 2. `dot_general -> transpose`, producing `dw1`; and
 3. `dot_general -> multiply -> multiply -> add`, followed by the two
    `dot_general` branches and the `transpose` that produce `dx` and `dw0`.
+
+The second and third regions occupy one contiguous supported interval but are
+disconnected: the `dw1` branch consumes the exported activation, while the
+`dx`/`dw0` branch consumes the unsupported subtraction result. This derivation,
+not an expected count of three, defines the result.
 
 The third region accepts the untouched subtraction result as an external
 operand. Region boundaries expose all live-ins and live-outs as explicit SSA
@@ -210,7 +243,9 @@ constant-fold the island as part of this proof.
 ### Coverage manifest and provenance lifetime
 
 `shuttle-annotate-source` assigns a structural source reference to every
-source result. `shuttle-form-structural-regions` then writes a transient
+source result and a structural operation reference to every zero-result
+operation. A value anchor is either a function argument reference or a source
+result reference. `shuttle-form-structural-regions` then writes a transient
 module-level coverage manifest. The manifest records:
 
 - the complete source-result reference set;
@@ -218,6 +253,12 @@ module-level coverage manifest. The manifest records:
 - the excluded reference set and a closed structural reason such as
   `unsupported_operation`, `effect_boundary`, `control_boundary`, or
   `external_user_boundary`;
+- every zero-result operation's operation reference, normalized operation
+  fingerprint, classification, and ordered operand value anchors;
+- every terminator operand as a tuple of terminator operation reference,
+  operand ordinal, and source value anchor;
+- every function result as a tuple of function ordinal, result ordinal, and
+  the corresponding terminator-operand anchor;
 - the numerical policy and canonical tuning digest used for selection; and
 - a format version.
 
@@ -226,6 +267,14 @@ complete source-result set. Every selected reference belongs to exactly one
 region. Exclusion reasons describe structural facts; they cannot contain
 module, function, or workload names. The manifest is compiler state, not a
 public StableHLO attribute.
+
+Zero-result operations are part of the source audit even though they contribute
+no result reference. In the first slice, terminators and any other zero-result
+operations remain outside selected regions. Their records prevent result-only
+coverage from overlooking a deleted, replaced, or rewired terminator. A future
+conversion that selects a zero-result operation needs an explicit algebra
+effect model and a new manifest classification; it cannot reuse result
+coverage as proof.
 
 At the algebra stage, `shuttle-verify-source-coverage{stage=algebra}` requires
 the selected set to equal the union of provenance on the selected regions'
@@ -243,11 +292,17 @@ lowered coverage check requires:
 - excluded manifest references remain represented by untouched StableHLO;
 - no reference appears in both classes; and
 - the union of represented selected and excluded references equals the
-  manifest's complete set.
+  manifest's complete result set;
+- every zero-result operation record still has the same normalized operation
+  fingerprint and ordered operand-anchor relationship; and
+- every terminator operand and function result resolves to the same source
+  value anchor through the lowered provenance relation.
 
 This equality makes the second coverage check meaningful after all
 `shuttle.region` operations have disappeared. It also catches a lowering that
 drops selected provenance or accidentally consumes an unsupported operation.
+It also catches a type-correct return rewire that leaves the union of source
+references unchanged.
 
 `shuttle-strip-source-provenance` runs only after lowered coverage succeeds. It
 removes the coverage manifest, source-reference attributes, source locations
@@ -264,11 +319,16 @@ The pass library exposes one builder for the production sequence:
 ```cpp
 void buildShuttleStablehloPipeline(
     mlir::OpPassManager &manager,
-    const ShuttlePipelineOptions &options);
+    const ShuttlePipelineOptions &options,
+    std::shared_ptr<const ShuttlePipelineObserver> observer = {});
 ```
 
 `ShuttlePipelineOptions` is constructed from the validated canonical compiler
 options. It contains numerical policy and tuning data but no workload label.
+The optional observer is a separate native instrumentation channel. It is not
+a field of `ShuttlePipelineOptions`, canonical compiler JSON, policy digest, or
+JAX/XLA compilation cache identity.
+
 The builder fixes pass order and verifier placement. Callers cannot assemble a
 shorter production pipeline that omits coverage, provenance stripping, or
 final erasure.
@@ -285,20 +345,80 @@ cache keys. The first slice may lower them to identical StableHLO. Identical
 physical lowering does not permit the compiler to merge their cache or policy
 identities.
 
+### Native test observer
+
+Offline and patched-jaxlib tests use native observer events instead of parsing
+logs or adding diagnostic fields to compiler options. Each pipeline execution
+receives a process-unique `invocation_id` from an atomic counter. The ID is only
+for correlating observer events; it is absent from the IR, policy digest, and
+cache identity.
+
+The observer receives immutable snapshots at three points:
+
+1. after algebra coverage verification: normalized region membership, the
+   complete coverage manifest, the unsupported-island fingerprint, numerical
+   policy digest, and invocation ID;
+2. after lowered coverage verification and immediately before provenance
+   stripping: the lowered manifest relation, terminator/function-result
+   anchors, unsupported-island fingerprint, policy digest, and invocation ID;
+3. after provenance stripping and final erasure verification: the normalized
+   StableHLO fingerprint, an explicit no-Shuttle-semantics result, policy
+   digest, and invocation ID.
+
+Region membership is an ordered list of structural source references derived
+by the partition rule. The unsupported-island fingerprint includes normalized
+operation names, types, attributes, and operand-anchor relationships. The
+post-strip event cannot contain the manifest or source references; it records
+their absence and the final normalized module fingerprint.
+
+Observer callbacks are non-mutating and cannot change pass success. A native
+test registry stores observer subscriptions as reference-counted objects. It
+uses a mutex to install or remove subscriptions and takes an immutable
+subscription snapshot at invocation start. Each test observer stores events in
+a mutex-protected map keyed by invocation ID; there is no process-global "last
+compilation" record. RAII scope removal waits until every captured observer
+reference is released, so a compilation on an XLA worker thread cannot call a
+destroyed observer. Failed pipelines emit a terminal failure event and never a
+successful post-erasure event.
+
+Tests may install or remove the observer without changing the compiled
+executable's cache key. A cache hit does not run the transform and therefore
+does not emit a new pipeline invocation. Tests correlate expected misses with
+observer IDs and verify hits separately through the isolated cache protocol
+below.
+
 ### Offline `shuttle-opt` gate
 
 The native offline gate runs before building a patched jaxlib. It requires all
-of the following on the frozen forward and JAX VJP StableHLO fixtures:
+frozen StableHLO fixtures to carry a source audit containing the exact export
+command, JAX and jaxlib versions, pinned XLA revision, input shapes and dtypes,
+raw StableHLO SHA-256, and normalized StableHLO SHA-256. The test regenerates
+each fixture with JAX 0.10.1 and compares parsed, normalized MLIR. Copying an
+expected operation list into a hand-authored fixture does not pass the audit.
+
+Normalized comparisons parse MLIR and assign canonical module symbols,
+function symbols, block ordinals, and SSA value numbers by structural traversal.
+They preserve operation names, types, non-symbol attributes, operand edges,
+result order, structural source references, and manifest classifications. They
+remove only symbol spelling, SSA spelling, nonsemantic location spelling, and
+observer invocation IDs. Rename tests compare normalized structures, not text
+after search-and-replace.
+
+The gate requires all of the following:
 
 1. Run the shared production pipeline through `shuttle-opt` under both
    `SOURCE_ORDERED` and `FAST`.
 2. Preserve an IR dump after StableHLO-to-Shuttle conversion and a fully
    lowered StableHLO output for each module and policy.
 3. Check one forward region and the three VJP regions listed above, with only
-   generic `shuttle.contract` and `shuttle.map` operations.
+   generic `shuttle.contract` and `shuttle.map` operations. Derive these
+   memberships from the partition rule; do not request counts of one or three.
 4. Check exact algebra-stage and lowered-stage manifest equality. A mutation
    that removes one selected reference, duplicates a selected reference into
    the excluded class, or absorbs one unsupported reference must fail.
+   Rewire a function return to a different same-type live value while leaving
+   the represented source-reference union unchanged; the terminator and
+   function-result anchor checks must fail.
 5. Check the VJP `constant -> broadcast_in_dim -> subtract` island is
    structurally unchanged after ignoring SSA names and temporary provenance.
 6. Check the lowered modules parse and verify as StableHLO and contain no
@@ -311,7 +431,21 @@ of the following on the frozen forward and JAX VJP StableHLO fixtures:
    semantic-policy digests even if their lowered StableHLO fingerprints are
    equal.
 9. Rename the module and function in each fixture and check that region
-   selection, algebra fingerprint, and lowered structure are unchanged.
+   selection, normalized region membership, algebra fingerprint, and lowered
+   structure are unchanged.
+10. Repeat the forward and VJP proof at `x=[3,2]`, `w0=[2,6]`, `w1=[6,4]`, and
+    output cotangent `[3,4]`, all f32. The partition and generic operation kinds
+    must match after substituting extents; no fixed primary-fixture extent may
+    appear in selection or conversion code.
+11. Export and compile an unrelated Map-only graph,
+    `transpose((a * b) + c)` for `[2,3]` f32 operands, and an unrelated
+    Contract-only graph, `a @ b` for `[3,2] @ [2,4]` f32 operands. The same
+    partition, conversion, coverage, lowering, and erasure pipeline must accept
+    them without a new provider, workload label, or fixture switch.
+12. Regenerate all primary and genericity fixtures from their audited JAX
+    sources in the test environment and fail on any unexplained normalized IR
+    drift. A JAX upgrade must update the source audit and receive review before
+    changing expected partition membership.
 
 This gate proves the native dialect, conversion, coverage, and lowering without
 a Python compiler path. It does not prove that ordinary `jax.jit` invokes the
@@ -338,21 +472,48 @@ and an ordinary `jax.jit` of `reference_vjp` with the same compiler options.
 No custom primitive, typed FFI call, serialized-HLO callback, Python StableHLO
 parser, textual-HLO rewrite, or precomputed workload plan may participate.
 
+Cache testing runs in a fresh process with a unique empty persistent-cache
+directory and no inherited global JAX cache directory. It sets
+`jax_persistent_cache_min_compile_time_secs=0` and
+`jax_persistent_cache_min_entry_size_bytes=0` so the bounded CPU fixture is not
+discarded by cache admission thresholds. The test creates one Python
+`reference_function` object, then constructs separate
+`source_ordered_jit` and `fast_jit` wrappers around that same object because
+`compiler_options` are immutable properties of a jitted wrapper. The same rule
+applies to the VJP callable. "Compile twice under one policy" means call the
+same jitted wrapper object twice with identical shapes, not construct two
+nominally equivalent wrappers.
+
+The first process calls each policy wrapper twice. Each wrapper must produce
+one native observer invocation and one persistent executable entry. The two
+policy wrappers for a callable must report distinct cache lookup keys and
+distinct policy digests. A second fresh process points at the same isolated
+directory, reconstructs the equivalent wrappers, and requires persistent-cache
+hits with no native pipeline invocation. Forward and VJP cache records are
+audited separately. Helper compilations are forbidden in this process so cache
+entry counts and lookup keys remain attributable to these four wrappers.
+
 The CPU integration test must:
 
 1. execute forward and JAX-owned VJP under `SOURCE_ORDERED` and `FAST`;
 2. compare the output, `dx`, `dw0`, and `dw1` with Shuttle disabled, using the
    same numerical requirements as the offline gate;
-3. obtain transform diagnostics from the native registration and check the
-   forward/VJP region counts and complete coverage manifests;
-4. check the unsupported VJP island in the pre-HLO transformed module;
+3. use the concurrency-safe native observer to check normalized forward/VJP
+   region membership, complete coverage manifests, policy digests, unsupported
+   island fingerprints, invocation IDs, and successful post-strip erasure;
+4. check the unsupported VJP island in the pre-strip transformed module;
 5. check the module handed to StableHLO-to-HLO has no Shuttle semantics or
    provenance;
-6. compile the same callable and shapes twice under one policy and observe one
-   cache identity, then compile under the other policy and observe a distinct
-   cache identity and native transform invocation; and
+6. run the isolated two-process cache protocol above, including repeated calls
+   to the same jitted object, separate policy wrappers around the same Python
+   callable, distinct persistent keys, and zero transform invocations on
+   persistent hits;
 7. fail compilation, without fallback, when the enabled Shuttle transform is
-   absent or any coverage, lowering, or erasure verifier fails.
+   absent or any coverage, lowering, or erasure verifier fails; and
+8. compile forward and VJP wrappers for both policies concurrently in a
+   separate cache-disabled test, then check unique invocation IDs, ordered
+   per-invocation observer phases, correct policy/manifest attribution, and no
+   callbacks after observer scope teardown.
 
 Passing the offline gate alone is a compiler-unit milestone. Passing this
 patched-jaxlib gate establishes the first ordinary-JAX forward-and-training
