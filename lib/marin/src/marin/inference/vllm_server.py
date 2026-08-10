@@ -51,35 +51,8 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
-# CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
-# attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_REQUIREMENTS = (
-    "nvidia-cuda-nvcc==13.0.88",
-    "nvidia-cuda-crt==13.0.88",
-    "nvidia-nvvm==13.0.88",
-)
-_CUDA_NVCC_BOOTSTRAP = """\
-import importlib.metadata
-import os
-from pathlib import Path
-import sys
-
-distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
-nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
-nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
-cuda_home = nvcc.parent.parent
-cuda_lib = cuda_home / "lib"
-cuda_lib64 = cuda_home / "lib64"
-if cuda_lib.is_dir() and not cuda_lib64.exists():
-    cuda_lib64.symlink_to(cuda_lib, target_is_directory=True)
-cudart = cuda_lib / "libcudart.so.13"
-cudart_link = cuda_lib / "libcudart.so"
-if cudart.is_file() and not cudart_link.exists():
-    cudart_link.symlink_to(cudart.name)
-os.environ["CUDA_HOME"] = str(cuda_home)
-os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
-os.execvp(sys.argv[1], sys.argv[1:])
-"""
+_FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_DEEPGEMM_NVRTC_ENV_VAR = "DG_JIT_USE_NVRTC"
 _PYTHON_FILE_BOOTSTRAP = """\
 import runpy
 import sys
@@ -224,17 +197,12 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
-        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
-            command.extend(("--with", requirement))
         command.extend(
             (
                 "--python",
                 self.python_version,
                 "--torch-backend",
                 install.torch_backend,
-                "python",
-                "-c",
-                _CUDA_NVCC_BOOTSTRAP,
                 install.executable,
                 *install.executable_args,
             )
@@ -242,17 +210,22 @@ class IsolatedCudaVllm:
         return command
 
     def env(self) -> dict[str, str]:
-        # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
-        # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        # CoreWeave task images do not provide nvcc. Keep sampling on native/Triton kernels and let
+        # DeepGEMM use the CUDA-runtime-matched NVRTC shipped with the selected vLLM environment.
+        # Both variants may also receive an s3:// path; CoreWeave rejects path-style S3 requests.
         environment = {
+            _FLASHINFER_SAMPLER_ENV_VAR: "0",
+            _DEEPGEMM_NVRTC_ENV_VAR: "1",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         return environment
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        return (
+            f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:"
+            f"{_FLASHINFER_SAMPLER_ENV_VAR}=0:{_DEEPGEMM_NVRTC_ENV_VAR}=1"
+        )
 
 
 def _write_virtual_hosted_s3_config() -> str:
