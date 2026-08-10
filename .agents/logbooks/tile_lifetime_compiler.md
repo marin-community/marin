@@ -3961,3 +3961,34 @@ author: dlwh
   shard-mapped CUDA executable or any GPU performance.
 - Next action: lower the handlers and payload return inside one shard-mapped
   graph, then compile and execute that graph on CPU before requesting GB200.
+
+### 2026-08-09 20:51 PDT - TLTC-MOE-006 integrated shard-mapped reverse graph
+
+- Hypothesis: the fixed-capacity reverse handlers, three payload transports,
+  source Fold, and JAX router pullback can coexist in one four-rank shard-mapped
+  graph without introducing a semantic communication combine.
+- Commit hash: `00a7504821fe5a5e9fcba90e29ff2b377bd3bd4a`.
+- Command: `XLA_FLAGS=--xla_force_host_platform_device_count=4 uv run
+  --frozen --package marin-tile-lifetime --group test python
+  lib/tile_lifetime/benchmarks/cpu_distributed_expert_jax_module.py
+  --output-directory
+  lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_module_cpu_v0`.
+- Config: four forced CPU devices, eight sources, eight experts, top-2,
+  hidden/intermediate size 32, BF16 tensor storage, FP32 route weights, and five
+  fixed rows per expert. Relation metadata remains a runtime-shaped input.
+- Result (`exploratory`): one StableHLO graph contains five generated custom
+  calls, three `stablehlo.all_to_all` operations, and one JAX router-gradient
+  `stablehlo.all_reduce`. Both inverse transports recover every unique
+  source-item/route-slot edge ID exactly. The graph contains no Torch, DeepEP,
+  MoK, or attention target.
+- Correctness: the natural-JAX/decomposed comparison remains at `0.000716249`
+  maximum and `0.000133022` maximum mean absolute error. All output and
+  cotangent arrays repeat bitwise. The focused suite reports 44 passing tests;
+  targeted Pyrefly, Ruff, and `./infra/pre-commit.py --changed-files --fix`
+  pass.
+- Interpretation: handler/collective separation is no longer a static-HLO
+  blocker. CPU cannot compile the CUDA typed-FFI calls, so the integrated graph
+  has not executed numerically as one program. The decomposed stage reference
+  and collective permutation checks remain separate executions.
+- Next action: rebase this checkpoint onto canonical commit `53c413e2d9`, then
+  request review before any CUDA compilation or GB200 allocation.
