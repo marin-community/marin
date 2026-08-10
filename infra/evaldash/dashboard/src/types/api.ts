@@ -33,39 +33,112 @@ export interface RunRow {
   jobs: Record<string, string>
 }
 
-// A matrix cell is the latest succeeded score (value + paired stderr) for a (model, task),
-// or -- when no run ever succeeded there -- the latest run's failure status. value is null
-// in the failure case; run_id always links to a real run.
-export interface MatrixCell {
-  status: string
-  value: number | null
-  stderr: number | null
-  metric: string | null
+// What a cell's interval covers. `identified` includes the contribution of items the run attempted
+// but never graded; `sampling_only` means the run reports no attempted count, so the interval holds
+// only if it graded everything it started -- which the record does not establish.
+export const INTERVAL_KIND = {
+  IDENTIFIED: 'identified',
+  SAMPLING_ONLY: 'sampling_only',
+} as const
+
+export type IntervalKind = (typeof INTERVAL_KIND)[keyof typeof INTERVAL_KIND]
+
+// One benchmark result: the rate over graded items, the interval around it, how much of the
+// attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
+// complete-case rate and is biased upward when a run lost items.
+export interface PanelCell {
+  value: number
+  low: number
+  high: number
+  interval_kind: IntervalKind
+  metric: string
+  metric_kind: string
+  n_scored: number
+  n_attempted: number | null
+  coverage: number | null
+  errors: Record<string, number>
+  item_cap: number | null
+  flags: string[]
   run_id: string
+  created_at: string
+  version: string | null
+  git_sha: string
+  eval_runtime: string
+}
+
+// Why a (model, benchmark) has no cell: a rejected run (failed status, coverage below the gate, the
+// wrong cohort) or a run that produced no metric at all.
+export interface MissingCell {
+  reason: string
+  run_id: string
+  status: string
   created_at: string
 }
 
-export interface MatrixRow {
-  model: string
-  version: string | null
-  archived: boolean
-  cells: Record<string, MatrixCell>
-}
-
-export interface LeaderboardEntry {
-  model: string
-  version: string | null
-  archived: boolean
-  score: number | null
-  stderr: number | null
+// A cross-benchmark aggregate always travels with the protocol that defines it: which benchmarks,
+// which per-benchmark metric, and what it did about the ones a model never ran.
+export interface PanelAggregate {
+  value: number
+  low: number
+  high: number
+  interval_kind: IntervalKind
   covered: number
   total: number
+  panel: string[]
+  missing_policy: string
+  metrics: string[]
 }
 
-export interface Matrix {
-  tasks: string[]
-  rows: MatrixRow[]
-  leaderboard: LeaderboardEntry[]
+export interface PanelRow {
+  model: string
+  archived: boolean
+  cells: Record<string, PanelCell>
+  missing: Record<string, MissingCell>
+  aggregate: PanelAggregate | null
+  covered: number
+}
+
+export interface PanelRequest {
+  min_coverage: number
+  cohort: string
+  cohort_version: string | null
+  completeness: string
+  filters: Record<string, string>
+  model_query: string | null
+  statuses: string[]
+}
+
+export interface Panel {
+  benchmarks: string[]
+  panel: string[]
+  rows: PanelRow[]
+  request: PanelRequest
+}
+
+// One model's gap to a benchmark's leader: the 95% interval for the difference, and whether it
+// clears zero. Overlapping model intervals do not settle an ordering; this does.
+export interface Difference {
+  low: number
+  high: number
+  separated: boolean
+}
+
+export interface ComparisonRow {
+  benchmark: string
+  shared: boolean
+  leader: string
+  cells: Record<string, PanelCell>
+  differences: Record<string, Difference>
+}
+
+// Head-to-head between named models (/api/compare): per-benchmark cells and gaps, plus each model's
+// aggregate over the shared benchmarks (null when it is missing one of them).
+export interface Comparison {
+  models: string[]
+  benchmarks: string[]
+  shared: string[]
+  rows: ComparisonRow[]
+  aggregates: Record<string, PanelAggregate | null>
 }
 
 export interface EvalSuite {
@@ -80,6 +153,9 @@ export interface Meta {
   archived_models: string[]
   users: string[]
   statuses: string[]
+  versions: string[]
+  // Run properties a panel can be filtered on, each with the values actually present.
+  facets: Record<string, string[]>
   current_user: string | null
   store: string
 }
@@ -145,7 +221,7 @@ export interface EvalRecord {
     max_gen_tokens: number | null
     extra: Record<string, string>
   } | null
-  headline: { value: number; metric: string; stderr: number | null } | null
+  headline: PanelCell | null
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -363,14 +439,9 @@ export interface SamplesResponse {
 
 // --- Score-over-time + groups ---
 
-export interface HistoryPoint {
-  run_id: string
-  created_at: string | null
-  value: number
-  stderr: number | null
-  metric: string
+// A point on a (model, benchmark) score-over-time series: one run's cell plus its terminal status.
+export interface HistoryPoint extends PanelCell {
   status: string
-  git_sha: string
 }
 
 export interface HistoryResponse {
@@ -409,9 +480,9 @@ export interface ModelRun {
   status: string
   created_at: string | null
   version: string | null
-  value: number | null
-  stderr: number | null
-  metric: string | null
+  headline: PanelCell | null
+  /** Why the run produced no headline; null when it did. */
+  gap_reason: string | null
 }
 
 // Everything the model view needs in one call: the cohort list for the version selector, every
@@ -459,9 +530,7 @@ export interface GroupMember {
   eval_name: string
   status: string
   created_at: string
-  value: number | null
-  metric: string | null
-  stderr: number | null
+  headline: PanelCell | null
 }
 
 // A launch: all evals run against one model by one serve group, newest first (/api/groups).

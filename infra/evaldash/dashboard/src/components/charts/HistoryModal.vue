@@ -1,14 +1,18 @@
 <script setup lang="ts">
 /**
- * Score-over-time modal for one (model, task): a line of every run's primary metric with a
- * stderr band and a point per run (tooltip = run id + git sha). Fetched from /api/history.
+ * Score-over-time modal for one (model, task): a line of every run's primary metric with its 95%
+ * interval as a band and a point per run (tooltip = run id + git sha). Fetched from /api/history.
+ *
+ * The band is the interval the panel uses, so a run that lost items shows a visibly wider band than
+ * one that graded everything, and a step between two runs can be read against how well each is
+ * determined.
  */
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import * as Plot from '@observablehq/plot'
 import { RouterLink } from 'vue-router'
+import { formatCoverage, formatInterval, formatScore, formatTimestamp, shortSha } from '@/utils/formatting'
 import { useApi } from '@/composables/useApi'
-import { formatScore, formatStderr, formatTimestamp, shortSha } from '@/utils/formatting'
-import type { HistoryResponse } from '@/types/api'
+import { INTERVAL_KIND, type HistoryPoint, type HistoryResponse } from '@/types/api'
 import PlotFigure from '@/components/charts/PlotFigure.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
 
@@ -31,8 +35,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 interface Point {
   t: Date
   value: number
-  lo: number
-  hi: number
+  low: number
+  high: number
   run_id: string
   git_sha: string
 }
@@ -40,17 +44,14 @@ interface Point {
 const points = computed<Point[]>(() =>
   (data.value?.points ?? [])
     .filter((p) => p.created_at)
-    .map((p) => {
-      const se = p.stderr ?? 0
-      return {
-        t: new Date(p.created_at as string),
-        value: p.value,
-        lo: p.value - se,
-        hi: p.value + se,
-        run_id: p.run_id,
-        git_sha: p.git_sha,
-      }
-    }),
+    .map((p) => ({
+      t: new Date(p.created_at),
+      value: p.value,
+      low: p.low,
+      high: p.high,
+      run_id: p.run_id,
+      git_sha: p.git_sha,
+    })),
 )
 
 const options = computed<Record<string, unknown>>(() => ({
@@ -61,31 +62,44 @@ const options = computed<Record<string, unknown>>(() => ({
   x: { type: 'utc', label: null, grid: false },
   y: { label: 'primary metric', grid: true },
   marks: [
-    Plot.areaY(points.value, { x: 't', y1: 'lo', y2: 'hi', fill: 'currentColor', fillOpacity: 0.12, curve: 'monotone-x' }),
+    Plot.areaY(points.value, {
+      x: 't',
+      y1: 'low',
+      y2: 'high',
+      fill: 'currentColor',
+      fillOpacity: 0.12,
+      curve: 'monotone-x',
+    }),
     Plot.lineY(points.value, { x: 't', y: 'value', stroke: 'currentColor', strokeWidth: 1.5, curve: 'monotone-x' }),
     Plot.dot(points.value, {
       x: 't',
       y: 'value',
       fill: 'currentColor',
       r: 3.5,
-      title: (d: Point) => `${d.run_id}\n${shortSha(d.git_sha)}\nscore ${formatScore(d.value)}`,
+      title: (d: Point) => `${d.run_id}\n${shortSha(d.git_sha)}\n${formatScore(d.value)} (${formatInterval(d.low, d.high)})`,
     }),
     Plot.ruleY([0], { stroke: 'currentColor', strokeOpacity: 0.15 }),
   ],
 }))
+
+// What a point's interval covers: the graded share when the run reports one, otherwise a note that
+// completeness is unknown rather than a silent claim that nothing was lost.
+function coverageNote(point: HistoryPoint): string {
+  if (point.interval_kind !== INTERVAL_KIND.IDENTIFIED) return 'coverage unreported'
+  return point.coverage !== null && point.coverage < 1 ? formatCoverage(point.coverage) : 'complete'
+}
 </script>
 
 <template>
-  <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-    @click.self="emit('close')"
-  >
-    <div class="w-full max-w-3xl max-h-[85vh] overflow-auto rounded-lg border border-surface-border bg-surface p-5 shadow-xl">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="emit('close')">
+    <div
+      class="w-full max-w-3xl max-h-[85vh] overflow-auto rounded-lg border border-surface-border bg-surface p-5 shadow-xl"
+    >
       <div class="flex items-start justify-between gap-3 mb-3">
         <div>
           <h3 class="text-sm font-semibold">Score over time</h3>
           <p class="text-xs text-text-muted mt-0.5">
-            <span class="font-mono">{{ model }}</span> · {{ task }}
+            <span class="font-mono">{{ model }}</span> · {{ task }} · band = 95% interval
           </p>
         </div>
         <button
@@ -96,7 +110,10 @@ const options = computed<Record<string, unknown>>(() => ({
         </button>
       </div>
 
-      <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-3">
+      <div
+        v-if="error"
+        class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-3"
+      >
         {{ error }}
       </div>
       <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
@@ -113,6 +130,7 @@ const options = computed<Record<string, unknown>>(() => ({
                   <th class="px-2 py-1.5 text-left">When</th>
                   <th class="px-2 py-1.5 text-left">Status</th>
                   <th class="px-2 py-1.5 text-left">git</th>
+                  <th class="px-2 py-1.5 text-left">Graded</th>
                   <th class="px-2 py-1.5 text-right">Score</th>
                 </tr>
               </thead>
@@ -127,14 +145,21 @@ const options = computed<Record<string, unknown>>(() => ({
                       :to="`/runs/${p.run_id}`"
                       class="font-mono text-accent hover:text-accent-hover hover:underline"
                       @click="emit('close')"
-                    >{{ p.run_id }}</RouterLink>
+                      >{{ p.run_id }}</RouterLink
+                    >
                   </td>
                   <td class="px-2 py-1.5 whitespace-nowrap text-text-secondary">{{ formatTimestamp(p.created_at) }}</td>
                   <td class="px-2 py-1.5"><StatusChip :status="p.status" /></td>
                   <td class="px-2 py-1.5 font-mono text-text-secondary">{{ shortSha(p.git_sha) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums">
+                  <td
+                    class="px-2 py-1.5 font-mono whitespace-nowrap"
+                    :class="p.coverage !== null && p.coverage < 1 ? 'text-status-warning' : 'text-text-muted'"
+                  >
+                    {{ coverageNote(p) }}
+                  </td>
+                  <td class="px-2 py-1.5 text-right tabular-nums font-mono whitespace-nowrap">
                     {{ formatScore(p.value) }}
-                    <span class="text-text-muted">{{ formatStderr(p.value, p.stderr) }}</span>
+                    <span class="block text-[10px] text-text-muted leading-none">{{ formatInterval(p.low, p.high) }}</span>
                   </td>
                 </tr>
               </tbody>

@@ -264,6 +264,26 @@ class RunTiming(BaseModel):
     finished_at: str | None = None
 
 
+class TaskCoverage(BaseModel):
+    """How much of one task's intended item set a run actually graded.
+
+    ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
+    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
+    error type, so a reader can tell a model's score apart from the quality of the infrastructure
+    that produced it.
+
+    ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
+    to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
+    mechanism with no notion of an attempted count at all records nothing here.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    n_attempted: int | None = None
+    n_scored: int
+    errors: dict[str, int] = Field(default_factory=dict)
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -298,6 +318,10 @@ class EvalRunRecord(BaseModel):
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
+    coverage: dict[str, TaskCoverage] = Field(default_factory=dict)
+    """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
+    count. Empty when the mechanism reports none and on every record written before coverage existed;
+    a reader treats an empty entry as unknown coverage, never as complete coverage."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""

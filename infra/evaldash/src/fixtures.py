@@ -45,6 +45,7 @@ from marin.evaluation.records import (
     RunStatus,
     RunTiming,
     ServingParams,
+    TaskCoverage,
     write_record,
 )
 
@@ -98,6 +99,7 @@ def _record(
     results_path: str,
     metrics: dict[str, dict[str, float]],
     description: str | None,
+    coverage: dict[str, TaskCoverage] | None = None,
     error: str | None = None,
     log_tails: dict[str, tuple[str, ...]] | None = None,
     runtime_minutes: float = 8.0,
@@ -121,6 +123,7 @@ def _record(
         error=error,
         results_path=results_path,
         metrics=metrics,
+        coverage=coverage or {},
         jobs={"serve": f"jobs/{group_id}/serve", "eval": f"jobs/{run_id}/eval"},
         log_tails=log_tails or {},
         provenance=_provenance(),
@@ -313,9 +316,15 @@ _HEADLINE = {
 }
 
 
+# Graded documents behind every fixture lm-eval score, as lm-eval records it beside the metrics. A
+# round thousand so each three-decimal fixture score is an exact document count, and the statistics
+# engine takes its binomial path rather than falling back to recorded dispersion.
+_FIXTURE_ITEMS = 1000
+
+
 def _lm_metrics(task: str, value: float, stderr: float | None) -> dict[str, dict[str, float]]:
     metric, stderr_key = _HEADLINE[task]
-    inner = {metric: value}
+    inner = {metric: value, "sample_len": float(_FIXTURE_ITEMS)}
     if stderr_key is not None and stderr is not None:
         inner[stderr_key] = stderr
     return {task: inner}
@@ -419,7 +428,10 @@ def build_fixtures(dest: str) -> list[str]:
             evaluation=_harbor_ref("aime"),
             status=RunStatus.SUCCEEDED,
             results_path=results_of(r),
-            metrics={"aime": {"accuracy": 0.333, "mean_reward": 0.333, "solved": 3.0, "total": 9.0}},
+            # An agentic run that lost one of its ten trials to a timeout: the aggregate is over the
+            # nine trials a verifier graded, and the coverage carries what happened to the tenth.
+            metrics={"aime": {"accuracy": 3 / 9, "mean_reward": 3 / 9, "solved": 3.0, "total": 9.0}},
+            coverage={"aime": TaskCoverage(n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
             description=desc,
             runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks
             serving=ServingParams(

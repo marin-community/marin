@@ -26,6 +26,7 @@ from marin.evaluation.records import (
     ModelRef,
     Provenance,
     RunStatus,
+    TaskCoverage,
     read_record,
     record_path,
     write_record,
@@ -47,6 +48,8 @@ _REPORT_TAIL_LINES = 15
 class EvaluationOutcome:
     metrics: dict[str, dict[str, float]]
     jobs: dict[str, str] = field(default_factory=dict)
+    coverage: dict[str, TaskCoverage] = field(default_factory=dict)
+    """Per-task item coverage for mechanisms that report an attempted-item count; empty otherwise."""
 
 
 class EvaluationError(RuntimeError):
@@ -57,11 +60,15 @@ class EvaluationError(RuntimeError):
         status: RunStatus,
         jobs: dict[str, str] | None = None,
         log_tails: dict[str, tuple[str, ...]] | None = None,
+        coverage: dict[str, TaskCoverage] | None = None,
     ):
         super().__init__(message)
         self.status = status
         self.jobs = jobs or {}
         self.log_tails = log_tails or {}
+        self.coverage = coverage or {}
+        """Coverage measured before the failure, so a rejected run records why it was rejected as
+        structured counts rather than only as an error string."""
 
 
 class EvalExecutor(Protocol):
@@ -138,6 +145,7 @@ def _record(
     metrics: dict[str, dict[str, float]],
     jobs: dict[str, str],
     log_tails: dict[str, tuple[str, ...]],
+    coverage: dict[str, TaskCoverage] | None = None,
 ) -> str:
     record = EvalRunRecord(
         run_id=identity.run_id,
@@ -162,6 +170,7 @@ def _record(
         error=error,
         results_path=identity.output_dir,
         metrics=metrics,
+        coverage=coverage or {},
         provenance=Provenance(
             git_sha=batch.provenance.git_sha,
             eval_runtime=identity.eval_runtime,
@@ -248,6 +257,7 @@ def _run_one_evaluation(
     jobs.update(_inference_job_ids(session))
     tails: dict[str, tuple[str, ...]] = {}
     metrics: dict[str, dict[str, float]] = {}
+    coverage: dict[str, TaskCoverage] = {}
     status = RunStatus.SUCCEEDED
     error: str | None = None
     inference_failure: Exception | None = None
@@ -257,12 +267,14 @@ def _run_one_evaluation(
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
+        coverage = outcome.coverage
         jobs |= outcome.jobs
     except Exception as exc:
         if isinstance(exc, EvaluationError):
             status = exc.status
             jobs |= exc.jobs
             tails = exc.log_tails
+            coverage = exc.coverage
         else:
             logger.exception("unexpected failure in evaluation %s", evaluation.identity.eval_ref.name)
             status = RunStatus.FAILED
@@ -275,7 +287,7 @@ def _run_one_evaluation(
             tails |= _session_tail(session)
             inference_failure = serve_exc
 
-    path = _record(batch, evaluation.identity, status, error, metrics, jobs, tails)
+    path = _record(batch, evaluation.identity, status, error, metrics, jobs, tails, coverage)
     failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
     return _EvaluationExecution(
         record_path=path,

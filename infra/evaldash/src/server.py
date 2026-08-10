@@ -12,7 +12,7 @@ A background task ingests the records on startup and every ``EVALDASH_INGEST_INT
 production ``postgres`` store upserts each record into Cloud SQL and fails fast if no DB is
 configured, while the ``local`` store serves entirely from the object-store record snapshot with
 no database (for development against a ``RECORDS_PREFIXES`` directory). Both keep an in-memory
-snapshot the matrix/meta/groups/history views read from, since ``results_db`` exposes no aggregate
+snapshot the panel/meta/groups/history views read from, since ``results_db`` exposes no aggregate
 query for them; a prefix whose listing fails keeps its last successfully-listed records in that
 snapshot rather than dropping out of it.
 
@@ -40,7 +40,7 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,13 +50,22 @@ import review
 import samples
 import sqlalchemy
 import uvicorn
+from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
     scan_records,
 )
-from metrics import build_matrix, build_meta, build_model_detail, record_score
+from metrics import (
+    RUN_FACETS,
+    build_comparison,
+    build_meta,
+    build_model_detail,
+    build_panel,
+    panel_request,
+    record_headline,
+)
 from results_db import (
     connect_engine,
     ensure_schema,
@@ -97,6 +106,8 @@ DEFAULT_SAMPLE_LIMIT = 50
 MAX_SAMPLE_LIMIT = 500
 DEFAULT_REVIEW_SAMPLES = 20
 MAX_REVIEW_SAMPLES = 40
+# Most models one request may compare head-to-head; mirrors the SPA's picker cap.
+MAX_COMPARE_MODELS = 4
 REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
@@ -169,7 +180,7 @@ class RecordStore:
     """In-memory snapshot of eval records plus the read views the API serves over it.
 
     The base serves every read from the snapshot the ingest loop swaps wholesale each cycle (run
-    list, run detail, group siblings, matrix, meta, groups, history) and holds the archived-model
+    list, run detail, group siblings, panel, meta, groups, history) and holds the archived-model
     set in memory. :class:`MemoryRecordStore` uses these directly for local, offline runs;
     :class:`PgRecordStore` overrides the run list, run detail, group siblings, refresh, and archive
     state to read the durable Postgres index instead. The lock guards the snapshot swap against the
@@ -204,7 +215,7 @@ class RecordStore:
         logger.info("memory store refreshed: %d records", len(records))
 
     def archived_models(self) -> set[str]:
-        """Model names hidden from the headline matrix. In-memory in the base; a table in Postgres."""
+        """Model names hidden from the headline panel. In-memory in the base; a table in Postgres."""
         with self._lock:
             return set(self._archived)
 
@@ -244,14 +255,25 @@ class RecordStore:
         rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
         return rows[:limit]
 
-    def matrix(self, include_archived: bool = False) -> dict:
-        """The model x eval matrix over the snapshot. Archived models are dropped unless requested;
-        when included, their rows carry ``archived: true`` so the UI can style them apart."""
+    def panel(self, request: SelectionRequest, aggregate: MissingPolicy | None, include_archived: bool) -> dict:
+        """The model x benchmark panel the request selects, over the snapshot.
+
+        Archived models are dropped unless requested; when included, their rows carry
+        ``archived: true`` so the UI can style them apart.
+        """
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
             records = [record for record in records if record.model.name not in archived]
-        return build_matrix(records, frozenset(archived))
+        return build_panel(records, request, frozenset(archived), aggregate)
+
+    def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
+        """Head-to-head difference intervals between named models, over the snapshot.
+
+        Archived models are always in scope: naming a model is an explicit request for it.
+        """
+        records, _by_id = self._snapshot()
+        return build_comparison(records, request, models)
 
     def meta(self) -> dict:
         records, _by_id = self._snapshot()
@@ -298,28 +320,18 @@ class RecordStore:
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a matrix column, i.e. a registry eval name. One point per run that produced a
-        primary metric -- with its stderr, status, and provenance for the score-over-time tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
+        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
         points = []
         for record in records:
             if record.model.name != model or record.evaluation.name != task:
                 continue
-            score = record_score(record)
-            if score is None:
+            headline = record_headline(record)
+            if headline is None:
                 continue
-            points.append(
-                {
-                    "run_id": record.run_id,
-                    "created_at": record.created_at,
-                    "value": score.value,
-                    "stderr": score.stderr,
-                    "metric": score.metric,
-                    "status": record.status.value,
-                    "git_sha": record.provenance.git_sha,
-                }
-            )
+            points.append({**headline, "status": record.status.value})
         points.sort(key=lambda point: point["created_at"] or "")
         return points
 
@@ -359,7 +371,7 @@ class PgRecordStore(RecordStore):
 
     ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
     is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, ``groups``, and
+    prefix failed to list this cycle) still resolves. ``panel``, ``meta``, ``groups``, and
     ``history`` inherit the base's snapshot reads, since ``results_db`` exposes no aggregate query.
     """
 
@@ -620,6 +632,10 @@ def _current_user(request: Request) -> str | None:
     return raw.removeprefix(IAP_USER_PREFIX)
 
 
+class BadRequest(ValueError):
+    """A query parameter the server will not guess at, surfaced to the caller as a 400."""
+
+
 def _parse_limit(raw: str | None) -> int:
     return _parse_int(raw, default=DEFAULT_RUNS_LIMIT, low=1, high=MAX_RUNS_LIMIT)
 
@@ -633,6 +649,48 @@ def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
     except ValueError:
         return default
     return max(low, min(value, high))
+
+
+def _parse_flag(raw: str | None) -> bool:
+    return raw in ("1", "true")
+
+
+def _parse_names(raw: str | None) -> tuple[str, ...] | None:
+    """A comma-separated benchmark selection, or None for "every benchmark present"."""
+    if not raw:
+        return None
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return names or None
+
+
+def _parse_coverage(raw: str | None) -> float:
+    """The coverage floor a result must clear to be displayed."""
+    if not raw:
+        return DEFAULT_MIN_COVERAGE
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BadRequest(f"min_coverage must be a number in [0, 1], got {raw!r}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise BadRequest(f"min_coverage must be in [0, 1], got {value}")
+    return value
+
+
+def _parse_aggregate(raw: str | None) -> MissingPolicy | None:
+    """The cross-benchmark aggregation policy, or None for no aggregate at all.
+
+    Absent by default: a mean across benchmarks has no interpretation without a declared panel and
+    missing-data policy, so a caller has to ask for one and say which policy it wants. An unrecognized
+    policy is an error rather than "no aggregate": the two answer different questions, and silently
+    substituting one for the other hides the typo.
+    """
+    if not raw:
+        return None
+    try:
+        return MissingPolicy(raw)
+    except ValueError as exc:
+        policies = ", ".join(policy.value for policy in MissingPolicy)
+        raise BadRequest(f"unknown aggregate policy {raw!r}; expected one of: {policies}") from exc
 
 
 def _parse_review_n(raw: object) -> int:
@@ -669,26 +727,20 @@ def _status_rollup(statuses: set[str]) -> str:
 
 
 def _run_headline(record: dict) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric as
-    ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
-    produced metrics)."""
-    score = record_score(EvalRunRecord.model_validate(record))
-    if score is None:
-        return None
-    return {"value": score.value, "metric": score.metric, "stderr": score.stderr}
+    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
+    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
+    metrics)."""
+    return record_headline(EvalRunRecord.model_validate(record))
 
 
 def _group_member(record: EvalRunRecord) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
-    score = record_score(record)
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
         "status": record.status.value,
         "created_at": record.created_at,
-        "value": score.value if score else None,
-        "metric": score.metric if score else None,
-        "stderr": score.stderr if score else None,
+        "headline": record_headline(record),
     }
 
 
@@ -862,9 +914,40 @@ def create_app(
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
 
-    async def api_matrix(request: Request) -> JSONResponse:
-        include_archived = request.query_params.get("include_archived") in ("1", "true")
-        return JSONResponse(await asyncio.to_thread(store.matrix, include_archived))
+    def _selection(params: Mapping[str, str]) -> SelectionRequest:
+        """The panel selection a query string asks for, shared by the panel and compare endpoints."""
+        return panel_request(
+            benchmarks=_parse_names(params.get("benchmarks")),
+            cohort_version=params.get("cohort") or None,
+            completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
+            min_coverage=_parse_coverage(params.get("min_coverage")),
+            filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
+            model_query=params.get("model") or None,
+        )
+
+    async def api_panel(request: Request) -> JSONResponse:
+        params = request.query_params
+        try:
+            selection = _selection(params)
+            aggregate = _parse_aggregate(params.get("aggregate"))
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.panel, selection, aggregate, _parse_flag(params.get("include_archived")))
+        return JSONResponse(payload)
+
+    async def api_compare(request: Request) -> JSONResponse:
+        params = request.query_params
+        models = _parse_names(params.get("models"))
+        if models is None or len(models) < 2:
+            return JSONResponse({"error": "compare needs at least two models"}, status_code=400)
+        if len(models) > MAX_COMPARE_MODELS:
+            return JSONResponse({"error": f"compare takes at most {MAX_COMPARE_MODELS} models"}, status_code=400)
+        try:
+            selection = _selection(params)
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.comparison, selection, models)
+        return JSONResponse(payload)
 
     async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
@@ -913,7 +996,8 @@ def create_app(
         Route("/api/runs/{run_id:str}/samples", api_run_samples),
         Route("/api/runs/{run_id:str}/group", api_run_group),
         Route("/api/runs/{run_id:str}", api_run_detail),
-        Route("/api/matrix", api_matrix),
+        Route("/api/panel", api_panel),
+        Route("/api/compare", api_compare),
         Route("/api/history", api_history),
         Route("/api/meta", api_meta),
         Route("/api/status", api_status),

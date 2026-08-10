@@ -20,6 +20,7 @@ if str(_EVALDASH_SRC) not in sys.path:
     sys.path.insert(0, str(_EVALDASH_SRC))
 
 import fixtures  # noqa: E402
+import metrics  # noqa: E402
 import samples  # noqa: E402
 import server  # noqa: E402
 from marin.evaluation.records import list_records, write_record  # noqa: E402
@@ -43,21 +44,45 @@ def client(store) -> TestClient:
         yield client
 
 
-def test_memory_store_matrix_uses_latest_version_cohort(store):
-    matrix = store.matrix()
-    qwen = next(row for row in matrix["rows"] if row["model"] == "qwen3-8b")
-    # qwen3-8b has a 2026.07.19 and a 2026.07.21 launch; the matrix shows only the newer cohort.
-    assert qwen["version"] == "2026.07.21"
+def _panel(store, **kwargs):
+    return store.panel(metrics.panel_request(**kwargs), None, False)
+
+
+def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
+    panel = _panel(store)
+    qwen = next(row for row in panel["rows"] if row["model"] == "qwen3-8b")
+    # qwen3-8b has a 2026.07.19 and a 2026.07.21 launch; mmlu comes from the newer one.
+    assert qwen["cells"]["mmlu"]["version"] == "2026.07.21"
     assert qwen["cells"]["mmlu"]["value"] == pytest.approx(0.719)
 
 
-def test_leaderboard_reports_coverage_not_just_score(store):
-    board = {entry["model"]: entry for entry in store.matrix()["leaderboard"]}
-    # snowball ran all four headline suites; llama3-8b only mmlu. Coverage makes that visible even
-    # though a narrow model can post a higher mean.
-    assert board["snowball"]["covered"] == 4
-    assert board["llama3-8b"]["covered"] == 1
-    assert board["snowball"]["total"] == board["llama3-8b"]["total"]
+def test_panel_reports_coverage_of_the_selected_benchmarks(store):
+    rows = {row["model"]: row for row in _panel(store)["rows"]}
+    # snowball ran all four headline suites; llama3-8b only mmlu. Coverage makes that visible, and no
+    # cross-benchmark mean is offered to paper over the difference.
+    assert rows["snowball"]["covered"] == 4
+    assert rows["llama3-8b"]["covered"] == 1
+    assert rows["snowball"]["aggregate"] is None
+
+
+def test_panel_keeps_only_models_with_the_full_selection_when_asked(store):
+    complete = _panel(store, benchmarks=("mmlu", "gsm8k-0shot"), completeness=metrics.Completeness.COMPLETE_PANEL)
+
+    models = {row["model"] for row in complete["rows"]}
+    assert "snowball" in models
+    assert "llama3-8b" not in models
+
+
+def test_agentic_cell_carries_its_coverage_and_a_wider_interval(store):
+    """The aime fixture lost one of ten trials to a timeout: its interval covers the ungraded trial
+    rather than assuming it would have gone either way."""
+    row = next(row for row in _panel(store)["rows"] if row["model"] == "snowball")
+
+    aime = row["cells"]["aime"]
+    assert aime["interval_kind"] == "identified"
+    assert aime["coverage"] == pytest.approx(0.9)
+    assert aime["errors"] == {"AgentTimeoutError": 1}
+    assert aime["high"] - aime["low"] >= 0.1
 
 
 def test_groups_roll_up_mixed_launch_status(store):
@@ -109,8 +134,9 @@ def test_api_surface_over_fixtures(client):
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
 
-    matrix = client.get("/api/matrix").json()
-    assert set(matrix["tasks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
+    panel = client.get("/api/panel").json()
+    assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
+    assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
     runs = client.get("/api/runs?limit=100").json()
     assert len(runs) == 13
@@ -143,6 +169,34 @@ def test_run_detail_headline_is_null_for_a_failed_run(client):
     assert detail["status"] == "failed"
     assert detail["headline"] is None
     assert detail["timing"]["finished_at"]
+
+
+def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(client):
+    comparison = client.get("/api/compare", params={"models": "snowball,qwen3-8b"}).json()
+
+    assert set(comparison["shared"]) >= {"mmlu", "arc-challenge"}
+    mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
+    assert mmlu["leader"] in ("snowball", "qwen3-8b")
+    # The leader is not compared with itself; every other model gets an interval for its gap.
+    assert set(mmlu["differences"]) == set(mmlu["cells"]) - {mmlu["leader"]}
+    (gap,) = mmlu["differences"].values()
+    assert gap["low"] <= gap["high"]
+
+
+def test_api_compare_rejects_a_request_it_cannot_answer(client):
+    assert client.get("/api/compare", params={"models": "snowball"}).status_code == 400
+    assert client.get("/api/compare", params={"models": "a,b,c,d,e"}).status_code == 400
+
+
+def test_api_panel_rejects_an_unusable_query_rather_than_answering_a_different_one(client):
+    """A typo'd aggregate policy and "no aggregate" are different questions, so the server does not
+    silently substitute one for the other."""
+    bad_policy = client.get("/api/panel", params={"aggregate": "mena"})
+    assert bad_policy.status_code == 400
+    assert "unknown aggregate policy" in bad_policy.json()["error"]
+
+    assert client.get("/api/panel", params={"min_coverage": "ninety"}).status_code == 400
+    assert client.get("/api/panel", params={"min_coverage": "90"}).status_code == 400
 
 
 def test_api_agentic_artifact_is_run_local(client):
