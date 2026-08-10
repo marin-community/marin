@@ -21,11 +21,14 @@ from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,
+    audit_shard_mapped_handler_module_stablehlo,
     build_natural_router_relation,
+    build_relation_return_metadata,
     evaluate_decomposed_training_reference,
     evaluate_natural_jax_training,
     jax_payload_all_to_all,
     lower_handler_module_stablehlo,
+    lower_shard_mapped_handler_module_stablehlo,
     plan_distributed_expert_jax_module,
 )
 from tile_lifetime.expert_parallel_training import derive_expert_parallel_training_plan
@@ -62,12 +65,14 @@ def _training_plan():
     return derive_expert_parallel_training_plan(forward)
 
 
-def _payload_roundtrip():
+def _expert_mesh() -> Mesh:
     devices = np.asarray(jax.devices("cpu"), dtype=object)
     if devices.size != 4:
         raise RuntimeError("set XLA_FLAGS=--xla_force_host_platform_device_count=4 before importing JAX")
-    mesh = Mesh(devices, ("expert",))
+    return Mesh(devices, ("expert",))
 
+
+def _payload_roundtrip(mesh: Mesh):
     def local(payload):
         local_payload = payload[0]
         received = jax_payload_all_to_all(local_payload, axis_name="expert")
@@ -85,6 +90,85 @@ def _payload_roundtrip():
     output = jax.jit(roundtrip)(payload)
     stablehlo = str(jax.jit(roundtrip).lower(payload).compiler_ir(dialect="stablehlo"))
     return np.asarray(payload), np.asarray(output), stablehlo
+
+
+def _edge_return_roundtrip(plan, mesh: Mesh):
+    rank_count = plan.relation.destination_rank_count
+    local_sources = plan.config.source_items_per_rank
+    route_slots = plan.relation.route_slots
+    local_edges = local_sources * route_slots
+    local_experts = plan.local_expert_count
+    return_metadata = build_relation_return_metadata(plan)
+    edge_identity = return_metadata.source_item * route_slots + return_metadata.route_slot + 1
+    edge_payload = np.where(return_metadata.valid, edge_identity, 0).astype(np.int32)
+    route_payload = np.zeros(
+        (rank_count, plan.relation.source_item_count, route_slots),
+        dtype=np.int32,
+    )
+    route_indices = plan.relation.destination_item.reshape(rank_count, local_sources, route_slots)
+    global_route_indices = route_indices.reshape(plan.relation.source_item_count, route_slots)
+    expected = np.arange(1, plan.relation.route_count + 1, dtype=np.int32).reshape(
+        rank_count,
+        local_sources,
+        route_slots,
+    )
+    for source in range(plan.relation.source_item_count):
+        for slot in range(route_slots):
+            destination_rank = global_route_indices[source, slot] // local_experts
+            route_payload[destination_rank, source, slot] = source * route_slots + slot + 1
+
+    def local(local_edge_payload, local_route_payload, row_source_item, row_route_slot, row_valid, local_routes):
+        valid = row_valid[0]
+        source_rank = jnp.where(valid, row_source_item[0] // local_sources, rank_count)
+        source_edge = jnp.where(
+            valid,
+            (row_source_item[0] % local_sources) * route_slots + row_route_slot[0],
+            local_edges,
+        )
+        packed_input = (
+            jnp.zeros((rank_count, local_edges), dtype=jnp.int32)
+            .at[
+                source_rank,
+                source_edge,
+            ]
+            .set(local_edge_payload[0], mode="drop")
+        )
+        received_input = jax_payload_all_to_all(packed_input, axis_name="expert")
+        received_route = jax_payload_all_to_all(
+            local_route_payload[0].reshape(rank_count, local_sources, route_slots),
+            axis_name="expert",
+        )
+        destination_rank = local_routes[0] // local_experts
+        returned_input = received_input[destination_rank.reshape(-1), jnp.arange(local_edges, dtype=jnp.int32)]
+        returned_route = jnp.take_along_axis(
+            jnp.transpose(received_route, (1, 2, 0)),
+            destination_rank[..., None],
+            axis=2,
+        )[..., 0]
+        return returned_input.reshape(1, local_sources, route_slots), returned_route[None]
+
+    returned = jax.shard_map(
+        local,
+        mesh=mesh,
+        in_specs=(
+            P("expert", None),
+            P("expert", None, None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None, None),
+        ),
+        out_specs=(P("expert", None, None), P("expert", None, None)),
+        check_vma=False,
+    )(
+        jnp.asarray(edge_payload),
+        jnp.asarray(route_payload),
+        jnp.asarray(return_metadata.source_item),
+        jnp.asarray(return_metadata.route_slot),
+        jnp.asarray(return_metadata.valid),
+        jnp.asarray(route_indices),
+    )
+    return expected, np.asarray(returned[0]), np.asarray(returned[1])
 
 
 def main() -> None:
@@ -156,7 +240,11 @@ def main() -> None:
         deterministic[name] = bool(np.array_equal(actual, repeated))
     handler_hlo = lower_handler_module_stablehlo(plan)
     handler_occurrences = audit_handler_module_stablehlo(plan, handler_hlo)
-    sent_payload, returned_payload, collective_hlo = _payload_roundtrip()
+    mesh = _expert_mesh()
+    integrated_hlo = lower_shard_mapped_handler_module_stablehlo(plan, mesh=mesh)
+    integrated_audit = audit_shard_mapped_handler_module_stablehlo(plan, integrated_hlo)
+    sent_payload, returned_payload, collective_hlo = _payload_roundtrip(mesh)
+    expected_edges, returned_input_edges, returned_route_edges = _edge_return_roundtrip(plan, mesh)
     summary = {
         "kind": "fixed_capacity_distributed_expert_jax_module_cpu",
         "devices": [device.device_kind for device in jax.devices("cpu")],
@@ -175,8 +263,12 @@ def main() -> None:
         "handler_occurrences": handler_occurrences,
         "handler_custom_call_count": handler_hlo.count("stablehlo.custom_call"),
         "router_vjp_dot_count": handler_hlo.count("stablehlo.dot_general"),
+        "integrated_graph": integrated_audit,
+        "integrated_custom_call_count": integrated_hlo.count("stablehlo.custom_call"),
         "collective_all_to_all_count": collective_hlo.count("stablehlo.all_to_all"),
         "collective_roundtrip_exact": bool(np.array_equal(sent_payload, returned_payload)),
+        "input_edge_return_identity_exact": bool(np.array_equal(expected_edges, returned_input_edges)),
+        "route_edge_return_identity_exact": bool(np.array_equal(expected_edges, returned_route_edges)),
         "collective_boundaries": [boundary.__dict__ for boundary in plan.collectives],
         "input_adjoint_weight_abi": plan.input_adjoint_weight_abi.__dict__,
         "maximum_absolute_error": maximum_errors,
@@ -190,8 +282,11 @@ def main() -> None:
         raise RuntimeError(f"decomposed reverse is not deterministic: {deterministic}")
     if summary["collective_all_to_all_count"] != 2 or not summary["collective_roundtrip_exact"]:
         raise RuntimeError("JAX payload transport did not lower and round-trip exactly")
+    if not summary["input_edge_return_identity_exact"] or not summary["route_edge_return_identity_exact"]:
+        raise RuntimeError("JAX inverse transport did not preserve source-item/route-slot edge identity")
     args.output_directory.mkdir(parents=True, exist_ok=True)
     (args.output_directory / "handler-stablehlo.mlir").write_text(handler_hlo)
+    (args.output_directory / "integrated-stablehlo.mlir").write_text(integrated_hlo)
     (args.output_directory / "collective-stablehlo.mlir").write_text(collective_hlo)
     (args.output_directory / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     checksum_lines = []

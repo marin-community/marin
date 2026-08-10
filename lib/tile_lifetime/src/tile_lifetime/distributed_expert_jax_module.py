@@ -79,6 +79,15 @@ class InputAdjointWeightAbi:
 
 
 @dataclass(frozen=True)
+class RelationReturnMetadata:
+    """Rank-local padded rows mapped back to original source-route edges."""
+
+    source_item: np.ndarray
+    route_slot: np.ndarray
+    valid: np.ndarray
+
+
+@dataclass(frozen=True)
 class GeneratedDistributedExpertHandlers:
     """Instantiated generic reverse handler sources for one rank shape."""
 
@@ -253,6 +262,36 @@ def verify_distributed_expert_jax_module(plan: DistributedExpertJaxModulePlan) -
         raise ValueError("rank-local relation edge handlers do not share one fixed ABI")
     if len({rank.edge_reverse.semantic_digest for rank in plan.composition.ranks}) != 1:
         raise ValueError("fixed rank handlers do not share one generic semantic program")
+
+
+def build_relation_return_metadata(plan: DistributedExpertJaxModulePlan) -> RelationReturnMetadata:
+    """Invert each rank's runtime route-to-padded-row mapping without changing edge identity."""
+    rank_count = plan.relation.destination_rank_count
+    local_rows = plan.local_expert_count * plan.destination_capacity
+    source_item = np.full((rank_count, local_rows), -1, dtype=np.int32)
+    route_slot = np.full((rank_count, local_rows), -1, dtype=np.int32)
+    valid = np.zeros((rank_count, local_rows), dtype=np.bool_)
+    source_grid = np.broadcast_to(
+        np.arange(plan.relation.source_item_count, dtype=np.int32)[:, None],
+        (plan.relation.source_item_count, plan.relation.route_slots),
+    )
+    slot_grid = np.broadcast_to(
+        np.arange(plan.relation.route_slots, dtype=np.int32)[None, :],
+        (plan.relation.source_item_count, plan.relation.route_slots),
+    )
+    for rank in plan.composition.ranks:
+        padded_rows = rank.metadata.route_padded_rows
+        present = padded_rows >= 0
+        rows = padded_rows[present]
+        if np.unique(rows).size != rows.size:
+            raise ValueError(f"rank {rank.metadata.rank} maps multiple relation edges to one padded row")
+        source_item[rank.metadata.rank, rows] = source_grid[present]
+        route_slot[rank.metadata.rank, rows] = slot_grid[present]
+        valid[rank.metadata.rank, rows] = True
+    edge_identity = source_item[valid] * plan.relation.route_slots + route_slot[valid]
+    if not np.array_equal(np.sort(edge_identity), np.arange(plan.relation.route_count, dtype=np.int32)):
+        raise ValueError("rank-local return rows do not preserve every relation edge exactly once")
+    return RelationReturnMetadata(source_item=source_item, route_slot=route_slot, valid=valid)
 
 
 def build_natural_router_relation(
@@ -434,6 +473,198 @@ def jax_payload_all_to_all(payload: jax.Array, *, axis_name: str) -> jax.Array:
 
 def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
     """Lower all generated handlers plus JAX router VJP without compiling CUDA."""
+    transformed = _local_handler_function(plan)
+    return str(jax.jit(transformed).lower(*_local_handler_arguments(plan)).compiler_ir(dialect="stablehlo"))
+
+
+def audit_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan, stablehlo: str) -> dict[str, int]:
+    """Require one occurrence of every generic family and no opaque kernel."""
+    targets = (
+        plan.handlers.relation_edge_target,
+        plan.handlers.input_adjoint.target,
+        *(handler.target for handler in plan.handlers.weight_gradients),
+        plan.handlers.source_fold.target,
+    )
+    occurrences = {target: stablehlo.count(f"@{target}") for target in targets}
+    if any(count != 1 for count in occurrences.values()):
+        raise ValueError(f"transformed handler occurrences are not one-to-one: {occurrences}")
+    lowered = stablehlo.lower()
+    if any(token in lowered for token in ("torch", "deep_ep", "mok", "flash_attention")):
+        raise ValueError("transformed module contains an opaque semantic custom call")
+    if "stablehlo.top_k" in lowered:
+        raise ValueError("router selection must precede the transformed reverse boundary")
+    if "stablehlo.dot_general" not in lowered:
+        raise ValueError("JAX router VJP algebra is absent from the transformed module")
+    return occurrences
+
+
+def lower_shard_mapped_handler_module_stablehlo(
+    plan: DistributedExpertJaxModulePlan,
+    *,
+    mesh: jax.sharding.Mesh,
+) -> str:
+    """Lower handlers, payload return, source Fold, and router VJP together."""
+    rank_count = plan.relation.destination_rank_count
+    if mesh.shape != {"expert": rank_count}:
+        raise ValueError(f"expert mesh {mesh.shape} != fixed relation rank count {rank_count}")
+    destination_handlers = _local_destination_handler_function(plan)
+    source_finalize = _local_source_finalize_function(plan)
+    local_sources = plan.config.source_items_per_rank
+    route_slots = plan.relation.route_slots
+    local_experts = plan.local_expert_count
+    local_edges = local_sources * route_slots
+    hidden = plan.config.hidden
+
+    def local(
+        output_cotangent_send,
+        route_padded_rows,
+        route_weights,
+        saved_edge_output,
+        row_local_expert,
+        row_valid,
+        saved_pair,
+        padded_source,
+        saved_hidden,
+        down_weight,
+        gate_weight,
+        up_weight,
+        row_source_item,
+        row_route_slot,
+        source,
+        router_weight,
+        route_indices,
+    ):
+        received_cotangent = jax_payload_all_to_all(output_cotangent_send[0], axis_name="expert").reshape(
+            plan.relation.source_item_count,
+            hidden,
+        )
+        edge_input_cotangent, route_weight_cotangent, w13_cotangent, w2_cotangent = destination_handlers(
+            received_cotangent,
+            route_padded_rows[0],
+            route_weights[0],
+            saved_edge_output[0],
+            row_local_expert[0],
+            row_valid[0],
+            saved_pair[0],
+            padded_source[0],
+            saved_hidden[0],
+            down_weight[0],
+            gate_weight[0],
+            up_weight[0],
+        )
+        valid = row_valid[0]
+        source_rank = jnp.where(valid, row_source_item[0] // local_sources, rank_count)
+        source_edge = jnp.where(
+            valid,
+            (row_source_item[0] % local_sources) * route_slots + row_route_slot[0],
+            local_edges,
+        )
+        packed_input = (
+            jnp.zeros((rank_count, local_edges, hidden), dtype=jnp.bfloat16)
+            .at[
+                source_rank,
+                source_edge,
+            ]
+            .set(edge_input_cotangent, mode="drop")
+        )
+        received_input = jax_payload_all_to_all(packed_input, axis_name="expert")
+        packed_route = route_weight_cotangent.reshape(rank_count, local_sources, route_slots)
+        received_route = jax_payload_all_to_all(packed_route, axis_name="expert")
+        destination_rank = route_indices[0] // local_experts
+        flat_destination = destination_rank.reshape(-1)
+        returned_input_edges = received_input[flat_destination, jnp.arange(local_edges, dtype=jnp.int32)]
+        returned_route_cotangent = jnp.take_along_axis(
+            jnp.transpose(received_route, (1, 2, 0)),
+            destination_rank[..., None],
+            axis=2,
+        )[..., 0]
+        input_cotangent, router_weight_cotangent = source_finalize(
+            returned_input_edges,
+            returned_route_cotangent,
+            source[0],
+            router_weight,
+            route_indices[0],
+        )
+        return (
+            input_cotangent[None],
+            jax.lax.psum(router_weight_cotangent, "expert"),
+            w13_cotangent[None],
+            w2_cotangent[None],
+        )
+
+    in_specs = (
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec("expert", None),
+        jax.sharding.PartitionSpec("expert", None),
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None),
+        jax.sharding.PartitionSpec("expert", None),
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec(None, None),
+        jax.sharding.PartitionSpec("expert", None, None),
+    )
+    out_specs = (
+        jax.sharding.PartitionSpec("expert", None, None),
+        jax.sharding.PartitionSpec(None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
+    )
+    transformed = jax.shard_map(
+        local,
+        mesh=mesh,
+        in_specs=in_specs,
+        out_specs=out_specs,
+        check_vma=False,
+    )
+    return str(jax.jit(transformed).lower(*_shard_mapped_handler_arguments(plan)).compiler_ir(dialect="stablehlo"))
+
+
+def audit_shard_mapped_handler_module_stablehlo(
+    plan: DistributedExpertJaxModulePlan,
+    stablehlo: str,
+) -> dict[str, object]:
+    """Audit the single handler/collective graph before accelerator use."""
+    handlers = audit_handler_module_stablehlo(plan, stablehlo)
+    all_to_all_count = stablehlo.count("stablehlo.all_to_all")
+    all_reduce_count = stablehlo.count("stablehlo.all_reduce")
+    if all_to_all_count != 3:
+        raise ValueError(f"integrated graph has {all_to_all_count} all-to-all operations, expected 3")
+    if all_reduce_count != 1:
+        raise ValueError(f"integrated graph has {all_reduce_count} all-reduce operations, expected 1")
+    return {
+        "handlers": handlers,
+        "all_to_all_count": all_to_all_count,
+        "all_reduce_count": all_reduce_count,
+    }
+
+
+def _local_handler_function(plan: DistributedExpertJaxModulePlan):
+    destination_handlers = _local_destination_handler_function(plan)
+    source_finalize = _local_source_finalize_function(plan)
+
+    def transformed(*arguments):
+        destination = destination_handlers(*arguments[:12])
+        input_cotangent, router_weight_cotangent = source_finalize(*arguments[12:])
+        return (
+            input_cotangent,
+            router_weight_cotangent,
+            destination[0],
+            destination[2],
+            destination[3],
+        )
+
+    return transformed
+
+
+def _local_destination_handler_function(plan: DistributedExpertJaxModulePlan):
     rank = plan.composition.ranks[0]
     handlers = plan.handlers
     local_rows = rank.edge_reverse_plan.padded_rows
@@ -441,10 +672,8 @@ def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
     capacity = plan.destination_capacity
     hidden = plan.config.hidden
     intermediate = plan.config.intermediate
-    sources = plan.config.source_items_per_rank
-    route_slots = plan.relation.route_slots
 
-    def transformed(
+    def destination_handlers(
         received_cotangent,
         route_padded_rows,
         route_weights,
@@ -457,13 +686,8 @@ def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
         down_weight,
         gate_weight,
         up_weight,
-        returned_input_edges,
-        returned_route_cotangent,
-        source,
-        router_weight,
-        route_indices,
     ):
-        padded_cotangent, _ = call_cuda_relation_edge_reverse_ffi(
+        padded_cotangent, route_weight_cotangent = call_cuda_relation_edge_reverse_ffi(
             rank.edge_reverse,
             rank.edge_reverse_plan,
             received_cotangent,
@@ -512,6 +736,24 @@ def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
             saved_hidden,
             padded_cotangent.reshape(local_experts, capacity, hidden),
         )
+        return edge_input_cotangent, route_weight_cotangent, w13_cotangent, w2_cotangent
+
+    return destination_handlers
+
+
+def _local_source_finalize_function(plan: DistributedExpertJaxModulePlan):
+    handlers = plan.handlers
+    sources = plan.config.source_items_per_rank
+    hidden = plan.config.hidden
+    route_slots = plan.relation.route_slots
+
+    def source_finalize(
+        returned_input_edges,
+        returned_route_cotangent,
+        source,
+        router_weight,
+        route_indices,
+    ):
         source_indices = jnp.repeat(jnp.arange(sources, dtype=jnp.int32), route_slots)[:, None]
         input_cotangent = call_cuda_source_indexed_fold_ffi(
             handlers.source_fold,
@@ -526,16 +768,22 @@ def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
             route_indices,
             returned_route_cotangent,
         )
-        return (
-            input_cotangent + router_input_cotangent.astype(jnp.bfloat16),
-            router_weight_cotangent,
-            edge_input_cotangent,
-            w13_cotangent,
-            w2_cotangent,
-        )
+        return input_cotangent + router_input_cotangent.astype(jnp.bfloat16), router_weight_cotangent
 
+    return source_finalize
+
+
+def _local_handler_arguments(plan: DistributedExpertJaxModulePlan) -> tuple[jax.Array, ...]:
+    rank = plan.composition.ranks[0]
+    local_rows = rank.edge_reverse_plan.padded_rows
+    local_experts = plan.local_expert_count
+    capacity = plan.destination_capacity
+    hidden = plan.config.hidden
+    intermediate = plan.config.intermediate
+    sources = plan.config.source_items_per_rank
+    route_slots = plan.relation.route_slots
     received_rows = rank.edge_reverse_plan.received_rows
-    arguments = (
+    return (
         jnp.zeros((received_rows, hidden), dtype=jnp.bfloat16),
         jnp.zeros((received_rows, route_slots), dtype=jnp.int32),
         jnp.zeros((received_rows, route_slots), dtype=jnp.float32),
@@ -554,28 +802,41 @@ def lower_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan) -> str:
         jnp.zeros((hidden, plan.relation.destination_count), dtype=jnp.bfloat16),
         jnp.zeros((sources, route_slots), dtype=jnp.int32),
     )
-    return str(jax.jit(transformed).lower(*arguments).compiler_ir(dialect="stablehlo"))
 
 
-def audit_handler_module_stablehlo(plan: DistributedExpertJaxModulePlan, stablehlo: str) -> dict[str, int]:
-    """Require one occurrence of every generic family and no opaque kernel."""
-    targets = (
-        plan.handlers.relation_edge_target,
-        plan.handlers.input_adjoint.target,
-        *(handler.target for handler in plan.handlers.weight_gradients),
-        plan.handlers.source_fold.target,
+def _shard_mapped_handler_arguments(plan: DistributedExpertJaxModulePlan) -> tuple[jax.Array, ...]:
+    rank_count = plan.relation.destination_rank_count
+    local_rows = plan.composition.ranks[0].edge_reverse_plan.padded_rows
+    local_experts = plan.local_expert_count
+    capacity = plan.destination_capacity
+    hidden = plan.config.hidden
+    intermediate = plan.config.intermediate
+    sources = plan.config.source_items_per_rank
+    route_slots = plan.relation.route_slots
+    return_metadata = build_relation_return_metadata(plan)
+    route_indices = plan.relation.destination_item.reshape(rank_count, sources, route_slots)
+    return (
+        jnp.zeros((rank_count, rank_count, sources, hidden), dtype=jnp.bfloat16),
+        jnp.asarray(np.stack(tuple(rank.metadata.route_padded_rows for rank in plan.composition.ranks))),
+        jnp.asarray(np.stack(tuple(rank.metadata.route_weights for rank in plan.composition.ranks))),
+        jnp.zeros((rank_count, local_rows, hidden), dtype=jnp.bfloat16),
+        jnp.broadcast_to(
+            jnp.arange(local_rows, dtype=jnp.int32)[None, :] // capacity,
+            (rank_count, local_rows),
+        ),
+        jnp.asarray(return_metadata.valid),
+        jnp.zeros((rank_count, local_rows, 2 * intermediate), dtype=jnp.bfloat16),
+        jnp.zeros((rank_count, local_experts, capacity, hidden), dtype=jnp.bfloat16),
+        jnp.zeros((rank_count, local_experts, capacity, intermediate), dtype=jnp.bfloat16),
+        jnp.zeros((rank_count, local_experts, intermediate, hidden), dtype=jnp.bfloat16),
+        jnp.zeros((rank_count, local_experts, hidden, intermediate), dtype=jnp.bfloat16),
+        jnp.zeros((rank_count, local_experts, hidden, intermediate), dtype=jnp.bfloat16),
+        jnp.asarray(return_metadata.source_item),
+        jnp.asarray(return_metadata.route_slot),
+        jnp.zeros((rank_count, sources, hidden), dtype=jnp.bfloat16),
+        jnp.zeros((hidden, plan.relation.destination_count), dtype=jnp.bfloat16),
+        jnp.asarray(route_indices),
     )
-    occurrences = {target: stablehlo.count(f"@{target}") for target in targets}
-    if any(count != 1 for count in occurrences.values()):
-        raise ValueError(f"transformed handler occurrences are not one-to-one: {occurrences}")
-    lowered = stablehlo.lower()
-    if any(token in lowered for token in ("torch", "deep_ep", "mok", "flash_attention")):
-        raise ValueError("transformed module contains an opaque semantic custom call")
-    if "stablehlo.top_k" in lowered:
-        raise ValueError("router selection must precede the transformed reverse boundary")
-    if "stablehlo.dot_general" not in lowered:
-        raise ValueError("JAX router VJP algebra is absent from the transformed module")
-    return occurrences
 
 
 def _input_adjoint_operands(

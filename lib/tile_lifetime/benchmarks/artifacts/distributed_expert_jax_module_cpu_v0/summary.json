@@ -78,6 +78,19 @@
     ],
     "transformation": "transpose each forward Contract weight, concatenate gate/up, then reshape"
   },
+  "input_edge_return_identity_exact": true,
+  "integrated_custom_call_count": 5,
+  "integrated_graph": {
+    "all_reduce_count": 1,
+    "all_to_all_count": 3,
+    "handlers": {
+      "shuttle.distributed_expert_cpu.edge.rank0.edge_reverse": 1,
+      "shuttle.distributed_expert_cpu.input_adjoint": 1,
+      "shuttle.distributed_expert_cpu.source_fold": 1,
+      "shuttle.distributed_expert_cpu.weight_gradient.w13": 1,
+      "shuttle.distributed_expert_cpu.weight_gradient.w2": 1
+    }
+  },
   "kind": "fixed_capacity_distributed_expert_jax_module_cpu",
   "maximum_absolute_error": {
     "down_weight_cotangent": 0.000622674822807312,
@@ -105,6 +118,7 @@
     "route_slots": 2,
     "sources": 8
   },
+  "route_edge_return_identity_exact": true,
   "router_vjp_dot_count": 3,
   "runtime_dependencies": [
     "JAX/XLA typed FFI",
