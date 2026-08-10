@@ -25,6 +25,12 @@ from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0)
+_COUNTER_PREFIX = "dedup/fuzzy/verification"
+# The verifier anchors each cluster on its longest document. A test that
+# exercises the local-representative path must therefore keep the canonical
+# longest and unrelated to the members, so that no member matches the anchor
+# and the local path is the only way to reach one.
+LONG_UNRELATED_CANONICAL = " ".join(f"c{index}" for index in range(400))
 TEST_LOCAL_PARAMS = LocalRepresentativeParams(
     maximum_comparisons_per_document=4,
     maximum_representatives_per_cluster=8,
@@ -205,6 +211,57 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.sources[source_key].source_tag == "source_000"
 
 
+def test_verifier_removes_a_member_that_contains_the_canonical(tmp_path, monkeypatch):
+    """A short canonical must not hide the duplicate that contains it.
+
+    Connected components names each cluster after its minimum content ID, which
+    says nothing about length. Anchoring on that canonical made the whole
+    cluster unremovable whenever it was the shorter document: the canonical is
+    never its own removal candidate, and every longer member failed the length
+    test before containment was ever computed.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    canonical_text = "alpha beta gamma delta epsilon zeta"
+    longer_text = f"{canonical_text} eta theta iota kappa lambda mu nu xi omicron"
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "doc-a", "text": canonical_text},
+                {"id": "doc-b", "text": longer_text},
+            ]
+        },
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "doc-a", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
+                    {"id": "doc-b", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                ]
+            }
+        },
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    rows = _output_rows(verified, source_key)
+    assert [row["id"] for row in rows] == ["doc-a"]
+    assert rows[0]["dup_representative_id"] == "doc-b"
+    assert rows[0]["dup_member_containment"] == 1.0
+    assert verified.counters[f"{_COUNTER_PREFIX}/representative_longer_than_first"] == 1
+    assert verified.counters[f"{_COUNTER_PREFIX}/representative_not_canonical"] == 1
+
+
 def test_representative_selection_is_stable_across_input_order(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
@@ -316,7 +373,7 @@ def test_verifier_recovers_duplicate_through_local_representative(tmp_path, monk
             "part-00000.parquet": [
                 {"id": "a-local", "text": local_text},
                 {"id": "b-duplicate", "text": duplicate_text},
-                {"id": "canonical", "text": "one two three four five six seven eight nine ten eleven twelve"},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
             ]
         },
     )
@@ -375,7 +432,7 @@ def test_local_verifier_accepts_equal_token_sequences_with_different_whitespace(
             "part-00000.parquet": [
                 {"id": "a-local", "text": representative_text},
                 {"id": "b-member", "text": member_text},
-                {"id": "canonical", "text": "one two three four five six seven"},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
             ]
         },
     )
@@ -414,7 +471,13 @@ def test_local_verifier_accepts_equal_token_sequences_with_different_whitespace(
     assert row["dup_local_char_jaccard"] is None
 
 
-def test_local_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
+def test_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
+    """Two documents over a tiny vocabulary contain each other by exhaustion.
+
+    20,000 and 40,000 random digits share every distinct 3-gram, so containment
+    and Jaccard both reach 1.0 while the texts share no 13-character run. The
+    character test has to decide, and it must decide against them.
+    """
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     def digit_text(seed: int, size: int) -> str:
@@ -430,7 +493,7 @@ def test_local_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
             "part-00000.parquet": [
                 {"id": "a-local", "text": representative_text},
                 {"id": "b-member", "text": member_text},
-                {"id": "canonical", "text": "one two three four five six seven"},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
             ]
         },
     )
@@ -472,7 +535,7 @@ def test_local_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
     )
 
     assert _output_rows(verified, source_key) == []
-    assert verified.counters["dedup/fuzzy/verification/comparison/local_char_jaccard_below_threshold"] == 1
+    assert verified.counters["dedup/fuzzy/verification/comparison/saturated_char_jaccard_below_threshold"] == 1
 
 
 def test_local_representative_selection_is_stable_across_input_order(tmp_path, monkeypatch):
@@ -482,7 +545,7 @@ def test_local_representative_selection_is_stable_across_input_order(tmp_path, m
     source_a_key, source_a = _write_source(
         root=tmp_path,
         name="source-a",
-        shards={"part-00000.parquet": [{"id": "canonical", "text": "one two three four five six seven"}]},
+        shards={"part-00000.parquet": [{"id": "canonical", "text": LONG_UNRELATED_CANONICAL}]},
     )
     source_b_key, source_b = _write_source(
         root=tmp_path,
@@ -564,7 +627,7 @@ def test_verifier_applies_the_stricter_token_jaccard_gate_to_local_matches(tmp_p
             "part-00000.parquet": [
                 {"id": "a-local", "text": local_text},
                 {"id": "b-member", "text": member_text},
-                {"id": "canonical", "text": "one two three four five six seven"},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
             ]
         },
     )
@@ -615,7 +678,7 @@ def test_verifier_ranks_local_nominees_and_bounds_comparisons(tmp_path, monkeypa
             "part-00000.parquet": [
                 {"id": "a-first", "text": "red orange yellow green blue indigo violet black white gray"},
                 {"id": "b-best", "text": b_text},
-                {"id": "canonical", "text": "one two three four five six seven eight nine ten eleven twelve"},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
                 {"id": "z-target", "text": target_text},
             ]
         },
@@ -688,10 +751,10 @@ def test_verifier_bounds_representative_count_and_text(tmp_path, monkeypatch):
     rows = [
         {"id": "a-count", "text": "red orange yellow green blue indigo violet"},
         {"id": "b-count", "text": long_text},
-        {"id": "canonical-count", "text": "one two three four five six seven eight nine ten"},
+        {"id": "canonical-count", "text": LONG_UNRELATED_CANONICAL},
         {"id": "z-count", "text": short_duplicate},
         {"id": "a-long", "text": long_text},
-        {"id": "canonical-long", "text": "north south east west up down left right"},
+        {"id": "canonical-long", "text": LONG_UNRELATED_CANONICAL},
         {"id": "z-long", "text": short_duplicate},
     ]
     source_key, source = _write_source(
@@ -756,7 +819,7 @@ def test_repeated_noncanonical_ids_stay_available_as_local_representatives(tmp_p
     source_a_key, source_a = _write_source(
         root=tmp_path,
         name="source-a",
-        shards={"part-00000.parquet": [{"id": "canonical", "text": "one two three four five six seven"}]},
+        shards={"part-00000.parquet": [{"id": "canonical", "text": LONG_UNRELATED_CANONICAL}]},
     )
     source_b_key, source_b = _write_source(
         root=tmp_path,
@@ -968,5 +1031,51 @@ def test_verifier_falls_back_when_a_cluster_lost_its_canonical(tmp_path, monkeyp
     assert [row["id"] for row in rows] == ["bbb"]
     assert rows[0]["dup_doc"] is True
     assert rows[0]["dup_representative_id"] == "aaa"
-    assert rows[0]["dup_representative_kind"] == "cluster_fallback"
-    assert verified.counters["dedup/fuzzy/verification/clusters_without_canonical"] == 1
+    assert rows[0]["dup_representative_kind"] == "cluster_longest"
+    assert verified.counters["dedup/fuzzy/verification/representative_not_canonical"] == 1
+
+
+def test_verifier_accepts_repeated_source_ids(tmp_path, monkeypatch):
+    """Sources that normalize with DedupMode.NONE keep byte-identical rows.
+
+    Their IDs come from an upstream content hash, so a repeat means the same
+    text twice and the join can bind either row.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "aaa", "text": "alpha beta gamma delta"},
+                {"id": "aaa", "text": "alpha beta gamma delta"},
+                {"id": "bbb", "text": "alpha beta gamma"},
+            ]
+        },
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "aaa", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
+                    {"id": "bbb", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                ]
+            }
+        },
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    rows = _output_rows(verified, source_key)
+    assert [row["id"] for row in rows] == ["bbb"]
+    assert rows[0]["dup_doc"] is True
+    assert rows[0]["dup_representative_id"] == "aaa"
+    assert verified.counters["dedup/fuzzy/verification/repeated_source_ids"] >= 1

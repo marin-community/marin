@@ -6,9 +6,10 @@
 import logging
 import os
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from itertools import batched, chain, groupby
 from typing import Any
 
@@ -54,13 +55,18 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_JACCARD_REJECTION = "local_token_jaccard_below_threshold"
 _LOCAL_CHAR_JACCARD_REJECTION = "local_char_jaccard_below_threshold"
+# Bounds on the head scan that picks each cluster anchor. Cluster size is
+# heavily skewed - the p99 cluster holds 13 members - so a short head covers
+# effectively every cluster while a pathological one stays bounded.
+ANCHOR_SCAN_RECORDS = 64
+ANCHOR_SCAN_CHARS = 2_000_000
 
 
 class RepresentativeKind(StrEnum):
     """The retained document used for a direct verification."""
 
     CLUSTER_CANONICAL = "cluster_canonical"
-    CLUSTER_FALLBACK = "cluster_fallback"
+    CLUSTER_LONGEST = "cluster_longest"
     LOCAL_REPRESENTATIVE = "local_representative"
 
 
@@ -178,8 +184,15 @@ _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
 )
 
 
-def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
-    """Read selected Parquet columns and validate sorted, unique IDs."""
+def _rows(path: str, columns: list[str], *, repeated_ids: bool = False) -> Iterator[dict[str, Any]]:
+    """Read selected Parquet columns and validate ascending IDs.
+
+    ``repeated_ids`` accepts a repeated ID and yields only its first row. A
+    source that normalizes with ``DedupMode.NONE`` keeps every record carrying
+    an upstream content hash, so equal IDs there mean byte-identical text and
+    either row answers the join. Descending IDs stay an error: the join walks
+    both sides forward once and cannot recover from them.
+    """
     with StoragePath(path).open("rb") as stream:
         parquet = pq.ParquetFile(stream)
         if parquet.metadata.num_rows == 0:
@@ -192,8 +205,13 @@ def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
         for batch in parquet.iter_batches(columns=columns):
             for row in batch.to_pylist():
                 row_id = row["id"]
-                if previous_id is not None and row_id <= previous_id:
-                    raise ValueError(f"{path} IDs are not sorted and unique at {row_id!r}")
+                if previous_id is not None and row_id < previous_id:
+                    raise ValueError(f"{path} IDs are not sorted at {row_id!r}")
+                if previous_id is not None and row_id == previous_id:
+                    if not repeated_ids:
+                        raise ValueError(f"{path} IDs are not unique at {row_id!r}")
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
+                    continue
                 previous_id = row_id
                 yield row
 
@@ -209,7 +227,7 @@ def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tupl
         if candidate is None:
             continue
 
-        normalized = iter(_rows(shard.normalized_path, ["id", "text"]))
+        normalized = iter(_rows(shard.normalized_path, ["id", "text"], repeated_ids=True))
         source = next(normalized, None)
         while candidate is not None:
             while source is not None and source["id"] < candidate["id"]:
@@ -238,7 +256,7 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_shards_empty", 1)
             continue
 
-        minhash_rows = iter(_rows(shard.minhash_path, ["id", "buckets"]))
+        minhash_rows = iter(_rows(shard.minhash_path, ["id", "buckets"], repeated_ids=True))
         minhash = next(minhash_rows, None)
         while candidate is not None:
             while minhash is not None and minhash["id"] < candidate["id"]:
@@ -263,9 +281,14 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             minhash = next(minhash_rows, None)
 
 
-def _document_partition(key: tuple[int, str]) -> int:
-    """Route a candidate document to its existing co-partitioned file index."""
-    return key[0]
+def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> int:
+    """Route a candidate document to its shard's position in this layout.
+
+    The store requires ``hash_key(key) % partitions`` to name the source
+    partition holding the key. File indices are global to the corpus, so a
+    layout covering a subset of shards must route by position instead.
+    """
+    return positions[key[0]]
 
 
 def _attach_document_text(
@@ -288,15 +311,15 @@ def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
 
 
 def _cluster_sort_key(record: dict[str, Any]) -> bytes:
-    """Put the canonical first, then group equal content IDs deterministically."""
-    canonical_rank = 0 if record["kind"] == "sentinel" or record["is_cluster_canonical"] else 1
+    """Order a cluster by content ID so that equal IDs group together.
+
+    The canonical no longer sorts first. The reducer picks its representative by
+    length instead, and it removes that record from the stream, which preserves
+    ascending ID order only when the order does not depend on which record was
+    removed.
+    """
     content_id = record.get("id", "").encode()
-    return (
-        canonical_rank.to_bytes()
-        + len(content_id).to_bytes(8, byteorder="big")
-        + content_id
-        + record["file_idx"].to_bytes(8, byteorder="big")
-    )
+    return len(content_id).to_bytes(8, byteorder="big") + content_id + record["file_idx"].to_bytes(8, byteorder="big")
 
 
 def _score_bin(score: float) -> str:
@@ -438,6 +461,39 @@ def _local_verification_gate(
     )
 
 
+def _choose_longest_representative(
+    records_with_text: Iterator[dict[str, Any]],
+) -> tuple[dict[str, Any], Iterator[dict[str, Any]]]:
+    """Return the longest document of a bounded head, and the rest in ID order.
+
+    The accept rule is directional: a member is removed only when it is no
+    longer than the representative. Anchoring on the connected-components
+    canonical therefore throws away every removal in a cluster whose canonical
+    is not its longest document, and that canonical is the component ID
+    minimum, which carries no relation to length.
+
+    Only the head is buffered, so memory stays bounded on a huge cluster. The
+    bounds are deliberately independent of the local-representative budgets:
+    how far to scan for the longest document is a question about memory, not
+    about how many representatives a cluster may retain.
+
+    Removing one record keeps the remainder in ascending ID order, which the
+    caller relies on to group equal IDs.
+    """
+    head: list[dict[str, Any]] = []
+    buffered_chars = 0
+    for record in records_with_text:
+        head.append(record)
+        buffered_chars += len(record["text"])
+        if len(head) >= ANCHOR_SCAN_RECORDS or buffered_chars >= ANCHOR_SCAN_CHARS:
+            break
+    longest = max(range(len(head)), key=lambda index: (len(head[index]["text"]), head[index]["id"]))
+    if longest > 0:
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_longer_than_first", 1)
+    representative = head.pop(longest)
+    return representative, chain(head, records_with_text)
+
+
 @dataclass(frozen=True)
 class _SplitRecordGroup:
     first: dict[str, Any]
@@ -469,28 +525,28 @@ def _make_cluster_verifier(
             document_store,
             lookup_batch_size,
         )
-        representative = next(records_with_text)
-        # A node is canonical when its own content hash equals the cluster
-        # label, so a cluster loses its canonical once the node owning that
-        # label joins a lower-labelled cluster. The remaining members are still
-        # candidates for one another, thus the first member in the deterministic
-        # sort order stands in and every removal is still verified against
-        # retained text.
+        representative, records_with_text = _choose_longest_representative(records_with_text)
+        # The cluster canonical is now provenance only. It still names the
+        # cluster, but it no longer decides what every member is compared
+        # against, because the component ID minimum is unrelated to length.
         representative_kind = RepresentativeKind.CLUSTER_CANONICAL
         if not representative["is_cluster_canonical"]:
-            representative_kind = RepresentativeKind.CLUSTER_FALLBACK
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters_without_canonical", 1)
-        canonical = _RetainedRepresentative(
+            representative_kind = RepresentativeKind.CLUSTER_LONGEST
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_not_canonical", 1)
+        primary = _RetainedRepresentative(
             id=representative["id"],
             source_key=representative["source_key"],
             prepared=prepare_verification_text(representative["text"], verification_params),
             buckets=frozenset(representative["buckets"]),
             kind=representative_kind,
         )
-        retained = [canonical]
+        retained = [primary]
         bucket_representatives: dict[str, list[int]] = defaultdict(list)
         local_representative_chars = 0
         cluster_size = 1
+        # The representative is no longer guaranteed to be the canonical, so the
+        # one-canonical-per-cluster invariant is counted across the cluster.
+        canonicals_seen = int(representative["is_cluster_canonical"])
         accepted = 0
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
 
@@ -524,8 +580,8 @@ def _make_cluster_verifier(
         for member_id, same_id_records in groupby(records_with_text, key=lambda record: record["id"]):
             record_group = _split_record_group(same_id_records)
             member = record_group.first
-            canonical_id_group = member_id == canonical.id
-            if canonical_id_group:
+            representative_id_group = member_id == primary.id
+            if representative_id_group:
                 exact_records = chain((member,), record_group.remaining)
                 expected_text = representative["text"]
             else:
@@ -534,16 +590,16 @@ def _make_cluster_verifier(
 
             for exact_record in exact_records:
                 cluster_size += 1
-                if exact_record["is_cluster_canonical"]:
-                    raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+                canonicals_seen += exact_record["is_cluster_canonical"]
                 if exact_record["text"] != expected_text:
                     raise ValueError(f"Cluster {group_key[1]!r} has different text for content ID {member_id!r}")
                 _record_document_decision(exact_record, "delegated_global_exact")
-            if canonical_id_group:
+            if representative_id_group:
                 continue
 
             cluster_size += 1
-            if member["is_cluster_canonical"]:
+            canonicals_seen += member["is_cluster_canonical"]
+            if canonicals_seen > 1:
                 raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
 
             prepared_member = prepare_verification_text(member["text"], verification_params)
@@ -553,12 +609,12 @@ def _make_cluster_verifier(
             matched_result: VerificationResult | None = None
             matched_local_token_sequence_equal: bool | None = None
             matched_local_char_jaccard: float | None = None
-            shared_buckets = len(member_buckets & canonical.buckets)
-            result = verify_prepared_candidate(prepared_member, canonical.prepared, verification_params)
+            shared_buckets = len(member_buckets & primary.buckets)
+            result = verify_prepared_candidate(prepared_member, primary.prepared, verification_params)
             comparison_decision = result.rejection.value if result.rejection is not None else "accepted"
-            _record_comparison(result, canonical.kind, comparison_decision)
+            _record_comparison(result, primary.kind, comparison_decision)
             if result.accepted:
-                matched_representative = canonical
+                matched_representative = primary
                 matched_result = result
             else:
                 shared_counts: dict[int, int] = defaultdict(int)
@@ -659,8 +715,15 @@ def _verification_shards(
     minhash_sources: dict[str, MinHashAttrData],
     candidates: FuzzyDupsAttrData,
     output_path: str,
+    shard_basenames: frozenset[str] | None = None,
 ) -> _VerificationLayout:
-    """Build and validate the co-partitioned verification layout."""
+    """Build and validate the co-partitioned verification layout.
+
+    ``shard_basenames`` keeps only the named shard triples. The trees are
+    co-partitioned, so a triple is self-contained and dropping one loses no
+    row. Cluster membership is not co-partitioned, though, thus the caller
+    must supply a set that holds every member of every cluster it verifies.
+    """
     normalized_by_key: dict[str, NormalizedData] = {}
     normalized_entries: list[tuple[str, str, NormalizedData]] = []
     for source_name, source in normalized_sources.items():
@@ -731,6 +794,10 @@ def _verification_shards(
         )
         for entry in entries
     ]
+    if shard_basenames is not None:
+        shards = [shard for shard in shards if shard.normalized_path.rsplit("/", 1)[-1] in shard_basenames]
+        if not shards:
+            raise ValueError("shard_basenames selected no shard of the verification layout")
     source_tags = {entry.source_key: entry.source_tag for entry in entries}
     return _VerificationLayout(shards=shards, attr_dirs=attr_dirs, source_tags=source_tags)
 
@@ -749,8 +816,14 @@ def verify_fuzzy_dups(
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    shard_basenames: frozenset[str] | None = None,
 ) -> VerifiedFuzzyDupsAttrData:
-    """Verify existing candidate clusters and write sparse duplicate markers."""
+    """Verify existing candidate clusters and write sparse duplicate markers.
+
+    ``shard_basenames`` verifies a prepared subset of the co-partitioned
+    shards. Every cluster it covers must be complete inside that subset, since
+    a cluster missing members verifies against the wrong representative.
+    """
     if not normalized_sources:
         raise ValueError("verify_fuzzy_dups requires at least one normalized source")
     layout = _verification_shards(
@@ -758,6 +831,7 @@ def verify_fuzzy_dups(
         minhash_sources=minhash_sources,
         candidates=candidates,
         output_path=output_path,
+        shard_basenames=shard_basenames,
     )
     shards = layout.shards
     if not shards:
@@ -781,13 +855,14 @@ def verify_fuzzy_dups(
     # own an entered pool before the table loads.
     ctx = ZephyrContext(**ctx_kwargs).start()
     shard_groups = [[shard] for shard in shards]
+    document_partitions = {shard.file_idx: position for position, shard in enumerate(shards)}
 
     try:
         ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
         document_store = ctx.load_memory_store(
             Dataset.from_list(shard_groups).flat_map(_candidate_documents),
             name="fuzzy-verification-documents",
-            hash_key=_document_partition,
+            hash_key=partial(_document_partition, document_partitions),
             recovery_timeout=store_config.recovery_timeout,
             ready_timeout=store_config.ready_timeout,
         )
