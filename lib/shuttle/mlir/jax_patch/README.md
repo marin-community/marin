@@ -68,7 +68,9 @@ Before building, run the pure fixture-contract regression suite explicitly:
 
 ```bash
 PYTHONPATH=lib/shuttle/mlir/jax_patch \
-  uv run pytest -q lib/shuttle/mlir/jax_patch/test_acceptance_contract.py
+  uv run pytest -q \
+    lib/shuttle/mlir/jax_patch/test_acceptance_contract.py \
+    lib/shuttle/mlir/jax_patch/test_verify_acceptance_patch.py
 PYTHONPATH=lib/shuttle/mlir/jax_patch \
   uv run python lib/shuttle/mlir/jax_patch/verify_acceptance_fixture_oracles.py
 ```
