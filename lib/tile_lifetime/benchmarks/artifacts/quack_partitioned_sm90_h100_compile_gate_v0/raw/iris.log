@@ -1,0 +1,153 @@
+I20260809 18:36:25 8418467456 iris.cluster.config Loading config from /private/tmp/shuttle-quack-partitioned-mainloop/lib/iris/config/cw-us-east-02a.yaml
+I20260809 18:36:25 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 18:36:26 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+I20260809 18:36:26 8418467456 finelog.client.log_client LogClient resolved /system/log-server -> http://127.0.0.1:10000/proxy/system.log-server (log)
+[01:33:29] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Cloning into '/tmp/quack-partitioned-sm90'...
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Note: switching to '84ef91df9bec87c7e4938517234fafb07ef844dd'.
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | You are in 'detached HEAD' state. You can look around, make experimental
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | changes and commit them, and you can discard any commits you make in this
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | state without impacting any branches by switching back to a branch.
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | If you want to create a new branch to retain commits you create, you may
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | do so (now or later) by using -c with the switch command. Example:
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |   git switch -c <new-branch-name>
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Or undo this operation with:
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |   git switch -
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Turn off this advice by setting config variable advice.detachedHead to false
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | HEAD is now at 84ef91d [Epi,TransformA] Reorganize gemm epilouge transformA files
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Using CPython 3.12.13 interpreter at: /usr/local/bin/python3.12
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Creating virtual environment at: /tmp/quack-partitioned-env
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Activate with: source /tmp/quack-partitioned-env/bin/activate
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Resolved 29 packages in 409ms
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading setuptools (1.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cuda-runtime (2.1MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading cuda-bindings (11.6MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading triton (188.0MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cusolver (191.6MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading torch (502.1MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cufft (204.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cufile (1.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-nvjitlink (39.5MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cuda-cupti (10.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-curand (56.8MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cudnn-cu13 (349.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cusparse (139.2MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-nvshmem-cu13 (57.6MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cuda-nvrtc (86.0MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cublas (403.5MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading networkx (2.0MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cusparselt-cu13 (162.3MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-nccl-cu13 (196.4MiB)
+[01:33:31] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading sympy (6.0MiB)
+[01:33:32] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cufile
+[01:33:32] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cuda-runtime
+[01:33:33] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cuda-cupti
+[01:33:33] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded cuda-bindings
+[01:33:35] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded setuptools
+[01:33:35] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-nvjitlink
+[01:33:36] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cusolver
+[01:33:36] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded networkx
+[01:33:36] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-curand
+[01:33:36] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded triton
+[01:33:37] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cufft
+[01:33:37] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-nvshmem-cu13
+[01:33:38] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cusparse
+[01:33:38] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded sympy
+[01:33:39] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cuda-nvrtc
+[01:33:39] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cudnn-cu13
+[01:33:40] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cusparselt-cu13
+[01:33:40] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-nccl-cu13
+[01:33:40] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cublas
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded torch
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Prepared 29 packages in 14.28s
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If the cache and target directories are on different filesystems, hardlinking may not be supported.
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Installed 29 packages in 596ms
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-bindings==13.0.3
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-pathfinder==1.2.2
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-toolkit==13.0.3.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + filelock==3.29.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + fsspec==2026.4.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + jinja2==3.1.6
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + markupsafe==3.0.3
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + mpmath==1.3.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + networkx==3.6.1
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cublas==13.1.1.3
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cuda-cupti==13.0.85
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cuda-nvrtc==13.0.88
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cuda-runtime==13.0.96
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cudnn-cu13==9.20.0.48
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cufft==12.0.0.61
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cufile==1.15.1.6
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-curand==10.4.0.35
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cusolver==12.0.4.66
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cusparse==12.6.3.3
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cusparselt-cu13==0.8.1
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-nccl-cu13==2.29.7
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-nvjitlink==13.2.78
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-nvshmem-cu13==3.4.5
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-nvtx==13.0.85
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + setuptools==78.1.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + sympy==1.14.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + torch==2.13.0+cu130
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + triton==3.7.1
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + typing-extensions==4.15.0
+[01:33:46] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+[01:33:47] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Resolved 13 packages in 564ms
+[01:33:47] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cutlass-dsl-libs-base (2.7MiB)
+[01:33:47] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cutlass-dsl-libs-cu12 (84.4MiB)
+[01:33:47] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Downloading nvidia-cutlass-dsl-libs-cu13 (83.9MiB)
+[01:33:47] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cutlass-dsl-libs-base
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cutlass-dsl-libs-cu13
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  Downloaded nvidia-cutlass-dsl-libs-cu12
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Prepared 5 packages in 3.17s
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Uninstalled 2 packages in 2ms
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If the cache and target directories are on different filesystems, hardlinking may not be supported.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Installed 12 packages in 91ms
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  - cuda-bindings==13.0.3
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-bindings==13.3.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-core==1.0.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  - cuda-pathfinder==1.2.2
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-pathfinder==1.6.0
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + cuda-python==13.3.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + numpy==2.5.2
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cuda-nvdisasm==13.3.73
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cutlass-dsl==4.6.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cutlass-dsl-libs-base==4.6.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cutlass-dsl-libs-core==4.6.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cutlass-dsl-libs-cu12==4.6.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + nvidia-cutlass-dsl-libs-cu13==4.6.1
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + protobuf==6.33.6
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Using Python 3.12.13 environment at: /tmp/quack-partitioned-env
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Resolved 34 packages in 286ms
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If the cache and target directories are on different filesystems, hardlinking may not be supported.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |          If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Installed 4 packages in 21ms
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + apache-tvm-ffi==0.1.13.post2
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + einops==0.8.2
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + ml-dtypes==0.5.4
+[01:33:50] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |  + torch-c-dlpack-ext==0.1.5
+[01:33:54] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | {"cutlass_dsl": "4.6.1", "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd", "shuttle_revision": "233b253f4d", "submission_bundle": "e6d7f0c615a437b368752281d628fece6487cf3e", "torch": "2.13.0+cu130", "torch_cuda": "13.0"}
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | Traceback (most recent call last):
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |   File "/app/lib/tile_lifetime/benchmarks/h100_quack_partitioned_mainloop_preflight.py", line 23, in <module>
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |     from tile_lifetime.quack_partitioned_gemm_adapter import QUACK_PARTITION_ADAPTER_BASE_REVISION
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |   File "/app/lib/tile_lifetime/src/tile_lifetime/__init__.py", line 105, in <module>
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |     from tile_lifetime.jax_collective_transport import (
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |   File "/app/lib/tile_lifetime/src/tile_lifetime/jax_collective_transport.py", line 10, in <module>
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 |     import jax
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | ModuleNotFoundError: No module named 'jax'
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | SHUTTLE_ARTIFACT_SHA256 da5d36d024465b93bc955ecb01e91fdee82fb88b6d72771aa0d67bd3aa3e9b1b  /tmp/shuttle-partitioned-sm90.tgz
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | SHUTTLE_ARTIFACT_BASE64_BEGIN
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | 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
+[01:33:55] task=/dlwh/shuttle-quack-partitioned-sm90-h100-20260809/0 | SHUTTLE_ARTIFACT_BASE64_END

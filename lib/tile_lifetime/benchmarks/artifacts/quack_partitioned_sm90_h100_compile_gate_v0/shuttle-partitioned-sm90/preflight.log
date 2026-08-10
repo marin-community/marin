@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/app/lib/tile_lifetime/benchmarks/h100_quack_partitioned_mainloop_preflight.py", line 23, in <module>
+    from tile_lifetime.quack_partitioned_gemm_adapter import QUACK_PARTITION_ADAPTER_BASE_REVISION
+  File "/app/lib/tile_lifetime/src/tile_lifetime/__init__.py", line 105, in <module>
+    from tile_lifetime.jax_collective_transport import (
+  File "/app/lib/tile_lifetime/src/tile_lifetime/jax_collective_transport.py", line 10, in <module>
+    import jax
+ModuleNotFoundError: No module named 'jax'
