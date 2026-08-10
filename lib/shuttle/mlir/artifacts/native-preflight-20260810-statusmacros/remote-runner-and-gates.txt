@@ -1,0 +1,44 @@
+job=/dlwh/shuttle-native-mlir-preflight-20260810-statusmacros
+preflight_started_utc=2026-08-10T13:16:48Z
+preflight_finished_utc=2026-08-10T13:30:27Z
+preflight_exit_code=3
+dialect_marin_sha=8eb01889a10bcb9f906741afd67df92fe34de69d
+xla_patch_marin_sha=8eb01889a10bcb9f906741afd67df92fe34de69d
+xla_revision=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+bazel_version=7.7.0
+cpu_limit=24
+bazel_ram_limit_mb=65536
+
+Both patches passed remote apply checks, applied in 0001 then 0002 order, and
+passed reverse-apply checks in reverse order. The combined checkout passed
+`git diff --check`. All seven expected `Label("//xla...`) runtime labels were
+found, and `anchored_xla_runtime_label_count=7`.
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS
+  elapsed_seconds=21.893 actions=1
+@shuttle_mlir//:ShuttleDialect PASS
+  elapsed_seconds=51.255 actions=952
+@shuttle_mlir//:ShuttlePasses PASS
+  elapsed_seconds=7.035 actions=91
+@shuttle_mlir//:shuttle-opt PASS
+  elapsed_seconds=544.415 actions=5951
+bazel build @shuttle_mlir//:mlir_tests PASS
+  elapsed_seconds=11.191 actions=143
+bazel test @shuttle_mlir//:mlir_tests PASS
+  elapsed_seconds=2.569 executed=11 passed=11 failed=0
+
+//xla/pjrt:stablehlo_module_transform_test PASS
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS
+//xla/pjrt:pjrt_executable_test PASS
+//xla/pjrt:mlir_to_hlo_test FAIL
+  executed_internal_tests=9 passed_internal_tests=8 failed_internal_tests=1
+  failed_internal_test=MlirToHloTest.EnabledModuleTransformReceivesOptions
+  first_failure=xla/pjrt/mlir_to_hlo_test.cc:106
+  diagnostic=conversion requires module with `main` function
+  fixture_function_sym_name=negate
+  secondary_failure=xla/pjrt/mlir_to_hlo_test.cc:110 forwarded_options=false
+
+The four-target XLA gate compiled and executed all four targets in 152.121
+seconds and 3,432 actions. Three targets passed and one failed locally. The
+controller reports one task failure, zero preemptions, and task exit 3. The job
+was submitted once with max-retries 0 and was not restarted or relaunched.
