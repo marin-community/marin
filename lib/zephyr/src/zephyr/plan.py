@@ -44,7 +44,7 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.readers import InputFileSpec, compute_parquet_splits, is_parquet_source, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
@@ -521,8 +521,7 @@ def _row_ranges_per_file(
         return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
 
     def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
-        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and entry.path.endswith(".parquet"))
-        if not is_parquet:
+        if not is_parquet_source(load_op.format, entry.path):
             return [_WHOLE_FILE_ROW_RANGE]
         return list(compute_parquet_splits(entry.path, approx_shard_bytes))
 

@@ -10,7 +10,7 @@ import fnmatch
 import io
 import logging
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -114,7 +114,9 @@ class InputFileSpec:
 
     Attributes:
         path: Path to the file
-        format: File format ("parquet", "jsonl", or "auto" to detect)
+        format: File format. ``"auto"`` detects from the path extension; an
+            explicit ``"parquet"``/``"jsonl"``/``"vortex"`` overrides it, so a
+            file whose name carries no usable extension can still be read.
         columns: List of columns to read
         row_start: Optional start row for chunked reading
         row_end: Optional end row for chunked reading
@@ -438,17 +440,54 @@ SUPPORTED_EXTENSIONS = tuple(
     ]
 )
 
+_LOADERS: dict[str, Callable[[InputFileSpec], Iterator[dict]]] = {
+    "jsonl": load_jsonl,
+    "parquet": load_parquet,
+    "vortex": load_vortex,
+}
+
+
+def is_parquet_source(declared_format: str, path: str) -> bool:
+    """True when *path* is read as Parquet under *declared_format*.
+
+    The planner (row-group splitting) and the readers must agree on how a file
+    is interpreted, so both resolve it here.
+    """
+    return declared_format == "parquet" or (declared_format == "auto" and path.endswith(".parquet"))
+
+
+def _loader_for(spec: InputFileSpec) -> Callable[[InputFileSpec], Iterator[dict]]:
+    """Resolve the reader for *spec*, honoring an explicit format over the extension.
+
+    ``format="auto"`` detects from the path extension and rejects anything
+    unrecognised. An explicit format wins, so ``Dataset.load_jsonl`` and its
+    siblings can read files whose names carry no usable extension.
+    """
+    if spec.format != "auto":
+        return _LOADERS[spec.format]
+    if not spec.path.endswith(SUPPORTED_EXTENSIONS):
+        raise ValueError(f"Unsupported extension: {spec.path}.")
+    if spec.path.endswith(".parquet"):
+        return load_parquet
+    if spec.path.endswith(".vortex"):
+        return load_vortex
+    return load_jsonl
+
 
 def load_file(
     source: str | InputFileSpec,
     include_file_paths: bool = False,
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
 ) -> Iterator[dict]:
-    """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
+    """Load records as JSONL, Parquet, or Vortex, per the spec's format.
+
+    A bare path (or a spec with ``format="auto"``) is detected from its
+    extension; a spec carrying an explicit format is read that way regardless
+    of the extension.
 
     Args:
-        source: Path to file or InputFileSpec containing the path, columns,
-            row range, and filter expression.
+        source: Path to file or InputFileSpec containing the path, format,
+            columns, row range, and filter expression.
         include_file_paths: If True, inject the source file path into each record
             under file_path_column.
         file_path_column: Key to add when include_file_paths is True.
@@ -457,7 +496,7 @@ def load_file(
         Parsed records as dictionaries
 
     Raises:
-        ValueError: If file extension is not supported
+        ValueError: If the format is ``"auto"`` and the extension is not supported.
         RuntimeError: If file_path_column already exists in a record.
 
     Example:
@@ -472,18 +511,12 @@ def load_file(
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
 
-    if not spec.path.endswith(SUPPORTED_EXTENSIONS):
-        raise ValueError(f"Unsupported extension: {spec.path}.")
+    loader = _loader_for(spec)
 
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
 
-    if spec.path.endswith(".parquet"):
-        records = load_parquet(spec)
-    elif spec.path.endswith(".vortex"):
-        records = load_vortex(spec)
-    else:
-        records = load_jsonl(spec)
+    records = loader(spec)
 
     if not include_file_paths:
         yield from records
@@ -507,8 +540,8 @@ def load_file_batch(
     file type so callers get a clear error rather than silent dict conversion.
 
     Args:
-        source: Path to Parquet file or InputFileSpec containing the path, columns,
-            row range, and filter expression.
+        source: Path to Parquet file or InputFileSpec containing the path, format,
+            columns, row range, and filter expression.
         include_file_paths: If True, append a string column named file_path_column
             containing the source file path to each batch.
         file_path_column: Name of the column to add when include_file_paths is True.
@@ -517,11 +550,11 @@ def load_file_batch(
         One ``pa.RecordBatch`` per qualifying row group.
 
     Raises:
-        RuntimeError: If the file is not a Parquet file, or if file_path_column
+        RuntimeError: If the file is not read as Parquet, or if file_path_column
             already exists in the batch schema.
     """
     spec = _as_spec(source)
-    if not spec.path.endswith(".parquet"):
+    if not is_parquet_source(spec.format, spec.path):
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)

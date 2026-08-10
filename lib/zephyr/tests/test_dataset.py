@@ -576,6 +576,22 @@ def test_load_file_unsupported_extension(tmp_path, zephyr_ctx):
         zephyr_ctx.execute(ds)
 
 
+def test_load_jsonl_reads_unconventional_extension(tmp_path, zephyr_ctx):
+    """``.load_jsonl()`` carries its format through the plan to the reader.
+
+    The files here have an extension ``load_file``'s auto-detection cannot
+    interpret, so this only passes if the declared format reaches the reader.
+    """
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    records = [{"id": 1}, {"id": 2}]
+    (input_dir / "data.dat").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    ds = Dataset.from_files(f"{input_dir}/*.dat").load_jsonl()
+
+    assert zephyr_ctx.execute(ds).results == records
+
+
 def test_write_without_shard_pattern_multiple_shards(tmp_path, zephyr_ctx):
     """Test that writing multiple shards without {shard} pattern raises ValueError."""
     output_dir = tmp_path / "output"

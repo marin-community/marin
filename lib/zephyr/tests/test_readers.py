@@ -17,6 +17,8 @@ from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
     InputFileSpec,
     compute_parquet_splits,
+    load_file,
+    load_file_batch,
     load_jsonl,
     load_parquet,
     load_parquet_batch,
@@ -212,3 +214,36 @@ def test_load_jsonl_decompresses_zstd_extensions(tmp_path, ext):
 
     assert path.endswith(SUPPORTED_EXTENSIONS)
     assert list(load_jsonl(path)) == RECORDS
+
+
+def test_load_file_honors_explicit_format_over_extension(tmp_path):
+    """An explicit format reads a file whose extension carries no format hint."""
+    path = str(tmp_path / "records.data")
+    encoder = msgspec.json.Encoder()
+    with open(path, "wb") as f:
+        f.write(b"".join(encoder.encode(r) + b"\n" for r in RECORDS))
+
+    assert not path.endswith(SUPPORTED_EXTENSIONS)
+    assert list(load_file(InputFileSpec(path=path, format="jsonl"))) == RECORDS
+
+
+def test_load_file_auto_rejects_unknown_extension(tmp_path):
+    """``format="auto"`` still refuses an extension it cannot interpret."""
+    path = str(tmp_path / "records.data")
+    with open(path, "wb") as f:
+        f.write(b"{}\n")
+
+    with pytest.raises(ValueError, match="Unsupported extension"):
+        list(load_file(path))
+
+
+def test_load_file_batch_honors_explicit_parquet_format(tmp_path):
+    """The batch reader accepts a declared Parquet file under any extension."""
+    path = str(tmp_path / "data.bin")
+    _write_test_parquet(path, RECORDS, row_group_size=4)
+
+    batches = list(load_file_batch(InputFileSpec(path=path, format="parquet")))
+    assert [row for b in batches for row in b.to_pylist()] == RECORDS
+
+    with pytest.raises(RuntimeError, match="only supports Parquet files"):
+        list(load_file_batch(path))
