@@ -24,7 +24,7 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -94,13 +94,47 @@ GRUG_MODULES = (
     "levanter.grug.attention._fa4_cute_config",
     "levanter.grug.attention._fa4_cute_kernels",
 )
-FLASH_ATTN_CUTE_MODULES = (
-    "flash_attn.cute",
-    "flash_attn.cute.block_sparsity",
-    "flash_attn.cute.mask",
-    "flash_attn.cute.seqlen_info",
-    "flash_attn.cute.tile_scheduler",
-    "flash_attn.cute.utils",
+GRUG_IMPLEMENTATION_MODULES = (
+    ("public_forward", "levanter.grug.attention._fa4_cute", "gpu_fa4_cute_attention"),
+    (
+        "forward_boundary",
+        "levanter.grug.attention._fa4_cute_backend",
+        "segmented_flash_attention_forward",
+    ),
+    (
+        "forward_mainloop",
+        "levanter.grug.attention._fa4_cute_kernels",
+        "segmented_flash_attention_forward_launcher",
+    ),
+    (
+        "reverse_boundary",
+        "levanter.grug.attention._fa4_cute_backend",
+        "segmented_flash_attention_backward",
+    ),
+    (
+        "reverse_sm90_mainloop_adapter",
+        "levanter.grug.attention._fa4_cute_kernels",
+        "segmented_flash_attention_backward_sm90_launcher",
+    ),
+    (
+        "reverse_sm90_preprocess_adapter",
+        "levanter.grug.attention._fa4_cute_kernels",
+        "segmented_flash_attention_backward_sm90_preprocess_launcher",
+    ),
+    (
+        "reverse_sm90_postprocess_adapter",
+        "levanter.grug.attention._fa4_cute_kernels",
+        "flash_attention_backward_postprocess_launcher",
+    ),
+)
+FLASH_ATTN_DISTRIBUTION = "flash-attn-4"
+FLASH_ATTN_IMPORT_PACKAGE = "flash_attn"
+FLASH_ATTN_SM90_IMPLEMENTATION_MODULES = (
+    ("reverse_sm90_mainloop", "flash_attn.cute.flash_bwd_sm90", "FlashAttentionBackwardSm90"),
+    ("reverse_preprocess", "flash_attn.cute.flash_bwd_preprocess", "FlashAttentionBackwardPreprocess"),
+    ("reverse_postprocess", "flash_attn.cute.flash_bwd_postprocess", "FlashAttentionBackwardPostprocess"),
+    ("reverse_block_sparsity", "flash_attn.cute.block_sparsity", "BlockSparseTensors"),
+    ("reverse_scalar_helpers", "flash_attn.cute.utils", "ssa_to_scalar"),
 )
 
 
@@ -245,44 +279,99 @@ def _repository_audit(repository: Path, *, expected_revision: str) -> dict[str, 
     return {"root": str(root), "head": revision}
 
 
-def _grug_module_audit(repository: Path) -> tuple[dict[str, str], ...]:
+def _module_source_record(
+    *,
+    role: str,
+    module_name: str,
+    symbol: str,
+    module: object,
+    source_root: Path,
+    source_label: str,
+) -> dict[str, object]:
+    module_file = getattr(module, "__file__", None)
+    if module_file is None:
+        raise ValueError(f"{source_label} module has no source file: {module_name}")
+    path = Path(module_file).resolve()
+    if not path.is_relative_to(source_root):
+        raise ValueError(f"{source_label} module {module_name} imported outside audited source root: {path}")
+    if not hasattr(module, symbol):
+        raise ValueError(f"{source_label} module {module_name} has no required implementation symbol {symbol}")
+    source = path.read_bytes()
+    return {
+        "role": role,
+        "module": module_name,
+        "symbol": symbol,
+        "file": str(path),
+        "sha256": hashlib.sha256(source).hexdigest(),
+        "bytes": len(source),
+    }
+
+
+def _grug_module_audit(repository: Path) -> tuple[dict[str, object], ...]:
     levanter_root = (repository / "lib/levanter/src").resolve()
-    records = []
-    for module_name in GRUG_MODULES:
-        module = importlib.import_module(module_name)
-        module_file = getattr(module, "__file__", None)
-        if module_file is None:
-            raise ValueError(f"Grug module has no source file: {module_name}")
-        path = Path(module_file).resolve()
-        if not path.is_relative_to(levanter_root):
-            raise ValueError(f"Grug module {module_name} imported outside --repository: {path}")
-        records.append(
-            {"module": module_name, "file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    missing_modules = tuple(module_name for module_name in GRUG_MODULES if module_name not in sys.modules)
+    if missing_modules:
+        raise ValueError(f"Grug oracle did not load required repository modules: {missing_modules}")
+    return tuple(
+        _module_source_record(
+            role=role,
+            module_name=module_name,
+            symbol=symbol,
+            module=sys.modules[module_name],
+            source_root=levanter_root,
+            source_label="Grug",
         )
-    return tuple(records)
+        for role, module_name, symbol in GRUG_IMPLEMENTATION_MODULES
+    )
 
 
-def _installed_flash_attn_audit() -> dict[str, object]:
+def _normalized_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _installed_flash_attn_audit(
+    *,
+    loaded_modules: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     try:
-        version = importlib.metadata.version("flash-attn")
+        distribution = importlib.metadata.distribution(FLASH_ATTN_DISTRIBUTION)
     except importlib.metadata.PackageNotFoundError as error:
-        raise ValueError("installed Grug oracle has no flash-attn distribution metadata") from error
-    modules = []
-    for module_name in FLASH_ATTN_CUTE_MODULES:
-        module = importlib.import_module(module_name)
-        module_file = getattr(module, "__file__", None)
-        if module_file is None:
-            raise ValueError(f"installed flash-attn CuTe module has no source file: {module_name}")
-        path = Path(module_file).resolve()
-        modules.append(
-            {
-                "module": module_name,
-                "file": str(path),
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "bytes": path.stat().st_size,
-            }
+        raise ValueError(f"installed Grug oracle has no {FLASH_ATTN_DISTRIBUTION} distribution metadata") from error
+    resolved_name = str(distribution.metadata["Name"])
+    if _normalized_distribution_name(resolved_name) != FLASH_ATTN_DISTRIBUTION:
+        raise ValueError(
+            f"Grug oracle import package {FLASH_ATTN_IMPORT_PACKAGE!r} resolved from unexpected distribution "
+            f"{resolved_name!r}; expected {FLASH_ATTN_DISTRIBUTION!r}"
         )
-    return {"distribution": "flash-attn", "version": version, "modules": tuple(modules)}
+    import_root = Path(distribution.locate_file(FLASH_ATTN_IMPORT_PACKAGE)).resolve()
+    if not import_root.is_dir():
+        raise ValueError(
+            f"{FLASH_ATTN_DISTRIBUTION} does not provide import package {FLASH_ATTN_IMPORT_PACKAGE!r}: {import_root}"
+        )
+    modules_by_name = sys.modules if loaded_modules is None else loaded_modules
+    missing_modules = tuple(
+        module_name for _, module_name, _ in FLASH_ATTN_SM90_IMPLEMENTATION_MODULES if module_name not in modules_by_name
+    )
+    if missing_modules:
+        raise ValueError(f"Grug SM90 oracle did not load required {FLASH_ATTN_DISTRIBUTION} modules: {missing_modules}")
+    modules = tuple(
+        _module_source_record(
+            role=role,
+            module_name=module_name,
+            symbol=symbol,
+            module=modules_by_name[module_name],
+            source_root=import_root,
+            source_label=FLASH_ATTN_DISTRIBUTION,
+        )
+        for role, module_name, symbol in FLASH_ATTN_SM90_IMPLEMENTATION_MODULES
+    )
+    return {
+        "distribution": {"requested": FLASH_ATTN_DISTRIBUTION, "resolved": resolved_name},
+        "distribution_to_import": {FLASH_ATTN_DISTRIBUTION: FLASH_ATTN_IMPORT_PACKAGE},
+        "version": distribution.version,
+        "import_root": str(import_root),
+        "modules": modules,
+    }
 
 
 def _generated_dependency_audit(forward: Any, reverse: Any) -> dict[str, object]:
@@ -633,14 +722,10 @@ def main() -> None:
         segmented_flash_attention_forward,
     )
 
-    grug_module_audit = _grug_module_audit(args.repository)
-    pre_timing["grug_imported_modules"] = grug_module_audit
-    installed_flash_attn_audit = _installed_flash_attn_audit()
-    pre_timing["installed_flash_attn_cute"] = installed_flash_attn_audit
-    persist_pre_timing()
-
     causal_mask = AttentionMask.causal()
     kernel_config = _segmented_kernel_config(args.head_dimension)
+    if kernel_config.sm90_backward is None:
+        raise ValueError("the reviewed FA4 diagnostic requires Grug's native SM90 backward path")
 
     @jax.jit
     def grug_forward_call(q, k, v):
@@ -764,6 +849,16 @@ def main() -> None:
     generated_composed_targets = set(compiled_hlo["generated_composed"]["custom_call_targets"])
     if not {GENERATED_FORWARD_TARGET, GENERATED_REVERSE_TARGET}.issubset(generated_composed_targets):
         raise ValueError(f"generated composed boundary omits a generated target: {generated_composed_targets}")
+    try:
+        grug_module_audit = _grug_module_audit(args.repository)
+        installed_flash_attn_audit = _installed_flash_attn_audit()
+    except ValueError as error:
+        pre_timing["status"] = "failed"
+        pre_timing["failure"] = str(error)
+        persist_pre_timing()
+        raise
+    pre_timing["grug_imported_modules"] = grug_module_audit
+    pre_timing["installed_flash_attn_cute"] = installed_flash_attn_audit
     pre_timing["compiled_hlo"] = compiled_hlo
     pre_timing["status"] = "passed"
     persist_pre_timing()
