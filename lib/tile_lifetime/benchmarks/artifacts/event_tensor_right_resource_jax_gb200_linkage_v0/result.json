@@ -1,0 +1,199 @@
+{
+  "cases": {
+    "baseline": {
+      "correctness_limits": {
+        "maximum_absolute_error": 0.125,
+        "mean_absolute_error": 0.01
+      },
+      "deterministic": true,
+      "event_runtime_fingerprint": "9a221758d1e6a881db61840c68cd56cfa2b7b7f0a614a4601cb672328cfe41ea",
+      "maximum_absolute_error": 0.001985907554626465,
+      "mean_absolute_error": 0.00014988885959610343,
+      "median_ms": 0.6125440122559667,
+      "output_hash": "a111bd4be5c5e0721db0de64120ca0dd9c7766baf12d158cf3b77f2725ab5f82",
+      "repeated_output_hash": "a111bd4be5c5e0721db0de64120ca0dd9c7766baf12d158cf3b77f2725ab5f82",
+      "repeated_output_hash_count": 10,
+      "samples_ms": [
+        0.6104330532252789,
+        0.6432000081986189,
+        0.6111040711402893,
+        2.255104947835207,
+        0.6292480975389481,
+        0.6190079730004072,
+        0.6017920095473528,
+        0.6095040589570999,
+        0.601473031565547,
+        0.613983953371644
+      ],
+      "work_capacity": 14,
+      "work_count": 14
+    },
+    "relation_mutation": {
+      "correctness_limits": {
+        "maximum_absolute_error": 0.125,
+        "mean_absolute_error": 0.01
+      },
+      "deterministic": true,
+      "event_runtime_fingerprint": "5d538341ab3e7cbb5b8dbaafeee387ab3f5490e39d1c6fdaa13796e8e0b077ae",
+      "maximum_absolute_error": 0.0024746060371398926,
+      "mean_absolute_error": 0.00015078106662258506,
+      "median_ms": 0.6047200877219439,
+      "output_hash": "08829495db8715ed50f4cc33023045c23699efc0f3df77477469122dd83c831e",
+      "repeated_output_hash": "08829495db8715ed50f4cc33023045c23699efc0f3df77477469122dd83c831e",
+      "repeated_output_hash_count": 10,
+      "samples_ms": [
+        0.6028481293469667,
+        0.6193919107317924,
+        0.606592046096921,
+        0.6095678545534611,
+        0.6111999973654747,
+        0.6091529503464699,
+        0.5987840704619884,
+        0.5956799723207951,
+        0.5879371892660856,
+        0.5969281774014235
+      ],
+      "work_capacity": 14,
+      "work_count": 14
+    }
+  },
+  "claim_scope": "bounded linkage only; no overlap or performance acceptance",
+  "compiled_work_capacity": 14,
+  "device": "cuda:0",
+  "device_kind": "NVIDIA GB200",
+  "empty_right_resource": 7,
+  "empty_right_resource_edge_count": 0,
+  "event_program_fingerprint": "ec387cdc6d5d9e4b40d1b24130fbfc513567084c9b00557a611cdf7a8d539bbe",
+  "event_schedule_audit": {
+    "buffer": {
+      "capacity": 1,
+      "generation_range_inclusive": [0, 13],
+      "name": "right_resource_buffer",
+      "reuse_dependence_count": 1,
+      "storage_slot": 0,
+      "task_count": 14
+    },
+    "event_plans": [
+      {
+        "domain_axes": [["resource_task", 14]],
+        "generation_policy": "phased",
+        "generation_range_inclusive": [0, 13],
+        "initial_count": 1,
+        "initial_count_repetitions": 14,
+        "memory_scope": "cluster",
+        "name": "right_resource_ready",
+        "notify_edge_count": 14,
+        "storage_slot": 0,
+        "trigger_edge_count": 14
+      },
+      {
+        "domain_axes": [["left_item", 128], ["edge_partition", 2]],
+        "generation_policy": "per_invocation",
+        "generation": 0,
+        "initial_count": 4,
+        "initial_count_repetitions": 256,
+        "memory_scope": "device",
+        "name": "partial_state_ready",
+        "notify_edge_count": 1024,
+        "storage_slot_range_inclusive": [0, 255],
+        "trigger_edge_count": 256
+      },
+      {
+        "domain_axes": [["resource_task", 14]],
+        "generation_policy": "phased",
+        "generation_range_inclusive": [0, 13],
+        "initial_counts": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "memory_scope": "cluster",
+        "name": "right_resource_reuse_0",
+        "notify_edge_count": 13,
+        "storage_slot": 0,
+        "trigger_edge_count": 14
+      }
+    ],
+    "grouping": {
+      "edge_count": 1024,
+      "resource_edge_offsets": [0, 77, 148, 224, 291, 367, 435, 512, 579, 644, 718, 792, 867, 949, 1024],
+      "resource_items": [0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6],
+      "resource_partitions": [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+      "task_count": 14
+    },
+    "realizations": [
+      {
+        "kind": "physical",
+        "mechanism": "backend-selected staged-resource completion",
+        "plan": "right_resource_ready"
+      },
+      {
+        "kind": "erased_stream_order",
+        "mechanism": "same device stream",
+        "plan": "partial_state_ready"
+      },
+      {
+        "kind": "physical",
+        "mechanism": "backend-selected staged-resource release",
+        "plan": "right_resource_reuse_0"
+      }
+    ],
+    "task_families": [
+      {
+        "axes": [["resource_task", 14]],
+        "name": "right_resource_stage",
+        "placement": "transfer_workers"
+      },
+      {
+        "axes": [["resource_task", 14]],
+        "name": "grouped_contract_fold_body",
+        "placement": "matrix_workers"
+      },
+      {
+        "axes": [["left_item", 128], ["edge_partition", 2]],
+        "name": "partial_state_fold_finalize",
+        "placement": "reduction_workers"
+      }
+    ]
+  },
+  "external_semantic_kernels": [],
+  "generated_handlers": {
+    "baseline_fold_handler": "shuttle_partial_state_fold_finalize_handler",
+    "baseline_fold_target": "shuttle.partial_state_fold_finalize",
+    "mutated_fold_handler": "shuttle_partial_state_fold_finalize_mutated_relation_handler",
+    "mutated_fold_target": "shuttle.partial_state_fold_finalize_mutated_relation",
+    "physical_class": "RoutedStreamingFoldContractSm100"
+  },
+  "head_dimension": 128,
+  "internal_synchronization_boundary": "primitive-owned mbarrier sites",
+  "iris_job": "/dlwh/shuttle-event-right-resource-gb200-linkage-2",
+  "jax": "0.10.1",
+  "key_length": 1024,
+  "key_value_heads": 2,
+  "msa_revision": "80434d7f67877c6570ca19cac444b84bc9855dac",
+  "nvidia_smi": "NVIDIA GB200, GPU-4858a3bb-5976-f906-0d1d-91a34ba87ef4, 595.71.05, P0, 1950 MHz, 2062 MHz, 1200.00 W",
+  "partial_merge_source_sha256": {
+    "baseline": "2679b86d8e5341f08a58f3a75a2d924bb0da81d59592df77376dc273c663834d",
+    "relation_mutation": "2e1b9253746306f1db64feda19f6547005aa78ad42d8835f54fbe6c91df51ffa"
+  },
+  "physical_call_type": "PjitFunction",
+  "physical_source_sha256": "84876cfe29bf90a8c0f16d8df3f4a61eba8ced13a9bce06b6129963df5ade646",
+  "query_heads": 16,
+  "query_length": 128,
+  "selected_count": 4,
+  "shuttle_dirty": false,
+  "shuttle_revision": "ac475ef28b",
+  "status": "passed",
+  "task_duration_seconds": 34.59,
+  "toolchain_packages": {
+    "cuda-python": "13.3.1",
+    "jax": "0.10.1",
+    "jax-cuda13-pjrt": "0.10.1",
+    "jax-cuda13-plugin": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "nvidia-cuda-nvcc": "13.3.73",
+    "nvidia-cutlass-dsl": "4.5.3",
+    "quack-kernels": "0.2.10"
+  },
+  "torch_installed": false,
+  "torch_loaded": false,
+  "validation_failures": []
+}
+

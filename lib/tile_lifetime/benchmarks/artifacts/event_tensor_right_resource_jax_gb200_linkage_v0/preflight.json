@@ -1,0 +1,37 @@
+{
+  "architecture": "sm_100a",
+  "dependency_versions": {
+    "apache-tvm-ffi": "0.1.13.post2",
+    "cuda-python": "13.3.1",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "nvidia-cuda-nvcc": "13.3.73",
+    "nvidia-cutlass-dsl": "4.5.3",
+    "quack-kernels": "0.2.10"
+  },
+  "event_program_fingerprint": "196b0f299c37c22559064f1fee88a1693173aa9211b8b3af33400d7c2f8dac57",
+  "event_runtime_fingerprint": "1788d488fe7e392af94408c3a2918784e32b42c479e34ab6abf181234badc1ca",
+  "external_semantic_kernels": [],
+  "iris_job": "/dlwh/shuttle-event-right-resource-cpu-preflight-2",
+  "mutation_runtime_fingerprint": "a98f092e10480bd555d9e0b6986527f83fa594cc138b3347cefe696e457dd18e",
+  "partial_merge_handler": "shuttle_partial_state_fold_finalize_handler",
+  "partial_merge_source_sha256": "2679b86d8e5341f08a58f3a75a2d924bb0da81d59592df77376dc273c663834d",
+  "physical_call_type": "PjitFunction",
+  "physical_source_sha256": "84876cfe29bf90a8c0f16d8df3f4a61eba8ced13a9bce06b6129963df5ade646",
+  "python": "3.12.13",
+  "shuttle_revision": "ac475ef28b",
+  "static_launch_grid": {
+    "capacity_annotation": "cutlass.Constexpr[int]",
+    "compiled_work_capacity": 16,
+    "grid_expression": "num_ctas",
+    "runtime_capacity_overflow_policy": "reject before physical launch",
+    "runtime_work_count_forwarded": true,
+    "runtime_work_count_is_device_operand": true
+  },
+  "status": "linux_compile_import_preflight_passed",
+  "task_duration_seconds": 16.33,
+  "torch_installed": false,
+  "torch_loaded": false
+}
+

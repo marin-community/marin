@@ -3930,3 +3930,34 @@ author: dlwh
   final-HLO audit, and matched H100/GB200 timing of the two calls.
 - Design/status:
   `.agents/projects/tile_lifetime_compiler/streaming_attention_training_region_split.md`.
+
+### 2026-08-09 - TLTC-EVENT-009 Torch-free GB200 right-resource linkage
+
+- The corrected CPU-only dependency/source/ABI gate passed as
+  `/dlwh/shuttle-event-right-resource-cpu-preflight-2`: generated Fold typed
+  FFI compiled and registered, pinned MSA/QuACK support imported,
+  `cutlass.jax.cutlass_call` instantiated, static work capacity remained a
+  `cutlass.Constexpr[int]`, runtime `work_count` remained a device operand, and
+  Torch was neither installed nor loaded.
+- The sole bounded device attempt
+  `/dlwh/shuttle-event-right-resource-gb200-linkage-2` then passed on one
+  NVIDIA GB200. A nonmonotone RelationPlan with one empty right resource and a
+  relation permutation reused the same compiled Event Tensor program and
+  capacity. Generic right-major grouping fed the SM100 grouped Contract/Fold
+  physical class, followed on the same stream by the generated Fold finalizer.
+- Both cases matched the semantic JAX reference. Baseline maximum/mean error
+  was 0.001986/0.000150; the mutation was 0.002475/0.000151. Ten retained
+  outputs per case were bitwise deterministic. Diagnostic medians were 0.613
+  ms and 0.605 ms, but this smoke makes no overlap or performance claim.
+- The outer task/event/buffer plan is compiler-derived and contains no
+  workload-specific readiness construction or external semantic kernels.
+  Internal SM100 pipeline `mbarrier` sites remain primitive-owned. The job was
+  terminal after 34.59 seconds and the GB200 tray was released.
+- The initial setup job failed before preflight because QuACK's public wheel
+  dependencies installed Torch. That failure is separately preserved. The
+  corrected runner pins every audited low-level dependency and installs QuACK
+  with `--no-deps`, excluding its Torch-facing wrappers.
+- Evidence is under
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_right_resource_jax_gb200_linkage_v0/`
+  and
+  `lib/tile_lifetime/benchmarks/artifacts/event_tensor_right_resource_jax_gb200_dependency_blocker_v0/`.

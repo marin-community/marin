@@ -1,0 +1,6 @@
+Iris job /dlwh/shuttle-event-right-resource-gb200-linkage-2
+State: succeeded
+Tasks: 1/1 completed, 0 failures, 0 preemptions
+Task duration: 34.59 seconds
+Terminal state observed: 2026-08-10T03:59:31Z
+The entrypoint task terminated and the single-GB200 tray was released by Iris.
