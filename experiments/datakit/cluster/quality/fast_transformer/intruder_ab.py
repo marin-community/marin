@@ -92,6 +92,7 @@ def build_pool(
     per_bucket: int,
     seed: int,
     bucketing: str = "global",
+    adjacent_only: bool = False,
     n_buckets: int = N_BUCKETS,
 ) -> BucketPool:
     """A scorer's ``(group, bucket)`` bucketing over the evaluation documents.
@@ -128,7 +129,42 @@ def build_pool(
         rng.shuffle(docs)  # BucketPool's head-as-uniform-sample contract
         buckets.append(Bucket(key, docs[:per_bucket]))
     logger.info("intruder_ab: %s -> %d (group, bucket) cells from %d scored docs", name, len(buckets), len(scored["id"]))
+
+    if adjacent_only:
+        return _adjacent_pool(name, buckets)
     return BucketPool(name, buckets, stratum_of=lambda key: key.rsplit("|q", 1)[0])
+
+
+def _adjacent_pool(name: str, buckets: list[Bucket]) -> BucketPool:
+    """A pool whose every trial pairs neighbouring quality buckets.
+
+    Unconstrained, a trial draws its intruder from any other bucket in the group,
+    and how hard that is depends on how far apart the two buckets are. That favours
+    a lopsided bucketing: the deployed model holds 63.5% of each domain in one
+    bucket and its extreme buckets are tiny (10th/90th percentile cell-size ratio
+    0.009 against 0.088), so its trials often pit a large middle bucket against a
+    handful of outliers, which are conspicuous for being outliers rather than for
+    the bucket being coherent.
+
+    Confining each trial to an adjacent pair asks both bucketings the same
+    question — can the panel tell one quality level from the next — so neither
+    profits from the shape of its own distribution.
+    """
+    by_group: dict[str, dict[int, Bucket]] = {}
+    for bucket in buckets:
+        group, level = bucket.name.rsplit("|q", 1)
+        by_group.setdefault(group, {})[int(level)] = bucket
+
+    paired: list[Bucket] = []
+    for group, levels in by_group.items():
+        for level in sorted(levels):
+            if level + 1 not in levels:
+                continue
+            # One stratum per adjacent pair; a cell appears in up to two of them.
+            for member in (level, level + 1):
+                paired.append(Bucket(f"{group}|p{level}|q{member}", levels[member].docs))
+    logger.info("intruder_ab: %s -> %d adjacent-pair cells", name, len(paired))
+    return BucketPool(name, paired, stratum_of=lambda key: key.rsplit("|q", 1)[0])
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -149,6 +185,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-trials", type=int, default=400)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-workers", type=int, default=16)
+    parser.add_argument(
+        "--adjacent-only",
+        action="store_true",
+        help="confine every trial to neighbouring quality buckets, so a lopsided bucketing gains nothing",
+    )
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args(argv)
 
@@ -166,6 +207,7 @@ def main() -> None:
         "per_bucket": args.per_bucket,
         "seed": args.seed,
         "bucketing": args.bucketing,
+        "adjacent_only": args.adjacent_only,
     }
     lhs = build_pool(lhs_name, scored_root=lhs_path, **common)
     rhs = build_pool(rhs_name, scored_root=rhs_path, **common)
