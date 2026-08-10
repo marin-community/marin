@@ -34,7 +34,7 @@ from experiments.llama import llama3_tokenizer
 
 DEFAULT_MOK_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
-MOK_EP_BATCH_SIZE = 1024
+MOK_BATCH_SIZE_PER_GPU = 16
 MOK_GPUS_PER_NODE = 4
 MAX_MOK_NODES = 16
 MOK_PROCESSES_PER_TASK = 1
@@ -90,8 +90,9 @@ def build_mok_run(
     if not 1 <= num_nodes <= MAX_MOK_NODES:
         raise ValueError(f"num_nodes must be between 1 and {MAX_MOK_NODES}, got {num_nodes}")
 
-    model, optimizer = build_mok_configs(num_train_steps=num_steps, batch_size=MOK_EP_BATCH_SIZE)
     expert_axis_size = num_nodes * MOK_GPUS_PER_NODE
+    train_batch_size = MOK_BATCH_SIZE_PER_GPU * expert_axis_size
+    model, optimizer = build_mok_configs(num_train_steps=num_steps, batch_size=train_batch_size)
     model = dataclasses.replace(model, num_experts=2 * expert_axis_size)
     overrides = {
         name: value
@@ -142,7 +143,7 @@ def build_mok_run(
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
-            train_batch_size=MOK_EP_BATCH_SIZE,
+            train_batch_size=train_batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=True, start_step=5, num_steps=5),
             mp=jmp.get_policy(MOK_MIXED_PRECISION),
@@ -157,6 +158,7 @@ def build_mok_run(
                     f"xla-{implementation.value}",
                     capacity_tag,
                     size_tag,
+                    f"batch-{train_batch_size}",
                     f"nodes-{num_nodes}",
                     "gb200",
                     "MOK-JAX",

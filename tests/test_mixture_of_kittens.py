@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from collections.abc import Sequence
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -226,6 +227,20 @@ def test_grug_dispatch_adds_requested_pip_packages():
 
 def test_experiment_model_uses_ragged_all_to_all():
     assert heuristic.MOK_MODEL.moe_implementation == "ragged_all_to_all"
+
+
+@pytest.mark.parametrize(("num_nodes", "expected_batch_size"), [(1, 64), (2, 128)])
+def test_gate_keeps_the_per_gpu_batch_constant(num_nodes: int, expected_batch_size: int):
+    step = launch.build_mok_run(
+        run_id=f"batch-{num_nodes}",
+        num_steps=1,
+        implementation=train.RaggedAllToAllImplementation.PRIVATE,
+        num_nodes=num_nodes,
+        version="dev",
+    )
+
+    config = json.loads(step.fingerprint_payload())
+    assert config["trainer"]["trainer"]["train_batch_size"] == expected_batch_size
 
 
 def test_expert_bank_must_divide_requested_topology():
