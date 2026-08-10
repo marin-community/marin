@@ -36,14 +36,37 @@ LEGACY_IMAGE_JOBS = {
     "finelog-image",
     "marin-tpu-ci-images",
 }
-MANUAL_IMAGE_SET_PATTERN = re.compile(r"github\.event_name == 'workflow_dispatch'\s*&&\s*inputs\.image_set == '([^']+)'")
+WEEKLY_IMAGE_JOBS = {"iris-tags", "iris-images", "iris-manifests", "finelog-image"}
+MANUAL_ONLY_PATTERN = re.compile(
+    r"github\.event_name == 'workflow_dispatch' && inputs\.image_set == '(?P<image_set>all|h100-evidence)'"
+)
+MANUAL_OR_SCHEDULE_PATTERN = re.compile(
+    r"\(github\.event_name == 'workflow_dispatch' && inputs\.image_set == '(?P<image_set>all|h100-evidence)'\)"
+    r"\s*\|\|\s*"
+    r"\(github\.event_name == 'schedule' && github\.event\.schedule == '(?P<schedule>[^']+)'\)"
+)
 
 
-def _manual_jobs_for(workflow: dict, image_set: str) -> set[str]:
+def _job_runs(job: dict, *, event_name: str, image_set: str = "", schedule: str = "") -> bool:
+    condition = job["if"].strip()
+    manual_only = MANUAL_ONLY_PATTERN.fullmatch(condition)
+    if manual_only:
+        return event_name == "workflow_dispatch" and image_set == manual_only.group("image_set")
+
+    manual_or_schedule = MANUAL_OR_SCHEDULE_PATTERN.fullmatch(condition)
+    if manual_or_schedule:
+        manual = event_name == "workflow_dispatch" and image_set == manual_or_schedule.group("image_set")
+        scheduled = event_name == "schedule" and schedule == manual_or_schedule.group("schedule")
+        return manual or scheduled
+
+    raise AssertionError(f"job has an unsupported condition: {condition}")
+
+
+def _jobs_for(workflow: dict, *, event_name: str, image_set: str = "", schedule: str = "") -> set[str]:
     return {
         name
         for name, job in workflow["jobs"].items()
-        if image_set in MANUAL_IMAGE_SET_PATTERN.findall(job.get("if", ""))
+        if _job_runs(job, event_name=event_name, image_set=image_set, schedule=schedule)
     }
 
 
@@ -123,8 +146,10 @@ def test_broad_ops_manual_image_set_selects_legacy_or_h100_exclusively():
         }
     }
     assert set(workflow["jobs"]) == LEGACY_IMAGE_JOBS | {"h100-evidence-image"}
-    assert _manual_jobs_for(workflow, "all") == LEGACY_IMAGE_JOBS
-    assert _manual_jobs_for(workflow, "h100-evidence") == {"h100-evidence-image"}
+    assert _jobs_for(workflow, event_name="workflow_dispatch", image_set="all") == LEGACY_IMAGE_JOBS
+    assert _jobs_for(workflow, event_name="workflow_dispatch", image_set="h100-evidence") == {"h100-evidence-image"}
+    assert _jobs_for(workflow, event_name="schedule", schedule="0 2 * * 0") == WEEKLY_IMAGE_JOBS
+    assert _jobs_for(workflow, event_name="schedule", schedule="0 3 * * *") == {"marin-tpu-ci-images"}
     assert bridge == {
         "if": "github.event_name == 'workflow_dispatch' && inputs.image_set == 'h100-evidence'",
         "permissions": {"contents": "read", "packages": "write"},
