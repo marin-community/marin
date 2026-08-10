@@ -128,7 +128,7 @@ def build_mok_run(
         model = dataclasses.replace(
             model,
             mixture_of_kittens=MoKForwardConfig(macrobatch_size=MOK_FUSED_MACROBATCH_SIZE),
-            remat_mode="save_moe",
+            remat_mode="offload_moe",
         )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
