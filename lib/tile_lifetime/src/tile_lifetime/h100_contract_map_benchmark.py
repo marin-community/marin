@@ -409,6 +409,52 @@ PAIRWISE_DRIFT_REQUIRED_FIELDS = (
 )
 RAW_SAMPLE_REQUIRED_FIELDS = ("sample_index", "backend_order", "measurements_ns")
 
+LOGICAL_BOUNDARY_RECORD_SCHEMAS = (
+    (
+        "layout_adapter",
+        (
+            ("value", "canonical_string"),
+            ("input_layout", "canonical_string"),
+            ("output_layout", "canonical_string"),
+            ("materialized", "bool"),
+        ),
+    ),
+    (
+        "materialized_copy",
+        (
+            ("source", "canonical_string"),
+            ("destination", "canonical_string"),
+            ("bytes", "nonnegative_int"),
+        ),
+    ),
+    (
+        "transpose",
+        (
+            ("input", "canonical_string"),
+            ("output", "canonical_string"),
+            ("permutation", "permutation_int_list"),
+            ("materialized", "bool"),
+        ),
+    ),
+    (
+        "bitcast",
+        (
+            ("input", "canonical_string"),
+            ("output", "canonical_string"),
+            ("input_shape", "positive_int_list"),
+            ("output_shape", "positive_int_list"),
+        ),
+    ),
+    (
+        "recompute_operation",
+        (
+            ("output", "canonical_string"),
+            ("operation", "canonical_string"),
+            ("launch_count", "nonnegative_int"),
+        ),
+    ),
+)
+
 _SHA256_LENGTH = 64
 _GIT_SHA_LENGTH = 40
 
@@ -462,9 +508,104 @@ def _require_finite_nonnegative_number(value: object, context: str) -> float:
 
 
 def _require_nonnegative_integer(value: object, context: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if type(value) is not int or value < 0:
         raise ValueError(f"{context} must be a nonnegative integer")
     return value
+
+
+def _require_positive_integer_list(value: object, context: str) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{context} must be a nonempty list of positive integers")
+    if any(type(item) is not int or item <= 0 for item in value):
+        raise ValueError(f"{context} must be a nonempty list of positive integers")
+    return value
+
+
+def _require_permutation(value: object, context: str) -> None:
+    if not isinstance(value, list) or not value or any(type(item) is not int for item in value):
+        raise ValueError(f"{context} must be a nonempty integer permutation")
+    if sorted(value) != list(range(len(value))):
+        raise ValueError(f"{context} must be a nonempty integer permutation")
+
+
+def _require_exact_record(value: object, schema_name: str, context: str) -> Mapping[str, Any]:
+    record = _mapping(value, context)
+    schema = dict(next(fields for name, fields in LOGICAL_BOUNDARY_RECORD_SCHEMAS if name == schema_name))
+    if set(record) != set(schema):
+        raise ValueError(f"{context} must contain exactly the closed {schema_name} schema fields: {tuple(schema)}")
+    return record
+
+
+def _require_record_list(value: object, schema_name: str, context: str) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{context} must be a list of closed {schema_name} records")
+    return [_require_exact_record(record, schema_name, f"{context}[{index}]") for index, record in enumerate(value)]
+
+
+def _validate_logical_boundary(logical_boundary: Mapping[str, Any]) -> None:
+    required_fields = next(
+        section.required_fields for section in RESULT_EVIDENCE_SECTIONS if section.name == "logical_boundary"
+    )
+    if set(logical_boundary) != set(required_fields):
+        raise ValueError("logical_boundary must contain exactly its reviewed schema fields")
+    _require_nonempty_string_list(logical_boundary["input_layouts"], "logical_boundary.input_layouts")
+    _require_nonempty_string_list(logical_boundary["output_layouts"], "logical_boundary.output_layouts")
+
+    adapters = _require_record_list(
+        logical_boundary["layout_adapters"], "layout_adapter", "logical_boundary.layout_adapters"
+    )
+    for index, adapter in enumerate(adapters):
+        context = f"logical_boundary.layout_adapters[{index}]"
+        for field in ("value", "input_layout", "output_layout"):
+            _require_nonempty_string(adapter[field], f"{context}.{field}")
+        if type(adapter["materialized"]) is not bool:
+            raise ValueError(f"{context}.materialized must be a bool")
+
+    copies = _require_record_list(
+        logical_boundary["materialized_copies"], "materialized_copy", "logical_boundary.materialized_copies"
+    )
+    for index, copy_record in enumerate(copies):
+        context = f"logical_boundary.materialized_copies[{index}]"
+        for field in ("source", "destination"):
+            _require_nonempty_string(copy_record[field], f"{context}.{field}")
+        _require_nonnegative_integer(copy_record["bytes"], f"{context}.bytes")
+
+    transposes = _require_record_list(logical_boundary["transposes"], "transpose", "logical_boundary.transposes")
+    for index, transpose in enumerate(transposes):
+        context = f"logical_boundary.transposes[{index}]"
+        for field in ("input", "output"):
+            _require_nonempty_string(transpose[field], f"{context}.{field}")
+        _require_permutation(transpose["permutation"], f"{context}.permutation")
+        if type(transpose["materialized"]) is not bool:
+            raise ValueError(f"{context}.materialized must be a bool")
+
+    bitcasts = _require_record_list(logical_boundary["bitcasts"], "bitcast", "logical_boundary.bitcasts")
+    for index, bitcast in enumerate(bitcasts):
+        context = f"logical_boundary.bitcasts[{index}]"
+        for field in ("input", "output"):
+            _require_nonempty_string(bitcast[field], f"{context}.{field}")
+        input_shape = _require_positive_integer_list(bitcast["input_shape"], f"{context}.input_shape")
+        output_shape = _require_positive_integer_list(bitcast["output_shape"], f"{context}.output_shape")
+        if math.prod(input_shape) != math.prod(output_shape):
+            raise ValueError(f"{context} must preserve the element count")
+
+    saved_state = _mapping(
+        logical_boundary["saved_state_names_and_bytes"], "logical_boundary.saved_state_names_and_bytes"
+    )
+    for name, byte_count in saved_state.items():
+        _require_nonempty_string(name, "logical_boundary.saved_state_names_and_bytes key")
+        _require_nonnegative_integer(byte_count, f"logical_boundary.saved_state_names_and_bytes.{name}")
+
+    recompute_operations = _require_record_list(
+        logical_boundary["recompute_operations"],
+        "recompute_operation",
+        "logical_boundary.recompute_operations",
+    )
+    for index, operation in enumerate(recompute_operations):
+        context = f"logical_boundary.recompute_operations[{index}]"
+        for field in ("output", "operation"):
+            _require_nonempty_string(operation[field], f"{context}.{field}")
+        _require_nonnegative_integer(operation["launch_count"], f"{context}.launch_count")
 
 
 def _require_timing_samples(value: object, context: str) -> None:
@@ -582,6 +723,7 @@ def result_evidence_schema() -> dict[str, Any]:
             "raw_sample": RAW_SAMPLE_REQUIRED_FIELDS,
             "raw_sample_measurement_backends": tuple(BackendVariant),
             "raw_sample_measurement_boundaries": tuple(MeasurementBoundary),
+            "logical_boundary_records": {name: dict(fields) for name, fields in LOGICAL_BOUNDARY_RECORD_SCHEMAS},
         },
         "reviewed_numerical_floors": [asdict(floor) for floor in REVIEWED_NUMERICAL_FLOORS],
         "reviewed_numerical_floors_sha256": REVIEWED_NUMERICAL_FLOORS_SHA256,
@@ -655,7 +797,9 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
         if occupancy > 1.0:
             raise ValueError(f"{context}.achieved_occupancy cannot exceed one")
     kernel_names = tuple(record["name"] for record in kernel_records)
-    if resources["launch_count"] != len(kernel_records) or tuple(resources["ordered_kernel_names"]) != kernel_names:
+    launch_count = resources["launch_count"]
+    _require_nonnegative_integer(launch_count, "resources.launch_count")
+    if launch_count != len(kernel_records) or tuple(resources["ordered_kernel_names"]) != kernel_names:
         raise ValueError("launch_count and ordered_kernel_names must match kernel_records")
 
     copies = _mapping(payload["copies"], "copies")
@@ -669,6 +813,9 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
         _require_nonnegative_integer(copies[field], f"copies.{field}")
     if copies["unexpected_copy_count"] != 0:
         raise ValueError("copies.unexpected_copy_count must be zero")
+
+    logical_boundary = _mapping(payload["logical_boundary"], "logical_boundary")
+    _validate_logical_boundary(logical_boundary)
 
     provenance = _mapping(payload["provenance"], "provenance")
     _require_nonempty_string_list(provenance["command"], "provenance.command")

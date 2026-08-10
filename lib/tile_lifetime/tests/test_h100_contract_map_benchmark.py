@@ -17,6 +17,7 @@ import pytest
 
 from tile_lifetime.h100_contract_map_benchmark import (
     KERNEL_RECORD_REQUIRED_FIELDS,
+    LOGICAL_BOUNDARY_RECORD_SCHEMAS,
     NUMERICAL_OUTPUT_REQUIRED_FIELDS,
     NUMERICAL_OUTPUT_ROLES,
     PAIRWISE_DRIFT_REQUIRED_FIELDS,
@@ -114,12 +115,28 @@ def _complete_result_evidence() -> dict[str, Any]:
         "logical_boundary": {
             "input_layouts": ["row_major", "column_major"],
             "output_layouts": ["row_major"],
-            "layout_adapters": [],
-            "materialized_copies": [],
-            "transposes": [],
-            "bitcasts": [],
+            "layout_adapters": [
+                {
+                    "value": "input",
+                    "input_layout": "row_major",
+                    "output_layout": "column_major",
+                    "materialized": False,
+                }
+            ],
+            "materialized_copies": [{"source": "input", "destination": "input_copy", "bytes": 4096}],
+            "transposes": [
+                {"input": "input_copy", "output": "input_transposed", "permutation": [1, 0], "materialized": True}
+            ],
+            "bitcasts": [
+                {
+                    "input": "input_transposed",
+                    "output": "input_flat",
+                    "input_shape": [16, 32],
+                    "output_shape": [512],
+                }
+            ],
             "saved_state_names_and_bytes": {"map_activation": 4096},
-            "recompute_operations": [],
+            "recompute_operations": [{"output": "aux_activation", "operation": "contract_map", "launch_count": 1}],
         },
         "provenance": {
             "command": ["benchmark", "--plan", "plan.json"],
@@ -387,6 +404,9 @@ def test_result_evidence_schema_names_all_24_required_records() -> None:
         for backend in BackendVariant
         for boundary in MeasurementBoundary
     ]
+    assert schema["nested_records"]["logical_boundary_records"] == {
+        name: dict(fields) for name, fields in LOGICAL_BOUNDARY_RECORD_SCHEMAS
+    }
 
 
 def test_result_evidence_bundle_requires_every_backend_and_boundary() -> None:
@@ -568,3 +588,87 @@ def test_result_evidence_rejects_empty_timing_sample_lists(field: str) -> None:
 
     with pytest.raises(ValueError, match="at least one timing sample"):
         validate_result_evidence(payload)
+
+
+def test_result_evidence_rejects_all_null_logical_boundary_values_after_json_roundtrip() -> None:
+    payload = _complete_result_evidence()
+    payload["logical_boundary"] = {field: None for field in payload["logical_boundary"]}
+    serialized_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=r"logical_boundary.input_layouts must be a nonempty list"):
+        validate_result_evidence(serialized_payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "malformed_value", "error"),
+    (
+        ("input_layouts", [None], "canonical string"),
+        ("output_layouts", [], "nonempty list"),
+        (
+            "layout_adapters",
+            [{"value": "input", "input_layout": "row_major", "output_layout": "column_major", "materialized": None}],
+            "materialized must be a bool",
+        ),
+        (
+            "materialized_copies",
+            [{"source": "input", "destination": "input_copy", "bytes": True}],
+            "bytes must be a nonnegative integer",
+        ),
+        (
+            "transposes",
+            [{"input": "input", "output": "output", "permutation": [True, 0], "materialized": False}],
+            "integer permutation",
+        ),
+        (
+            "bitcasts",
+            [{"input": "input", "output": "output", "input_shape": [True, 32], "output_shape": [32]}],
+            "positive integers",
+        ),
+        ("saved_state_names_and_bytes", {"activation": False}, "nonnegative integer"),
+        (
+            "recompute_operations",
+            [{"output": "activation", "operation": "contract_map", "launch_count": False}],
+            "launch_count must be a nonnegative integer",
+        ),
+    ),
+)
+def test_result_evidence_rejects_malformed_logical_boundary_section_after_json_roundtrip(
+    field: str, malformed_value: object, error: str
+) -> None:
+    payload = _complete_result_evidence()
+    payload["logical_boundary"][field] = malformed_value
+    serialized_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=error):
+        validate_result_evidence(serialized_payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("layout_adapters", "materialized_copies", "transposes", "bitcasts", "recompute_operations"),
+)
+def test_result_evidence_rejects_unknown_logical_boundary_record_field_after_json_roundtrip(field: str) -> None:
+    payload = _complete_result_evidence()
+    payload["logical_boundary"][field][0]["unknown"] = "not-reviewed"
+    serialized_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="must contain exactly the closed"):
+        validate_result_evidence(serialized_payload)
+
+
+def test_result_evidence_rejects_unknown_logical_boundary_section_field_after_json_roundtrip() -> None:
+    payload = _complete_result_evidence()
+    payload["logical_boundary"]["unknown"] = []
+    serialized_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="logical_boundary must contain exactly its reviewed schema fields"):
+        validate_result_evidence(serialized_payload)
+
+
+def test_result_evidence_rejects_bool_launch_count_after_json_roundtrip() -> None:
+    payload = _complete_result_evidence()
+    payload["resources"]["launch_count"] = True
+    serialized_payload = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=r"resources.launch_count must be a nonnegative integer"):
+        validate_result_evidence(serialized_payload)
