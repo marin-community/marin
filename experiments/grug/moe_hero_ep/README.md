@@ -5,10 +5,12 @@ data-parallel rack uses one 64-device expert mesh.
 
 ## Configuration
 
-- Model: d6144, 48 layers, 192 routed experts of width 6272, top-4 routing, latent width 3072, and
-  two shared experts of width 3072. This is 546.292 B total parameters and 24.680 B active per token.
+- Model: d6144, 48 layers, 192 routed experts of width 6144 (hidden-wide), top-4 routing, latent
+  width 3072, and two shared experts of width 3072. This is 535.420 B total parameters and 24.454 B
+  active per token. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 512, and every sixth layer full-causal. SConv and fused RoPE are on.
+  sliding window 2048, and every fourth layer full-causal with the final layer also global. SConv
+  and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
   the `replica_dcn` axis. Three whole experts land on each device in each rack.
 - Batch: 1024 global sequences. The launcher does not scale the batch with the rack count.
@@ -27,13 +29,15 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 
 ## Result
 
-The capacity factor 1.33 default has only a five-step, full-watch gate. All 76 norm fields were
-finite on each step. Capacity factor 1.34 failed from a CUDA OOM. The highest confirmed routing
-cell capacity is 1,829. Capacity factor 1.33 keeps a small margin below that limit.
+The capacity factor 1.33 default passed a five-step, full-watch gate with all 76 norm fields finite
+on each step. The highest confirmed routing cell capacity is 1,829, and 1.33 keeps a small margin
+below it; this cell load scales with the expert count and top-k, not the expert width, so it holds
+as the width moves. Capacity factor 1.34 ran out of CUDA memory at the prior expert width 6272.
 
-The matched 200-step result used capacity factor 1.30 and automatic PGLE. Its last-50 mean was
-262,683 tokens/s with 3.9642% drops. Its drop-adjusted rate was 252,271 tokens/s, and its mean loss
-was 3.2417.
+The matched 200-step throughput and loss were measured at the prior expert width 6272 with capacity
+factor 1.30 and automatic PGLE: a last-50 mean of 262,683 tokens/s at 3.9642% drops, a drop-adjusted
+252,271 tokens/s, and a mean loss of 3.2417. The narrower 6144 width lowers per-expert compute and
+memory below these figures.
 
 ## Sweeps
 
@@ -58,9 +62,10 @@ Width appears in the first two and not the third, thus width is the cheap way to
 and top-k is the expensive way. Six buffers scale with top-k, and one of them is float32: top-6
 costs 30.75 GiB against 20.50 GiB for top-4 at this shape.
 
-The selected E192 model fits at expert width 6272 and capacity factor 1.33. Width 6400 fails at
-capacity factor 1.30. The [experiment record](../../../.agents/logbooks/7279-moe-hero-ep.md)
-contains the size and capacity searches.
+The selected E192 model runs at expert width 6144 and capacity factor 1.33. Width 6400 failed at
+capacity factor 1.30 in the size search. The
+[experiment record](../../../.agents/logbooks/7279-moe-hero-ep.md) contains the size and capacity
+searches.
 
 ## Run Controls
 
@@ -103,7 +108,7 @@ Submit the one-rack gate through the Marin Iris controller:
 run_id="mhep-017-200"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
+  --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
@@ -122,7 +127,8 @@ for the JAX coordinator, and the default 8476 is shared by every run on the clus
 rack. It fixes the batch at ~4M tokens per step to hold the fixed-all-to-all drop dynamics, and
 sizes the step count from the model's active-parameter count: `num_steps` trains
 `--tokens-per-active-param` (default 750) tokens per active parameter. `--flavor ep` keeps the
-64-way expert axis; `--flavor fsdp` runs the same shape dropless. Print the plan without a GPU run:
+64-way expert axis; `--flavor fsdp-nodrop` runs the same shape dropless, and `--flavor fsdp-chunk4`
+runs it with four-chunk capacity. Print the plan without a GPU run:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
@@ -138,7 +144,7 @@ Submit one rung through the Marin Iris controller:
 run_id="mhep-abl-d1024-ep"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
+  --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
