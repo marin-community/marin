@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
@@ -344,6 +344,56 @@ def test_generated_bitwise_repeatability_rejects_mutated_output() -> None:
     with pytest.raises(ValueError, match="bitwise repeatability"):
         verify_benchmark_repeatability(
             report,
+            numerical_acceptance=_rounding_acceptance(),
+            boundary_name="generated Shuttle",
+        )
+
+
+def test_repeatability_verifier_rejects_incomplete_or_duplicate_evidence() -> None:
+    output = np.array([0.0], dtype=np.float32)
+    report = benchmark_repeatability_report(
+        ("output",),
+        ((output,), (output.copy(),), (output.copy(),)),
+        (output,),
+        output_dtypes={"output": "bf16"},
+        policy=_bounded_bf16_policy(),
+    )
+    duplicate_repeats = replace(report, repeats=(report.repeats[0],) * 3)
+    missing_output = replace(
+        report,
+        repeats=(replace(report.repeats[0], outputs=()), *report.repeats[1:]),
+    )
+    missing_pairs = replace(report, pairwise_drift=())
+
+    for incomplete_report, message in (
+        (duplicate_repeats, "repeat indices"),
+        (missing_output, "do not match declared outputs"),
+        (missing_pairs, "does not cover each repeat pair exactly once"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            verify_benchmark_repeatability(
+                incomplete_report,
+                numerical_acceptance=_rounding_acceptance(),
+                boundary_name="expert oracle",
+            )
+
+
+def test_repeatability_verifier_recomputes_bitwise_summary_from_hashes() -> None:
+    reference = (np.array([0.0], dtype=np.float32),)
+    report = benchmark_repeatability_report(
+        ("output",),
+        ((reference[0],), (np.array([0.03125], dtype=np.float32),)),
+        reference,
+        output_dtypes={"output": "bf16"},
+        policy=BenchmarkRepeatabilityPolicy(
+            mode=BenchmarkRepeatabilityMode.BITWISE,
+            minimum_repeats=2,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="contradicts recorded output hashes"):
+        verify_benchmark_repeatability(
+            replace(report, bitwise_repeat=True),
             numerical_acceptance=_rounding_acceptance(),
             boundary_name="generated Shuttle",
         )
