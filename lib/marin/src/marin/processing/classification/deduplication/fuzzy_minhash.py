@@ -293,12 +293,12 @@ def compute_minhash_attrs_step(
             zephyr_context=zephyr_context,
         ),
         hash_attrs={
+            "v": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,
             "text_cap_chars": text_cap_chars,
             "seed": seed,
-            "v": MINHASH_ATTR_DATA_VERSION,
         },
         override_output_path=override_output_path,
     )

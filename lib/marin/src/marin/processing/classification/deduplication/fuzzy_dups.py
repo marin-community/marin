@@ -450,8 +450,9 @@ def compute_fuzzy_dups_attrs_step(
             reduce_task_resources=reduce_task_resources,
             zephyr_context=zephyr_context,
         ),
-        # Keep the legacy Datakit dedup identity when the default is in use.
-        # MinHash content parameters enter this hash through the dependency IDs.
+        # Match the identity the Datakit DAG builds, so a step created here
+        # resolves to the artifacts that graph already produced. The MinHash
+        # content parameters reach this hash through the dependency IDs.
         hash_attrs={
             "v": FUZZY_DUPS_ATTR_DATA_VERSION,
             **({"cc_max_iterations": cc_max_iterations} if cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS else {}),
