@@ -32,7 +32,6 @@ let reloadingForAuth = false
 // The Backends tab subsumes provider-specific cluster views.
 const TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
-  { key: 'tasks', label: 'Tasks', to: '/tasks' },
   { key: 'nodes', label: 'Nodes', to: '/nodes' },
   { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
   { key: 'backends', label: 'Backends', to: '/backends' },
@@ -48,7 +47,7 @@ const activeTab = computed(() => {
   const path = route.path
   if (PATH_TO_TAB[path]) return PATH_TO_TAB[path]
   if (path.startsWith('/job')) return 'jobs'
-  if (path.startsWith('/task')) return 'tasks'
+  if (path.startsWith('/task')) return 'jobs'
   if (path.startsWith('/node')) return 'nodes'
   return 'jobs'
 })

@@ -578,6 +578,7 @@ class JobService:
                 "states": sorted(int(state) for state in query.states),
                 "backend_id": query.backend_id,
                 "execution_cluster_id": query.execution_cluster_id,
+                "top_level_only": query.top_level_only,
                 "page_size": page_size,
             },
         )
@@ -602,6 +603,7 @@ class JobService:
                     if query.execution_cluster_id is not None
                     else None
                 ),
+                top_level_only=query.top_level_only,
                 offset=offset,
                 limit=page_size + 1,
             )

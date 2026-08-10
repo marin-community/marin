@@ -615,7 +615,7 @@ class SubmitJobResponse(_message.Message):
     def __init__(self, job: _Optional[_Union[JobIdentity, _Mapping]] = ...) -> None: ...
 
 class JobQuery(_message.Message):
-    __slots__ = ("owner_id", "parent", "job_id_prefix", "states", "backend_id", "execution_cluster_id", "page", "resource_id")
+    __slots__ = ("owner_id", "parent", "job_id_prefix", "states", "backend_id", "execution_cluster_id", "page", "resource_id", "top_level_only")
     OWNER_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -624,6 +624,7 @@ class JobQuery(_message.Message):
     EXECUTION_CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    TOP_LEVEL_ONLY_FIELD_NUMBER: _ClassVar[int]
     owner_id: str
     parent: ResourceKey
     job_id_prefix: str
@@ -632,7 +633,8 @@ class JobQuery(_message.Message):
     execution_cluster_id: str
     page: PageRequest
     resource_id: str
-    def __init__(self, owner_id: _Optional[str] = ..., parent: _Optional[_Union[ResourceKey, _Mapping]] = ..., job_id_prefix: _Optional[str] = ..., states: _Optional[_Iterable[_Union[JobState, str]]] = ..., backend_id: _Optional[str] = ..., execution_cluster_id: _Optional[str] = ..., page: _Optional[_Union[PageRequest, _Mapping]] = ..., resource_id: _Optional[str] = ...) -> None: ...
+    top_level_only: bool
+    def __init__(self, owner_id: _Optional[str] = ..., parent: _Optional[_Union[ResourceKey, _Mapping]] = ..., job_id_prefix: _Optional[str] = ..., states: _Optional[_Iterable[_Union[JobState, str]]] = ..., backend_id: _Optional[str] = ..., execution_cluster_id: _Optional[str] = ..., page: _Optional[_Union[PageRequest, _Mapping]] = ..., resource_id: _Optional[str] = ..., top_level_only: _Optional[bool] = ...) -> None: ...
 
 class JobSummary(_message.Message):
     __slots__ = ("identity", "owner_id", "parent", "state", "execution_cluster_id", "backend_id", "num_tasks", "submitted_at", "started_at", "finished_at", "error_message", "pending_reason", "exit_code", "resources")
@@ -687,6 +689,42 @@ class ListJobsResponse(_message.Message):
     jobs: _containers.RepeatedCompositeFieldContainer[JobSummary]
     page: PageInfo
     def __init__(self, jobs: _Optional[_Iterable[_Union[JobSummary, _Mapping]]] = ..., page: _Optional[_Union[PageInfo, _Mapping]] = ...) -> None: ...
+
+class UserSummary(_message.Message):
+    __slots__ = ("user_id", "task_state_counts", "job_state_counts", "role")
+    class TaskStateCountsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    class JobStateCountsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    USER_ID_FIELD_NUMBER: _ClassVar[int]
+    TASK_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+    JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    user_id: str
+    task_state_counts: _containers.ScalarMap[str, int]
+    job_state_counts: _containers.ScalarMap[str, int]
+    role: str
+    def __init__(self, user_id: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ..., role: _Optional[str] = ...) -> None: ...
+
+class ListUsersRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ListUsersResponse(_message.Message):
+    __slots__ = ("users",)
+    USERS_FIELD_NUMBER: _ClassVar[int]
+    users: _containers.RepeatedCompositeFieldContainer[UserSummary]
+    def __init__(self, users: _Optional[_Iterable[_Union[UserSummary, _Mapping]]] = ...) -> None: ...
 
 class DescribeJobRequest(_message.Message):
     __slots__ = ("job",)

@@ -10,10 +10,6 @@ const routes = [
     component: () => import('./components/controller/BackendsTab.vue'),
   },
   {
-    path: '/tasks',
-    component: () => import('./components/controller/TasksTab.vue'),
-  },
-  {
     path: '/nodes',
     component: () => import('./components/controller/NodesTab.vue'),
   },

@@ -228,6 +228,7 @@ def job_query_to_proto(value: JobQuery) -> resource_pb2.JobQuery:
         states=value.states,
         backend_id=value.backend_id or "",
         execution_cluster_id=value.execution_cluster_id or "",
+        top_level_only=value.top_level_only,
         page=_page_request(value.page_size, value.page_token),
     )
     if value.parent is not None:

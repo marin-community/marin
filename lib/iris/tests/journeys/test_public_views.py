@@ -3,7 +3,43 @@
 
 """Public list and diagnostic views over completed journeys."""
 
-from iris.rpc import job_pb2
+from iris.rpc import job_pb2, resource_pb2
+from iris.rpc.resource_service import ResourceServiceImpl
+from rigging.server_auth import VerifiedIdentity, identity_scope
+
+
+def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(journey):
+    alice = journey.submit("alice", user="alice", tasks=2)
+    journey.submit("bob", user="bob")
+    journey.set_budget("idle-user")
+    journey.settle()
+
+    service = ResourceServiceImpl(journey.controller.controller)
+    response = service.list_users(resource_pb2.ListUsersRequest(), None)
+    users = {user.user_id: user for user in response.users}
+
+    assert set(users) == {"alice", "bob", "idle-user"}
+    assert users["alice"].job_state_counts == {"running": 1}
+    assert users["alice"].task_state_counts == {"running": alice.tasks}
+    assert users["idle-user"].job_state_counts == {}
+    assert users["idle-user"].task_state_counts == {}
+
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
+        restricted = service.list_users(resource_pb2.ListUsersRequest(), None)
+
+    assert [user.user_id for user in restricted.users] == ["alice"]
+
+
+def test_resource_job_list_can_return_only_top_level_jobs(journey):
+    root = journey.submit("root", user="alice")
+    journey.submit_child(root, "child")
+
+    response = ResourceServiceImpl(journey.controller.controller).list_jobs(
+        resource_pb2.ListJobsRequest(query=resource_pb2.JobQuery(owner_id="alice", top_level_only=True)),
+        None,
+    )
+
+    assert [job.identity.key.resource_id for job in response.jobs] == [root.wire_id]
 
 
 def test_list_jobs_filters_terminal_and_pending_jobs_and_cancel_finished_is_noop(journey):

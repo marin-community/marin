@@ -154,6 +154,7 @@ export interface RuntimeEntrypoint {
 export interface EnvironmentConfig {
   pipPackages?: string[]
   envVars?: Record<string, string>
+  setupScripts?: string[]
   extras?: string[]
   pythonVersion?: string
   dockerfile?: string
@@ -702,6 +703,13 @@ export interface ResourceJobDetail {
     replicas?: number
     priorityBand?: string
     taskImage?: string
+    maxTaskFailures?: number
+    maxRetriesFailure?: number
+    maxRetriesPreemption?: number
+    ports?: string[]
+    submitArgv?: string[]
+    clientRevisionDate?: string
+    containerProfile?: string
   }
 }
 
@@ -766,6 +774,17 @@ export interface ResourceListJobsResponse {
   page?: ResourcePageInfo
 }
 
+export interface ResourceUserSummary {
+  userId: string
+  taskStateCounts?: Record<string, number>
+  jobStateCounts?: Record<string, number>
+  role?: string
+}
+
+export interface ResourceListUsersResponse {
+  users?: ResourceUserSummary[]
+}
+
 export interface ResourceDescribeJobResponse {
   job?: ResourceJobDetail
 }
@@ -801,6 +820,7 @@ export interface ResourceNodeSummary {
   slice?: ResourceSliceIdentity
   runningTaskCount: number
   observedAt?: ProtoTimestamp
+  region?: string
 }
 
 export interface ResourceNodeAttribute {
@@ -841,6 +861,22 @@ export interface ResourceSliceSummary {
 export interface ResourceListSlicesResponse {
   slices?: ResourceSliceSummary[]
   page?: ResourcePageInfo
+}
+
+export interface ResourceSliceMember {
+  providerNodeId: string
+  node?: ResourceNodeIdentity
+  observedAt?: ProtoTimestamp
+}
+
+export interface ResourceSliceDetail {
+  summary: ResourceSliceSummary
+  members?: ResourceSliceMember[]
+  sourceStatuses?: ResourceSourceStatus[]
+}
+
+export interface ResourceDescribeSliceResponse {
+  slice?: ResourceSliceDetail
 }
 
 export interface ResourceEndpointSummary {

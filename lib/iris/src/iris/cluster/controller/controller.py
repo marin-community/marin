@@ -28,6 +28,7 @@ from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.profile import ProfileResources
 from iris.cluster.controller.slice import SliceResources
 from iris.cluster.controller.task import TaskResources
+from iris.cluster.controller.user import UserResources
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     UserBudgetDefaults,
@@ -79,6 +80,7 @@ from iris.resources.source import (
 )
 from iris.resources.state import JobState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.resources.user import UserSummary
 
 
 class Controller:
@@ -124,6 +126,7 @@ class Controller:
         self._nodes = NodeResources(dependencies)
         self._slices = SliceResources(dependencies)
         self._activity = ActivityResources(dependencies, self._jobs, self._tasks, self._attempts)
+        self._users = UserResources(dependencies)
 
     @property
     def cluster_id(self) -> str:
@@ -142,6 +145,9 @@ class Controller:
 
     def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
         return self._jobs.list_jobs(query)
+
+    def list_users(self) -> tuple[UserSummary, ...]:
+        return self._users.list_users()
 
     def describe_job(self, key: ResourceKey) -> JobDetail:
         return self._jobs.describe_job(key)

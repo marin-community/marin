@@ -391,6 +391,7 @@ message JobQuery {
   string execution_cluster_id = 6;
   PageRequest page = 7;
   string resource_id = 8;
+  bool top_level_only = 9;
 }
 
 message JobSummary {
@@ -422,6 +423,19 @@ message ListJobsRequest {
 message ListJobsResponse {
   repeated JobSummary jobs = 1;
   PageInfo page = 2;
+}
+
+message UserSummary {
+  string user_id = 1;
+  map<string, int32> task_state_counts = 2;
+  map<string, int32> job_state_counts = 3;
+  string role = 4;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated UserSummary users = 1;
 }
 
 message DescribeJobRequest {
@@ -827,6 +841,7 @@ message ProfileAttemptResponse {
 service ResourceService {
   rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
   rpc DescribeJob(DescribeJobRequest) returns (DescribeJobResponse);
   rpc GetJobState(GetJobStateRequest) returns (GetJobStateResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);

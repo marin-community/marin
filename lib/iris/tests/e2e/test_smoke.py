@@ -260,9 +260,8 @@ def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
 
 
 def _open_job_detail(page, cluster_url: str, job_id: str) -> None:
-    dashboard_goto(page, f"{cluster_url}/")
+    dashboard_goto(page, f"{cluster_url}/#/?all=1")
     wait_for_dashboard_ready(page)
-    page.get_by_placeholder("Owner").fill("")
     page.get_by_placeholder("Job ID prefix").fill("")
     page.get_by_role("button", name="Filter").click()
     page.get_by_role("link", name=job_id, exact=True).click()
@@ -301,8 +300,8 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 # ============================================================================
 
 
-def test_dashboard_jobs_tab_filters_by_owner_and_opens_job(smoke_cluster, smoke_page, smoke_screenshot):
-    """The global Job inventory filters by owner and links to typed Job detail."""
+def test_dashboard_groups_jobs_by_starred_user_and_opens_job(smoke_cluster, smoke_page, smoke_screenshot):
+    """The Job landing page groups owners, preserves stars, and drills into their Jobs."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -315,8 +314,13 @@ def test_dashboard_jobs_tab_filters_by_owner_and_opens_job(smoke_cluster, smoke_
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
-    smoke_page.get_by_placeholder("Owner").fill(user)
-    smoke_page.get_by_role("button", name="Filter").click()
+    user_link = smoke_page.get_by_role("link", name=user, exact=True)
+    user_link.wait_for()
+    star = user_link.locator("xpath=ancestor::tr").locator("button[aria-pressed]")
+    initial_starred = star.get_attribute("aria-pressed")
+    star.click()
+    assert star.get_attribute("aria-pressed") != initial_starred
+    user_link.click()
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
     assert_visible(smoke_page, "th:has-text('Backend')")
@@ -335,31 +339,39 @@ def test_dashboard_jobs_tab_filters_by_owner_and_opens_job(smoke_cluster, smoke_
 
 
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
-    """SUCCEEDED job detail page."""
+    """Job detail keeps status, request, task diagnostics, and logs together."""
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     job_id = job.job_id.to_wire()
     _open_job_detail(smoke_page, smoke_cluster.url, job_id)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
+    for heading in ["Job Status", "Task Summary", "Resources (per task)", "Tasks", "Job Logs"]:
+        smoke_page.get_by_role("heading", name=heading, exact=True).wait_for()
     smoke_page.get_by_text(f"{job_id}/0", exact=True).wait_for()
     smoke_screenshot("job-detail", "Typed Job detail with state, placement, and Task links")
 
 
 def test_dashboard_task_detail_selects_an_exact_attempt(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
-    """Task detail exposes its exact Attempt identity and Activity source status."""
+    """Task detail keeps status, placement, attempts, endpoints, and logs together."""
     task_status = smoke_cluster.task_status(verbose_job)
     task_id = task_status.task_id
     job_id = verbose_job.job_id.to_wire()
 
     _open_task_detail(smoke_page, smoke_cluster.url, job_id, task_id)
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Attempt 0') " "&& document.body.textContent.includes('Activity')",
+        """() => {
+            const headings = Array.from(document.querySelectorAll('h3'))
+                .map((heading) => (heading.textContent || '').trim());
+            return document.body.textContent.includes('Attempt 0')
+                && ['Status', 'Placement', 'History', 'Attempts', 'Logs']
+                    .every((heading) => headings.includes(heading));
+        }""",
         timeout=10_000,
     )
     smoke_screenshot(
         "task-detail",
-        "Typed Task detail with exact Attempt identity, placement, and Activity source status",
+        "Task detail with exact Attempt identity, placement, history, diagnostics, and logs",
     )
 
 
@@ -433,6 +445,8 @@ def test_dashboard_node_detail(smoke_cluster, smoke_page, smoke_screenshot, capa
     wait_for_dashboard_ready(smoke_page)
     smoke_page.get_by_role("link", name=worker_id, exact=True).click()
     _wait_for_node_detail_screenshot_ready(smoke_page, worker_id)
+    for heading in ["Capacity", "Placement", "Attributes", "Recent Attempts"]:
+        smoke_page.get_by_role("heading", name=heading, exact=True).wait_for()
 
     smoke_screenshot(
         "node-detail",
@@ -446,19 +460,22 @@ def _wait_for_capacity_screenshot_ready(page) -> None:
             const text = document.body.textContent || "";
             const routeReady = decodeURIComponent(window.location.hash) === "#/capacity";
             return routeReady
-                && text.includes("Backend-owned slices and observed membership")
-                && (text.includes("Scaling group") || text.includes("No slices reported"));
+                && text.includes("Active demand, observed nodes, scaling groups, and slices")
+                && text.includes("Scaling Groups")
+                && text.includes("Pending Jobs")
+                && text.includes("Users")
+                && text.includes("Slices");
         }
     """
     _await_stable_screenshot(page, check)
 
 
 def test_dashboard_capacity_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Capacity shows backend-qualified Slices and observed membership."""
+    """Capacity combines demand, users, Nodes, scaling groups, and Slices."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_capacity_screenshot_ready(smoke_page)
-    smoke_screenshot("capacity-tab", "Backend-qualified Slice inventory and observed membership")
+    smoke_screenshot("capacity-tab", "Capacity and scheduling demand with observed infrastructure")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -604,12 +621,24 @@ def test_dashboard_cancel_job_returns_a_durable_action(smoke_cluster, smoke_page
 # ============================================================================
 
 
-def test_endpoint_registration(smoke_cluster):
-    """Endpoint registered from inside job via RPC."""
+def test_endpoint_registration(smoke_cluster, smoke_page, smoke_screenshot):
+    """A registered Endpoint is discoverable, navigable, and inspectable."""
     prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
+    endpoint_name = f"{prefix}/actor1"
     job = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/endpoints")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.get_by_placeholder("Name prefix").fill(prefix)
+    smoke_page.get_by_role("button", name="Filter", exact=True).click()
+    smoke_page.get_by_role("link", name=endpoint_name, exact=True).wait_for()
+    smoke_page.get_by_role("button", name="Details", exact=True).click()
+    smoke_page.get_by_text("Address", exact=True).wait_for()
+    smoke_page.get_by_text("Access", exact=True).wait_for()
+    smoke_page.get_by_role("link", name=job.job_id.task(0).to_wire(), exact=True).wait_for()
+    smoke_screenshot("endpoints-tab", "Endpoint inventory with proxy, Task, Job, lease, and metadata links")
 
 
 def test_port_allocation(smoke_cluster, capabilities):

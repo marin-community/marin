@@ -23,6 +23,9 @@ class ResourceService(Protocol):
     async def list_jobs(self, request: resource__pb2.ListJobsRequest, ctx: RequestContext) -> resource__pb2.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_users(self, request: resource__pb2.ListUsersRequest, ctx: RequestContext) -> resource__pb2.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -114,6 +117,16 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_jobs,
+                ),
+                "/iris.resource.ResourceService/ListUsers": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.ListUsersRequest,
+                        output=resource__pb2.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_users,
                 ),
                 "/iris.resource.ResourceService/DescribeJob": Endpoint.unary(
                     method=MethodInfo(
@@ -382,6 +395,26 @@ class ResourceServiceClient(ConnectClient):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ListJobsRequest,
                 output=resource__pb2.ListJobsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_users(
+        self,
+        request: resource__pb2.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.ListUsersResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.ListUsersRequest,
+                output=resource__pb2.ListUsersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -834,6 +867,8 @@ class ResourceServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_jobs(self, request: resource__pb2.ListJobsRequest, ctx: RequestContext) -> resource__pb2.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_users(self, request: resource__pb2.ListUsersRequest, ctx: RequestContext) -> resource__pb2.ListUsersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_job_state(self, request: resource__pb2.GetJobStateRequest, ctx: RequestContext) -> resource__pb2.GetJobStateResponse:
@@ -903,6 +938,16 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_jobs,
+                ),
+                "/iris.resource.ResourceService/ListUsers": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListUsers",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.ListUsersRequest,
+                        output=resource__pb2.ListUsersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_users,
                 ),
                 "/iris.resource.ResourceService/DescribeJob": EndpointSync.unary(
                     method=MethodInfo(
@@ -1171,6 +1216,26 @@ class ResourceServiceClientSync(ConnectClientSync):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ListJobsRequest,
                 output=resource__pb2.ListJobsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_users(
+        self,
+        request: resource__pb2.ListUsersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.ListUsersResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListUsers",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.ListUsersRequest,
+                output=resource__pb2.ListUsersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

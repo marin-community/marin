@@ -82,6 +82,7 @@ class JobQuery:
     states: frozenset[JobState] = frozenset()
     backend_id: str | None = None
     execution_cluster_id: str | None = None
+    top_level_only: bool = False
     page_size: int = 50
     page_token: str | None = None
 

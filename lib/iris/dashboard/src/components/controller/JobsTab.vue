@@ -9,10 +9,16 @@ import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SourceWarnings from '@/components/shared/SourceWarnings.vue'
+import UsersOverview from '@/components/controller/UsersOverview.vue'
 
 const PAGE_SIZE = 50
 const route = useRoute()
 const router = useRouter()
+const selectedUser = computed(() => typeof route.query.user === 'string' ? route.query.user : '')
+const showAll = computed(() => route.query.all === '1')
+const backendId = computed(() => typeof route.query.backend === 'string' ? route.query.backend : '')
+const clusterId = computed(() => typeof route.query.cluster === 'string' ? route.query.cluster : '')
+const inJobList = computed(() => Boolean(selectedUser.value || showAll.value || backendId.value || clusterId.value))
 const owner = ref(typeof route.query.owner === 'string' ? route.query.owner : '')
 const jobPrefix = ref(typeof route.query.prefix === 'string' ? route.query.prefix : '')
 const pageToken = ref<string | undefined>(undefined)
@@ -20,10 +26,11 @@ const previousTokens = ref<(string | undefined)[]>([])
 
 const { data, loading, error, refresh } = useResourceRpc<ResourceListJobsResponse>('ListJobs', () => ({
   query: {
-    ownerId: owner.value || undefined,
+    ownerId: selectedUser.value || owner.value || undefined,
     jobIdPrefix: jobPrefix.value || undefined,
-    backendId: typeof route.query.backend === 'string' ? route.query.backend : undefined,
-    executionClusterId: typeof route.query.cluster === 'string' ? route.query.cluster : undefined,
+    backendId: backendId.value || undefined,
+    executionClusterId: clusterId.value || undefined,
+    topLevelOnly: true,
     page: { pageSize: PAGE_SIZE, pageToken: pageToken.value },
   },
 }))
@@ -41,8 +48,14 @@ const columns: Column[] = [
 function applyFilters() {
   previousTokens.value = []
   pageToken.value = undefined
-  void router.replace({ query: { ...route.query, owner: owner.value || undefined, prefix: jobPrefix.value || undefined } })
-  void refresh()
+  void router.replace({
+    query: {
+      ...route.query,
+      owner: selectedUser.value ? undefined : owner.value || undefined,
+      prefix: jobPrefix.value || undefined,
+    },
+  })
+  void refreshJobs()
 }
 
 function nextPage() {
@@ -65,17 +78,31 @@ function jobRoute(job: ResourceJobSummary) {
   }
 }
 
-watch(() => [route.query.backend, route.query.cluster], applyFilters)
-onMounted(refresh)
-useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
+async function refreshJobs() {
+  if (inJobList.value) await refresh()
+}
+
+watch([selectedUser, showAll, backendId, clusterId], () => {
+  previousTokens.value = []
+  pageToken.value = undefined
+  void refreshJobs()
+})
+onMounted(refreshJobs)
+useAutoRefresh(refreshJobs, DEFAULT_REFRESH_MS)
 </script>
 
 <template>
-  <section class="space-y-4">
+  <UsersOverview v-if="!inJobList" />
+  <section v-else class="space-y-4">
+    <div v-if="selectedUser" class="flex items-center gap-2 text-sm text-text-secondary">
+      <RouterLink to="/" class="text-accent hover:underline">Users</RouterLink>
+      <span>/</span>
+      <span class="font-mono text-text">{{ selectedUser }}</span>
+    </div>
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h2 class="text-xl font-semibold">Jobs</h2>
+      <h2 class="text-xl font-semibold">{{ selectedUser ? `${selectedUser}'s jobs` : 'Jobs' }}</h2>
       <form class="flex flex-wrap gap-2" @submit.prevent="applyFilters">
-        <input v-model="owner" class="px-3 py-1.5 text-sm border rounded bg-surface" placeholder="Owner" />
+        <input v-if="!selectedUser" v-model="owner" class="px-3 py-1.5 text-sm border rounded bg-surface" placeholder="Owner" />
         <input v-model="jobPrefix" class="px-3 py-1.5 text-sm border rounded bg-surface" placeholder="Job ID prefix" />
         <button class="px-3 py-1.5 text-sm border rounded hover:bg-surface-raised">Filter</button>
       </form>

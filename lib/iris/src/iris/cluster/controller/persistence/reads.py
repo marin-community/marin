@@ -670,6 +670,7 @@ def list_resource_jobs(
     states: Sequence[int],
     backend_id: str | None,
     execution_cluster: str | None,
+    top_level_only: bool,
     offset: int,
     limit: int,
 ) -> list[JobRecord]:
@@ -706,6 +707,8 @@ def list_resource_jobs(
         stmt = stmt.where(jobs_table.c.backend_id == backend_id)
     if execution_cluster is not None:
         stmt = stmt.where(jobs_table.c.cluster == execution_cluster)
+    if top_level_only:
+        stmt = stmt.where(jobs_table.c.parent_job_id.is_(None))
     return [_job_record(row, federation=True) for row in tx.execute(stmt).all()]
 
 

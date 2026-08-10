@@ -51,6 +51,7 @@ from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import iris_logging_pb2, resource_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.rpc.federation_client import peer_connect_error
+from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from iris.rpc.resource_codec import (
     job_spec_from_proto,
     job_spec_to_proto,
@@ -483,6 +484,7 @@ class ResourceServiceImpl:
                     states=frozenset(JobState(state) for state in query.states),
                     backend_id=query.backend_id or None,
                     execution_cluster_id=query.execution_cluster_id or None,
+                    top_level_only=query.top_level_only,
                     page_size=query.page.page_size or _DEFAULT_JOB_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
@@ -492,6 +494,25 @@ class ResourceServiceImpl:
         return resource_pb2.ListJobsResponse(
             jobs=[_job_summary_to_proto(item) for item in page.items],
             page=_page_info(page.next_page_token, page.source_statuses),
+        )
+
+    def list_users(
+        self, _request: resource_pb2.ListUsersRequest, _ctx: RequestContext
+    ) -> resource_pb2.ListUsersResponse:
+        owner_id = _authorized_owner()
+        users = self._resources.list_users()
+        if owner_id is not None:
+            users = tuple(user for user in users if user.user_id == owner_id)
+        return resource_pb2.ListUsersResponse(
+            users=[
+                resource_pb2.UserSummary(
+                    user_id=user.user_id,
+                    task_state_counts={task_state_friendly(state): count for state, count in user.task_state_counts},
+                    job_state_counts={job_state_friendly(state): count for state, count in user.job_state_counts},
+                    role=user.role,
+                )
+                for user in users
+            ]
         )
 
     def describe_job(
