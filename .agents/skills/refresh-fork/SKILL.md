@@ -71,7 +71,7 @@ revision.
 ```sh
 git clone <repository> <fork>
 git -C <fork> remote add upstream <upstream>
-git -C <fork> fetch --tags --multiple origin upstream   # --multiple: two remotes, not a refspec
+git -C <fork> fetch --tags --multiple origin upstream   # --multiple fetches both remotes; without it "upstream" is read as a refspec
 git -C <fork> remote set-head upstream -a                # so upstream/HEAD resolves
 ```
 
@@ -82,7 +82,7 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`): the base is the tip of the
+- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`): the base is the tip of the
   `upstream` default branch. These forks rebase onto upstream `main`; there is no
   release to gate on.
 - `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
@@ -101,8 +101,8 @@ the refresh or file a blocker issue.
 
 For an isolated fork whose `upstream` base has not moved, there is nothing to rebase
 and the refresh is a no-op — even if Marin's pin lags the fork's own `main`. Adopting
-patches pushed to the fork since Marin last locked is the daily external-dependency
-bump's job (`ops-external-dependencies`), not this skill. refresh-fork runs only when
+patches pushed to the fork since Marin last locked belongs to the daily
+external-dependency bump (`ops-external-dependencies`); refresh-fork runs only when
 there is a newer upstream base to rebase onto.
 
 ## Rebase the overlay
@@ -115,8 +115,8 @@ branch; on collision use the next `-rN` suffix.
 Find the base our commits currently sit on: `old_base` is the descriptor's
 `upstream_base` (descriptor pins) or `git merge-base <fork>/main upstream/HEAD`
 (isolated pins). `old_tip` is the head of our patches: the fork's `main` for isolated
-pins — Marin's recorded pin may lag it, so rebase the full patch set, not the pin —
-or the pinned refresh branch for descriptor pins. Then, onto `new_base`:
+pins (Marin's recorded pin may lag `main`, so rebase from `main` to cover the full
+patch set), or the pinned refresh branch for descriptor pins. Then, onto `new_base`:
 
 1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
    Merge commits (especially merges of `upstream` into a feature branch) are not
@@ -137,8 +137,8 @@ or the pinned refresh branch for descriptor pins. Then, onto `new_base`:
 
 Stop and file a blocker instead of forcing a PR when the rebase is not a mechanical
 replay: our overlay is non-linear (merge commits weaving upstream in), upstream
-renamed or refactored files our `fix` commits touch (so they need re-authoring, not a
-ported diff), or conflicts hit many core files at once. A fork hundreds of commits
+renamed or refactored files our `fix` commits touch (so they need re-authoring against
+the new layout), or conflicts hit many core files at once. A fork hundreds of commits
 behind upstream is usually in this state. The weekly cadence keeps a fork from ever
 drifting this far; one that already has (see `nuances`) needs a one-time manual
 catch-up outside this skill before it can be auto-migrated. The blocker issue carries

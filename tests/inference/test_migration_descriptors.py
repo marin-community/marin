@@ -100,15 +100,10 @@ def test_depends_on_is_acyclic_and_resolvable():
         for dep in deps:
             assert dep in descriptors, f"{name}: depends_on unknown fork {dep!r}"
 
-    resolved: set[str] = set()
-
     def visit(node: str, stack: tuple[str, ...]) -> None:
         assert node not in stack, f"dependency cycle through {node}"
-        if node in resolved:
-            return
         for dep in graph[node]:
             visit(dep, (*stack, node))
-        resolved.add(node)
 
     for name in graph:
         visit(name, ())

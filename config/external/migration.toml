@@ -75,6 +75,7 @@ e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
     "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
+    "The aime-smoke e2e is broken pending #8116 (the isolated driver env omits rigging), so a harbor refresh cannot be validated until that lands.",
 ]
 
 [MarinSkyRL]
@@ -86,5 +87,5 @@ blocker_assignee = "yonromai"
 nuances = [
     "Shares history with NovaSky-AI/SkyRL (merge-base 8e132edc, Dec 2025), but NovaSky's later monolith->package restructure (skyrl-train/ -> skyrl/) moved or deleted 684 of the 718 files Marin touched, so a mechanical rebase is intractable.",
     "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
-    "Marin consumes only the root marinskyrl package, not the forked skyrl-train; the GitHub compare API 404s because the repo was pushed standalone rather than forked, which does not affect git-level rebasing.",
+    "Marin consumes only the root marinskyrl package; the forked skyrl-train is unused. The GitHub compare API 404s because the repo was pushed as a standalone (its fork network is unlinked), which does not affect git-level rebasing.",
 ]
