@@ -380,6 +380,19 @@ def test_primary_segmented_input_adjoint_avoids_dense_expert_axis() -> None:
     assert "cublasGemmStridedBatchedEx" in generated.source
     assert "kPhysicalMapFeatures" not in generated.source
 
+    seams = plan.fusion_seams
+    assert seams.consumed_edge_tile.axes == ("segment", "row_within_segment", "feature")
+    assert seams.consumed_edge_tile.feature_extent == 7168
+    assert seams.pair_state_tile.feature_extent == 6144
+    assert seams.produced_edge_tile.feature_extent == 7168
+    assert seams.maximum_logical_edges == 96 * 256
+    assert seams.standalone_ffi_materializes_full_buffers
+    assert not seams.fused_candidate_requires_full_materialization
+    assert seams.buffer_elision.produced_edge_payload
+    assert seams.buffer_elision.exact_edge_identity_required
+    assert seams.buffer_elision.all_pair_consumers_must_share_tile_lifetime
+    assert seams.readiness.produced_edge_ready_after == "second_contract"
+
 
 def test_segmented_input_adjoint_compile_plan_links_only_generic_cuda_dependencies(tmp_path: Path) -> None:
     plan = plan_segmented_input_adjoint_ffi(

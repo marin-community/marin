@@ -51,6 +51,9 @@ XLA_FLAGS=--xla_force_host_platform_device_count=4 \
   lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_module_cpu_v0
 ```
 
-Remaining gates are CUDA source compilation, numerical execution of the
-integrated graph, and a matched four-rank GB200 replay. No GPU result is implied
-by this checkpoint.
+The five generated sources subsequently passed an `sm_100a` CPU-only Linux
+compile/link/load/register preflight recorded in
+`distributed_expert_jax_cuda_compile_preflight_sm100_v0`. Remaining gates are
+device compilation through JAX, numerical execution of the integrated graph,
+and a matched four-rank GB200 replay. No GPU result is implied by this
+checkpoint.

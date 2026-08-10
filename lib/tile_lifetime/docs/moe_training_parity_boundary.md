@@ -114,6 +114,15 @@ across projection scratch and outputs, 150,994,944 Map items addressed with
 64-bit indices, and 3,246,995,275,776 Contract FLOPs. This is a static resource
 claim, not a latency result.
 
+The segmented plan also exposes physical fusion seams without changing the
+semantic boundary. Its consumed cotangent, generated pair state, and produced
+input cotangent share an explicit bounded `[segment, row, feature]` tile domain.
+Readiness names the producer tile, saved state, RelationPlan validity, and the
+second-Contract completion needed by a downstream consumer. Buffer-elision
+metadata states when an adjacent producer or exact-edge consumer may retain the
+payload in the tile lifetime. The standalone typed-FFI call still materializes
+full buffers; a fused transport/Contract schedule is not required to do so.
+
 A one-device JAX test compares the new edge adapter with the VJP of the natural
 weighted Fold. Padded BF16 edge cotangents and FP32 route-weight cotangents are
 exact, and repeated execution is bitwise stable. The edge handler's generated
@@ -148,7 +157,10 @@ ABI. Evidence is stored under
 
 This is still not a distributed GPU result. CPU cannot compile the CUDA
 typed-FFI calls, so the integrated graph is lowered and audited while numerical
-correctness executes the equivalent decomposed stages. CUDA compilation,
+correctness executes the equivalent decomposed stages. A separate CPU-only
+Linux preflight compiled all five sources for `sm_100a`, loaded their DSOs, and
+registered their typed-FFI targets with JAX using the locked CUDA 13.2/JAX
+0.10.1 environment. It did not query a device. Device compilation through JAX,
 multi-rank numerical execution, and the matched primary-shape replay remain
 runtime gates.
 

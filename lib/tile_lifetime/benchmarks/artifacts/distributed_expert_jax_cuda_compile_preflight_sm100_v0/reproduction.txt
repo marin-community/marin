@@ -1,0 +1,29 @@
+Generate the sources from the Shuttle checkout:
+
+uv run --frozen --package marin-tile-lifetime --group test python \
+  lib/tile_lifetime/benchmarks/emit_distributed_expert_jax_cuda_sources.py \
+  --output-directory /tmp/shuttle-moe-ffi-sources \
+  --source-revision 348fa2120b \
+  --architecture sm_100a
+
+The successful CPU-only Iris task installed these exact packages before running
+cpu_cuda_ffi_compile_register_preflight.py:
+
+jax==0.10.1
+jaxlib==0.10.1
+nvidia-cublas==13.4.1.1
+nvidia-cuda-cccl==13.3.3.4.1
+nvidia-cuda-crt==13.2.78
+nvidia-cuda-nvcc==13.2.78
+nvidia-cuda-nvrtc==13.0.88
+nvidia-cuda-runtime==13.0.96
+nvidia-nvvm==13.2.78
+
+No --gpu option was passed to Iris. The task command was:
+
+python cpu_cuda_ffi_compile_register_preflight.py \
+  --manifest /tmp/shuttle-moe-ffi-sources/manifest.json \
+  --build-directory /tmp/shuttle-moe-ffi-build \
+  --output /tmp/shuttle-moe-ffi-result.json \
+  --nvcc <environment>/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_100a

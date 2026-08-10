@@ -41,6 +41,88 @@ class SegmentedInputAdjointFfiPlan:
     def pair_features(self) -> int:
         return 2 * self.intermediate_features
 
+    @property
+    def fusion_seams(self) -> SegmentedInputAdjointFusionSeams:
+        """Describe tile-level producer and consumer seams for fused candidates."""
+        return SegmentedInputAdjointFusionSeams(
+            consumed_edge_tile=SegmentedEdgeTileDomain(
+                segment_count=self.segment_count,
+                capacity=self.capacity,
+                feature_extent=self.input_features,
+            ),
+            pair_state_tile=SegmentedEdgeTileDomain(
+                segment_count=self.segment_count,
+                capacity=self.capacity,
+                feature_extent=self.pair_features,
+            ),
+            produced_edge_tile=SegmentedEdgeTileDomain(
+                segment_count=self.segment_count,
+                capacity=self.capacity,
+                feature_extent=self.input_features,
+            ),
+            readiness=SegmentedTileReadiness(
+                requires_consumed_edge_tile=True,
+                requires_saved_pair_tile=True,
+                validity_predicated=True,
+                produced_edge_ready_after="second_contract",
+            ),
+            buffer_elision=SegmentedBufferElisionLegality(
+                consumed_edge_payload=True,
+                pair_state=True,
+                produced_edge_payload=True,
+                exact_edge_identity_required=True,
+                all_pair_consumers_must_share_tile_lifetime=True,
+            ),
+            maximum_logical_edges=self.segment_count * self.capacity,
+            standalone_ffi_materializes_full_buffers=True,
+            fused_candidate_requires_full_materialization=False,
+        )
+
+
+@dataclass(frozen=True)
+class SegmentedEdgeTileDomain:
+    """Bounded segment/row/feature domain shared by payload and Contract tiles."""
+
+    segment_count: int
+    capacity: int
+    feature_extent: int
+    axes: tuple[str, str, str] = ("segment", "row_within_segment", "feature")
+
+
+@dataclass(frozen=True)
+class SegmentedTileReadiness:
+    """Logical readiness conditions for an adjacent fused schedule."""
+
+    requires_consumed_edge_tile: bool
+    requires_saved_pair_tile: bool
+    validity_predicated: bool
+    produced_edge_ready_after: str
+
+
+@dataclass(frozen=True)
+class SegmentedBufferElisionLegality:
+    """Conditions under which standalone ABI buffers may become tile-local."""
+
+    consumed_edge_payload: bool
+    pair_state: bool
+    produced_edge_payload: bool
+    exact_edge_identity_required: bool
+    all_pair_consumers_must_share_tile_lifetime: bool
+
+
+@dataclass(frozen=True)
+class SegmentedInputAdjointFusionSeams:
+    """Physical metadata for fusing adjacent transport and Contract schedules."""
+
+    consumed_edge_tile: SegmentedEdgeTileDomain
+    pair_state_tile: SegmentedEdgeTileDomain
+    produced_edge_tile: SegmentedEdgeTileDomain
+    readiness: SegmentedTileReadiness
+    buffer_elision: SegmentedBufferElisionLegality
+    maximum_logical_edges: int
+    standalone_ffi_materializes_full_buffers: bool
+    fused_candidate_requires_full_materialization: bool
+
 
 @dataclass(frozen=True)
 class GeneratedSegmentedInputAdjointFfi:
