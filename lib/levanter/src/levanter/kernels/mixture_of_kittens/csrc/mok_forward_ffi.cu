@@ -392,8 +392,8 @@ ffi::Error ForwardBf16(
     if (router_weights.dimensions()[0] != local_tokens || router_weights.dimensions()[1] != top_k) {
       return ffi::Error::InvalidArgument("router_weights shape does not match x and top_k");
     }
-    if (schedule_peer_token_idx.dimensions()[0] != schedule_capacity || macrobatch_size != schedule_capacity) {
-      return ffi::Error::InvalidArgument("schedule and macrobatch sizes do not match");
+    if (schedule_peer_token_idx.dimensions()[0] != schedule_capacity) {
+      return ffi::Error::InvalidArgument("schedule arrays have different sizes");
     }
     if (num_tokens.dimensions()[0] != 1 || tokens_per_expert.dimensions()[0] != local_experts) {
       return ffi::Error::InvalidArgument("schedule count tensor shape mismatch");
@@ -410,7 +410,8 @@ ffi::Error ForwardBf16(
     }
     if (local_tokens % MoK::config::MLP_Mb != 0 || schedule_capacity % MoK::config::MLP_Mb != 0 ||
         hidden_dim % MoK::config::MLP_Nb != 0 || intermediate_dim % MoK::config::MLP_Nb != 0 ||
-        minibatch_size <= 0 || schedule_capacity % minibatch_size != 0) {
+        macrobatch_size <= 0 || minibatch_size <= 0 || macrobatch_size % minibatch_size != 0 ||
+        schedule_capacity % minibatch_size != 0) {
       return ffi::Error::InvalidArgument("MoK dimensions do not meet the 256-row and 256-column tile rules");
     }
 

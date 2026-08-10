@@ -295,7 +295,7 @@ def test_fused_gate_records_the_mixture_of_kittens_boundary():
     assert fused["num_comm_sms"] == 40
     assert fused["bwd_num_comm_sms"] == 28
     assert fused["minibatch_size"] == 4096
-    assert fused["macrobatch_size"] == 131072
+    assert fused["macrobatch_size"] == 32768
     assert fused["schedule_capacity_factor"] == 1.1
 
 

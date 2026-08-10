@@ -41,6 +41,7 @@ MOK_GPUS_PER_NODE = 4
 MAX_MOK_NODES = 16
 MOK_PROCESSES_PER_TASK = 1
 MOK_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+MOK_FUSED_MACROBATCH_SIZE = 32768
 # The model keeps its MuonH state on pinned host memory. This leaves room for both ragged
 # all-to-all arms under the same allocation.
 MOK_OFFLOAD_OPT_STATE = True
@@ -119,7 +120,10 @@ def build_mok_run(
     if overrides:
         model = dataclasses.replace(model, **overrides)
     if execution is MokExecution.FUSED:
-        model = dataclasses.replace(model, mixture_of_kittens=MoKForwardConfig())
+        model = dataclasses.replace(
+            model,
+            mixture_of_kittens=MoKForwardConfig(macrobatch_size=MOK_FUSED_MACROBATCH_SIZE),
+        )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % expert_axis_size != 0:

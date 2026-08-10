@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. A raw JAX FFI path now passes fused BF16 forward and backward checks on four GB200 GPUs. The next gate is full-model memory and one completed training step before the 25-step profile.
+The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. A raw JAX FFI path now passes fused BF16 forward and backward checks on four GB200 GPUs. Recomputing the forward context reduced the full-model runtime allocation from 378.61 GiB to 143.86 GiB, which is 5.64 GiB above the allocator limit. A 32K macro-buffer is now the full-model memory treatment; its two-pass ring replay passed the four-GPU gradient gate.
 
 Both measured arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
@@ -242,3 +242,23 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The adapter builds and runs the fused BF16 backward without PyTorch. Forward maximum error was 0.03125. Input, router, and routed-weight gradient maximum errors were 0.0625, 0.2632, and at most 0.5. Shared-weight gradients were summed across the expert axis and had maximum error 1.0 after four BF16 local reductions. All checks passed their stated limits with no mismatch.
 - Interpretation: Native backward removes the JAX fallback activations and supplies correct distributed gradients. The remaining risk is full-shape compiler memory and training execution.
 - Next action: Run one full-model step with the native backward, then submit the 25-step profile if the memory gate passes.
+
+### 2026-08-10 10:50 UTC - Context recomputation reduced the full-model allocation
+
+- Hypothesis: Saving the fused forward context through all 48 rematerialized layers causes the full-shape memory failure.
+- Commit Hash: `70e208d23`.
+- Commands: Two one-step four-GPU GB200 Iris runs and one four-GPU recomputation gradient gate.
+- Config: E8, top-4, global batch 64, BF16 compute, fused forward and native backward, first with a saved context and then with backward context recomputation.
+- Result: Saving the context made XLA request 378.61 GiB. Recomputing it reduced the compiler estimate to 216.05 GiB after rematerialization and the runtime allocation to 143.86 GiB. The allocator limit was 138.22 GiB, so no training step ran. The recomputed gradient gate passed before the full-shape run.
+- Interpretation: Context lifetime was the main memory fault. The remaining runtime gap is 5.64 GiB, which matches the size of the routed activation ring at a 131,072-token macro-buffer.
+- Next action: Reduce the macro-buffer to 32,768 tokens and use the source kernel's ring replay path.
+
+### 2026-08-10 11:06 UTC - Two-pass ring replay passed the four-GPU gate
+
+- Hypothesis: A macro-buffer smaller than the schedule reduces memory while the fused kernel replays routed activations without a gradient change.
+- Commit Hash: `70e208d23` plus the ring-replay change.
+- Commands: Fifteen focused tests, repository checks, and one four-GPU GB200 forward and backward job.
+- Config: A 1,024-row schedule, a 512-row macro-buffer, a 256-row minibatch, and the same independent BF16 reference and gradient limits as the native-backward gate.
+- Result: The terminal job `/rav/mok-ffi-ring-replay-4xgb200-20260810-1104` succeeded without a retry. Forward maximum error was 0.03125. All input, router, routed-weight, and shared-weight gradient checks passed with no mismatches.
+- Interpretation: The JAX adapter can use the source ring replay mechanism. The full gate can use a 32,768-row buffer, which is one quarter of the prior routed workspace.
+- Next action: Repeat the one-step full-model memory gate with the 32K macro-buffer.
