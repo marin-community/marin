@@ -8,6 +8,11 @@ evaluated question in its own native shape. This module normalizes those rows in
 :class:`~finestore.eval.EvalSample` and exports them into the run's finestore archive, preserving
 each source file it read so the archive can be rebuilt from itself. ``finestore.eval`` owns the
 contract and the archive tables; knowledge of lm-eval's row shape lives here.
+
+The same pass measures each task's coverage. lm-eval publishes no attempted-item count in its
+aggregate results, but its per-sample rows carry the document indices it enumerated, so the rows are
+the only place a run can establish what it set out to grade -- which is what lets the statistics
+engine identify an interval instead of reporting sampling error alone.
 """
 
 from __future__ import annotations
@@ -15,6 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
@@ -29,11 +37,14 @@ from finestore.eval import (
     Message,
     SampleKind,
     base_metric,
+    primary_filter,
     primary_metric,
 )
 from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, SEALED_MARKER
 from finestore.reader import CompositeReader
 from rigging.filesystem import StoragePath, factory, prefix_join
+
+from marin.evaluation.records import TaskCoverage
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +289,74 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
 
 
 # --------------------------------------------------------------------------------------------------
+# Coverage: what a task's own sample rows say about how much of it ran.
+# --------------------------------------------------------------------------------------------------
+
+
+def _document_extent(doc_ids: Iterable[str]) -> int | None:
+    """How many documents a task enumerated, from the indices its rows carry, or None if unknowable.
+
+    lm-eval indexes a task's documents ``0..N-1`` and writes a row for each one it reached, so the
+    highest index present establishes ``N``. A task whose ids are not indices (another harness's
+    identifiers) establishes nothing, and coverage stays unknown rather than being guessed at.
+    """
+    highest = -1
+    for doc_id in doc_ids:
+        if not doc_id.isdigit():
+            return None
+        highest = max(highest, int(doc_id))
+    return highest + 1 if highest >= 0 else None
+
+
+def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
+    """One task's coverage, read from the samples it produced.
+
+    A document that yielded no grading is counted as attempted but unscored, and one whose grader
+    extracted no answer is counted as unanswered -- it scored, but on nothing the model actually
+    supplied. A task scoring each document under several extraction filters holds one sample per
+    (document, filter); the tallies come from the filter :func:`~finestore.eval.primary_filter`
+    picks, which is the one the run's headline metric is also reported under.
+    """
+    graded: dict[str, list[EvalSample]] = {}
+    seen: set[str] = set()
+    for sample in samples:
+        seen.add(sample.doc_id)
+        if sample.grading is not None:
+            graded.setdefault(sample.doc_id, []).append(sample)
+
+    headline = primary_filter(
+        {sample.grading.filter for rows in graded.values() for sample in rows if sample.grading.filter}
+    )
+    scored = [
+        next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
+    ]
+    ungraded = len(seen) - len(scored)
+    # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
+    # (a rubric, an edit distance) has no numerator to record.
+    binary = all(sample.grading.score in (0.0, 1.0) for sample in scored)
+    return TaskCoverage(
+        n_attempted=_document_extent(seen),
+        n_scored=len(scored),
+        n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
+        n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
+        errors={"ungraded": ungraded} if ungraded else {},
+    )
+
+
+def _task_key(relative: str, group: bool) -> str:
+    """The ``metrics`` key a sample file's coverage belongs to.
+
+    A run's records key metrics by the task-config directory (``<task_dir>/<model>/<file>``), and
+    namespace them ``<task_dir>/<task>`` when one config evaluated several tasks -- see
+    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`. Coverage keys the same
+    way so a reader can line the two up.
+    """
+    path = PurePosixPath(relative)
+    task_dir = path.parent.parent.name
+    return f"{task_dir}/{_task_from_filename(path.name, '.jsonl')}" if group else task_dir
+
+
+# --------------------------------------------------------------------------------------------------
 # Export: normalize a run's sample files into its finestore archive, preserving the sources read.
 # --------------------------------------------------------------------------------------------------
 
@@ -313,13 +392,22 @@ def _content_type(relative: str) -> str:
     return "application/octet-stream"
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
+@dataclass(frozen=True)
+class SampleExport:
+    """What a run's sample export wrote, and what those samples say about the run's completeness."""
+
+    samples: int
+    coverage: dict[str, TaskCoverage] = field(default_factory=dict)
+    """Per-task coverage keyed like the run's ``metrics`` (see :func:`_task_key`)."""
+
+
+def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
-    Returns the number of samples written. Every artifact the harness left in the results tree is
-    preserved inside the archive, not only the files this reads, so the archive stands alone if the
-    tree is pruned. Re-running is idempotent: an unchanged source produces identical rows, which
-    collapse on the primary key without conflict. A run with no sample source is left untouched.
+    Returns the rows written and the coverage they establish. Every artifact the harness left in the
+    results tree is preserved inside the archive, not only the files this reads, so the archive stands
+    alone if the tree is pruned. Re-running is idempotent: an unchanged source produces identical rows,
+    which collapse on the primary key without conflict. A run with no sample source is left untouched.
 
     Raises if the archive holds samples written under an older contract. Those rows cannot collapse
     against rows written under the current one, and finestore does not delete, so bringing them
@@ -327,25 +415,40 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     """
     root = StoragePath(out_path)
     artifacts = run_artifacts(out_path)
+    sources = [relative for relative in artifacts if _is_sample_source(relative) and not is_scratch_artifact(relative)]
     if not any(_is_sample_source(relative) for relative in artifacts):
         # With no source there is nothing to write, and nothing that could stand in for what is
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
-        return 0
+        return SampleExport(samples=0)
     require_current_samples(out_path)
+    # A task config that evaluated several tasks wrote several sample files under one directory, and
+    # its metrics are namespaced to match.
+    grouped = {relative for relative in sources if _dir_source_count(sources, relative) > 1}
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
+    coverage: dict[str, TaskCoverage] = {}
     try:
         for relative in artifacts:
             payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-            if _is_sample_source(relative) and not is_scratch_artifact(relative):
-                count += _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
+            if relative not in sources:
+                continue
+            samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
+            count += len(samples)
+            if samples:
+                coverage[_task_key(relative, relative in grouped)] = task_coverage(samples)
         store.seal()
     finally:
         store.close()
-    return count
+    return SampleExport(samples=count, coverage=coverage)
+
+
+def _dir_source_count(sources: Sequence[str], relative: str) -> int:
+    """How many sample files share ``relative``'s task-config directory."""
+    parent = PurePosixPath(relative).parent.parent
+    return sum(1 for other in sources if PurePosixPath(other).parent.parent == parent)
 
 
 def require_current_samples(out_path: str) -> None:
@@ -369,8 +472,8 @@ def _task_from_filename(name: str, suffix: str) -> str:
     return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
 
 
-def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
-    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the rows added.
+def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> list[EvalSample]:
+    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the samples added.
 
     Splits only on the physical LF delimiter, so a literal U+2028/U+2029 inside a JSON string stays
     part of its record rather than being taken for a record boundary.
@@ -378,11 +481,12 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
     rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
     if not rows:
         logger.warning("samples file %s is empty; skipping archive export", filename)
-        return 0
+        return []
     task = _task_from_filename(filename, ".jsonl")
-    for raw in rows:
-        store.add_sample(sample_from_lm_eval(task, raw))
-    return len(rows)
+    samples = [sample_from_lm_eval(task, raw) for raw in rows]
+    for sample in samples:
+        store.add_sample(sample)
+    return samples
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
@@ -426,7 +530,7 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-            count += _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload)
+            count += len(_add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload))
         store.seal()
     finally:
         store.close()

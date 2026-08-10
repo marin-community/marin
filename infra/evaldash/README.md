@@ -69,6 +69,14 @@ Imbens-Manski critical value rather than imputing them; when it reports none, th
 `sampling_only`, because completeness is then unknown. Rankings sort on the interval's lower bound, so
 losing items cannot buy rank.
 
+Both runners establish that attempted count. Harbor reports the trials it dispatched; lm-eval publishes
+no such count in its aggregate results, so the evalchemy path derives it from the document indices in
+the run's own per-sample rows (`marin.evaluation.lm_eval_samples`), which also carry the pass tally and
+the count of items whose grader extracted no answer. A cell every one of whose graded items yielded no
+extractable answer is marked `no_answers` and starred in the panel: the zero is a real score, and it is
+equally consistent with a broken grader, so the dashboard reports the observation instead of ruling on
+it.
+
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to
 the alphabetically-first non-stderr metric).

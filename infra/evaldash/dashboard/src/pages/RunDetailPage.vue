@@ -13,7 +13,7 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import { INTERVAL_KIND, type EvalRecord } from '@/types/api'
+import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
 import LogsPanel from '@/components/runs/LogsPanel.vue'
@@ -60,6 +60,12 @@ const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   if (headline.coverage === null || headline.coverage >= 1) return { label: 'all items graded', warn: false }
   return { label: formatCoverage(headline.coverage), warn: true }
 })
+
+// Properties the statistics engine flagged on this grade, spelled out. A flagged run is still a real
+// measurement, so this explains what was observed and leaves the judgement to the reader.
+const flagNotes = computed<string[]>(() =>
+  (data.value?.headline?.flags ?? []).filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
+)
 
 // Per-error-type counts for the items this run attempted and never graded: an admitted batch keeps
 // its error breakdown, so a reader can tell the model's score apart from the infrastructure's.
@@ -180,6 +186,14 @@ async function copyPath() {
           <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Finished</div>
           <div class="text-sm font-medium mt-1.5">{{ formatTimestamp(finishedAt) }}</div>
         </div>
+      </div>
+
+      <!-- What the engine noticed about this grade: stated as the observation, not as a verdict -->
+      <div v-if="flagNotes.length" class="rounded-lg border border-status-warning-border bg-status-warning-bg p-3">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-status-warning mb-1">Worth checking</h3>
+        <ul class="text-sm leading-relaxed list-disc pl-5">
+          <li v-for="note in flagNotes" :key="note">{{ note }}</li>
+        </ul>
       </div>
 
       <!-- Attrition: the items this run attempted and never graded, by cause -->

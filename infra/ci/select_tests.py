@@ -58,6 +58,9 @@ class SourceRoot:
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
     SourceRoot("experiments", "."),
+    # The evaldash server is not a package: its tests import it by repo-root path
+    # (``infra.evaldash.src.metrics``), so the repo root is its import root.
+    SourceRoot("infra/evaldash/src", "."),
 )
 
 # Files whose change triggers running every package's full test suite. The Rust

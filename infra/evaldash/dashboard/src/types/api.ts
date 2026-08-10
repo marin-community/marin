@@ -43,6 +43,23 @@ export const INTERVAL_KIND = {
 
 export type IntervalKind = (typeof INTERVAL_KIND)[keyof typeof INTERVAL_KIND]
 
+// Properties of a measurement worth showing beside it. `marin.evaluation.eval_stats.ResultFlag` is
+// the full set; these are the ones the panel annotates a cell with.
+export const RESULT_FLAG = {
+  NO_ANSWERS: 'no_answers',
+} as const
+
+// A flag says what was observed, not what to conclude: unextractable answers score zero like wrong
+// ones do, so the cell is marked and explained rather than withheld or corrected.
+//
+// Only flags nothing else on the page already shows belong here. `attrition` has its own per-cause
+// table and a coverage figure on the cell, and `capped` is a declared setting rather than a finding;
+// repeating either as a warning says the same thing twice and dulls the ones that matter.
+export const FLAG_NOTES: Record<string, string> = {
+  no_answers: 'no graded item yielded an extractable answer — suspect the grader, not only the model',
+  degenerate_stderr: 'the harness recorded a standard error of exactly zero, which no real sample supports',
+}
+
 // One benchmark result: the rate over graded items, the interval around it, how much of the
 // attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
 // complete-case rate and is biased upward when a run lost items.

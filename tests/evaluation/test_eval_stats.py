@@ -525,5 +525,85 @@ def test_record_adapter_falls_back_to_dispersion_when_a_value_is_not_a_count():
     assert measurement.recorded_stderr == pytest.approx(math.sqrt(0.02) / 2)
 
 
+def test_evalchemy_coverage_identifies_an_interval_lm_eval_metrics_alone_cannot():
+    """The counts a run's own samples establish are what take it off the sampling-only path."""
+    metrics = {"gsm8k_5shot": {"sample_len": 128.0, "exact_match,none": 0.5, "exact_match_stderr,none": 0.04}}
+    without = measurement_from_record(_record(metrics=metrics))
+    with_coverage = measurement_from_record(
+        _record(metrics=metrics, coverage={"gsm8k_5shot": TaskCoverage(n_attempted=128, n_scored=128, n_correct=64)})
+    )
+
+    assert without is not None and with_coverage is not None
+    assert measurement_interval(without).kind is IntervalKind.SAMPLING_ONLY
+    assert measurement_interval(with_coverage).kind is IntervalKind.IDENTIFIED
+    assert ResultFlag.ATTRITION_UNREPORTED not in with_coverage.flags
+
+
+def test_a_recorded_pass_count_is_preferred_to_inverting_the_reported_rate():
+    """The harness counted its own passes; recovering that count from a rounded rate is a fallback."""
+    record = _record(
+        metrics={"gsm8k_5shot": {"sample_len": 3.0, "exact_match,none": 1 / 3, "exact_match_stderr,none": 0.27}},
+        coverage={"gsm8k_5shot": TaskCoverage(n_attempted=3, n_scored=3, n_correct=1)},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.n_correct == 1
+    assert measurement.kind is MetricKind.BINARY
+
+
+def test_a_pass_count_that_contradicts_the_reported_value_is_not_substituted_for_it():
+    """Pooled k/n and an unweighted mean over unequal subtasks are different numbers. Taking the
+    tally as the numerator for a value it does not belong to would republish the run at a score it
+    never reported."""
+    record = _record(
+        eval_name="suite",
+        metrics={
+            "suite/one": {"sample_len": 10.0, "acc,none": 0.9, "acc_stderr,none": 0.1},
+            "suite/two": {"sample_len": 90.0, "acc,none": 0.1, "acc_stderr,none": 0.03},
+        },
+        coverage={
+            "suite/one": TaskCoverage(n_attempted=10, n_scored=10, n_correct=9),
+            "suite/two": TaskCoverage(n_attempted=90, n_scored=90, n_correct=9),
+        },
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    # The record's headline is the unweighted mean of 0.9 and 0.1; the tallies pool to 18/100.
+    assert measurement.value == pytest.approx(0.5)
+    assert measurement.kind is MetricKind.CONTINUOUS
+    assert measurement.n_correct is None
+
+
+def test_a_run_whose_grader_extracted_no_answers_is_flagged_rather_than_dropped():
+    """A benchmark-wide zero is a real score and a suspect one. The flag reports the evidence and
+    leaves admission to the caller."""
+    record = _record(
+        metrics={"gsm8k_5shot": {"sample_len": 40.0, "exact_match,none": 0.0, "exact_match_stderr,none": 0.0}},
+        coverage={"gsm8k_5shot": TaskCoverage(n_attempted=40, n_scored=40, n_correct=0, n_unanswered=40)},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.value == 0.0
+    assert ResultFlag.NO_ANSWERS in measurement.flags
+
+
+def test_a_run_the_model_merely_failed_is_not_flagged_as_unanswered():
+    record = _record(
+        metrics={"gsm8k_5shot": {"sample_len": 40.0, "exact_match,none": 0.0, "exact_match_stderr,none": 0.0}},
+        coverage={"gsm8k_5shot": TaskCoverage(n_attempted=40, n_scored=40, n_correct=0, n_unanswered=3)},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert ResultFlag.NO_ANSWERS not in measurement.flags
+
+
 def test_record_adapter_returns_nothing_for_a_run_that_produced_no_metrics():
     assert measurement_from_record(_record(metrics={})) is None

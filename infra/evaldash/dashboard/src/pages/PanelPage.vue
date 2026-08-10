@@ -16,7 +16,16 @@ import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/util
 import { scoreTint } from '@/utils/score'
 import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { MAX_COMPARE } from '@/constants'
-import { INTERVAL_KIND, type Meta, type MissingCell, type Panel, type PanelCell, type PanelRow } from '@/types/api'
+import {
+  FLAG_NOTES,
+  INTERVAL_KIND,
+  RESULT_FLAG,
+  type Meta,
+  type MissingCell,
+  type Panel,
+  type PanelCell,
+  type PanelRow,
+} from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
@@ -279,10 +288,15 @@ function cellTitle(cell: PanelCell): string {
   return [
     `${cell.metric} · ${cell.n_scored} items graded`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
+    ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id}`,
     `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
     'click for history',
   ].join('\n')
+}
+// A flagged cell is still a real measurement, so it is marked and explained rather than withheld.
+function isSuspect(cell: PanelCell): boolean {
+  return cell.flags.includes(RESULT_FLAG.NO_ANSWERS)
 }
 function gapLabel(gap: MissingCell): string {
   return gap.reason.startsWith('coverage') ? 'under-covered' : 'no result'
@@ -622,7 +636,10 @@ function goToModel(model: string) {
                     :title="cellTitle(cellFor(row, task)!)"
                     @click="openHistory(row.model, task)"
                   >
-                    <span class="tabular-nums font-mono font-medium">{{ formatScore(cellFor(row, task)!.value) }}</span>
+                    <span class="tabular-nums font-mono font-medium">
+                      {{ formatScore(cellFor(row, task)!.value)
+                      }}<span v-if="isSuspect(cellFor(row, task)!)" class="text-status-warning">*</span>
+                    </span>
                     <span class="block text-[10px] text-text-muted tabular-nums font-mono leading-none">
                       {{ formatInterval(cellFor(row, task)!.low, cellFor(row, task)!.high) }}
                     </span>
@@ -654,7 +671,8 @@ function goToModel(model: string) {
         <p class="text-xs text-text-muted mt-2 leading-relaxed">
           An empty cell says which: <span class="text-status-warning">under-covered</span> or
           <span class="text-status-warning">no result</span> links the run that failed the panel's admission rule, and
-          — means the model never ran that benchmark.
+          — means the model never ran that benchmark. A <span class="text-status-warning">*</span> marks a score no
+          graded item produced an extractable answer for; hover the cell for what was observed.
         </p>
       </div>
     </div>

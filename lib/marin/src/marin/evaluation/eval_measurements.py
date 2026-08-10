@@ -108,23 +108,25 @@ def _rollup_scores(scores: list[_TaskScore]) -> list[_TaskScore]:
 def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage:
     """The record's coverage for its benchmark, from the typed field when the producer wrote one.
 
-    Producers that record no attempted count leave coverage unreported rather than complete: lm-eval
-    grades every document it attempts, but it records no attempted count, so the record cannot
-    establish that nothing was lost upstream of it. One task with an unknown attempted count makes the
-    whole benchmark's count unknown -- a partial sum would understate what the run set out to grade.
+    A producer that records no attempted count leaves coverage unreported rather than complete: the
+    record cannot establish that nothing was lost upstream of it, so readers widen instead. One task
+    with an unknown attempted count makes the whole benchmark's count unknown -- a partial sum would
+    understate what the run set out to grade -- and the same holds for the pass count.
     """
     reported = record.coverage or {}
     if not reported:
         return Coverage(n_scored=n_scored or 0)
-    counts = [entry.n_attempted for entry in reported.values()]
-    attempted = None if any(count is None for count in counts) else sum(count for count in counts if count is not None)
+    attempted = [entry.n_attempted for entry in reported.values()]
+    correct = [entry.n_correct for entry in reported.values()]
     errors: dict[str, int] = {}
     for entry in reported.values():
         for name, count in entry.errors.items():
             errors[name] = errors.get(name, 0) + count
     return Coverage(
         n_scored=sum(entry.n_scored for entry in reported.values()),
-        n_attempted=attempted,
+        n_attempted=None if any(c is None for c in attempted) else sum(c for c in attempted if c is not None),
+        n_correct=None if any(c is None for c in correct) else sum(c for c in correct if c is not None),
+        n_unanswered=sum(entry.n_unanswered for entry in reported.values()),
         errors=errors,
     )
 
@@ -156,7 +158,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     coverage = _mechanism_coverage(record, n_scored)
     kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
     stderr = _combined_stderr([score.stderr for score in scores])
-    n_correct = _integral_successes(value, coverage.n_scored) if kind is MetricKind.BINARY else None
+    n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
         # A binary metric whose value is not k/n (an unweighted rollup across subtasks) has no
         # Bernoulli count behind it, so it takes the recorded-dispersion path instead.
@@ -188,15 +190,24 @@ def measurements_from_records(records: Iterable[EvalRunRecord]) -> list[Measurem
     return [measurement for record in records if (measurement := measurement_from_record(record)) is not None]
 
 
-def _integral_successes(value: float, n_scored: int) -> int | None:
-    """``round(value * n)`` when the value really is a count over ``n`` items, else None."""
-    if n_scored <= 0:
+def _successes(value: float, coverage: Coverage) -> int | None:
+    """The Bernoulli numerator behind ``value``, or None when the value is not a count over items.
+
+    A producer that tallied its own passes supplies the numerator directly, which is exact where
+    recovering it from the reported rate is not. It also settles the question the rate cannot: a
+    benchmark whose headline is an unweighted mean across differently-sized subtasks is not the
+    pooled ``k/n`` those tallies sum to, and a tally that disagrees with the reported value is proof
+    that no Bernoulli count stands behind it -- inverting the rate anyway would find a spurious one
+    whenever the mean happened to land on a whole number of items.
+    """
+    if coverage.n_scored <= 0:
         return None
-    scaled = value * n_scored
+    scaled = value * coverage.n_scored
+    tolerance = _INTEGRALITY_TOLERANCE * max(1.0, coverage.n_scored)
+    if coverage.n_correct is not None:
+        return coverage.n_correct if abs(scaled - coverage.n_correct) <= tolerance else None
     nearest = round(scaled)
-    if abs(scaled - nearest) > _INTEGRALITY_TOLERANCE * max(1.0, n_scored):
-        return None
-    return int(nearest)
+    return int(nearest) if abs(scaled - nearest) <= tolerance else None
 
 
 def _combined_stderr(stderrs: Sequence[float | None]) -> float | None:
@@ -220,6 +231,8 @@ def _flags(coverage: Coverage, kind: MetricKind, stderr: float | None, item_cap:
         flags.add(ResultFlag.ATTRITION)
     if item_cap is not None:
         flags.add(ResultFlag.CAPPED)
+    if coverage.n_scored > 0 and coverage.n_unanswered >= coverage.n_scored:
+        flags.add(ResultFlag.NO_ANSWERS)
     if kind is MetricKind.CONTINUOUS:
         if stderr is None:
             flags.add(ResultFlag.NO_DISPERSION)

@@ -100,6 +100,11 @@ class ResultFlag(StrEnum):
     every item agrees; it is a degenerate value, not a missing one, and asserts a certainty the data
     does not support."""
 
+    NO_ANSWERS = "no_answers"
+    """No graded item yielded an extractable answer. The score is real -- unextractable answers score
+    zero -- but a run in this state is as consistent with a broken grader or a mis-served prompt as
+    with a model that cannot do the task, so it is evidence rather than a verdict."""
+
 
 @dataclass(frozen=True)
 class Interval:
@@ -134,10 +139,17 @@ class Coverage:
     ``None`` when the mechanism reports no such count. ``errors`` is the error-type histogram over
     attempted-but-ungraded items, which is what distinguishes a model's score from the quality of the
     infrastructure that produced it.
+
+    ``n_correct`` is the harness's own count of passing items, so a binary measurement need not
+    recover its numerator by inverting a rate; ``n_unanswered`` counts graded items that yielded no
+    extractable answer, which is what tells a genuinely-zero score apart from a broken extraction.
+    Both are ``None``/zero for a mechanism that reports neither.
     """
 
     n_scored: int
     n_attempted: int | None = None
+    n_correct: int | None = None
+    n_unanswered: int = 0
     errors: Mapping[str, int] = field(default_factory=dict)
 
     @property

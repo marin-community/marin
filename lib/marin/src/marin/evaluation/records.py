@@ -265,7 +265,7 @@ class RunTiming(BaseModel):
 
 
 class TaskCoverage(BaseModel):
-    """How much of one task's intended item set a run actually graded.
+    """How much of one task's intended item set a run actually graded, and how those grades came out.
 
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
     ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
@@ -275,12 +275,22 @@ class TaskCoverage(BaseModel):
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
     mechanism with no notion of an attempted count at all records nothing here.
+
+    ``n_correct`` is the count of graded items the harness scored as passing, recorded directly so a
+    reader gets the Bernoulli numerator without inverting a rounded rate out of ``metrics``. It is
+    ``None`` for a task whose grade is not pass/fail.
+
+    ``n_unanswered`` counts graded items whose output held no extractable answer. Those score zero
+    like a wrong answer does, so the count is the evidence that separates a model that answers badly
+    from a run whose extraction produced nothing at all.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     n_attempted: int | None = None
     n_scored: int
+    n_correct: int | None = None
+    n_unanswered: int = 0
     errors: dict[str, int] = Field(default_factory=dict)
 
 

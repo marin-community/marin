@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pydantic import Field
 from rigging.filesystem import StoragePath, prefix_join
 
+from marin.evaluation.lm_eval_samples import is_scratch_artifact
 from marin.execution.artifact import Artifact, result_type_name
 
 logger = logging.getLogger(__name__)
@@ -80,9 +81,14 @@ class EvalchemyResult(EvalResult):
     def _task_metrics(self) -> dict[str, dict[str, float]]:
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
-        result_files = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
-        if not result_files:
+        found = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
+        if not found:
             raise FileNotFoundError(f"no evalchemy results_*.json under {self.path}")
+        # A retried evaluation leaves a second complete tree under the harness's scratch directory,
+        # scoring the same items again. Reading both would key one benchmark's panel twice and double
+        # its item count, so the canonical tree wins wherever there is one to prefer.
+        canonical = [path for path in found if not is_scratch_artifact(str(path)[len(str(self.path)) :])]
+        result_files = canonical or found
         metrics: dict[str, dict[str, float]] = {}
         for result_file in result_files:
             task_dir = _result_task_dir(result_file)

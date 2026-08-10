@@ -117,7 +117,7 @@ def _record(
         version=version,
         description=description,
         model=ModelRef(name=model, location=f"gs://marin-models/{model}", backend="vllm"),
-        evaluation=evaluation,
+        eval=evaluation,
         hardware=_hardware(),
         status=status,
         error=error,
@@ -312,6 +312,7 @@ _HEADLINE = {
     "mmlu": ("acc,none", "acc_stderr,none"),
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
+    "humaneval": ("exact_match,none", "exact_match_stderr,none"),
     "math500": ("accuracy", None),
 }
 
@@ -417,6 +418,35 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", "2", extracted="120", target="120"),
         ],
     )
+    r = f"{grp}-humaneval"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model=REFERENCE_MODEL,
+            version="2026.07.20",
+            created_at="2026-07-20T02:15:00+00:00",
+            evaluation=_lm_eval_ref("humaneval", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_lm_metrics("humaneval", 0.318, 0.015),
+            coverage={
+                "humaneval": TaskCoverage(
+                    n_attempted=_FIXTURE_ITEMS, n_scored=_FIXTURE_ITEMS, n_correct=318, n_unanswered=12
+                )
+            },
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "humaneval",
+        [
+            _generation_sample("humaneval", "0", extracted="return a + b", target="return a + b"),
+            _generation_sample("humaneval", "1", extracted="", target="return len(s)"),
+        ],
+    )
     r = f"{grp}-aime"
     emit(
         _record(
@@ -500,6 +530,37 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", str(i), extracted=str(i), target=str(i if i % 2 else i + 1))
             for i in range(4)
         ],
+    )
+    r = f"{grp}-humaneval"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="tootsie-8b",
+            version="2026.07.20",
+            created_at="2026-07-20T04:15:00+00:00",
+            evaluation=_lm_eval_ref("humaneval", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            # A complete run that scored zero because nothing it produced could be extracted -- the
+            # score is real and the panel marks it, since a broken grader looks exactly like this.
+            metrics=_lm_metrics("humaneval", 0.0, 0.0),
+            coverage={
+                "humaneval": TaskCoverage(
+                    n_attempted=_FIXTURE_ITEMS,
+                    n_scored=_FIXTURE_ITEMS,
+                    n_correct=0,
+                    n_unanswered=_FIXTURE_ITEMS,
+                )
+            },
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "humaneval",
+        [_generation_sample("humaneval", str(i), extracted="", target=str(i)) for i in range(3)],
     )
     r = f"{grp}-math500"
     emit(

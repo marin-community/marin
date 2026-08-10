@@ -27,6 +27,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
 )
+from marin.evaluation.records import TaskCoverage
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
@@ -134,7 +135,7 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     }
     sample_path.write_text(json.dumps(raw, ensure_ascii=False) + "\n")
 
-    assert export_lm_eval_samples(str(results)) == 1
+    assert export_lm_eval_samples(str(results)).samples == 1
 
     table = CompositeReader(str(results)).scan("samples")
     assert table is not None
@@ -180,7 +181,7 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
         ],
     )
 
-    assert export_lm_eval_samples(str(results)) == 2
+    assert export_lm_eval_samples(str(results)).samples == 2
 
     rows = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert len(rows) == 2
@@ -208,7 +209,7 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     results = tmp_path / "run" / "results"
     source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4"), _lm_eval_row(1, "none", 0.0, "5")])
     (results / "gsm8k_5shot" / "model" / "results_20260807.json").write_text(json.dumps({"results": {}}))
-    assert export_lm_eval_samples(str(results)) == 2
+    assert export_lm_eval_samples(str(results)).samples == 2
 
     reader = CompositeReader(str(results))
     blob = reader.read_blob(f"sources/{source.relative_to(results)}")
@@ -317,7 +318,7 @@ def test_export_leaves_an_archive_it_has_no_source_for(tmp_path):
     results = tmp_path / "run" / "results"
     _harbor_archive(results, version=3)
 
-    assert export_lm_eval_samples(str(results)) == 0
+    assert export_lm_eval_samples(str(results)).samples == 0
     assert CompositeReader(str(results)).scan("samples").num_rows == 1
 
 
@@ -331,12 +332,94 @@ def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
     scratch.parent.mkdir(parents=True)
     scratch.write_text(json.dumps(_lm_eval_row(0, "none", 0.0, "5")) + "\n")
 
-    assert export_lm_eval_samples(str(results)) == 1
+    assert export_lm_eval_samples(str(results)).samples == 1
 
     [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).output == "4"
     # The retry is still recoverable: it is preserved even though it produced no row.
     assert any("tmpp90h6r1d" in name for name in preserved_sample_sources(str(results)))
+
+
+def test_export_establishes_what_a_task_set_out_to_grade(tmp_path):
+    # lm-eval publishes no attempted-item count in its aggregate results, so a run's own sample rows
+    # are the only evidence that it graded everything it enumerated. Without this the dashboard can
+    # only report sampling error and has to treat the benchmark's completeness as unknown.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(doc_id, "none", float(doc_id % 2), "4") for doc_id in range(6)])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    assert coverage == {"gsm8k_5shot": TaskCoverage(n_attempted=6, n_scored=6, n_correct=3, n_unanswered=0)}
+
+
+def test_a_document_that_produced_no_row_is_counted_as_attempted(tmp_path):
+    # lm-eval indexes documents 0..N-1, so a gap in the indices is a document that was enumerated and
+    # never graded. Scoring the survivors as if they were the whole benchmark is the complete-case
+    # bias the interval exists to bound.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [_lm_eval_row(0, "none", 1.0, "4"), _lm_eval_row(1, "none", 1.0, "4"), _lm_eval_row(3, "none", 1.0, "4")],
+    )
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_attempted == 4
+    assert entry.n_scored == 3
+
+
+def test_a_document_scored_under_two_filters_counts_once(tmp_path):
+    # gsm8k grades each document under strict-match and flexible-extract, so the archive holds two
+    # rows per document. Counting rows would report twice the items the benchmark actually has, which
+    # halves the interval it deserves.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+            _lm_eval_row(1, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(1, "flexible-extract", 0.0, "nope"),
+        ],
+    )
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_scored == 2
+    # flexible-extract leads for exact_match, and the tally comes from the same filter the run's
+    # headline metric is reported under rather than mixing the two verdicts.
+    assert entry.n_correct == 1
+
+
+def test_answers_the_grader_could_not_extract_are_counted_apart_from_wrong_ones(tmp_path):
+    # A zero because the model answered wrongly and a zero because nothing parseable came back are
+    # the same number and different facts; only the second is grounds for doubting the run.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 0.0, ""), _lm_eval_row(1, "none", 0.0, "5")])
+
+    [entry] = export_lm_eval_samples(str(results)).coverage.values()
+
+    assert entry.n_scored == 2
+    assert entry.n_correct == 0
+    assert entry.n_unanswered == 1
+
+
+def test_a_group_task_reports_coverage_per_subtask(tmp_path):
+    # One task config evaluating several tasks keys its metrics <task_dir>/<task>; coverage keys the
+    # same way or a reader cannot line the two up.
+    results = tmp_path / "run" / "results"
+    directory = results / "mmlu_5shot" / "model"
+    directory.mkdir(parents=True)
+    for subject in ("anatomy", "astronomy"):
+        rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(3)]
+        (directory / f"samples_mmlu_{subject}_20260807.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n"
+        )
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    assert sorted(coverage) == ["mmlu_5shot/mmlu_anatomy", "mmlu_5shot/mmlu_astronomy"]
+    assert all(entry.n_attempted == 3 for entry in coverage.values())
 
 
 def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):

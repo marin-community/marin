@@ -51,6 +51,7 @@ SHOTS = [
     ("08-compare.png", "/compare?models=snowball,qwen3-8b", "text=Shared-benchmark ranking"),
     ("09-model-detail.png", "/models/snowball", "text=Measurement profile"),
     ("10-run-agentic.png", "/runs/snowball-2026.07.20-aime", "text=Ungraded items"),
+    ("11-run-flagged.png", "/runs/tootsie-8b-2026.07.20-humaneval", "text=Worth checking"),
 ]
 
 
