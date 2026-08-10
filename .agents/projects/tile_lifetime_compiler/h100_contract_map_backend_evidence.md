@@ -88,6 +88,24 @@ Each backend reports two boundaries:
   layout adapters, copies, save-or-recompute policy, output adapters, and final
   synchronization.
 
+Input and output layouts are nonempty lists of canonical strings. The remaining
+logical-boundary arrays use closed records with these exact fields and types:
+
+- layout adapter: `value`, `input_layout`, and `output_layout` strings plus a
+  `materialized` boolean;
+- materialized copy: `source` and `destination` strings plus nonnegative integer
+  `bytes`;
+- transpose: `input` and `output` strings, a complete integer `permutation`, and
+  a `materialized` boolean;
+- bitcast: `input` and `output` strings plus nonempty positive-integer
+  `input_shape` and `output_shape` lists with equal element counts;
+- recompute operation: `output` and `operation` strings plus a nonnegative
+  integer `launch_count`.
+
+Saved state is a mapping from canonical value names to nonnegative integer byte
+counts. Null values, boolean substitutes for integers, missing fields, and
+unknown fields reject the record.
+
 The full boundary records every saved tensor and its byte size. A recompute
 candidate records the removed save and all extra Contract/Map launches. The
 comparison rejects a row if one backend includes an adapter, copy, or saved
