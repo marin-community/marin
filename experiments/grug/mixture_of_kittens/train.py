@@ -53,7 +53,7 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
-MOK_HOST_MEMORY_LIMIT_GB = 192
+MOK_HOST_MEMORY_LIMIT_GB = 256
 MOK_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": str(MOK_HOST_MEMORY_LIMIT_GB),
@@ -734,6 +734,7 @@ def _run_mok_local(config: GrugRunConfig) -> None:
             f"{installed_versions}"
         )
     logger.info("Using pinned Mixture of Kittens JAX packages: %s", installed_versions)
+    logger.info("Using a %s GB XLA host-memory limit", MOK_HOST_MEMORY_LIMIT_GB)
     _run_grug_local(config)
 
 
