@@ -5,13 +5,13 @@
 
 from pathlib import Path
 
+from tile_lifetime.autodiff import scalar_expression_vjp
 from tile_lifetime.cuda_map_fold_codegen import (
     CudaArithmeticMode,
     CudaMapFoldProgram,
     CudaScalarFunction,
     render_cuda_scalar_program_include,
 )
-from tile_lifetime.autodiff import scalar_expression_vjp
 from tile_lifetime.expert_parallel_training import ExpertParallelTrainingPlan
 from tile_lifetime.tensor_program import (
     ScalarExpression,
