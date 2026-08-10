@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import json
 import threading
 from pathlib import Path
 from urllib.parse import urlencode
@@ -40,8 +41,11 @@ class _BlockingStager:
     def validate(self, uri: str) -> str:
         return uri
 
-    def stage(self, uri: str) -> Path:
+    def stage(self, uri: str, progress) -> Path:
         self.started.set()
+        progress.set_size(2)
+        progress.add_bytes(4 * 1024 * 1024)
+        progress.complete_file()
         self.release.wait(timeout=5)
         return self.local_path
 
@@ -121,9 +125,22 @@ def test_open_stages_outside_request_then_redirects_to_proxy_path(tmp_path):
         pending = _request(app, "/open", query)
         assert pending["status"] == "202 Accepted"
         assert stager.started.wait(timeout=1)
+        assert b"Loading XProf profile" in pending["body"]
+
+        progress = _request(app, "/progress", query)
+        payload = json.loads(progress["body"])
+        assert payload["state"] == "downloading"
+        assert payload["downloaded_bytes"] == 4 * 1024 * 1024
+        assert payload["files_completed"] == 1
+        assert payload["total_files"] == 2
 
         stager.release.set()
         manager.future("gs://marin-us-east5/tmp/ttl=7d/xprof/run-1").result(timeout=1)
+        complete = json.loads(_request(app, "/progress", query)["body"])
+        assert complete == {
+            "state": "ready",
+            "location": f"./?{urlencode({'run_path': str(stager.local_path)})}",
+        }
         ready = _request(app, "/open", query)
         assert ready["status"] == "303 See Other"
         assert ready["headers"]["Location"] == f"./?{urlencode({'run_path': str(stager.local_path)})}"
