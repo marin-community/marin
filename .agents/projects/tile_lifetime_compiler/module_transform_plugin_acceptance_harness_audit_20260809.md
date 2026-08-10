@@ -1,5 +1,11 @@
 # Shuttle module-transform plugin and acceptance-harness audit
 
+> Historical audit: this document predates the MLIR-extension decision. Its
+> inventory remains useful, but its serialized-HLO callback and typed-HLO
+> importer proposals are not the production architecture. The current design
+> inserts native Shuttle MLIR passes inside XLA before StableHLO-to-HLO
+> conversion; see `shuttle_mlir_extension_design_20260809.md`.
+
 ## TL;DR
 
 - Audit revision: `f3ce4aac3c`
