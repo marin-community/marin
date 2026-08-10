@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import math
@@ -74,12 +75,24 @@ GRUG_FA4_SOURCE_PATHS = (
     Path("lib/levanter/src/levanter/grug/attention/_fa4_cute.py"),
     Path("lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py"),
     Path("lib/levanter/src/levanter/grug/attention/_fa4_cute_config.py"),
+    Path("lib/levanter/src/levanter/grug/attention/_fa4_cute_kernels.py"),
+    Path("lib/levanter/src/levanter/grug/attention/_fa4_cute_segmented_bwd.py"),
     Path("experiments/grug/base/model.py"),
     Path("experiments/grug/moe/model.py"),
 )
 OUTPUT_NAMES = ("output", "query_cotangent", "key_cotangent", "value_cotangent")
 FORWARD_OUTPUT_NAMES = ("output", "log_sum_exp")
 GRADIENT_OUTPUT_NAMES = ("query_cotangent", "key_cotangent", "value_cotangent")
+GENERATED_FORWARD_TARGET = "shuttle.normalized_weighted_reduction.forward_saved_bshd_s2048_d128_v1"
+GENERATED_REVERSE_TARGET = "shuttle.normalized_weighted_reduction.reverse_saved_bshd_s2048_d128_v1"
+FORBIDDEN_GENERATED_DEPENDENCIES = ("fa4", "flash_attn", "torch")
+GRUG_MODULES = (
+    "levanter.grug.attention",
+    "levanter.grug.attention._fa4_cute",
+    "levanter.grug.attention._fa4_cute_backend",
+    "levanter.grug.attention._fa4_cute_config",
+    "levanter.grug.attention._fa4_cute_kernels",
+)
 
 
 def _counterbalanced_samples(
@@ -136,12 +149,13 @@ def _source_audit(repository: Path) -> dict[str, object]:
     combined = ""
     for relative_path in GRUG_FA4_SOURCE_PATHS:
         path = repository / relative_path
-        source = path.read_text()
+        source_bytes = path.read_bytes()
+        source = source_bytes.decode()
         sources.append(
             {
                 "path": str(relative_path),
-                "sha256": hashlib.sha256(source.encode()).hexdigest(),
-                "bytes": len(source.encode()),
+                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "bytes": len(source_bytes),
             }
         )
         combined += source
@@ -175,12 +189,83 @@ def _source_audit(repository: Path) -> dict[str, object]:
 
 def _compiled_hlo_audit(compiled: Any) -> dict[str, object]:
     hlo = compiled.as_text()
+    custom_call_targets = tuple(sorted(set(re.findall(r'custom_call_target="([^"]+)"', hlo))))
     return {
         "sha256": hashlib.sha256(hlo.encode()).hexdigest(),
         "bytes": len(hlo.encode()),
         "contains_custom_call": "custom-call" in hlo,
         "contains_copy": " copy(" in hlo or "copy(" in hlo,
+        "custom_call_targets": custom_call_targets,
         "entry_layout": hlo.splitlines()[0] if hlo else "",
+    }
+
+
+def _verify_compiled_hlo_audit(
+    audit: dict[str, object],
+    *,
+    boundary_name: str,
+    expected_target: str | None = None,
+) -> None:
+    if not audit["entry_layout"]:
+        raise ValueError(f"{boundary_name} has no compiled entry layout")
+    if not audit["contains_custom_call"]:
+        raise ValueError(f"{boundary_name} has no compiled custom call")
+    targets = audit["custom_call_targets"]
+    if expected_target is not None and expected_target not in targets:
+        raise ValueError(f"{boundary_name} does not contain generated target {expected_target!r}: {targets}")
+
+
+def _require_fresh_directory(path: Path, *, label: str) -> None:
+    if path.exists():
+        if not path.is_dir() or any(path.iterdir()):
+            raise ValueError(f"{label} must be a fresh empty directory: {path}")
+        return
+    path.mkdir(parents=True)
+
+
+def _repository_audit(repository: Path, *, expected_revision: str) -> dict[str, str]:
+    repository = repository.resolve()
+    root = Path(
+        subprocess.check_output(("git", "-C", str(repository), "rev-parse", "--show-toplevel"), text=True).strip()
+    ).resolve()
+    revision = subprocess.check_output(("git", "-C", str(repository), "rev-parse", "HEAD"), text=True).strip()
+    if root != repository:
+        raise ValueError(f"--repository is not the exact Git worktree root: {repository} != {root}")
+    if revision != expected_revision:
+        raise ValueError(f"--repository HEAD {revision} does not match --shuttle-revision {expected_revision}")
+    return {"root": str(root), "head": revision}
+
+
+def _grug_module_audit(repository: Path) -> tuple[dict[str, str], ...]:
+    levanter_root = (repository / "lib/levanter/src").resolve()
+    records = []
+    for module_name in GRUG_MODULES:
+        module = importlib.import_module(module_name)
+        module_file = getattr(module, "__file__", None)
+        if module_file is None:
+            raise ValueError(f"Grug module has no source file: {module_name}")
+        path = Path(module_file).resolve()
+        if not path.is_relative_to(levanter_root):
+            raise ValueError(f"Grug module {module_name} imported outside --repository: {path}")
+        records.append(
+            {"module": module_name, "file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        )
+    return tuple(records)
+
+
+def _generated_dependency_audit(forward: Any, reverse: Any) -> dict[str, object]:
+    forward_source = forward.source_path.read_text().lower()
+    reverse_source = reverse.source_path.read_text().lower()
+    forward_dependencies = subprocess.check_output(("ldd", str(forward.library_path)), text=True).splitlines()
+    reverse_dependencies = subprocess.check_output(("ldd", str(reverse.library_path)), text=True).splitlines()
+    combined = "\n".join((forward_source, reverse_source, *forward_dependencies, *reverse_dependencies)).lower()
+    forbidden = tuple(name for name in FORBIDDEN_GENERATED_DEPENDENCIES if name in combined)
+    if forbidden:
+        raise ValueError(f"generated runtime depends on forbidden expert implementation names: {forbidden}")
+    return {
+        "forbidden_names": forbidden,
+        "forward_library_dependencies": forward_dependencies,
+        "reverse_library_dependencies": reverse_dependencies,
     }
 
 
@@ -275,6 +360,9 @@ def main() -> None:
     if "torch" in sys.modules:
         raise RuntimeError("Torch must not be imported by the generated or Grug-JAX benchmark path")
 
+    _require_fresh_directory(args.artifact_directory, label="artifact directory")
+    _require_fresh_directory(args.build_directory, label="build directory")
+    repository_audit = _repository_audit(args.repository, expected_revision=args.shuttle_revision)
     source_audit = _source_audit(args.repository)
     numerical_acceptance = NumericalAcceptanceContract(
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -296,11 +384,11 @@ def main() -> None:
         "schema_version": 1,
         "status": "collecting",
         "oracle": source_audit,
+        "repository": repository_audit,
         "note": "Grug FA4 admissibility is independent of generated Shuttle correctness.",
     }
 
     def persist_pre_timing() -> None:
-        args.artifact_directory.mkdir(parents=True, exist_ok=True)
         pre_timing_path.write_text(json.dumps(pre_timing, allow_nan=False, indent=2, sort_keys=True) + "\n")
 
     def verify_and_record(key: str, report: BenchmarkRepeatabilityReport, *, boundary_name: str) -> None:
@@ -342,7 +430,6 @@ def main() -> None:
             pipeline_depth=args.num_stages,
         ),
     )
-    args.build_directory.mkdir(parents=True, exist_ok=True)
     jaxpr_path = args.artifact_directory / "natural_training.jaxpr.txt"
     stablehlo_path = args.artifact_directory / "natural_training.stablehlo.bc"
     jaxpr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -361,14 +448,14 @@ def main() -> None:
     generated_forward = generate_streaming_attention_forward_ffi(
         program,
         schedule,
-        target_name="shuttle.streaming_forward.saved_fa4_match_s2048_d128_v1",
+        target_name=GENERATED_FORWARD_TARGET,
         num_warps=args.num_warps,
         num_stages=args.num_stages,
     )
     generated_reverse = generate_streaming_attention_backward_ffi(
         program,
         schedule,
-        target_name="shuttle.streaming_reverse.saved_fa4_match_s2048_d128_v1",
+        target_name=GENERATED_REVERSE_TARGET,
         state_policy=StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP,
         num_warps=args.num_warps,
         num_stages=args.num_stages,
@@ -401,6 +488,9 @@ def main() -> None:
     generated_runtime_imports = {"torch": "torch" in sys.modules, "flash_attn": "flash_attn" in sys.modules}
     if any(generated_runtime_imports.values()):
         raise RuntimeError(f"generated registration imported an expert runtime: {generated_runtime_imports}")
+    generated_dependency_audit = _generated_dependency_audit(compiled_forward, compiled_reverse)
+    pre_timing["generated_runtime_dependency_audit"] = generated_dependency_audit
+    persist_pre_timing()
 
     keys = jax.random.split(jax.random.key(20260809), len(input_specifications))
     arguments = tuple(
@@ -408,6 +498,35 @@ def main() -> None:
         for key, specification in zip(keys, input_specifications, strict=True)
     )
     query, key, value, output_cotangent = arguments
+    logical_boundary = {
+        "comparison": "logical BSHD, adapter-inclusive",
+        "inputs": tuple(
+            {
+                "name": name,
+                "shape": specification.shape,
+                "dtype": str(specification.dtype),
+            }
+            for name, specification in zip(STREAMING_ATTENTION_BACKWARD_INPUT_NAMES, input_specifications, strict=True)
+        ),
+        "forward_outputs": {
+            "output": {"shape": generated_forward.outputs[0].shape, "dtype": "bf16", "logical_axes": "BSHD"},
+            "log_sum_exp": {
+                "shape": generated_forward.outputs[1].shape,
+                "dtype": "fp32",
+                "logical_axes": "BHS",
+            },
+        },
+        "reverse_outputs": tuple(
+            {"name": output.name, "shape": output.shape, "dtype": output.dtype.value, "logical_axes": "BSHD"}
+            for output in generated_reverse.outputs
+        ),
+        "timed_adapter_policy": (
+            "all JAX/XLA input/output layout adapters, copies, and Grug causal-metadata construction execute "
+            "inside the lowered timed call; no host or device copy is timed outside either callable"
+        ),
+    }
+    pre_timing["logical_comparison_boundary"] = logical_boundary
+    persist_pre_timing()
 
     @jax.jit
     def generated_forward_call(q, k, v):
@@ -481,6 +600,10 @@ def main() -> None:
         segmented_flash_attention_backward,
         segmented_flash_attention_forward,
     )
+
+    grug_module_audit = _grug_module_audit(args.repository)
+    pre_timing["grug_imported_modules"] = grug_module_audit
+    persist_pre_timing()
 
     causal_mask = AttentionMask.causal()
     kernel_config = _segmented_kernel_config(args.head_dimension)
@@ -569,10 +692,48 @@ def main() -> None:
         grug_training_report,
         boundary_name="Grug FA4 saved-state training oracle",
     )
+
+    generated_output, generated_lse = generated_forward_repeats[0]
+    generated_forward_compiled = generated_forward_call.lower(query, key, value).compile()
+    generated_reverse_compiled = generated_reverse_call.lower(
+        query, key, value, generated_output, generated_lse, output_cotangent
+    ).compile()
+    generated_composed_compiled = generated_composed_call.lower(query, key, value, output_cotangent).compile()
+    grug_forward_compiled = grug_forward_call.lower(query, key, value).compile()
+    grug_reverse_compiled = grug_reverse_call.lower(
+        query, key, value, oracle_output, oracle_lse, output_cotangent
+    ).compile()
+    grug_composed_compiled = grug_composed_call.lower(query, key, value, output_cotangent).compile()
+    compiled_hlo = {
+        "generated_forward": _compiled_hlo_audit(generated_forward_compiled),
+        "generated_reverse": _compiled_hlo_audit(generated_reverse_compiled),
+        "generated_composed": _compiled_hlo_audit(generated_composed_compiled),
+        "grug_forward": _compiled_hlo_audit(grug_forward_compiled),
+        "grug_reverse": _compiled_hlo_audit(grug_reverse_compiled),
+        "grug_composed": _compiled_hlo_audit(grug_composed_compiled),
+        "note": "all layout adapters, copies, and causal metadata construction remain inside these compiled boundaries",
+    }
+    _verify_compiled_hlo_audit(
+        compiled_hlo["generated_forward"],
+        boundary_name="generated forward",
+        expected_target=GENERATED_FORWARD_TARGET,
+    )
+    _verify_compiled_hlo_audit(
+        compiled_hlo["generated_reverse"],
+        boundary_name="generated saved reverse",
+        expected_target=GENERATED_REVERSE_TARGET,
+    )
+    _verify_compiled_hlo_audit(compiled_hlo["generated_composed"], boundary_name="generated composed training")
+    _verify_compiled_hlo_audit(compiled_hlo["grug_forward"], boundary_name="Grug FA4 forward")
+    _verify_compiled_hlo_audit(compiled_hlo["grug_reverse"], boundary_name="Grug FA4 saved reverse")
+    _verify_compiled_hlo_audit(compiled_hlo["grug_composed"], boundary_name="Grug FA4 composed training")
+    generated_composed_targets = set(compiled_hlo["generated_composed"]["custom_call_targets"])
+    if not {GENERATED_FORWARD_TARGET, GENERATED_REVERSE_TARGET}.issubset(generated_composed_targets):
+        raise ValueError(f"generated composed boundary omits a generated target: {generated_composed_targets}")
+    pre_timing["compiled_hlo"] = compiled_hlo
     pre_timing["status"] = "passed"
     persist_pre_timing()
 
-    generated_output, generated_lse = generated_forward_repeats[0]
     measurements = {
         "forward": _counterbalanced_samples(
             lambda: generated_forward_call(query, key, value),
@@ -603,14 +764,6 @@ def main() -> None:
             iterations=args.iterations,
         ),
     }
-    generated_forward_compiled = generated_forward_call.lower(query, key, value).compile()
-    generated_reverse_compiled = generated_reverse_call.lower(
-        query, key, value, generated_output, generated_lse, output_cotangent
-    ).compile()
-    grug_forward_compiled = grug_forward_call.lower(query, key, value).compile()
-    grug_reverse_compiled = grug_reverse_call.lower(
-        query, key, value, oracle_output, oracle_lse, output_cotangent
-    ).compile()
     forward_call_count = compiled_forward.library.shuttle_streaming_attention_forward_ffi_call_count
     forward_call_count.restype = ctypes.c_int
     reverse_call_count = compiled_reverse.library.shuttle_streaming_attention_backward_ffi_call_count
@@ -654,13 +807,8 @@ def main() -> None:
             "grug_training": asdict(grug_training_report),
         },
         "measurements": measurements,
-        "compiled_hlo": {
-            "generated_forward": _compiled_hlo_audit(generated_forward_compiled),
-            "generated_reverse": _compiled_hlo_audit(generated_reverse_compiled),
-            "grug_forward": _compiled_hlo_audit(grug_forward_compiled),
-            "grug_reverse": _compiled_hlo_audit(grug_reverse_compiled),
-            "note": "all JAX layout adapters and causal metadata construction remain inside these compiled boundaries",
-        },
+        "logical_comparison_boundary": logical_boundary,
+        "compiled_hlo": compiled_hlo,
         "generated_build": {
             "forward_handler_sha256": hashlib.sha256(compiled_forward.source_path.read_bytes()).hexdigest(),
             "forward_library_sha256": hashlib.sha256(compiled_forward.library_path.read_bytes()).hexdigest(),
@@ -674,21 +822,9 @@ def main() -> None:
         },
         "runtime_dependency_audit": {
             "before_grug_import": generated_runtime_imports,
-            "generated_handler_contains_fa4": (
-                "fa4" in compiled_forward.source_path.read_text().lower()
-                or "fa4" in compiled_reverse.source_path.read_text().lower()
-            ),
-            "generated_handler_contains_torch": (
-                "torch" in compiled_forward.source_path.read_text().lower()
-                or "torch" in compiled_reverse.source_path.read_text().lower()
-            ),
+            "generated": generated_dependency_audit,
             "torch_imported": "torch" in sys.modules,
-            "forward_library_dependencies": (
-                subprocess.check_output(("ldd", str(compiled_forward.library_path)), text=True).splitlines()
-            ),
-            "reverse_library_dependencies": (
-                subprocess.check_output(("ldd", str(compiled_reverse.library_path)), text=True).splitlines()
-            ),
+            "grug_imported_modules": grug_module_audit,
         },
         "environment": {
             "jax": jax.__version__,
@@ -709,6 +845,7 @@ def main() -> None:
             ),
         },
         "revision": args.shuttle_revision,
+        "repository": repository_audit,
     }
     output = args.artifact_directory / "result.json"
     output.write_text(json.dumps(result, allow_nan=False, indent=2, sort_keys=True) + "\n")

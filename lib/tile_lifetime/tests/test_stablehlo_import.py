@@ -10,8 +10,8 @@ import pytest
 from tile_lifetime.ir import DType
 from tile_lifetime.pipeline import (
     FrontendSourceKind,
-    compile_stablehlo_streaming_attention_program,
-    validate_stablehlo_streaming_attention_compilation,
+    compile_experimental_whole_pattern_stablehlo_streaming_attention_program,
+    validate_experimental_whole_pattern_streaming_attention_compilation,
 )
 from tile_lifetime.plan import (
     GemmSkeleton,
@@ -152,8 +152,8 @@ def test_reference_stablehlo_attention_selects_opaque_streaming_plan() -> None:
     assert not any(record.shape[-2:] == (5, 5) for record in plan.activation_materializations)
 
 
-def test_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> None:
-    compilation = compile_stablehlo_streaming_attention_program(
+def test_experimental_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> None:
+    compilation = compile_experimental_whole_pattern_stablehlo_streaming_attention_program(
         base64.b64decode(ATTENTION_FIXTURE.read_text()),
         input_names=ATTENTION_INPUT_NAMES,
         output_name="attention_output",
@@ -172,8 +172,8 @@ def test_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> No
     assert compilation.semantic_erasure_report.is_clean
 
 
-def test_current_streaming_frontend_rejects_hand_authored_provenance() -> None:
-    compilation = compile_stablehlo_streaming_attention_program(
+def test_experimental_streaming_frontend_rejects_hand_authored_provenance() -> None:
+    compilation = compile_experimental_whole_pattern_stablehlo_streaming_attention_program(
         base64.b64decode(ATTENTION_FIXTURE.read_text()),
         input_names=ATTENTION_INPUT_NAMES,
         output_name="attention_output",
@@ -188,11 +188,11 @@ def test_current_streaming_frontend_rejects_hand_authored_provenance() -> None:
     )
 
     with pytest.raises(SemanticErasureError, match="must originate from a StableHLO artifact"):
-        validate_stablehlo_streaming_attention_compilation(bypass)
+        validate_experimental_whole_pattern_streaming_attention_compilation(bypass)
 
 
-def test_current_streaming_frontend_rejects_named_kernel_scheduling_key() -> None:
-    compilation = compile_stablehlo_streaming_attention_program(
+def test_experimental_streaming_frontend_rejects_named_kernel_scheduling_key() -> None:
+    compilation = compile_experimental_whole_pattern_stablehlo_streaming_attention_program(
         base64.b64decode(ATTENTION_FIXTURE.read_text()),
         input_names=ATTENTION_INPUT_NAMES,
         output_name="attention_output",
@@ -207,7 +207,7 @@ def test_current_streaming_frontend_rejects_named_kernel_scheduling_key() -> Non
     )
 
     with pytest.raises(SemanticErasureError, match="retains named semantics"):
-        validate_stablehlo_streaming_attention_compilation(named)
+        validate_experimental_whole_pattern_streaming_attention_compilation(named)
 
 
 def test_reference_stablehlo_program_recovers_coda_and_fa3() -> None:

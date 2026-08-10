@@ -43,13 +43,15 @@ def test_natural_jax_vjp_frontend_records_recovered_algebra_provenance() -> None
 
     assert result.audit.source_kind == "ordinary_jax_tensor_program"
     assert result.audit.automatic_differentiation_owner is JaxAutomaticDifferentiationOwner.JAX_VJP
-    assert result.audit.recovered_provenance is StreamingAttentionBackwardProvenance.JAX_VJP_HLO_RECOVERY
+    assert result.audit.recovered_provenance is StreamingAttentionBackwardProvenance.JAX_VJP_GENERIC_ALGEBRA_IMPORT
     assert result.audit.workload_dispatch_key is None
     assert result.audit.opaque_frontend_primitives == ()
     assert result.audit.source_operation_ids
+    assert result.audit.generic_algebra_operation_ids == result.audit.source_operation_ids
     assert result.audit.contract_operation_ids
     assert result.audit.fold_operation_ids
     assert result.audit.domain_restriction_operation_ids
+    assert result.audit.cast_and_view_operation_ids
     assert len(result.audit.jaxpr_sha256) == 64
     assert len(result.audit.stablehlo_sha256) == 64
     assert result.recovered.forward_output is not None

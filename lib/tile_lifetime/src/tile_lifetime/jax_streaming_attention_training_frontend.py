@@ -12,10 +12,11 @@ from enum import StrEnum
 
 import jax
 
+from tile_lifetime.stablehlo_algebra_import import import_stablehlo_algebra
 from tile_lifetime.stablehlo_import import import_stablehlo
-from tile_lifetime.stablehlo_streaming_attention_backward import (
-    RecoveredStableHLOStreamingAttentionBackward,
-    recover_stablehlo_streaming_attention_backward,
+from tile_lifetime.stablehlo_streaming_schedule import (
+    RecoveredGenericStreamingAttentionTraining,
+    select_streaming_attention_training_schedule,
 )
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import StreamingAttentionBackwardProvenance
@@ -40,9 +41,11 @@ class JaxVjpFrontendAudit:
     stablehlo_sha256: str
     recovered_provenance: StreamingAttentionBackwardProvenance
     source_operation_ids: tuple[int, ...]
+    generic_algebra_operation_ids: tuple[int, ...]
     contract_operation_ids: tuple[int, ...]
     fold_operation_ids: tuple[int, ...]
     domain_restriction_operation_ids: tuple[int, ...]
+    cast_and_view_operation_ids: tuple[int, ...]
     opaque_frontend_primitives: tuple[str, ...]
     workload_dispatch_key: None = None
 
@@ -54,7 +57,7 @@ class RecoveredJaxVjpStreamingAttentionTraining:
     audit: JaxVjpFrontendAudit
     jaxpr: str
     stablehlo: bytes
-    recovered: RecoveredStableHLOStreamingAttentionBackward
+    recovered: RecoveredGenericStreamingAttentionTraining
 
 
 def recover_jax_vjp_streaming_attention_training(
@@ -81,10 +84,9 @@ def recover_jax_vjp_streaming_attention_training(
     jaxpr = str(closed_jaxpr)
     stablehlo = jax.export.export(jax.jit(function))(*input_specifications).mlir_module_serialized
     graph = import_stablehlo(stablehlo, input_names=input_names)
-    recovered = recover_stablehlo_streaming_attention_backward(graph, schedule=schedule)
-    if recovered.forward_output is None:
-        raise ValueError("natural JAX training frontend must return the primal output and JAX-owned cotangents")
-    if recovered.program.provenance is not StreamingAttentionBackwardProvenance.JAX_VJP_HLO_RECOVERY:
+    algebra = import_stablehlo_algebra(graph)
+    recovered = select_streaming_attention_training_schedule(algebra, schedule=schedule)
+    if recovered.program.provenance is not StreamingAttentionBackwardProvenance.JAX_VJP_GENERIC_ALGEBRA_IMPORT:
         raise ValueError(f"unexpected recovered provenance {recovered.program.provenance}")
 
     source_function = f"{function.__module__}.{function.__qualname__}"
@@ -101,9 +103,11 @@ def recover_jax_vjp_streaming_attention_training(
         stablehlo_sha256=hashlib.sha256(stablehlo).hexdigest(),
         recovered_provenance=recovered.program.provenance,
         source_operation_ids=recovered.source_operation_ids,
+        generic_algebra_operation_ids=tuple(operation.source_operation_id for operation in recovered.algebra.operations),
         contract_operation_ids=recovered.contract_operation_ids,
         fold_operation_ids=fold_operation_ids,
         domain_restriction_operation_ids=recovered.domain_restriction_operation_ids,
+        cast_and_view_operation_ids=recovered.cast_and_view_operation_ids,
         opaque_frontend_primitives=opaque_primitives,
     )
     return RecoveredJaxVjpStreamingAttentionTraining(audit, jaxpr, stablehlo, recovered)

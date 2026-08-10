@@ -30,10 +30,11 @@ or emitter code; neither is part of the default semantic frontend.
 | Surface | Status | Boundary |
 | --- | --- | --- |
 | `pipeline.compile_stablehlo_dense_transformer_region` | Current prototype | StableHLO named canonicalization erases through `dense_flow` before scheduling; the recognizer still targets one bounded Llama-shaped region. |
-| `pipeline.compile_stablehlo_streaming_attention_program` | Current prototype | StableHLO attention erases into `TensorProgram` Contract/Map/Fold/DomainRestriction and returns source provenance plus a validated erasure report. |
+| `jax_streaming_attention_training_frontend.recover_jax_vjp_streaming_attention_training` | Current structural importer | Ordinary JAX plus JAX-owned VJP exports StableHLO, imports every source operation into generic algebra, then selects a normalized-weighted-reduction streaming schedule without a workload key. |
 | routed and projected routed attention recovery | Current prototype | StableHLO selection becomes generic Relation/RelationPlan and streaming Fold structure. |
 | `stablehlo_scan_recovery` | Current structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; named GDN/KDA convenience wrappers remain cleanup work on this checkpoint. |
-| StableHLO row-normalization and streaming-attention backward recovery | Current prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. |
+| StableHLO row-normalization recovery | Current prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. |
+| `pipeline.compile_experimental_whole_pattern_stablehlo_streaming_attention_program` and `stablehlo_streaming_attention_backward` | Experimental reference | Reconstruct a canonical attention program from a whole-pattern match. These paths reproduce earlier artifacts but do not count as accepted clean frontend provenance. |
 | `reference_pipeline` | Reference only | Retains named RMS and attention planning, including the opaque official-FA3 comparison path. It is not re-exported from `tile_lifetime`. |
 | `attention.compile_reference_attention_region` and `qkv_rope.compile_reference_qkv_rope_attention_region` | Reference only | Hand-built named `TensorGraph` planners for preserved comparisons and unit tests. |
 | `moe.compile_mok_oracle_region` | Oracle only | Builds the opaque MoK comparison skeleton. Import it explicitly from `tile_lifetime.moe`. |
