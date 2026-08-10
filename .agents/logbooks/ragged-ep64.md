@@ -1120,3 +1120,14 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Controlled comparison: S43's capacity-filled cuDNN path averaged 18.7795886 seconds, 55,836.4219 tokens/s, and 20.3193283% MFU. True active lengths reduced duration by 6.169%, raised throughput by 6.575%, and gained 1.3361 MFU points. Relative to S33's CuTe/Pallas baseline, the cumulative gain is 9.370% lower step time and 2.0263 MFU points.
 - W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s47-exact-ep16-e48-split32-active-row-cudnn-perf-20260810
 - Next arm: reduce capacity factor from 1.33 to the balanced-load boundary at 1.00. This tests static receiver-buffer savings after inactive compute has already been removed. Promote factor 0.98 only if measured drops leave headroom under the 2.5% ceiling.
+
+## 2026-08-10: S48 capacity 1.00 reaches 22.31% MFU within the drop budget
+
+- Run: `ra2a-s48-exact-ep16-e48-cf1-split32-active-row-cudnn-perf-20260810`; child `/power/ra2a-s48-exact-cf1-active-row-cudnn-perf-20260810-coord/grug-train-ra2a-s48-exact-ep16-e48-cf1-split32-active-row-cudnn-perf-20260810`. The coordinator and all four workers succeeded on their first attempts with exit 0.
+- Placement: S48 reused S47's workers `s2rsxs64`, `s2srxs64`, `s3qrxs64`, and `s4btxs64` in rack and NVLink domain `DH1-393-US-EAST-08A`.
+- Controlled change: reduce only capacity factor from 1.33 to 1.00. Keep the exact d6144/L48/E48 shape, active-row cuDNN/QuACK backend, split-32 transport, process-per-GPU topology, pinned-host optimizer state, safe XLA flags, and disabled periodic work.
+- Correctness: all 20 scored losses were finite. Mean loss was 11.8084320. Mean drop fraction and router overflow were 0.485522%; the worst scored step was 0.570999%, below the accepted 2.5% ceiling.
+- Timing: steps 5-24 averaged 17.1008615 seconds, 61,319.9088 tokens/s, and 22.3148138% MFU. Median duration was 17.0811883 seconds, median MFU was 22.3395077%, and duration sample standard deviation was 0.1190949 seconds.
+- Controlled comparison: relative to S47's capacity-1.33 zero-drop arm, capacity 1.00 reduced duration by 2.952%, raised throughput by 3.045%, and gained 0.6594 MFU points. Relative to S43's capacity-filled cuDNN backend, it reduced duration by 8.939% and gained 1.9955 MFU points.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s48-exact-ep16-e48-cf1-split32-active-row-cudnn-perf-20260810
+- Next arm: test capacity factor 0.98. Its aggregate receiver capacity is exactly 2% below balanced load; S48's 0.49% mean imbalance loss suggests the measured result should remain near the 2.5% budget. Reject it if the scored mean exceeds 2.5%.
