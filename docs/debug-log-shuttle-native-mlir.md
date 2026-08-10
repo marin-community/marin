@@ -102,8 +102,31 @@ interface through `@llvm-project//mlir:BytecodeOpInterface`.
   declarations and the Bazel target supplies the public header plus generated
   interface implementation.
 - Repository formatting and lint gates run on the changed files.
-- Native dialect compilation and lit execution remain pending on the exact-pin
-  build host. This debugging task does not claim those gates passed.
+- Native `@shuttle_mlir//:ShuttleDialect` compilation passed the generated
+  operation declarations and failed next at the handwritten include
+  `llvm/ADT/SmallDenseSet.h`. No bytecode-interface diagnostic recurred.
+
+## Hypothesis 3
+
+The handwritten sources use a header name that is absent from the pinned LLVM
+revision. Exact LLVM commit `9a4faee1068c09efbf837cfb7b0f5693b24635f4`
+defines `llvm::SmallDenseSet` in `llvm/ADT/DenseSet.h`; it has no
+`llvm/ADT/SmallDenseSet.h`.
+
+Both `ShuttleDialect.cc` and `Passes.cc` include the absent header and use
+`llvm::SmallDenseSet`. Replace both includes with `llvm/ADT/DenseSet.h` so the
+dialect library and the subsequent pass library use the pinned API.
+
+## Results 3
+
+- Every handwritten `llvm/...` and `mlir/...` include under
+  `lib/shuttle/mlir` was checked against exact LLVM commit `9a4faee1068`. The
+  two `SmallDenseSet.h` occurrences were the only missing paths.
+- `llvm/ADT/DenseSet.h` exists at the pin and contains the
+  `llvm::SmallDenseSet` template used by both sources.
+- Repository formatting and lint gates run on the changed files.
+- Native dialect compilation, the full driver build, and lit execution remain
+  pending. This debugging task does not claim those gates passed.
 
 ## Follow-up
 

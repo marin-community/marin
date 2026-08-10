@@ -16,7 +16,7 @@
 #include "shuttle/IR/ShuttleDialect.h"
 #include "shuttle/IR/ShuttleOps.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallDenseSet.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
