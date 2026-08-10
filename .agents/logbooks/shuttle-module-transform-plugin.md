@@ -67,3 +67,29 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   checkpoint does not authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810/README.md`
+
+### 2026-08-10 - Native compile after ReturnLike correction
+
+- Hypothesis: removing the unsupported `ReturnLike` trait allows the pinned
+  native target matrix to build and test against XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`.
+- Commit Hash: `bba4867bb9943c6c0553e0b910fdea8d6b83e14e` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-fixed/`, requesting 24
+  CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; Debian 13; GCC 14.2.0; embedded OpenJDK 21.0.5.
+- Result: the narrow `@shuttle_mlir//:shuttle_ops_inc_gen` target passed. The
+  following `@shuttle_mlir//:shuttle-opt` build failed compiling
+  `ShuttleDialect.cc`. The first diagnostic reported that generated
+  `ShuttleOps.h.inc` referenced an undeclared `mlir::BytecodeOpInterface`.
+  The MLIR lit suite and all four XLA tests did not run.
+- Interpretation: the ReturnLike TableGen blocker is closed. The generated
+  operation declarations now expose a pinned-MLIR C++ include or interface
+  compatibility blocker.
+- Next action: inspect the exact pinned bytecode-interface include contract and
+  generated operation header dependencies before any new native run. This
+  checkpoint does not authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-fixed/README.md`
