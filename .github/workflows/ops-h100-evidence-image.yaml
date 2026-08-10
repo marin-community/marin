@@ -1,0 +1,72 @@
+name: "Ops - H100 Evidence Image"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-h100-evidence-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ${{ steps.build.outputs.image_ref }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Resolve exact source commit
+        id: source
+        run: |
+          full_sha="$(git rev-parse HEAD)"
+          if [[ ! "$full_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "checkout did not resolve to a full Git SHA: $full_sha" >&2
+            exit 1
+          fi
+          echo "full_sha=$full_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push H100 evidence image
+        id: build
+        env:
+          IMAGE: ghcr.io/marin-community/iris-task-h100-evidence:${{ steps.source.outputs.full_sha }}
+        run: |
+          metadata_file="$RUNNER_TEMP/iris-task-h100-evidence-metadata.json"
+          docker buildx build --file lib/iris/Dockerfile \
+            --target task-h100-evidence \
+            --platform linux/amd64 \
+            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:task-h100-evidence-amd64 \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:task-h100-evidence-amd64,mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
+            --output type=image,compression=zstd,compression-level=3,push=true \
+            --provenance=false \
+            --metadata-file "$metadata_file" \
+            --build-arg IRIS_GIT_HASH=${{ steps.source.outputs.full_sha }} \
+            --tag "$IMAGE" \
+            .
+          digest="$(jq -r '."containerimage.digest"' "$metadata_file")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "build did not return an OCI digest: $digest" >&2
+            exit 1
+          fi
+          image_ref="$IMAGE@$digest"
+          docker buildx imagetools inspect "$image_ref" > /dev/null
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "H100 evidence image: \`$image_ref\`" >> "$GITHUB_STEP_SUMMARY"
