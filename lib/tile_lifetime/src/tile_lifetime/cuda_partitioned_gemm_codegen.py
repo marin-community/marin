@@ -18,6 +18,7 @@ from tile_lifetime.ffi_command_buffer import (
 from tile_lifetime.partitioned_gemm_program import (
     GeneratedPartitionedGemmFinalization,
     PartitionedGemmProgram,
+    PartitionFoldReassociation,
     generate_partitioned_gemm_finalization,
 )
 
@@ -92,7 +93,9 @@ def partitioned_gemm_ffi_abi(program: PartitionedGemmProgram) -> PartitionedGemm
 
     outputs = tuple(_parse_buffer(f"output{index}", shape) for index, shape in enumerate(program.output_shapes))
     scalar_outputs = outputs[: len(program.scalar_finalizations)]
-    passthrough_outputs = outputs[len(program.scalar_finalizations) :]
+    passthrough_start = len(program.scalar_finalizations)
+    passthrough_limit = passthrough_start + len(program.passthrough_finalizations)
+    passthrough_outputs = outputs[passthrough_start:passthrough_limit]
     for output, finalization in zip(scalar_outputs, program.scalar_finalizations, strict=True):
         extent = program.partitions[finalization.source_partitions[0]].extent
         if output.dtype != "bf16" or not output.shape or output.shape[-1] != extent:
@@ -105,6 +108,28 @@ def partitioned_gemm_ffi_abi(program: PartitionedGemmProgram) -> PartitionedGemm
             raise ValueError("partitioned Contract output feature extent disagrees with its source partition")
         if math.prod(output.shape[:-1]) != m:
             raise ValueError("partitioned Contract output row domain disagrees with M")
+    auxiliary_outputs = outputs[passthrough_limit:]
+    for output, fold in zip(auxiliary_outputs, program.auxiliary_folds, strict=True):
+        source = program.partitions[fold.source_partition]
+        input_view = _parse_buffer("auxiliary_input", fold.input_shape)
+        if input_view.dtype != "bf16" or math.prod(input_view.shape) != m * source.extent:
+            raise ValueError("auxiliary Fold input view must cover its retained BF16 partition exactly")
+        if len(input_view.shape) < 1 or math.prod(input_view.shape[:-1]) != math.prod(output.shape):
+            raise ValueError("auxiliary Fold output domain must equal its input leading axes")
+        if output.dtype != "f32":
+            raise ValueError("the bounded auxiliary Fold requires an FP32 output")
+        contribution_input = fold.contribution.inputs[0]
+        if (
+            contribution_input.input_index is None
+            or contribution_input.input_index.row_offset != 0
+            or contribution_input.input_index.feature_offset != 0
+        ):
+            raise ValueError("the bounded auxiliary Fold requires a pointwise contribution")
+        if fold.reassociation not in {
+            PartitionFoldReassociation.SOURCE_ORDERED,
+            PartitionFoldReassociation.ALLOW_ROUNDING_REORDER,
+        }:
+            raise ValueError("unsupported auxiliary Fold reassociation policy")
     for finalization in program.scalar_finalizations:
         if any(
             value.input_index is None or value.input_index.row_offset != 0 or value.input_index.feature_offset != 0
@@ -131,19 +156,32 @@ def generate_cuda_partitioned_gemm_ffi(
     abi = partitioned_gemm_ffi_abi(program)
     m, n, k = program.shape
     generated_finalization = generate_partitioned_gemm_finalization(program)
-    scalar_sources = "\n".join(body.source for body in generated_finalization.scalar_bodies)
+    scalar_sources = "\n".join(
+        body.source
+        for body in (
+            *generated_finalization.scalar_bodies,
+            *generated_finalization.auxiliary_contribution_bodies,
+            *generated_finalization.auxiliary_reducer_bodies,
+        )
+    )
     input_arguments = tuple(f"ffi::Buffer<ffi::BF16, {len(buffer.shape)}> {buffer.name}_buffer" for buffer in abi.inputs)
     result_arguments = tuple(
-        f"ffi::Result<ffi::Buffer<ffi::BF16, {len(buffer.shape)}>> {buffer.name}_buffer" for buffer in abi.outputs
+        f"ffi::Result<ffi::Buffer<{_ffi_cpp_type(buffer.dtype)}, {len(buffer.shape)}>> {buffer.name}_buffer"
+        for buffer in abi.outputs
     )
     input_bindings = tuple(f"      .Arg<ffi::Buffer<ffi::BF16, {len(buffer.shape)}>>()" for buffer in abi.inputs)
-    result_bindings = tuple(f"      .Ret<ffi::Buffer<ffi::BF16, {len(buffer.shape)}>>()" for buffer in abi.outputs)
+    result_bindings = tuple(
+        f"      .Ret<ffi::Buffer<{_ffi_cpp_type(buffer.dtype)}, {len(buffer.shape)}>>()" for buffer in abi.outputs
+    )
     kernel_arguments = tuple(f"const __nv_bfloat16* __restrict__ {buffer.name}" for buffer in abi.inputs) + tuple(
-        f"__nv_bfloat16* __restrict__ {buffer.name}" for buffer in abi.outputs
+        f"{_cuda_pointer_type(buffer.dtype)}* __restrict__ {buffer.name}" for buffer in abi.outputs
     )
     launch_arguments = tuple(
         f"reinterpret_cast<const __nv_bfloat16*>({buffer.name}_buffer.typed_data())" for buffer in abi.inputs
-    ) + tuple(f"reinterpret_cast<__nv_bfloat16*>({buffer.name}_buffer->typed_data())" for buffer in abi.outputs)
+    ) + tuple(
+        f"reinterpret_cast<{_cuda_pointer_type(buffer.dtype)}*>({buffer.name}_buffer->typed_data())"
+        for buffer in abi.outputs
+    )
 
     lhs_offset = _physical_offset(abi.inputs[0], row="row", feature="reduction")
     rhs_selection = _rhs_selection(program, abi)
@@ -335,6 +373,32 @@ def _output_loops(
             "  }"
         )
         output_index += 1
+    for fold_index, fold in enumerate(program.auxiliary_folds):
+        partition = program.partitions[fold.source_partition]
+        input_view = _parse_buffer("auxiliary_input", fold.input_shape)
+        fold_extent = input_view.shape[-1]
+        fold_rows = math.prod(input_view.shape[:-1])
+        output = abi.outputs[output_index]
+        output_offset = _physical_linear_offset(output, linear="fold_row")
+        contribution = generated_finalization.auxiliary_contribution_bodies[fold_index]
+        reducer = generated_finalization.auxiliary_reducer_bodies[fold_index]
+        initializer = _cuda_float(fold.initializer)
+        loops.append(
+            f"  for (int fold_row = threadIdx.x; fold_row < {fold_rows}; fold_row += blockDim.x) {{\n"
+            f"    float fold_state = {initializer};\n"
+            f"    for (int fold_feature = 0; fold_feature < {fold_extent}; ++fold_feature) {{\n"
+            f"      const int partition_linear = fold_row * {fold_extent} + fold_feature;\n"
+            f"      const int source_row = partition_linear / {partition.extent};\n"
+            f"      const int source_feature = partition_linear - source_row * {partition.extent};\n"
+            "      const float source_value = __bfloat162float(accumulator_boundary[\n"
+            f"          source_row * kFeatures + {partition.start} + source_feature]);\n"
+            f"      const float contribution = {contribution.symbol}(source_value);\n"
+            f"      fold_state = {reducer.symbol}(fold_state, contribution);\n"
+            "    }\n"
+            f"    output{output_index}[{output_offset}] = fold_state;\n"
+            "  }"
+        )
+        output_index += 1
     return "\n\n".join(loops)
 
 
@@ -370,6 +434,39 @@ def _physical_strides(shape: tuple[int, ...], minor_to_major: tuple[int, ...]) -
         strides[axis] = stride
         stride *= shape[axis]
     return tuple(strides)
+
+
+def _physical_linear_offset(buffer: PartitionedGemmFfiBuffer, *, linear: str) -> str:
+    strides = _physical_strides(buffer.shape, buffer.minor_to_major)
+    terms: list[str] = []
+    for axis, extent in enumerate(buffer.shape):
+        suffix = math.prod(buffer.shape[axis + 1 :])
+        coordinate = f"(({linear}) / {suffix}) % {extent}" if suffix != 1 else f"({linear}) % {extent}"
+        terms.append(f"({coordinate}) * {strides[axis]}")
+    return " + ".join(terms)
+
+
+def _ffi_cpp_type(dtype: str) -> str:
+    if dtype == "bf16":
+        return "ffi::BF16"
+    if dtype == "f32":
+        return "ffi::F32"
+    raise ValueError(f"unsupported partitioned Contract FFI dtype {dtype!r}")
+
+
+def _cuda_pointer_type(dtype: str) -> str:
+    if dtype == "bf16":
+        return "__nv_bfloat16"
+    if dtype == "f32":
+        return "float"
+    raise ValueError(f"unsupported partitioned Contract CUDA dtype {dtype!r}")
+
+
+def _cuda_float(value: float) -> str:
+    rendered = repr(float(value))
+    if "e" not in rendered.lower() and "." not in rendered:
+        rendered += ".0"
+    return f"{rendered}f"
 
 
 def _buffer_record(buffer: PartitionedGemmFfiBuffer) -> dict[str, object]:
