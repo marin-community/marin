@@ -66,7 +66,7 @@ def Shuttle_YieldOp
     : Shuttle_Op<"yield", [ParentOneOf<["::mlir::shuttle::RegionOp",
                                         "::mlir::shuttle::MapOp",
                                         "::mlir::shuttle::FoldOp"]>,
-                           Pure, ReturnLike, Terminator]> {
+                           Pure, Terminator]> {
   let summary = "Yield values from a Shuttle algebra region";
   let arguments = (ins Variadic<AnyType>:$values);
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];

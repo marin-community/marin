@@ -29,9 +29,14 @@ local_repository(
 Then run:
 
 ```bash
+bazel build @shuttle_mlir//:shuttle_ops_inc_gen
 bazel build @shuttle_mlir//:shuttle-opt
 bazel test @shuttle_mlir//:mlir_tests
 ```
+
+The generated-operations target is the fast preflight for ODS and TableGen
+compatibility with the pinned MLIR revision. Run it before compiling the C++
+dialect or scheduling a cluster build.
 
 Building from XLA rather than an installed `_jax.so` is intentional. MLIR's C++
 ABI and the private LLVM/StableHLO revisions embedded in a jaxlib wheel are not
@@ -72,6 +77,12 @@ types; an output cast must be a separate `shuttle.map`.
 Map input indexing maps may project dimensions to express broadcast. Result
 maps are full domain permutations: projection would imply duplicate writes,
 for which Map deliberately has no semantics.
+
+`shuttle.yield` is an MLIR terminator, and the parent operations use
+single-block implicit `shuttle.yield` terminators. Their region verifiers also
+require the final operation to be `shuttle.yield`. It is not `ReturnLike`:
+that MLIR trait also models the region-branch terminator interface, while the
+current Shuttle parents do not model region-branch control flow.
 
 The first `shuttle.contract` surface is intentionally closed to two-input,
 one-result `dot_general` with f32 operands, accumulator, and result. Its
