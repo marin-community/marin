@@ -13,7 +13,7 @@ from marin.execution.region_guard import (
     region_guard,
 )
 from marin.execution.step_runner import StepRunner
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 
 from tests.execution.conftest import recording_step
 
@@ -142,22 +142,36 @@ def test_runner_refuses_a_step_writing_to_another_region(monkeypatch, tmp_path):
 
 
 def test_runner_refuses_a_dependency_in_another_region(monkeypatch, tmp_path):
+    """A step that will run reads its dependencies, so their region counts too."""
     runs_in("us-central1")
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
     ran: list[str] = []
     dep = recording_step("foreign_dep", "gs://marin-eu-west4/raw", ran)
-    step = StepSpec(
-        name="consumer",
-        override_output_path=(tmp_path / "consumer").as_posix(),
-        deps=[dep],
-        fn=lambda path: Artifact(path=path),
-    )
+    consumer = recording_step("consumer", (tmp_path / "consumer").as_posix(), ran, deps=[dep])
 
     with pytest.raises(CrossRegionAccessError) as exc_info:
-        StepRunner().run([step])
+        StepRunner().run([consumer])
 
     assert ran == []
     assert [path.region for path in exc_info.value.paths] == ["europe-west4"]
+
+
+def test_runner_ignores_a_dependency_of_a_cached_step(monkeypatch, tmp_path):
+    """A cached step's dependencies are pruned, so nothing reads them and nothing moves.
+
+    Regression for the case #3981 reported against the old executor: a run failing over
+    a foreign-region dependency it was never going to touch.
+    """
+    runs_in("us-central1")
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    ran: list[str] = []
+    dep = recording_step("foreign_dep", "gs://marin-eu-west4/raw", ran)
+    cached = recording_step("cached", (tmp_path / "cached").as_posix(), ran, deps=[dep])
+    StatusFile((tmp_path / "cached").as_posix(), worker_id="test").write_status(STATUS_SUCCESS)
+
+    StepRunner().run([cached])
+
+    assert ran == []
 
 
 def test_override_env_var_lets_a_cross_region_graph_run(monkeypatch, tmp_path):

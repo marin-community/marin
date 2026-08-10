@@ -72,8 +72,10 @@ its inputs and outputs continuously, so a prefix in another region sends every s
 across regions and is billed as egress.
 
 Before scheduling any step, `StepRunner` compares the region it is running in against
-`MARIN_PREFIX` and against each step's output and dependency paths. A mismatch fails the
-run, naming the region and the offending paths:
+`MARIN_PREFIX` and against the output path of every step the schedule reaches. A step is
+reached only if this run writes it or reads it as an input, so a cached step whose inputs
+are pruned is not compared. A mismatch fails the run, naming the region and the offending
+path:
 
 ```text
 Step tokenize_1a2b3c4d would move data across regions: this run executes in us-central2,

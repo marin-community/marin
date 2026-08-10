@@ -212,10 +212,10 @@ class StepRunner:
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
 
-        ``MARIN_PREFIX``, and every scheduled step's output and dependency paths,
+        ``MARIN_PREFIX``, and the output path of every step the schedule reaches,
         are checked against the region the run executes in
         (:mod:`marin.execution.region_guard`): a mismatch fails before the runner
-        reads or writes those paths and before any child job is submitted.
+        reads or writes that path and before any child job is submitted.
         ``allow_cross_region`` (or ``MARIN_I_WILL_PAY_FOR_ALL_FEES``) downgrades
         that to a logged and telemetered warning.
         """
@@ -261,11 +261,14 @@ class StepRunner:
         is_built = (lambda _s: False) if dry_run else step_is_built
 
         def _check_region(step: StepSpec) -> None:
-            """Reject a step whose output or inputs live outside the run's region."""
-            guard.check(
-                f"Step {step.name_with_hash}",
-                [("output_path", step.output_path), *zip(step.dep_names, step.dep_paths, strict=True)],
-            )
+            """Reject a step whose output lives outside the run's region.
+
+            Checking each node's own output covers the inputs too: the walk only
+            descends into the dependencies of a node that will run, so every visited
+            node is one this run either writes or reads. A cached node's pruned
+            dependencies are never visited, and never read either.
+            """
+            guard.check(f"Step {step.name_with_hash}", [("output_path", step.output_path)])
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
