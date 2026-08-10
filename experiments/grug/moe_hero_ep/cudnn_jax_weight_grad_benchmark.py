@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 from fray.cluster import ResourceConfig
 from fray.types import ANY_REGION
-from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
+from levanter.cutlass_kernel_cache import cutlass_call
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -30,6 +30,8 @@ from marin.experiment.namespacing import user_namespaced_name
 from pydantic import BaseModel
 from rigging.filesystem import prefix_join
 from rigging.provenance import launch_provenance
+
+from experiments.grug.moe_hero_ep.cudnn_jax_weight_grad import build_cudnn_grouped_wgrad_launcher
 
 logger = logging.getLogger(__name__)
 
@@ -111,39 +113,11 @@ def _install_cudnn_frontend() -> float:
     return install_time
 
 
-@cute_launcher_factory
-def _build_launcher(
-    modules,
-    *,
-    expert_count: int,
-    max_active_clusters: int,
-    mma_tiler_mn: tuple[int, int],
-    cluster_shape_mn: tuple[int, int],
-):
-    cutlass, cute, _cjax, kernel_type, weight_mode, input_order = modules
-
-    @cute.jit
-    def launcher(stream, mat_a, mat_b, offsets, output, workspace):
-        kernel = kernel_type(
-            acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
-            mma_tiler_mn=mma_tiler_mn,
-            cluster_shape_mn=cluster_shape_mn,
-            accumulate_on_output=False,
-            expert_cnt=expert_count,
-            weight_mode=weight_mode.DENSE,
-            input_order=input_order.Tensor2D,
-        )
-        kernel(mat_a, mat_b, output, offsets, workspace, max_active_clusters, stream, None)
-
-    return launcher
-
-
 def _grouped_wgrad(shape: WeightGradientShape, modules, lhs: jax.Array, rhs: jax.Array, offsets: jax.Array):
     cutlass, _cute, cjax, _kernel_type, _weight_mode, _input_order = modules
     cluster_shape_mn = (2, 1)
     max_active_clusters = cutlass.utils.HardwareInfo().get_max_active_clusters(cluster_shape_mn[0] * cluster_shape_mn[1])
-    launcher = _build_launcher(
+    launcher = build_cudnn_grouped_wgrad_launcher(
         modules,
         expert_count=len(PADDED_GROUP_SIZES),
         max_active_clusters=max_active_clusters,
