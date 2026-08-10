@@ -27,6 +27,7 @@ VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
 GB200_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "aarch64")
 PROBE_DISTRIBUTION = "marinuvxprobe"
+_LOOPBACK_HOSTS = "127.0.0.1,localhost,::1"
 _READ_DIRECT_URL = (
     "import importlib.metadata\n"
     f"print(importlib.metadata.distribution({PROBE_DISTRIBUTION!r}).read_text('direct_url.json'))\n"
@@ -172,6 +173,8 @@ def test_verifier_accepts_the_record_a_real_uvx_install_writes(tmp_path):
             ],
             capture_output=True,
             text=True,
+            # A configured HTTP_PROXY would otherwise take the loopback wheel URL.
+            env={**os.environ, "NO_PROXY": _LOOPBACK_HOSTS, "no_proxy": _LOOPBACK_HOSTS},
             check=False,
         )
 
