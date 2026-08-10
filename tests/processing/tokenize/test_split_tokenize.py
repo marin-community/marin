@@ -136,6 +136,27 @@ def test_oversized_token_record_round_trips_as_ordered_chunks(tmp_path):
     assert [mask for row in rows for mask in row["assistant_masks"]] == record["assistant_masks"]
 
 
+def test_oversized_ndarray_token_fields_are_split():
+    """Array token fields split too, not just lists.
+
+    Levanter's chat and prebuilt-cache processors return ``np.ndarray`` for
+    ``input_ids`` and ``assistant_masks``, and ndarray is not a ``Sequence``.
+    Copying such a field whole into each chunk would leave the oversized row
+    oversized and duplicate the document.
+    """
+    record = {
+        "id": "chat-doc",
+        "input_ids": np.arange(10, dtype=np.int32),
+        "assistant_masks": np.ones(10, dtype=np.int32),
+    }
+
+    chunks = list(split_oversized_token_record(record, max_tokens=4))
+
+    assert [len(c["input_ids"]) for c in chunks] == [4, 4, 2]
+    assert [len(c["assistant_masks"]) for c in chunks] == [4, 4, 2]
+    assert np.array_equal(np.concatenate([c["input_ids"] for c in chunks]), record["input_ids"])
+
+
 def test_unsplit_token_record_is_chunk_zero():
     """A document that fits stays one row, so chunk_index is uniform across the dataset."""
     record = {"id": "abc", "input_ids": [1, 2, 3]}

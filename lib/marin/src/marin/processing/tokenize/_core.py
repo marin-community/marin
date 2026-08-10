@@ -188,6 +188,23 @@ class IdPreservingPreprocessor:
         return [{**out, "id": rec["id"]} for rec, out in zip(batch, outputs_list, strict=True)]
 
 
+def _splits_with_tokens(value: object, num_tokens: int) -> bool:
+    """Is ``value`` a per-token field that must be cut at the same boundaries?
+
+    A duck-typed length test rather than an ``isinstance`` against ``Sequence``:
+    Levanter's chat and prebuilt-cache processors return ``np.ndarray`` for
+    ``input_ids``, ``assistant_masks`` and loss weights, and ``np.ndarray`` is not
+    a ``Sequence``. Treating those as scalars would copy the whole oversized array
+    into every chunk, which both defeats the split and duplicates the document.
+    """
+    if isinstance(value, str | bytes | bytearray | Mapping):
+        return False
+    try:
+        return len(value) == num_tokens  # pyrefly: ignore[missing-attribute]
+    except TypeError:
+        return False
+
+
 def split_oversized_token_record(
     record: dict,
     *,
@@ -199,8 +216,8 @@ def split_oversized_token_record(
     the order, zero-based. A consumer that joins on ``id`` thus still matches the
     document, and reassembles it by a sort on ``(id, chunk_index)``. An id with
     the order encoded into it would instead match nothing on such a join, which
-    fails silently. Sequence fields that align with ``input_ids`` are split at the
-    same boundaries. Every other field is copied to each chunk.
+    fails silently. Fields whose length matches ``input_ids`` are split at the same
+    boundaries, lists and arrays alike. Every other field is copied to each chunk.
 
     A document at or below ``max_tokens`` yields one row with ``chunk_index == 0``,
     which keeps the column uniform across the dataset.
@@ -218,8 +235,7 @@ def split_oversized_token_record(
         end = min(start + max_tokens, num_tokens)
         chunk: dict = {CHUNK_INDEX_FIELD: chunk_index}
         for key, value in record.items():
-            aligned = isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray)
-            chunk[key] = value[start:end] if aligned and len(value) == num_tokens else value
+            chunk[key] = value[start:end] if _splits_with_tokens(value, num_tokens) else value
         yield chunk
 
 
