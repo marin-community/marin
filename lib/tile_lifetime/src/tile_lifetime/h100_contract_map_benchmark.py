@@ -409,6 +409,9 @@ PAIRWISE_DRIFT_REQUIRED_FIELDS = (
 )
 RAW_SAMPLE_REQUIRED_FIELDS = ("sample_index", "backend_order", "measurements_ns")
 
+_SHA256_LENGTH = 64
+_GIT_SHA_LENGTH = 40
+
 
 def _mapping(value: object, context: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
@@ -422,8 +425,146 @@ def _require_fields(mapping: Mapping[str, Any], required_fields: tuple[str, ...]
         raise ValueError(f"{context} is missing required evidence fields: {missing}")
 
 
+def _require_nonempty_string(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError(f"{context} must be a nonempty canonical string")
+    return value
+
+
+def _require_artifact_path(value: object, context: str) -> None:
+    path = _require_nonempty_string(value, context)
+    basename = path.rstrip("/").rsplit("/", 1)[-1]
+    stem, separator, suffix = basename.rpartition(".")
+    if not stem or not separator or not suffix or any(character in path for character in "\x00\r\n\t"):
+        raise ValueError(f"{context} must name a concrete artifact file")
+
+
+def _require_lowercase_hex_digest(value: object, length: int, context: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != length
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{context} must be exactly {length} lowercase hexadecimal characters")
+
+
+def _require_nonempty_string_list(value: object, context: str) -> None:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{context} must be a nonempty list")
+    for index, item in enumerate(value):
+        _require_nonempty_string(item, f"{context}[{index}]")
+
+
+def _require_finite_nonnegative_number(value: object, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+        raise ValueError(f"{context} must be a finite nonnegative number")
+    return float(value)
+
+
+def _require_nonnegative_integer(value: object, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{context} must be a nonnegative integer")
+    return value
+
+
+def _require_timing_samples(value: object, context: str) -> None:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{context} must contain at least one timing sample")
+    for index, sample in enumerate(value):
+        if isinstance(sample, bool) or not isinstance(sample, int) or sample <= 0:
+            raise ValueError(f"{context}[{index}] must be a positive integer nanosecond sample")
+
+
+def _reviewed_floor(backend: object) -> NumericalFloor:
+    for floor in REVIEWED_NUMERICAL_FLOORS:
+        if backend == floor.backend.value:
+            return floor
+    raise ValueError("identity.backend must name a required backend")
+
+
+def _validate_numerical_output(output: Mapping[str, Any], floor: NumericalFloor, context: str) -> None:
+    floating_metric_limits = (
+        ("maximum_absolute_error", floor.maximum_absolute_error),
+        ("mean_absolute_error", floor.mean_absolute_error),
+        ("mean_ulp_distance", floor.mean_ulp_distance),
+    )
+    for field, limit in floating_metric_limits:
+        value = _require_finite_nonnegative_number(output[field], f"{context}.{field}")
+        if value > limit:
+            raise ValueError(f"{context}.{field} exceeds the immutable {floor.backend.value} numerical floor")
+    maximum_ulp_distance = _require_nonnegative_integer(
+        output["maximum_ulp_distance"], f"{context}.maximum_ulp_distance"
+    )
+    if maximum_ulp_distance > floor.maximum_ulp_distance:
+        raise ValueError(f"{context}.maximum_ulp_distance exceeds the immutable {floor.backend.value} numerical floor")
+    if output["mean_absolute_error"] > output["maximum_absolute_error"]:
+        raise ValueError(f"{context}.mean_absolute_error cannot exceed maximum_absolute_error")
+    if output["mean_ulp_distance"] > output["maximum_ulp_distance"]:
+        raise ValueError(f"{context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
+    nonfinite_values = _require_nonnegative_integer(output["nonfinite_values"], f"{context}.nonfinite_values")
+    if nonfinite_values > floor.maximum_nonfinite_values:
+        raise ValueError(f"{context}.nonfinite_values exceeds the immutable {floor.backend.value} numerical floor")
+
+    repeat_hashes = output["repeat_hashes"]
+    if not isinstance(repeat_hashes, list) or len(repeat_hashes) < 2:
+        raise ValueError(f"{context}.repeat_hashes must contain at least two content identities")
+    for index, digest in enumerate(repeat_hashes):
+        _require_lowercase_hex_digest(digest, _SHA256_LENGTH, f"{context}.repeat_hashes[{index}]")
+    if floor.repeatability is RepeatabilityMode.BITWISE and len(set(repeat_hashes)) != 1:
+        raise ValueError(f"{context}.repeat_hashes violate the immutable bitwise-repeatability floor")
+
+    drift_records = output["pairwise_drift"]
+    if not isinstance(drift_records, list) or not drift_records:
+        raise ValueError(f"{context}.pairwise_drift cannot be empty")
+    expected_pairs = {
+        (left, right) for left in range(len(repeat_hashes)) for right in range(left + 1, len(repeat_hashes))
+    }
+    observed_pairs: set[tuple[int, int]] = set()
+    for index, drift_value in enumerate(drift_records):
+        drift_context = f"{context}.pairwise_drift[{index}]"
+        drift = _mapping(drift_value, drift_context)
+        _require_fields(drift, PAIRWISE_DRIFT_REQUIRED_FIELDS, drift_context)
+        left = _require_nonnegative_integer(drift["left_repeat_index"], f"{drift_context}.left_repeat_index")
+        right = _require_nonnegative_integer(drift["right_repeat_index"], f"{drift_context}.right_repeat_index")
+        pair = (left, right)
+        if pair not in expected_pairs or pair in observed_pairs:
+            raise ValueError(f"{drift_context} must identify one unique ordered repeat pair")
+        observed_pairs.add(pair)
+
+        repeat_floating_limits = (
+            ("maximum_absolute_error", floor.repeat_maximum_absolute_error),
+            ("mean_absolute_error", floor.repeat_mean_absolute_error),
+            ("mean_ulp_distance", 0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance),
+        )
+        for field, limit in repeat_floating_limits:
+            value = _require_finite_nonnegative_number(drift[field], f"{drift_context}.{field}")
+            if value > limit:
+                raise ValueError(f"{drift_context}.{field} exceeds the immutable {floor.backend.value} repeat floor")
+        repeat_maximum_ulp = _require_nonnegative_integer(
+            drift["maximum_ulp_distance"], f"{drift_context}.maximum_ulp_distance"
+        )
+        repeat_maximum_ulp_limit = 0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.maximum_ulp_distance
+        if repeat_maximum_ulp > repeat_maximum_ulp_limit:
+            raise ValueError(
+                f"{drift_context}.maximum_ulp_distance exceeds the immutable {floor.backend.value} repeat floor"
+            )
+        if drift["mean_absolute_error"] > drift["maximum_absolute_error"]:
+            raise ValueError(f"{drift_context}.mean_absolute_error cannot exceed maximum_absolute_error")
+        if drift["mean_ulp_distance"] > drift["maximum_ulp_distance"]:
+            raise ValueError(f"{drift_context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
+    if observed_pairs != expected_pairs:
+        raise ValueError(f"{context}.pairwise_drift must cover every repeat pair exactly once")
+
+
 def _serialized_schedule(timing: TimingProtocol) -> list[dict[str, Any]]:
-    return [asdict(row) for row in timing.steady_state_schedule]
+    return [
+        {
+            "sample_index": row.sample_index,
+            "cycle_index": row.cycle_index,
+            "backend_order": [backend.value for backend in row.backend_order],
+        }
+        for row in timing.steady_state_schedule
+    ]
 
 
 def result_evidence_schema() -> dict[str, Any]:
@@ -446,8 +587,9 @@ def result_evidence_schema() -> dict[str, Any]:
         "reviewed_numerical_floors_sha256": REVIEWED_NUMERICAL_FLOORS_SHA256,
         "steady_state_schedule": _serialized_schedule(plan.timing),
         "samples_per_backend_permutation": 4,
-        "required_backend_boundary_records": [
-            {"backend": backend.value, "measurement_boundary": boundary.value}
+        "required_result_records": [
+            {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}
+            for case in plan.cases
             for backend in BackendVariant
             for boundary in MeasurementBoundary
         ],
@@ -471,48 +613,106 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
     if identity["measurement_boundary"] not in tuple(boundary.value for boundary in MeasurementBoundary):
         raise ValueError("identity.measurement_boundary must name a required boundary")
 
+    artifacts = _mapping(payload["artifacts"], "artifacts")
+    artifact_fields = (
+        ("final_optimized_hlo_path", "final_optimized_hlo_sha256"),
+        ("custom_call_manifest_path", "custom_call_manifest_sha256"),
+    )
+    for path_field, digest_field in artifact_fields:
+        _require_artifact_path(artifacts[path_field], f"artifacts.{path_field}")
+        _require_lowercase_hex_digest(artifacts[digest_field], _SHA256_LENGTH, f"artifacts.{digest_field}")
+
     resources = _mapping(payload["resources"], "resources")
     kernel_records = resources["kernel_records"]
     if not isinstance(kernel_records, list) or not kernel_records:
         raise ValueError("resources.kernel_records must contain at least one kernel record")
     for index, record_value in enumerate(kernel_records):
-        record = _mapping(record_value, f"resources.kernel_records[{index}]")
-        _require_fields(record, KERNEL_RECORD_REQUIRED_FIELDS, f"resources.kernel_records[{index}]")
+        context = f"resources.kernel_records[{index}]"
+        record = _mapping(record_value, context)
+        _require_fields(record, KERNEL_RECORD_REQUIRED_FIELDS, context)
+        _require_nonempty_string(record["name"], f"{context}.name")
+        for path_field, digest_field in (("ptx_path", "ptx_sha256"), ("sass_path", "sass_sha256")):
+            _require_artifact_path(record[path_field], f"{context}.{path_field}")
+            _require_lowercase_hex_digest(record[digest_field], _SHA256_LENGTH, f"{context}.{digest_field}")
+        for field in (
+            "registers_per_thread",
+            "spill_load_bytes",
+            "spill_store_bytes",
+            "static_shared_memory_bytes",
+            "dynamic_shared_memory_bytes",
+            "active_blocks_per_sm",
+        ):
+            _require_nonnegative_integer(record[field], f"{context}.{field}")
+        block_size = record["block_size"]
+        if (
+            not isinstance(block_size, list)
+            or len(block_size) != 3
+            or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in block_size)
+        ):
+            raise ValueError(f"{context}.block_size must contain three positive integer dimensions")
+        _require_nonempty_string(record["limiting_occupancy_resource"], f"{context}.limiting_occupancy_resource")
+        occupancy = _require_finite_nonnegative_number(record["achieved_occupancy"], f"{context}.achieved_occupancy")
+        if occupancy > 1.0:
+            raise ValueError(f"{context}.achieved_occupancy cannot exceed one")
     kernel_names = tuple(record["name"] for record in kernel_records)
     if resources["launch_count"] != len(kernel_records) or tuple(resources["ordered_kernel_names"]) != kernel_names:
         raise ValueError("launch_count and ordered_kernel_names must match kernel_records")
 
+    copies = _mapping(payload["copies"], "copies")
+    for field in (
+        "device_to_device_count",
+        "device_to_device_bytes",
+        "host_to_device_count",
+        "host_to_device_bytes",
+        "unexpected_copy_count",
+    ):
+        _require_nonnegative_integer(copies[field], f"copies.{field}")
+    if copies["unexpected_copy_count"] != 0:
+        raise ValueError("copies.unexpected_copy_count must be zero")
+
     provenance = _mapping(payload["provenance"], "provenance")
+    _require_nonempty_string_list(provenance["command"], "provenance.command")
+    environment = _mapping(provenance["environment"], "provenance.environment")
+    if not environment:
+        raise ValueError("provenance.environment must be nonempty")
+    for key, value in environment.items():
+        _require_nonempty_string(key, "provenance.environment key")
+        _require_nonempty_string(value, f"provenance.environment.{key}")
+    _require_nonempty_string_list(provenance["compiler_flags"], "provenance.compiler_flags")
     source_sha = provenance["source_sha"]
-    if not isinstance(source_sha, str) or len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
-        raise ValueError("provenance.source_sha must be a full lowercase Git SHA")
+    _require_lowercase_hex_digest(source_sha, _GIT_SHA_LENGTH, "provenance.source_sha")
+    _require_nonempty_string(provenance["persistent_cache_identity"], "provenance.persistent_cache_identity")
 
     numerical = _mapping(payload["numerical"], "numerical")
     if numerical["reviewed_floors_sha256"] != REVIEWED_NUMERICAL_FLOORS_SHA256:
         raise ValueError("numerical evidence does not use the reviewed floor digest")
-    if numerical["floors_passed_before_timing"] is not True:
-        raise ValueError("numerical floors must pass before timing")
     outputs = _mapping(numerical["outputs"], "numerical.outputs")
     if tuple(outputs) != NUMERICAL_OUTPUT_ROLES:
         raise ValueError("numerical.outputs must contain forward, dx, dw0, and dw1 in fixed order")
+    floor = _reviewed_floor(identity["backend"])
     for role in NUMERICAL_OUTPUT_ROLES:
-        output = _mapping(outputs[role], f"numerical.outputs.{role}")
-        _require_fields(output, NUMERICAL_OUTPUT_REQUIRED_FIELDS, f"numerical.outputs.{role}")
-        if not output["repeat_hashes"]:
-            raise ValueError(f"numerical.outputs.{role}.repeat_hashes cannot be empty")
-        drift_records = output["pairwise_drift"]
-        if not isinstance(drift_records, list) or not drift_records:
-            raise ValueError(f"numerical.outputs.{role}.pairwise_drift cannot be empty")
-        for index, drift_value in enumerate(drift_records):
-            drift = _mapping(drift_value, f"numerical.outputs.{role}.pairwise_drift[{index}]")
-            _require_fields(
-                drift,
-                PAIRWISE_DRIFT_REQUIRED_FIELDS,
-                f"numerical.outputs.{role}.pairwise_drift[{index}]",
-            )
+        context = f"numerical.outputs.{role}"
+        output = _mapping(outputs[role], context)
+        _require_fields(output, NUMERICAL_OUTPUT_REQUIRED_FIELDS, context)
+        _validate_numerical_output(output, floor, context)
+    if numerical["floors_passed_before_timing"] is not True:
+        raise ValueError("numerical floors must pass before timing")
 
     timing = _mapping(payload["timing"], "timing")
-    expected_schedule = _serialized_schedule(default_h100_contract_map_benchmark_plan().timing)
+    timing_protocol = default_h100_contract_map_benchmark_plan().timing
+    for field in (
+        "compile_samples_ns",
+        "first_execution_samples_ns",
+        "warmup_samples_ns",
+        "persistent_cache_cold_samples_ns",
+        "persistent_cache_hit_samples_ns",
+    ):
+        _require_timing_samples(timing[field], f"timing.{field}")
+    if timing["warmup_iterations"] != timing_protocol.warmup_iterations:
+        raise ValueError("timing.warmup_iterations must equal the reviewed protocol")
+    if len(timing["warmup_samples_ns"]) != timing_protocol.warmup_iterations:
+        raise ValueError("timing.warmup_samples_ns must contain every reviewed warmup iteration")
+    expected_schedule = _serialized_schedule(timing_protocol)
     if timing["steady_state_schedule"] != expected_schedule:
         raise ValueError("timing.steady_state_schedule must equal the reviewed 24-row schedule")
     raw_samples = timing["raw_samples"]
@@ -535,22 +735,33 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
             boundaries = _mapping(measurements[backend], f"timing.raw_samples[{index}].measurements_ns.{backend}")
             if tuple(boundaries) != expected_boundaries:
                 raise ValueError(f"timing.raw_samples[{index}] backend measurements must contain both boundaries")
+            for boundary in expected_boundaries:
+                sample_context = f"timing.raw_samples[{index}].measurements_ns.{backend}.{boundary}"
+                sample = boundaries[boundary]
+                if isinstance(sample, bool) or not isinstance(sample, int) or sample <= 0:
+                    raise ValueError(f"{sample_context} must be a positive integer nanosecond sample")
 
 
 def validate_result_evidence_bundle(payloads: tuple[Mapping[str, Any], ...]) -> None:
-    """Require one complete result for every backend and measurement boundary."""
+    """Require one complete result for every reviewed case, backend, and boundary."""
     for payload in payloads:
         validate_result_evidence(payload)
+    expected = tuple(
+        (case.case_id, backend.value, boundary.value)
+        for case in default_h100_contract_map_benchmark_plan().cases
+        for backend in BackendVariant
+        for boundary in MeasurementBoundary
+    )
     identities = tuple(
         (
+            _mapping(payload["identity"], "identity")["case_id"],
             _mapping(payload["identity"], "identity")["backend"],
             _mapping(payload["identity"], "identity")["measurement_boundary"],
         )
         for payload in payloads
     )
-    expected = tuple((backend.value, boundary.value) for backend in BackendVariant for boundary in MeasurementBoundary)
     if identities != expected:
-        raise ValueError("result bundle must contain every backend and boundary exactly once in fixed order")
+        raise ValueError("result bundle must contain all 24 reviewed case, backend, and boundary records in fixed order")
 
 
 @dataclass(frozen=True)

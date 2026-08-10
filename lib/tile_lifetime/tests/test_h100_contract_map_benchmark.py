@@ -146,6 +146,21 @@ def _complete_result_evidence() -> dict[str, Any]:
     }
 
 
+def _complete_result_evidence_bundle() -> tuple[dict[str, Any], ...]:
+    payloads = []
+    for case in default_h100_contract_map_benchmark_plan().cases:
+        for backend in BackendVariant:
+            for boundary in MeasurementBoundary:
+                payload = _complete_result_evidence()
+                payload["identity"] = {
+                    "case_id": case.case_id,
+                    "backend": backend.value,
+                    "measurement_boundary": boundary.value,
+                }
+                payloads.append(payload)
+    return tuple(payloads)
+
+
 def test_default_plan_requires_three_backends_two_boundaries_and_anonymous_irregular_cases() -> None:
     plan = default_h100_contract_map_benchmark_plan()
 
@@ -355,23 +370,38 @@ def test_result_evidence_rejects_each_missing_raw_sample_field(field: str) -> No
 
 
 def test_result_evidence_accepts_complete_reviewed_payload() -> None:
-    # Acceptance of a complete serialized collector payload is the public validator boundary.
-    validate_result_evidence(_complete_result_evidence())
+    # A real collector crosses JSON before the public validator consumes its record.
+    payload = json.loads(json.dumps(_complete_result_evidence()))
+
+    validate_result_evidence(payload)
+
+
+def test_result_evidence_schema_names_all_24_required_records() -> None:
+    schema = result_evidence_schema()
+    required_records = schema["required_result_records"]
+
+    assert len(required_records) == 24
+    assert required_records == [
+        {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}
+        for case in default_h100_contract_map_benchmark_plan().cases
+        for backend in BackendVariant
+        for boundary in MeasurementBoundary
+    ]
 
 
 def test_result_evidence_bundle_requires_every_backend_and_boundary() -> None:
-    payloads = []
-    for backend in BackendVariant:
-        for boundary in MeasurementBoundary:
-            payload = _complete_result_evidence()
-            payload["identity"]["backend"] = backend.value
-            payload["identity"]["measurement_boundary"] = boundary.value
-            payloads.append(payload)
-    # A bundle is reportable only after all six independently validated records are present.
-    validate_result_evidence_bundle(tuple(payloads))
+    payloads = _complete_result_evidence_bundle()
+    validate_result_evidence_bundle(payloads)
 
-    with pytest.raises(ValueError, match="every backend and boundary exactly once"):
-        validate_result_evidence_bundle(tuple(payloads[:-1]))
+    with pytest.raises(ValueError, match="all 24 reviewed case, backend, and boundary records"):
+        validate_result_evidence_bundle(payloads[:-1])
+
+
+def test_result_evidence_bundle_rejects_six_records_for_only_one_case() -> None:
+    payloads = _complete_result_evidence_bundle()[: len(BackendVariant) * len(MeasurementBoundary)]
+
+    with pytest.raises(ValueError, match="all 24 reviewed case, backend, and boundary records"):
+        validate_result_evidence_bundle(payloads)
 
 
 def test_result_evidence_rejects_relaxed_floor_digest_and_post_numerical_timing() -> None:
@@ -395,4 +425,146 @@ def test_result_evidence_rejects_incomplete_or_reordered_raw_schedule() -> None:
     payload = _complete_result_evidence()
     payload["timing"]["raw_samples"][0]["backend_order"] = list(reversed(tuple(BackendVariant)))
     with pytest.raises(ValueError, match="scheduled order"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("maximum_absolute_error", 0.03126),
+        ("mean_absolute_error", 0.00201),
+        ("maximum_ulp_distance", 5),
+        ("mean_ulp_distance", 0.26),
+        ("nonfinite_values", 1),
+    ),
+)
+def test_result_evidence_rejects_measured_output_that_exceeds_backend_floor(field: str, value: float) -> None:
+    payload = _complete_result_evidence()
+    payload["numerical"]["outputs"]["dw1"][field] = value
+
+    with pytest.raises(ValueError, match="immutable ordinary_xla numerical floor"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_result_evidence_rejects_nonfinite_measured_metrics(value: float) -> None:
+    payload = _complete_result_evidence()
+    payload["numerical"]["outputs"]["forward"]["maximum_absolute_error"] = value
+
+    with pytest.raises(ValueError, match="finite nonnegative"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("maximum_absolute_error", 0.007813),
+        ("mean_absolute_error", 0.000501),
+        ("maximum_ulp_distance", 5),
+        ("mean_ulp_distance", 0.26),
+    ),
+)
+def test_result_evidence_rejects_repeat_drift_that_exceeds_backend_floor(field: str, value: float) -> None:
+    payload = _complete_result_evidence()
+    payload["numerical"]["outputs"]["dx"]["pairwise_drift"][0][field] = value
+
+    with pytest.raises(ValueError, match="immutable ordinary_xla repeat floor"):
+        validate_result_evidence(payload)
+
+
+def test_result_evidence_rejects_source_ordered_repeat_content_drift() -> None:
+    payload = _complete_result_evidence()
+    payload["identity"]["backend"] = BackendVariant.SHUTTLE_SOURCE_ORDERED.value
+    payload["numerical"]["outputs"]["forward"]["repeat_hashes"][1] = "6" * 64
+
+    with pytest.raises(ValueError, match="bitwise-repeatability floor"):
+        validate_result_evidence(payload)
+
+
+def test_result_evidence_rejects_unexpected_physical_copy() -> None:
+    payload = _complete_result_evidence()
+    payload["copies"]["unexpected_copy_count"] = 1
+
+    with pytest.raises(ValueError, match="unexpected_copy_count must be zero"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("container_path", "field", "value"),
+    (
+        (("artifacts",), "final_optimized_hlo_path", ""),
+        (("artifacts",), "custom_call_manifest_path", "manifest"),
+        (("resources", "kernel_records", 0), "ptx_path", " "),
+        (("resources", "kernel_records", 0), "sass_path", "artifacts/"),
+    ),
+)
+def test_result_evidence_rejects_non_artifact_paths(
+    container_path: tuple[str | int, ...], field: str, value: str
+) -> None:
+    payload = _complete_result_evidence()
+    container: Any = payload
+    for component in container_path:
+        container = container[component]
+    container[field] = value
+
+    with pytest.raises(ValueError, match=r"canonical string|concrete artifact file"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("container_path", "field", "value"),
+    (
+        (("artifacts",), "final_optimized_hlo_sha256", "4" * 63),
+        (("artifacts",), "custom_call_manifest_sha256", "G" * 64),
+        (("resources", "kernel_records", 0), "ptx_sha256", "A" * 64),
+        (("resources", "kernel_records", 0), "sass_sha256", "2" * 65),
+        (("numerical", "outputs", "forward", "repeat_hashes"), 0, "not-a-hash"),
+    ),
+)
+def test_result_evidence_rejects_malformed_content_identity(
+    container_path: tuple[str | int, ...], field: str | int, value: str
+) -> None:
+    payload = _complete_result_evidence()
+    container: Any = payload
+    for component in container_path:
+        container = container[component]
+    container[field] = value
+
+    with pytest.raises(ValueError, match="lowercase hexadecimal characters"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("command", []),
+        ("environment", {}),
+        ("compiler_flags", []),
+        ("source_sha", "0" * 39),
+        ("persistent_cache_identity", ""),
+    ),
+)
+def test_result_evidence_rejects_empty_or_malformed_provenance(field: str, value: object) -> None:
+    payload = _complete_result_evidence()
+    payload["provenance"][field] = value
+
+    with pytest.raises(ValueError, match=r"nonempty|lowercase hexadecimal characters"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "compile_samples_ns",
+        "first_execution_samples_ns",
+        "warmup_samples_ns",
+        "persistent_cache_cold_samples_ns",
+        "persistent_cache_hit_samples_ns",
+    ),
+)
+def test_result_evidence_rejects_empty_timing_sample_lists(field: str) -> None:
+    payload = _complete_result_evidence()
+    payload["timing"][field] = []
+
+    with pytest.raises(ValueError, match="at least one timing sample"):
         validate_result_evidence(payload)

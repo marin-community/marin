@@ -126,6 +126,12 @@ per output for the forward result, input adjoint, and both weight adjoints.
 Untimed repeat evidence retains output hashes and every pairwise drift record.
 Timing starts only after all floors pass.
 
+The result validator recomputes this decision from every emitted output metric;
+the producer's `floors_passed_before_timing` flag is not accepted on its own.
+NaN, infinity, nonfinite outputs, out-of-floor absolute or ULP error, and
+out-of-floor pairwise repeat drift reject the record. Bitwise-repeatable records
+also require identical SHA-256 output identities for every repeat.
+
 ## Physical evidence
 
 Every backend and boundary must retain:
@@ -143,18 +149,19 @@ Every backend and boundary must retain:
 - raw counterbalanced timing rows, command, environment, compiler flags,
   canonical source SHA, and persistent-cache identity.
 
-A missing resource field, missing raw sample, unexpected copy, or launch-count
-mismatch rejects the headline row. PTXAS text alone is insufficient when SASS
-or profiler evidence is missing.
+A missing resource field, missing raw sample, unexpected copy, malformed or
+empty artifact identity, empty provenance field, empty compile/warmup/cache
+sample list, or launch-count mismatch rejects the headline row. PTXAS text
+alone is insufficient when SASS or profiler evidence is missing.
 
-The machine result schema requires one record for each of the six backend and
-measurement-boundary pairs. Kernel records bind
-PTX and SASS paths and hashes to registers, spills, static and dynamic shared
-memory, block size, active blocks per SM, limiting occupancy resource, and
-achieved occupancy. Numerical records contain separate forward, `dx`, `dw0`,
-and `dw1` metrics, repeat hashes, and pairwise drift. Timing records embed the
-exact 24-row schedule, four rows for each backend permutation, and reject raw
-rows that omit a backend, boundary, or scheduled order.
+The machine result schema requires 24 records: one for each of the four reviewed
+structural cases, three backends, and two measurement boundaries. Kernel
+records bind PTX and SASS paths and hashes to registers, spills, static and
+dynamic shared memory, block size, active blocks per SM, limiting occupancy
+resource, and achieved occupancy. Numerical records contain separate forward,
+`dx`, `dw0`, and `dw1` metrics, repeat hashes, and pairwise drift. Timing records
+embed the exact 24-row schedule, four rows for each backend permutation, and
+reject raw rows that omit a backend, boundary, or scheduled order.
 
 ## External comparator admission
 
