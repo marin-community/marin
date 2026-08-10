@@ -1,0 +1,41 @@
+{
+  "accepted_performance_result": false,
+  "allocation": {
+    "cpu": 1,
+    "disk": "50GB",
+    "gpu_count": 1,
+    "gpu_variant": "H100",
+    "job_id": "/dlwh/dev-gpu-dlwh-shuttle-partitioned-gemm-95bb",
+    "memory": "32GB",
+    "priority": "batch"
+  },
+  "archive_sha256": "abbbcc773bd72677c2489a56c36a3210867187b4140cf327021ac3383f79cb30",
+  "artifact_hashes": {
+    "benchmark.stderr": "19eb01f229ca70c3a1ead35ccc7a6af93e44c6255bd08b49767018917bd23fbe",
+    "benchmark.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b93409b1a2b1cfe0b855",
+    "generated_partitioned_contract.cu": "22ae4721e7ecd56e3b63d7fb24b86c12d4fad7727c1a617007f65f98f692692c",
+    "post-gated-pre-scheduler-hlo.txt.gz": "7e6f8296058246819fb06eb3c3120274891811793a60f75dce5bfda21886bac4"
+  },
+  "completed_before_failure": {
+    "compile": true,
+    "counterbalanced_timing_loops": true,
+    "determinism_gate": true,
+    "handler_count_gate": true,
+    "independent_ordered_cpu_reference_gate": true,
+    "library_load": true,
+    "typed_ffi_execution": true
+  },
+  "failure": {
+    "exception": "subprocess.CalledProcessError",
+    "message": "git rev-parse HEAD failed because the frozen source archive had no .git directory",
+    "phase": "result provenance serialization",
+    "raw_distributions_preserved": false,
+    "retried": false
+  },
+  "holder_revision": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "release": {
+    "kubernetes_pod_absent": true,
+    "local_holder_session_absent": true
+  },
+  "shuttle_revision": "70581434c4"
+}
