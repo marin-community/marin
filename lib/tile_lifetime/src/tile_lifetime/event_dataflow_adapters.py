@@ -24,6 +24,8 @@ from tile_lifetime.event_dataflow import (
 )
 from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
+from tile_lifetime.right_resource_event_schedule import RightResourcePipelineDescriptor
+from tile_lifetime.sm100_routed_lowering import SM100RoutedStreamingLowering
 from tile_lifetime.streaming_attention import AttentionScoreAxis, StreamingAttentionProgram
 from tile_lifetime.streaming_event_schedule import StreamingContractFoldDescriptor
 
@@ -32,6 +34,32 @@ _DTYPE_BYTES = {
     DType.FP32: 4,
     DType.FP64: 8,
 }
+
+
+def sm100_routed_right_resource_descriptor(
+    lowering: SM100RoutedStreamingLowering,
+) -> RightResourcePipelineDescriptor:
+    """Bind one routed normalized-Fold lowering to generic schedule roles.
+
+    This adapter is the semantic boundary: the returned descriptor contains no
+    query, key, value, attention, or expert role names. The schedule-level
+    derivation therefore remains reusable for any relation-grouped body that
+    stages one right-side resource and emits partitioned Fold contributions.
+    """
+    element_bytes = 2
+    operand_count = 2
+    feature_dimension = 128
+    return RightResourcePipelineDescriptor(
+        grouped_body_name="grouped_contract_fold_body",
+        fold_finalize_name="partial_state_fold_finalize",
+        edge_partition_by_slot=tuple(
+            route_slot // lowering.selected_count for route_slot in range(lowering.relation.route_slots)
+        ),
+        edge_partition_count=lowering.key_value_heads,
+        edge_capacity_per_task=lowering.query_tokens_per_task,
+        resource_buffer_depth=lowering.schedule.right_stages,
+        resource_payload_bytes=(lowering.schedule.right_block_size * feature_dimension * operand_count * element_bytes),
+    )
 
 
 @dataclass(frozen=True)
