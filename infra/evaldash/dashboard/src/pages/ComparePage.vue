@@ -14,7 +14,7 @@ import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { isPartialCoverage } from '@/utils/panel'
-import { MAX_COMPARE } from '@/constants'
+import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
@@ -25,9 +25,19 @@ const router = useRouter()
 const selected = ref<string[]>([])
 const comparing = computed(() => selected.value.length >= 2)
 
-const { data, error, refresh } = useApi<Comparison>(
-  () => `api/compare?models=${encodeURIComponent(selected.value.join(','))}`,
-)
+// The panel's selection travels in the route, so a comparison launched from a narrowed panel keeps
+// its benchmark set, cohort, and filters. Anything else in the query string is ignored.
+const SELECTION_PARAMS = ['benchmarks', 'cohort', 'complete', 'min_coverage', ...FACETS] as const
+
+const { data, error, refresh } = useApi<Comparison>(() => {
+  const params = new URLSearchParams({ models: selected.value.join(',') })
+  for (const name of SELECTION_PARAMS) {
+    const raw = route.query[name]
+    const value = Array.isArray(raw) ? raw[0] : raw
+    if (value) params.set(name, value)
+  }
+  return `api/compare?${params.toString()}`
+})
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
 
 function fromQuery(): string[] {
@@ -50,19 +60,25 @@ onMounted(() => {
   refreshMeta()
 })
 watch(
-  () => route.query.models,
+  () => route.query,
   () => {
     selected.value = fromQuery()
     load()
   },
+  { deep: true },
 )
 onViewRefresh(() => {
   load()
   refreshMeta()
 })
 
+// Keep the inherited selection in the URL when the model set changes: it is what the comparison is
+// computed over, and dropping it would silently switch to a different question mid-session.
 function syncQuery() {
-  router.replace({ path: '/compare', query: selected.value.length ? { models: selected.value.join(',') } : {} })
+  const query = { ...route.query }
+  if (selected.value.length) query.models = selected.value.join(',')
+  else delete query.models
+  router.replace({ path: '/compare', query })
 }
 function toggle(model: string) {
   const at = selected.value.indexOf(model)

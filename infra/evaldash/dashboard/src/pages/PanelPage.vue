@@ -37,17 +37,24 @@ const KNOWN_KEY = 'evaldash.knownEvals'
 const selectedEvals = reactive(new Set<string>())
 const knownEvals = ref<string[]>([])
 
+// The selection every panel-backed endpoint shares. Compare takes the same one, so a head-to-head
+// launched from a narrowed panel scores the benchmarks and cohort the reader was looking at.
+const selection = computed<Record<string, string>>(() => {
+  const params: Record<string, string> = {}
+  if (completeOnly.value) params.complete = '1'
+  if (cohort.value) params.cohort = cohort.value
+  if (selectedEvals.size && selectedEvals.size !== knownEvals.value.length) {
+    params.benchmarks = [...selectedEvals].join(',')
+  }
+  for (const [facet, value] of Object.entries(facetValues)) if (value) params[facet] = value
+  return params
+})
+
 const query = computed(() => {
-  const params = new URLSearchParams()
+  const params = new URLSearchParams(selection.value)
   if (showArchived.value) params.set('include_archived', '1')
-  if (completeOnly.value) params.set('complete', '1')
-  if (cohort.value) params.set('cohort', cohort.value)
   if (modelQuery.value.trim()) params.set('model', modelQuery.value.trim())
   if (aggregatePolicy.value) params.set('aggregate', aggregatePolicy.value)
-  if (selectedEvals.size && selectedEvals.size !== knownEvals.value.length) {
-    params.set('benchmarks', [...selectedEvals].join(','))
-  }
-  for (const [facet, value] of Object.entries(facetValues)) if (value) params.set(facet, value)
   const suffix = params.toString()
   return suffix ? `api/panel?${suffix}` : 'api/panel'
 })
@@ -112,8 +119,10 @@ const sharedTasks = computed<string[]>(() => {
   return visibleTasks.value.filter((task) => selected.value.every((model) => modelCells.value[model]?.[task]))
 })
 
+// Carry the panel's selection into the compare route, so the comparison answers the same question
+// the panel was showing rather than falling back to every benchmark at the newest cohort.
 function goCompare() {
-  router.push({ path: '/compare', query: { models: selected.value.join(',') } })
+  router.push({ path: '/compare', query: { ...selection.value, models: selected.value.join(',') } })
 }
 
 const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))

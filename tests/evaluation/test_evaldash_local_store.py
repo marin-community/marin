@@ -183,6 +183,13 @@ def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(cl
     assert gap["low"] <= gap["high"]
 
 
+def test_api_compare_applies_the_selection_it_is_given(client):
+    comparison = client.get("/api/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu"}).json()
+
+    assert comparison["benchmarks"] == ["mmlu"]
+    assert comparison["shared"] == ["mmlu"]
+
+
 def test_api_compare_rejects_a_request_it_cannot_answer(client):
     assert client.get("/api/compare", params={"models": "snowball"}).status_code == 400
     assert client.get("/api/compare", params={"models": "a,b,c,d,e"}).status_code == 400

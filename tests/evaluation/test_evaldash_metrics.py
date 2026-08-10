@@ -331,3 +331,18 @@ def test_ungraded_items_can_unsettle_an_ordering_that_sampling_error_alone_would
 
     assert settled["differences"]["b"]["separated"] is True
     assert unsettled["differences"]["b"]["separated"] is False
+
+
+def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
+    """A comparison launched from a narrowed panel scores the benchmarks that panel was showing."""
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+        _record("a", "drop", None, "2026-01-01T00:00:00+00:00", 0.40),
+        _record("b", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.50),
+        _record("b", "drop", None, "2026-01-01T00:00:00+00:00", 0.30),
+    ]
+
+    comparison = build_comparison(records, panel_request(benchmarks=("mmlu",)), ("a", "b"))
+
+    assert comparison["benchmarks"] == ["mmlu"]
+    assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]
