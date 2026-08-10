@@ -152,8 +152,15 @@ def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_hook_wrap_builds_command_accepted_by_entry_point(tmp_path) -> None:
+def test_hook_wrap_builds_command_accepted_by_entry_point(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("IRIS_PYTHON", sys.executable)
     wrapped = MultiGpuHook(nproc=2).wrap(_recording_child(tmp_path))
+    assert wrapped[:4] == [
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
+    ]
     subprocess.run(wrapped, check=True)
     _assert_process_outputs(tmp_path, "0")
 

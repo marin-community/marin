@@ -468,9 +468,10 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
         IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
     )
     assert wrapped.command == [
-        "python",
-        "-m",
-        "iris.hooks.multigpu_main",
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -487,15 +488,17 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
     )
-    assert wrapped.command[:8] == [
-        "python",
-        "-m",
-        "iris.hooks.multigpu_main",
+    assert wrapped.command[:10] == [
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
         "--nproc",
         "4",
         "--devices-per-proc",
         "2",
         "--",
+        "python",
     ]
 
 
@@ -541,9 +544,10 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
     wrapped = iris_backend.wrap_nsys(entrypoint)
 
     assert wrapped.command == [
-        "$IRIS_PYTHON",
-        "-m",
-        "iris.hooks.nsys_main",
+        "bash",
+        "-c",
+        'exec "$IRIS_PYTHON" -m iris.hooks.nsys_main "$@"',
+        "iris-nsys",
         "--tasks",
         "0,3",
         "--",
@@ -551,4 +555,44 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
         "train.py",
         "--steps",
         "5",
+    ]
+
+
+def test_submit_composes_bounded_nsys_inside_multigpu_for_global_rank_zero(monkeypatch):
+    monkeypatch.setenv(iris_backend.NSYS_TASKS_ENV, "first")
+    monkeypatch.setenv(iris_backend.NSYS_CAPTURE_RANGE_ENV, "1")
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="/user/profile")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+    request = JobRequest(
+        name="profile",
+        entrypoint=Entrypoint.from_binary("python", ("train.py",)),
+        resources=ResourceConfig.with_gpu("GB200", count=4),
+        processes_per_task=4,
+    )
+
+    client.submit(request)
+
+    command = fake_iris.submit.call_args.kwargs["entrypoint"].command
+    assert command[:10] == [
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
+        "--nproc",
+        "4",
+        "--devices-per-proc",
+        "1",
+        "--",
+        "bash",
+    ]
+    assert command[10:18] == [
+        "-c",
+        'exec "$IRIS_PYTHON" -m iris.hooks.nsys_main "$@"',
+        "iris-nsys",
+        "--tasks",
+        "first",
+        "--capture-range",
+        "--",
+        "python",
     ]

@@ -9,7 +9,7 @@ import os
 import click
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
@@ -23,7 +23,12 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
-from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
+    MoeComparisonMetadata,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -33,7 +38,11 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
+HERO_MOK_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
+HERO_PROFILE_NUM_STEPS = 3
+HERO_PROFILE_PROCESS_INDEX = 0
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+HERO_COMPARISON_ENVIRONMENT = "torch-cu130-cublas13.2"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
@@ -61,7 +70,7 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(
+def _build_hero_run(
     *,
     run_id: str,
     num_steps: int,
@@ -70,6 +79,12 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     version: str | None = None,
+    moe_implementation: str | None = None,
+    mok_expert_placement: str | None = None,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
+    runtime_pip_packages: tuple[str, ...] = (),
+    profile_start_step: int | None = None,
+    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the one-rack EP64 hero throughput run.
 
@@ -81,6 +96,13 @@ def build_hero_run(
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if profile_start_step is not None:
+        if not 1 <= profile_start_step < num_steps:
+            raise ValueError(
+                f"profile_start_step must be in [1, num_steps), got {profile_start_step} for {num_steps} steps"
+            )
+        if profile_num_steps <= 0:
+            raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
 
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
     overrides = {
@@ -90,11 +112,14 @@ def build_hero_run(
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
+            ("mok_expert_placement", mok_expert_placement),
         )
         if value is not None
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    if moe_implementation is not None:
+        model = dataclasses.replace(model, moe_implementation=moe_implementation)
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -102,8 +127,12 @@ def build_hero_run(
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
-    capacity_tag = f"capacity-{model.capacity_factor:g}"
+    is_mok = model.moe_implementation == "mok"
+    if is_mok and capacity_factor is not None:
+        raise ValueError("capacity_factor does not apply to the dropless mok backend")
+    routing_semantics = "dropless" if is_mok else f"capacity-{model.capacity_factor:g}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
+    process_tag = f"processes-per-task-{processes_per_task}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -133,7 +162,21 @@ def build_hero_run(
             seed=0,
             train_batch_size=HERO_EP_BATCH_SIZE,
             num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=False),
+            profiler=(
+                ProfilerConfig(enabled=False)
+                if profile_start_step is None
+                else ProfilerConfig(
+                    enabled=True,
+                    start_step=profile_start_step,
+                    num_steps=profile_num_steps,
+                    process_index=HERO_PROFILE_PROCESS_INDEX,
+                    profile_options=ProfileOptionsConfig(
+                        host_tracer_level=1,
+                        python_tracer_level=0,
+                        enable_hlo_proto=True,
+                    ),
+                )
+            ),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -144,8 +187,11 @@ def build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
-                    capacity_tag,
                     size_tag,
+                    routing_semantics,
+                    f"expert-placement-{model.mok_expert_placement}" if is_mok else "expert-placement-contiguous",
+                    process_tag,
+                    HERO_COMPARISON_ENVIRONMENT,
                     "gb200",
                     "MHEP",
                 ],
@@ -165,7 +211,15 @@ def build_hero_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=None,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
+            runtime_pip_packages=runtime_pip_packages,
+            comparison=MoeComparisonMetadata(
+                backend=model.moe_implementation,
+                routing_semantics=routing_semantics,
+                fused_shared_experts=model.num_shared_experts if is_mok else 0,
+                software_environment=HERO_COMPARISON_ENVIRONMENT,
+                processes_per_task=processes_per_task,
+            ),
         )
 
     return ArtifactStep(
@@ -176,6 +230,85 @@ def build_hero_run(
         build_config=build_config,
         deps=(slim,),
         runtime_args={"train_resources": train_resources},
+    )
+
+
+def build_hero_run(
+    *,
+    run_id: str,
+    num_steps: int,
+    num_experts: int | None = None,
+    num_experts_per_token: int | None = None,
+    intermediate_dim: int | None = None,
+    capacity_factor: float | None = None,
+    version: str | None = None,
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the existing capacity-limited fixed-all-to-all EP64 baseline."""
+    return _build_hero_run(
+        run_id=run_id,
+        num_steps=num_steps,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        intermediate_dim=intermediate_dim,
+        capacity_factor=capacity_factor,
+        version=version,
+    )
+
+
+def build_mok_hero_run(
+    *,
+    run_id: str,
+    num_steps: int,
+    num_experts: int | None = None,
+    num_experts_per_token: int | None = None,
+    intermediate_dim: int | None = None,
+    mok_package: str,
+    mok_expert_placement: str = "contiguous",
+    profile_start_step: int | None = None,
+    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    version: str | None = None,
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the dropless MoK comparison arm with one JAX process per GB200."""
+    return _build_hero_run(
+        run_id=run_id,
+        num_steps=num_steps,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        intermediate_dim=intermediate_dim,
+        version=version,
+        moe_implementation="mok",
+        mok_expert_placement=mok_expert_placement,
+        processes_per_task=HERO_MOK_PROCESSES_PER_TASK,
+        runtime_pip_packages=(mok_package,),
+        profile_start_step=profile_start_step,
+        profile_num_steps=profile_num_steps,
+    )
+
+
+def build_multiprocess_hero_run(
+    *,
+    run_id: str,
+    num_steps: int,
+    num_experts: int | None = None,
+    num_experts_per_token: int | None = None,
+    intermediate_dim: int | None = None,
+    capacity_factor: float | None = None,
+    profile_start_step: int | None = None,
+    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    version: str | None = None,
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build a four-process-per-node fixed-all-to-all control matched to MoK's topology."""
+    return _build_hero_run(
+        run_id=run_id,
+        num_steps=num_steps,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        intermediate_dim=intermediate_dim,
+        capacity_factor=capacity_factor,
+        version=version,
+        processes_per_task=HERO_MOK_PROCESSES_PER_TASK,
+        profile_start_step=profile_start_step,
+        profile_num_steps=profile_num_steps,
     )
 
 

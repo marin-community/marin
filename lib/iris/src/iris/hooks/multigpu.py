@@ -47,9 +47,6 @@ class MultiGpuHook:
 
     def wrap(self, command: Sequence[str]) -> list[str]:
         argv = [
-            "python",
-            "-m",
-            _MULTIGPU_MAIN_MODULE,
             "--nproc",
             str(self.nproc),
             "--devices-per-proc",
@@ -58,7 +55,19 @@ class MultiGpuHook:
         if self.wrap_child:
             argv += ["--wrap", self.wrap_child]
         argv.append("--")
-        return [*argv, *command]
+        # Iris provisions the job environment's interpreter in IRIS_PYTHON.  The
+        # entrypoint is executed as argv (without shell expansion), so a literal
+        # ``$IRIS_PYTHON`` would not work here.  Pass the supervisor arguments via
+        # ``$@`` to preserve their exact boundaries while expanding only the
+        # interpreter path.  The fallback keeps this helper usable in local tests.
+        return [
+            "bash",
+            "-c",
+            f'exec "${{IRIS_PYTHON:-python}}" -m {_MULTIGPU_MAIN_MODULE} "$@"',
+            "iris-multigpu",
+            *argv,
+            *command,
+        ]
 
 
 def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> MultiGpuHook:

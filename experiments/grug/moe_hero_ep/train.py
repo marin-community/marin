@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import ctypes
 import dataclasses
 import functools
 import logging
@@ -39,6 +41,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug._jax_mixed_memory_donation import install_mixed_memory_donation_safety
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
@@ -61,6 +64,44 @@ _XLA_FLAG_DEFAULTS = (
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+
+
+@functools.cache
+def _load_cuda_runtime():
+    errors = []
+    for library_name in ("libcudart.so", "libcudart.so.13"):
+        try:
+            return ctypes.CDLL(library_name)
+        except OSError as exc:
+            errors.append(f"{library_name}: {exc}")
+    raise RuntimeError(f"could not load CUDA runtime for profiler range control: {'; '.join(errors)}")
+
+
+def _call_cuda_profiler_api(function_name: str) -> None:
+    function = getattr(_load_cuda_runtime(), function_name)
+    function.argtypes = []
+    function.restype = ctypes.c_int
+    status = function()
+    if status != 0:
+        raise RuntimeError(f"{function_name} failed with CUDA status {status}")
+
+
+@contextlib.contextmanager
+def _cuda_profiler_step_range(*, enabled: bool, start_step: int, num_steps: int, current_step: int):
+    """Open and close an Nsight ``cudaProfilerApi`` range around numbered host steps."""
+    profile_process = enabled and jax.process_index() == 0
+    starts_range = profile_process and current_step == start_step
+    ends_range = profile_process and current_step == start_step + num_steps - 1
+    if starts_range:
+        _call_cuda_profiler_api("cudaProfilerStart")
+    try:
+        yield
+    finally:
+        if ends_range:
+            # The StepTrace annotation and the compiled step have both returned. Flush any
+            # outstanding ordered effects before telling Nsight to finalize the range.
+            jax.effects_barrier()
+            _call_cuda_profiler_api("cudaProfilerStop")
 
 
 def _apply_hero_ep_runtime_defaults() -> None:
@@ -111,6 +152,18 @@ class GrugEvalConfig:
 
 
 @dataclass(frozen=True)
+class MoeComparisonMetadata:
+    """Tracker metadata for apples-to-apples MoE backend runs."""
+
+    backend: str
+    routing_semantics: str
+    fused_shared_experts: int
+    software_environment: str
+    processes_per_task: int
+    metric_contract: str = "train/loss,throughput/tokens_per_second,throughput/mfu,moe/drop_fraction"
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
@@ -123,6 +176,10 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # Extra runtime wheels or immutable VCS references installed into every Iris task.
+    # The MoK extension is intentionally supplied this way while it is developed outside Marin.
+    runtime_pip_packages: tuple[str, ...] = ()
+    comparison: MoeComparisonMetadata | None = None
 
 
 def build_train_dataset(
@@ -355,6 +412,7 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
 ):
+    install_mixed_memory_donation_safety()
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -365,7 +423,15 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
+    debug_disable_donation = os.environ.get("GRUG_DEBUG_DISABLE_DONATION") == "1"
+    if debug_disable_donation:
+        logger.warning("GRUG_DEBUG_DISABLE_DONATION=1: compiling a non-comparable diagnostic train step")
+
+    @functools.partial(
+        jax.jit,
+        donate_argnums=() if debug_disable_donation else (0,),
+        static_argnames=("compute_watch",),
+    )
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
@@ -437,10 +503,122 @@ def _make_train_step(
     return train_step
 
 
-def _run_grug_local(config: GrugRunConfig) -> None:
+def _mok_config(config: GrugModelConfig):
+    """Construct the optional adapter config without importing MoK on other backends."""
+    from levanter.kernels.mok import MokBf16Config  # noqa: PLC0415
+
+    return MokBf16Config(
+        workspace_id=config.mok_workspace_id,
+        fwd_num_comm_sms=config.mok_fwd_num_comm_sms,
+        bwd_num_comm_sms=config.mok_bwd_num_comm_sms,
+        minibatch_size=config.mok_minibatch_size,
+        macrobatch_size=config.mok_macrobatch_size,
+        schedule_capacity_multiplier=config.mok_schedule_capacity_multiplier,
+        all_gather_top_experts_chunk_bytes=config.mok_all_gather_top_experts_chunk_bytes,
+    )
+
+
+def _initialize_mok_process_runtime(config: GrugRunConfig):
+    """Join the MoK NCCL group and register its per-process workspace.
+
+    Iris already rendezvoused the JAX world when this runs. Reusing rank zero's registered host
+    with a distinct port gives Torch/NCCL the identical 64-rank process topology without making
+    Torch a dependency of model import or of the fixed-all-to-all control.
+    """
+    import torch  # noqa: PLC0415
+    import torch.distributed as dist  # noqa: PLC0415
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.client.job_info import get_job_info  # noqa: PLC0415
+    from iris.hooks.multigpu import (  # noqa: PLC0415
+        IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+        IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+        IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+    )
+    from iris.runtime.jax_init import attempt_scoped_endpoint_name  # noqa: PLC0415
+    from levanter.kernels.mok import initialize_mok_runtime  # noqa: PLC0415
+
+    try:
+        world_size = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+        rank = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
+        device_id = int(os.environ[IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV].split(",", 1)[0])
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("mok requires the four-process-per-node Iris launcher") from exc
+
+    torch.cuda.set_device(device_id)
+    job_info = get_job_info()
+    if job_info is None or job_info.task_index == 0:
+        coordinator_host = job_info.advertise_host if job_info is not None else "127.0.0.1"
+    else:
+        # Keep the Torch/NCCL rendezvous attached to the same Iris gang attempt as JAX.
+        # A preempted attempt can leave its leased endpoint visible briefly, so JAX uses
+        # an attempt-scoped name and MoK must resolve that exact endpoint as well.
+        endpoint_name = attempt_scoped_endpoint_name("jax_coordinator", job_info)
+        coordinator = iris_ctx().resolver.resolve(endpoint_name).first().url
+        coordinator_host = coordinator.rsplit(":", 1)[0]
+    coordinator_host = os.environ.get("MOK_MASTER_ADDR", coordinator_host)
+    coordinator_port = int(os.environ.get("MOK_MASTER_PORT", "29500"))
+
+    created_process_group = not dist.is_initialized()
+    if created_process_group:
+        dist.init_process_group(
+            backend="nccl",
+            init_method=f"tcp://{coordinator_host}:{coordinator_port}",
+            rank=rank,
+            world_size=world_size,
+        )
+    process_group = dist.group.WORLD
+    local_tokens, remainder = divmod(
+        config.trainer.trainer.train_batch_size * config.model.max_seq_len,
+        world_size,
+    )
+    if remainder:
+        raise ValueError("the MoK global token batch must divide the process count")
+    try:
+        runtime = initialize_mok_runtime(
+            config=_mok_config(config.model),
+            process_group=process_group,
+            num_local_tokens=local_tokens,
+            hidden_size=config.model.hidden_dim,
+            topk=config.model.num_experts_per_token,
+        )
+    except BaseException:
+        if created_process_group and dist.is_initialized():
+            dist.destroy_process_group()
+        raise
+    return runtime, created_process_group
+
+
+def _shutdown_mok_process_runtime(runtime, created_process_group: bool) -> None:
+    import torch.distributed as dist  # noqa: PLC0415
+
+    # All submitted FFI work must be complete before the native workspace is unregistered.
+    jax.effects_barrier()
+    runtime.close()
+    if created_process_group and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def _run_grug_local(config: GrugRunConfig, *, stop_after_steps: int | None = None) -> None:
     """Entry point for the grug template training loop."""
+    if stop_after_steps is not None and stop_after_steps <= 0:
+        raise ValueError("stop_after_steps must be positive")
+
     trainer = config.trainer.trainer
     trainer.initialize()
+
+    mok_runtime = None
+    created_process_group = False
+    try:
+        if config.model.moe_implementation == "mok":
+            mok_runtime, created_process_group = _initialize_mok_process_runtime(config)
+        _run_grug_initialized(config, stop_after_steps=stop_after_steps)
+    finally:
+        if mok_runtime is not None:
+            _shutdown_mok_process_runtime(mok_runtime, created_process_group)
+
+
+def _run_grug_initialized(config: GrugRunConfig, *, stop_after_steps: int | None = None) -> None:
+    trainer = config.trainer.trainer
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
@@ -514,6 +692,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
+        if config.comparison is not None:
+            levanter.tracker.log_summary(
+                {
+                    "comparison/backend": config.comparison.backend,
+                    "comparison/routing_semantics": config.comparison.routing_semantics,
+                    "comparison/fused_shared_experts": config.comparison.fused_shared_experts,
+                    "comparison/software_environment": config.comparison.software_environment,
+                    "comparison/processes_per_task": config.comparison.processes_per_task,
+                    "comparison/metric_contract": config.comparison.metric_contract,
+                }
+            )
+
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
 
@@ -547,10 +737,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
+            profile_path = trainer.log_dir / run_id / "profiler"
+            profile_run_id = run_id
+            if profiler_cfg.process_index is None:
+                process_suffix = f"process-{jax.process_index():05d}"
+                profile_path /= process_suffix
+                profile_run_id = f"{run_id}/{process_suffix}"
             state_callbacks.add_hook(
                 profiler_cfg.build(
-                    str(trainer.log_dir / run_id / "profiler"),
-                    run_id=run_id,
+                    str(profile_path),
+                    run_id=profile_run_id,
                     num_steps=profiler_num_steps,
                 ),
                 every=1,
@@ -572,10 +768,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        stop_step = trainer.num_train_steps
+        if stop_after_steps is not None:
+            stop_step = min(stop_step, int(state.step) + stop_after_steps)
 
         # Main optimization loop.
         try:
-            while int(state.step) < trainer.num_train_steps:
+            while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
@@ -584,10 +783,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                with _cuda_profiler_step_range(
+                    enabled=profiler_enabled,
+                    start_step=profiler_cfg.start_step,
+                    num_steps=profiler_num_steps,
+                    current_step=current_step,
+                ):
+                    with jax.profiler.StepTraceAnnotation("train", step_num=current_step):
+                        state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                        jax.block_until_ready(metrics["train/loss"])
                 step = int(state.step) - 1
-
-                jax.block_until_ready(metrics["train/loss"])
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
@@ -649,6 +854,7 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        pip_packages=config.runtime_pip_packages,
     )
 
 

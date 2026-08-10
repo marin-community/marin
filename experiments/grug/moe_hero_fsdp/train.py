@@ -40,6 +40,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug._jax_mixed_memory_donation import install_mixed_memory_donation_safety
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
@@ -353,6 +354,7 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
 ):
+    install_mixed_memory_donation_safety()
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:

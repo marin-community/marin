@@ -94,6 +94,44 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --run-id "$run_id" --num-steps 200 --version 2026.08.05 --run
 ```
 
+### Dropless MoK comparison
+
+The comparison branch exposes three EP launchers under the same Torch 2.11+cu130, cuBLAS 13.2,
+NVCC 13.0.88 environment:
+
+- `launch` is the historical one-process-per-node fixed-all-to-all baseline.
+- `launch_multiprocess` is the same fixed-all-to-all backend with one JAX process per GPU, matching
+  MoK's process topology.
+- `launch_mok` is the dropless MoK backend. It computes both shared experts inside the same native
+  call while keeping their six canonical parameter leaves separate for MuonH.
+
+MoK is supplied as an immutable, prebuilt CPython 3.12 Linux wheel for the Iris worker
+architecture. Build that wheel from the matching `mark/mok_hacking` checkout against Torch
+2.11+cu130 and CUDA 13.0 with `MOK_ARCH=SM100` for GB200; MoK's default SM103 wheel is not the
+right target. Source/VCS installs are intentionally unsupported by this launcher because task
+dependency installation happens before Iris exposes `nvcc` on `PATH`.
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_multiprocess \
+  --run-id mhep-fixed-multiprocess --num-steps 25 --version dev --run
+
+python -m experiments.grug.moe_hero_ep.launch_mok \
+  --run-id mhep-mok-dropless --num-steps 25 --version dev \
+  --mok-package 'https://storage.googleapis.com/BUCKET/mixture_of_kittens-0.1.0-cp312-cp312-linux_ARCH.whl' \
+  --run
+```
+
+The metric contract is loss, tokens/s, analytic MFU, and MoE drop fraction. MoK reports zero
+drops. The fixed-capacity arms' analytic MFU still counts all selected top-k expert FLOPs, so read
+their MFU together with `moe/drop_fraction`; throughput remains the direct whole-system measure.
+Do not put credentials or signed query parameters in `--mok-package`, because the package spec is
+part of the recorded run configuration.
+
+A four-GPU node is enough for the reduced MoK distributed correctness tests and a sliced kernel
+benchmark. It cannot run this exact 359.6B HERO shape: EP4 would hold 32 routed experts per device
+instead of two, and the rack batch would make each symmetric workspace roughly 16 times larger.
+Use the full 64-GPU rack for the end-to-end HERO loss/throughput/MFU result.
+
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port

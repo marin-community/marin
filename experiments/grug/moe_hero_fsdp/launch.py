@@ -37,6 +37,7 @@ HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+HERO_COMPARISON_ENVIRONMENT = "torch-cu130-cublas13.2"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 # This must exceed XLA's 10-minute collective timeout.
 HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
@@ -116,14 +117,15 @@ def build_hero_run(
                 WandbConfig(
                     entity="marin-community",
                     project=wandb_project,
-                    tags=["grug", "moe", "hero", "fsdp", "gb200"],
+                    tags=["grug", "moe", "hero", "fsdp", "gb200", HERO_COMPARISON_ENVIRONMENT],
                     group="moe-hero-fsdp",
                     name=run_id,
                     replicate_path=ctx.output_path,
                 ),
                 TelemetryConfig(),
             ),
-            watch=WatchConfig(interval=20),
+            # Keep instrumentation overhead matched with both EP comparison arms.
+            watch=WatchConfig(interval=0),
             progress_watchdog=ProgressWatchdogConfig(
                 step_timeout=HERO_TRAIN_STEP_TIMEOUT,
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,

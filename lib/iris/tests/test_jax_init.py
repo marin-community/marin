@@ -20,7 +20,7 @@ import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax
+from iris.runtime.jax_init import attempt_scoped_endpoint_name, configure_jax_compilation_cache, initialize_jax
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
 EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
@@ -96,17 +96,32 @@ def exit_hooks(monkeypatch: pytest.MonkeyPatch) -> FakeExitHooks:
     return hooks
 
 
-def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
+def _make_job_info(task_index: int = 0, num_tasks: int = 1, attempt_id: int = 0) -> JobInfo:
     """Create a JobInfo with the given task_index and num_tasks."""
     job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
-        attempt_id=0,
+        attempt_id=attempt_id,
         advertise_host="10.0.0.1",
         controller_address="controller:8080",
         ports={},
     )
+
+
+def test_attempt_scoped_endpoint_name_accepts_dev_session_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IRIS_JAX_SESSION_ID", "mok-r4")
+
+    endpoint_name = attempt_scoped_endpoint_name("jax_coordinator", _make_job_info(attempt_id=3))
+
+    assert endpoint_name == "jax_coordinator-attempt-3-session-mok-r4"
+
+
+def test_attempt_scoped_endpoint_name_rejects_invalid_dev_session_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IRIS_JAX_SESSION_ID", "mok/r4")
+
+    with pytest.raises(ValueError, match="IRIS_JAX_SESSION_ID"):
+        attempt_scoped_endpoint_name("jax_coordinator", _make_job_info())
 
 
 @pytest.fixture(autouse=True)
@@ -170,7 +185,7 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     initialize_jax()
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:8476")]
     assert mock_jax_init.call_args_list == [
         call(
             "10.0.0.1:8476",
@@ -215,13 +230,13 @@ def test_initialize_jax_task0_registers(
     exit_hooks: FakeExitHooks,
 ) -> None:
     """Task 0 registers the coordinator endpoint and calls jax.distributed.initialize."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4)
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4, attempt_id=7)
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
 
     initialize_jax(port=9999, heartbeat_timeout=37)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:9999")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-7", "10.0.0.1:9999")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:9999",
         4,
@@ -250,7 +265,7 @@ def test_initialize_jax_task0_uses_iris_port(
 
     initialize_jax(port=9999)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:12345",
         2,
@@ -360,7 +375,7 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator-attempt-0", "10.0.0.1:8476")]
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:8476",
         16,

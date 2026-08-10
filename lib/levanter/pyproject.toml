@@ -84,6 +84,12 @@ gpu = [
   "jax[cuda13]==0.11.0",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+  # MoK builds against CUDA 13.0. Keep the compiler frontend, assembler, CRT,
+  # and CCCL headers on one release so nvcc does not emit newer PTX than ptxas accepts.
+  "nvidia-cuda-cccl==13.0.85; sys_platform == 'linux'",
+  "nvidia-cuda-crt==13.0.88; sys_platform == 'linux'",
+  "nvidia-cuda-nvcc==13.0.88; sys_platform == 'linux'",
+  "nvidia-nvvm==13.0.88; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.

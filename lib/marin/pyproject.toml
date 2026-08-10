@@ -105,7 +105,7 @@ conflicts = [
     ],
     [
         # The vllm extra builds vLLM for TPUs from source, so it must use CPU
-        # torch rather than the cu128-pinned torch from the gpu extra.
+        # torch rather than the cu130-pinned torch from the gpu extra.
         { extra = "vllm" },
         { extra = "gpu" },
     ],
@@ -118,6 +118,12 @@ gpu = [
   "jax[cuda13]==0.11.0",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+  # MoK builds against CUDA 13.0. Keep the compiler frontend, assembler, CRT,
+  # and CCCL headers on one release so nvcc does not emit newer PTX than ptxas accepts.
+  "nvidia-cuda-cccl==13.0.85; sys_platform == 'linux'",
+  "nvidia-cuda-crt==13.0.88; sys_platform == 'linux'",
+  "nvidia-cuda-nvcc==13.0.88; sys_platform == 'linux'",
+  "nvidia-nvvm==13.0.88; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
@@ -212,13 +218,11 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
@@ -230,8 +234,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 

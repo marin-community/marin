@@ -85,19 +85,26 @@ class MoEExpertMlp(eqx.Module):
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         expert_chunks: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
+        expert_permutation: jax.Array | None = None,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        w_down = _reshard_for_init(
-            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
-            pspecs.w_down,
-        )
+        w_down = _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std)
+        if expert_permutation is not None:
+            expert_permutation = jnp.asarray(expert_permutation, dtype=jnp.int32)
+            if expert_permutation.shape != (num_experts,):
+                raise ValueError(
+                    f"expert_permutation must have shape ({num_experts},), got {expert_permutation.shape}"
+                )
+            w_gate = w_gate[expert_permutation]
+            w_up = w_up[expert_permutation]
+            w_down = w_down[expert_permutation]
         return MoEExpertMlp(
             w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
             w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
-            w_down=w_down,
+            w_down=_reshard_for_init(w_down, pspecs.w_down),
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
@@ -158,6 +165,12 @@ def moe_mlp(
     greater than one split the expert bank into equal, statically sized chunks.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+
+    if resolved_implementation == "mok":
+        raise ValueError(
+            "the mok backend fuses routed and shared experts and must be called through the Grug model adapter; "
+            "the routed-only moe_mlp interface does not carry shared-expert weights"
+        )
 
     if mesh is None:
         mesh = _current_mesh()

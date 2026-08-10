@@ -3,7 +3,7 @@
 
 """JAX distributed initialization via Iris endpoint registry.
 
-Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
+Task 0 registers its attempt-scoped coordinator address; tasks 1..N-1 poll for it.
 Single-task jobs initialize an explicit one-process distributed world.
 
 JAX is imported at call time — iris does not depend on jax.
@@ -12,6 +12,7 @@ JAX is imported at call time — iris does not depend on jax.
 import atexit
 import logging
 import os
+import re
 import time
 from enum import StrEnum
 
@@ -42,6 +43,8 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
+_JAX_SESSION_ID_ENV = "IRIS_JAX_SESSION_ID"
+_VALID_JAX_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -50,9 +53,23 @@ _JAX_ENV_KEYS = (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    _JAX_SESSION_ID_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
 )
+
+
+def attempt_scoped_endpoint_name(endpoint_name: str, job_info) -> str:
+    """Return the endpoint name for this synchronized Iris gang attempt."""
+    if job_info is None:
+        return endpoint_name
+    endpoint_name = f"{endpoint_name}-attempt-{job_info.attempt_id}"
+    session_id = os.environ.get(_JAX_SESSION_ID_ENV)
+    if session_id is None:
+        return endpoint_name
+    if _VALID_JAX_SESSION_ID.fullmatch(session_id) is None:
+        raise ValueError(f"{_JAX_SESSION_ID_ENV} must contain only letters, digits, '.', '_', and '-'")
+    return f"{endpoint_name}-session-{session_id}"
 
 
 def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> None:
@@ -302,6 +319,10 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
+    # A preempted coordinator can leave its leased endpoint visible briefly while
+    # the gang's next attempt starts. Use the synchronized gang attempt id so
+    # pollers cannot join a coordinator from the previous distributed world.
+    endpoint_name = attempt_scoped_endpoint_name(endpoint_name, job_info)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived

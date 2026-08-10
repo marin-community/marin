@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -52,6 +53,8 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
+from experiments.grug.moe_hero_ep.expert_placement import MokExpertPlacement, resolve_mok_expert_permutations
+
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 # Large-vocab CE via the plain-XLA path (no shared-memory tiling, so v_block can be large).
@@ -91,6 +94,62 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _mok_bf16(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    router_weights: jax.Array,
+    shared0_gate: jax.Array,
+    shared0_up: jax.Array,
+    shared0_down: jax.Array,
+    shared1_gate: jax.Array,
+    shared1_up: jax.Array,
+    shared1_down: jax.Array,
+    routed_gate: jax.Array,
+    routed_up: jax.Array,
+    routed_down: jax.Array,
+    *,
+    workspace_id: int,
+    fwd_num_comm_sms: int,
+    bwd_num_comm_sms: int,
+    minibatch_size: int,
+    macrobatch_size: int,
+    schedule_capacity_multiplier: float,
+    all_gather_top_experts_chunk_bytes: int,
+) -> jax.Array:
+    """Lazy boundary to the optional MoK runtime.
+
+    Keeping this import out of module initialization lets ordinary CPU tooling, checkpoint
+    inspection, and the existing FSDP/EP backends run without loading CUDA or PyTorch. The adapter
+    accepts Marin's canonical parameter leaves; any compute-only packing belongs behind this
+    boundary so Muon continues to see the original matrices.
+    """
+    from levanter.kernels.mok import MokBf16Config, mok_bf16  # noqa: PLC0415
+
+    return mok_bf16(
+        x,
+        selected_experts,
+        router_weights,
+        shared0_gate,
+        shared0_up,
+        shared0_down,
+        shared1_gate,
+        shared1_up,
+        shared1_down,
+        routed_gate,
+        routed_up,
+        routed_down,
+        config=MokBf16Config(
+            workspace_id=workspace_id,
+            fwd_num_comm_sms=fwd_num_comm_sms,
+            bwd_num_comm_sms=bwd_num_comm_sms,
+            minibatch_size=minibatch_size,
+            macrobatch_size=macrobatch_size,
+            schedule_capacity_multiplier=schedule_capacity_multiplier,
+            all_gather_top_experts_chunk_bytes=all_gather_top_experts_chunk_bytes,
+        ),
+    )
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -160,6 +219,14 @@ class GrugModelConfig:
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
+    mok_workspace_id: int = 0
+    mok_fwd_num_comm_sms: int = 40
+    mok_bwd_num_comm_sms: int = 28
+    mok_minibatch_size: int = 4096
+    mok_macrobatch_size: int = 131_072
+    mok_schedule_capacity_multiplier: float = 0.5
+    mok_all_gather_top_experts_chunk_bytes: int = 2048
+    mok_expert_placement: MokExpertPlacement = "contiguous"
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -202,7 +269,26 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        implementation = resolve_moe_implementation(self.moe_implementation)
+        if implementation == "mok" and (self.num_shared_experts != 2 or self.shared_expert_intermediate_dim <= 0):
+            raise ValueError("the mok backend requires exactly two enabled shared experts")
+        if implementation == "mok":
+            if self.mok_expert_placement not in ("contiguous", "r9_profile_hot_cold"):
+                raise ValueError(f"unknown MoK expert placement: {self.mok_expert_placement}")
+            if self.mok_workspace_id < 0:
+                raise ValueError("mok_workspace_id must be non-negative")
+            if self.mok_fwd_num_comm_sms <= 0 or self.mok_fwd_num_comm_sms % 2:
+                raise ValueError("mok_fwd_num_comm_sms must be positive and even")
+            if self.mok_bwd_num_comm_sms <= 0 or self.mok_bwd_num_comm_sms % 2:
+                raise ValueError("mok_bwd_num_comm_sms must be positive and even")
+            if self.mok_minibatch_size <= 0 or self.mok_minibatch_size % 256:
+                raise ValueError("mok_minibatch_size must be positive and divisible by 256")
+            if self.mok_macrobatch_size <= 0 or self.mok_macrobatch_size % self.mok_minibatch_size:
+                raise ValueError("mok macrobatch size must be a positive multiple of minibatch size")
+            if not math.isfinite(self.mok_schedule_capacity_multiplier) or self.mok_schedule_capacity_multiplier <= 0:
+                raise ValueError("mok_schedule_capacity_multiplier must be positive and finite")
+            if self.mok_all_gather_top_experts_chunk_bytes <= 0 or (self.mok_all_gather_top_experts_chunk_bytes % 16):
+                raise ValueError("mok_all_gather_top_experts_chunk_bytes must be positive and 16-byte aligned")
 
     @property
     def Embed(self) -> Axis:
@@ -718,7 +804,12 @@ class MoEMLP(eqx.Module):
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
+    def init(
+        cfg: GrugModelConfig,
+        *,
+        key: PRNGKeyArray,
+        expert_permutation: jax.Array | None = None,
+    ) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
 
@@ -727,9 +818,17 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        router = _init_weight(k_router, (d, e), cfg.initializer_std)
+        router_bias = jnp.zeros((e,))
+        if expert_permutation is not None:
+            expert_permutation = jnp.asarray(expert_permutation, dtype=jnp.int32)
+            if expert_permutation.shape != (e,):
+                raise ValueError(f"expert_permutation must have shape ({e},), got {expert_permutation.shape}")
+            router = router[:, expert_permutation]
+            router_bias = router_bias[expert_permutation]
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router=reshard(router, P(None, None)),
+            router_bias=router_bias,
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -740,6 +839,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                expert_permutation=expert_permutation,
             ),
             cfg=cfg,
         )
@@ -748,6 +848,8 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        *,
+        shared_experts: tuple[DenseMLP, ...] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -794,18 +896,46 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        moe_out = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
-        if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
-        else:
-            routed_flat = moe_out
+        if self.cfg.moe_implementation == "mok":
+            if shared_experts is None or len(shared_experts) != 2:
+                raise ValueError("the mok backend requires the block's two shared experts")
+            shared0, shared1 = shared_experts
+            routed_flat = _mok_bf16(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights_f,
+                shared0.w_gate,
+                shared0.w_up,
+                shared0.w_down,
+                shared1.w_gate,
+                shared1.w_up,
+                shared1.w_down,
+                self.expert_mlp.w_gate,
+                self.expert_mlp.w_up,
+                self.expert_mlp.w_down,
+                workspace_id=self.cfg.mok_workspace_id,
+                fwd_num_comm_sms=self.cfg.mok_fwd_num_comm_sms,
+                bwd_num_comm_sms=self.cfg.mok_bwd_num_comm_sms,
+                minibatch_size=self.cfg.mok_minibatch_size,
+                macrobatch_size=self.cfg.mok_macrobatch_size,
+                schedule_capacity_multiplier=self.cfg.mok_schedule_capacity_multiplier,
+                all_gather_top_experts_chunk_bytes=self.cfg.mok_all_gather_top_experts_chunk_bytes,
+            )
+            # MoK dispatch is dropless: capacity_factor is deliberately not part of this call.
             dropped_assignments = _zero_dropped_assignments()
+        else:
+            moe_out = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=self.cfg.report_capacity_overflow,
+            )
+            if self.cfg.report_capacity_overflow:
+                routed_flat, dropped_assignments = moe_out
+            else:
+                routed_flat = moe_out
+                dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -825,7 +955,12 @@ class Block(eqx.Module):
     sconv_mlp: "ShortConv | None"  # SConv on the MoE branch output (cfg.sconv)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(
+        cfg: GrugModelConfig,
+        *,
+        key: PRNGKeyArray,
+        expert_permutation: jax.Array | None = None,
+    ) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -844,7 +979,7 @@ class Block(eqx.Module):
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
+            mlp=MoEMLP.init(cfg, key=mlp_key, expert_permutation=expert_permutation),
             shared=shared,
             sconv_attn=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
@@ -872,8 +1007,11 @@ class Block(eqx.Module):
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
+        if self.mlp.cfg.moe_implementation == "mok":
+            mlp_out, router_stats = self.mlp(mlp_in, shared_experts=self.shared)
+        else:
+            mlp_out, router_stats = self.mlp(mlp_in)
+        if self.shared is not None and self.mlp.cfg.moe_implementation != "mok":
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
@@ -924,7 +1062,20 @@ class Transformer(eqx.Module):
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
-        stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        expert_permutations = None
+        if cfg.moe_implementation == "mok":
+            resolved_permutations = resolve_mok_expert_permutations(
+                cfg.mok_expert_placement,
+                num_layers=cfg.num_layers,
+                num_experts=cfg.num_experts,
+            )
+            if resolved_permutations is not None:
+                expert_permutations = jnp.asarray(resolved_permutations, dtype=jnp.int32)
+        stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(
+            cfg,
+            key=jnp.stack(block_keys),
+            expert_permutation=expert_permutations,
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),

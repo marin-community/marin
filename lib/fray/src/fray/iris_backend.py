@@ -173,6 +173,7 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
 
 
 NSYS_TASKS_ENV = "IRIS_NSYS_TASKS"
+NSYS_CAPTURE_RANGE_ENV = "IRIS_NSYS_CAPTURE_RANGE"
 
 
 def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
@@ -191,12 +192,29 @@ def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
     tasks = os.environ.get(NSYS_TASKS_ENV)
     if not tasks:
         return entrypoint
+    capture_range = os.environ.get(NSYS_CAPTURE_RANGE_ENV) == "1"
+    capture_range_arg = " --capture-range" if capture_range else ""
     command = list(entrypoint.command)
     if command[:2] == ["bash", "-c"] and len(command) == 3:
         inner = command[2].removeprefix("exec ")
-        wrapped = ["bash", "-c", f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks} -- {inner}"]
+        wrapped = [
+            "bash",
+            "-c",
+            f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks}{capture_range_arg} -- {inner}",
+        ]
     else:
-        wrapped = ["$IRIS_PYTHON", "-m", "iris.hooks.nsys_main", "--tasks", tasks, "--", *command]
+        nsys_args = ["--tasks", tasks]
+        if capture_range:
+            nsys_args.append("--capture-range")
+        wrapped = [
+            "bash",
+            "-c",
+            'exec "$IRIS_PYTHON" -m iris.hooks.nsys_main "$@"',
+            "iris-nsys",
+            *nsys_args,
+            "--",
+            *command,
+        ]
     return IrisEntrypoint(
         command=wrapped,
         workdir_files=entrypoint.workdir_files,
@@ -660,9 +678,12 @@ class FrayIrisClient:
     def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
+        # Compose nsys inside the multigpu supervisor so its `first` selector sees the
+        # supervisor-stamped global process index and traces rank 0, rather than task 0's
+        # four child processes as one node-scoped report.
+        iris_entrypoint = wrap_nsys(iris_entrypoint)
         if request.processes_per_task > 1:
             iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
-        iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
