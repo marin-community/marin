@@ -359,6 +359,7 @@ def test_partitioned_contract_cuda_generation_owns_one_generic_mainloop_and_dire
     assert audit.has_ordered_fp32_mainloop
     assert audit.has_bf16_rne_partition_boundary
     assert audit.has_command_buffer_trait
+    assert audit.has_handler_counter
     assert audit.command_buffer_eligible
     assert audit.forbidden_command_buffer_operations == ()
     assert not audit.has_atomics
@@ -370,6 +371,7 @@ def test_partitioned_contract_cuda_generation_owns_one_generic_mainloop_and_dire
     assert "ffi::Result<ffi::Buffer<ffi::BF16, 3>> output1_buffer" in generated.source
     assert "ffi::ScratchAllocator" not in generated.source
     assert "concatenated_output" not in generated.source
+    assert f'extern "C" std::uint64_t {generated.call_count_symbol}()' in generated.source
 
 
 def test_partitioned_contract_jax_ffi_spec_converts_layout_conventions_exactly() -> None:

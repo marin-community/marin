@@ -49,6 +49,7 @@ class GeneratedCudaPartitionedGemmFfi:
 
     target: str
     handler_symbol: str
+    call_count_symbol: str
     source: str
     semantic_digest: str
     source_digest: str
@@ -67,6 +68,7 @@ class PartitionedGemmSourceAudit:
     has_ordered_fp32_mainloop: bool
     has_bf16_rne_partition_boundary: bool
     has_command_buffer_trait: bool
+    has_handler_counter: bool
     command_buffer_eligible: bool
     forbidden_command_buffer_operations: tuple[str, ...]
     has_atomics: bool
@@ -147,6 +149,7 @@ def generate_cuda_partitioned_gemm_ffi(
     rhs_selection = _rhs_selection(program, abi)
     output_loops = _output_loops(program, abi, generated_finalization)
     handler_symbol = _target_symbol(target)
+    call_count_symbol = f"{handler_symbol}_call_count"
     semantic_record = {
         "program": program.semantic_digest,
         "physical_family": "bounded_one_cta_partitioned_contract",
@@ -176,6 +179,7 @@ constexpr int kRows = {m};
 constexpr int kFeatures = {n};
 constexpr int kReduction = {k};
 constexpr int kThreads = {threads};
+std::uint64_t call_count = 0;
 
 __global__ void ShuttlePartitionedGemmKernel(
     {",\n    ".join(kernel_arguments)}) {{
@@ -203,6 +207,7 @@ ffi::Error ShuttlePartitionedGemm(
     {",\n    ".join((*input_arguments, *result_arguments))}) {{
   ShuttlePartitionedGemmKernel<<<1, kThreads, 0, stream>>>(
       {",\n      ".join(launch_arguments)});
+  ++call_count;
   return ffi::Error::Success();
 }}
 
@@ -218,11 +223,16 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {handler_symbol},
     ShuttlePartitionedGemm,
     ShuttlePartitionedGemmBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
+
+extern "C" std::uint64_t {call_count_symbol}() {{
+  return call_count;
+}}
 """
     source = finalize_ffi_handler_source(source_template, command_buffer_compatible=True)
     return GeneratedCudaPartitionedGemmFfi(
         target=target,
         handler_symbol=handler_symbol,
+        call_count_symbol=call_count_symbol,
         source=source,
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),
@@ -258,6 +268,7 @@ def audit_cuda_partitioned_gemm_source(
             "accumulator_boundary[linear] = __float2bfloat16_rn(accumulator);" in generated.source
         ),
         has_command_buffer_trait="{ffi::Traits::kCmdBufferCompatible}" in generated.source,
+        has_handler_counter=generated.call_count_symbol in generated.source,
         command_buffer_eligible=command_buffer.eligible,
         forbidden_command_buffer_operations=command_buffer.forbidden_operations,
         has_atomics="atomic" in lowered,
