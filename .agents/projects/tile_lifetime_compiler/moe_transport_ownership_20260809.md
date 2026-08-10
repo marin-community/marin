@@ -105,26 +105,44 @@ the fused model program must not cross the generic transport interface.
 
 `relation_transport.py` derives:
 
-- a metadata plane with exact edge/source/slot/rank identity;
-- destination group logical counts and physical capacities;
-- rank-pair logical counts and per-rank physical offsets;
+- a static template with world/source rank counts, source maxima, exact
+  destination rank/local ownership, per-destination row capacities, exact and
+  coalesced rank-pair capacities, tile/macrobatch shape, and an epoch protocol;
+- runtime device metadata with exact edge/source/slot/rank identity and a
+  bijective source rank/local coordinate for direct return addressing;
+- source and destination counts/offsets that retain internal and trailing empty
+  ranks;
+- destination group logical counts and validated dynamic/fixed physical
+  capacities;
+- exact-edge and coalesced rank-pair count, count-offset, capacity-offset, and
+  physical-slot tables;
 - deterministic destination-row and inverse source-slot mappings;
-- the existing coalesced outbound projection as an optional backend view;
-- four transport legs: primal dispatch/return and cotangent dispatch/return;
-- an EventTensor readiness plan for each leg with system visibility and a
-  distinct generation;
-- overlap hooks at completed-edge and destination-segment/source-item
-  granularity;
-- candidate mechanisms without selecting one in semantics.
+- one flow per field. Source-item fields may use coalesced dispatch followed by
+  an explicit destination-edge join; edge-domain fields and all returns retain
+  exact edge rows;
+- primal dispatch/return and cotangent dispatch/return ABIs without defining
+  the AD algebra;
+- EventTensor readiness with explicit owner rank/placement, system visibility,
+  and a cyclic phase/generation binding;
+- ordered phase-reset and generation-wrap tasks that must complete before
+  reused event storage is initialized;
+- an exact tile/macrobatch dependence graph spanning dispatch joins, generic
+  tile stages, exact-edge push, source-edge join, and source Fold;
+- independent `NONE`, `TILE`, and `FULL` kernelization candidates. The `TILE`
+  candidate can group receive/first Contract/Map separately from second
+  Contract/return/Fold, while `FULL` represents a persistent group.
 
 Fixed capacity retains padded physical rows but notifications count only valid
-logical edges. Empty destination segments consequently begin ready. Returned
-payload always has shape `[source item, relation slot, ...]`; a generated Fold
-is a separate consumer.
+logical edges. Runtime routes occupy rank-pair capacity slots, and unused slots
+do not notify consumers. Empty destination rows consequently begin ready.
+Returned payload always has shape `[source item, relation slot, ...]`; a
+generated Fold is a separate consumer.
 
-The CPU interpreter performs only gather/scatter. Mutation tests change route
-weights without changing transport, vary relation arity, cover empty
-destinations, and exercise primal and cotangent traffic.
+The CPU interpreter performs only gather/scatter and explicit joins. Tests
+cover coalesced expansion, mixed field domains, exact rank-pair oracles,
+noncontiguous/trailing-empty ownership, topology/count mutations, fixed
+capacity, repeated epochs, kernelization candidates, and independent numerical
+effects of source and edge payloads.
 
 ## Negative results and risks
 
@@ -139,10 +157,10 @@ destinations, and exercise primal and cotangent traffic.
 - A DeepEP transport-only inverse API is not exposed by the audited public API.
   Achieving parity may require a small lower-level DeepEP adapter or a
   MoK-inspired symmetric-memory push backend.
-- The reference EventTensor currently marks readiness per completed physical
-  row. A GPU backend will likely coarsen notifications to tiles or
-  macrobatches. That must remain a schedule quotient that covers the exact
-  dependence, not a change to relation semantics.
+- Field-level EventTensors mark readiness per completed physical row. The
+  derived tile pipeline exposes the legal tile/macrobatch quotient, but a GPU
+  backend still needs to select and lower one event granularity without
+  changing the exact dependence graph.
 
 ## Ranked next experiments
 

@@ -1,226 +1,388 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+from itertools import pairwise
 
-from tile_lifetime.event_dataflow import (
-    EventMemoryScope,
-    EventSchedulingMode,
-    execute_event_dataflow,
-    verify_event_dataflow_program,
-)
+import numpy as np
+import pytest
+
+from tile_lifetime.event_dataflow import EventMemoryScope, verify_event_dataflow_program
 from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan, build_fixed_capacity_relation_plan, build_relation_plan
 from tile_lifetime.relation_transport import (
+    EpochResetKind,
+    RelationTransportTemplate,
+    TilePipelineEdge,
+    TilePipelineGraph,
+    TilePipelineStage,
     TransportCapacityMode,
+    TransportDirection,
+    TransportEpochProtocol,
+    TransportKernelizationPolicy,
     TransportMechanism,
     TransportPayloadDomain,
     TransportPayloadField,
-    derive_relation_transport_metadata,
+    TransportRowGranularity,
+    bind_transport_epoch,
+    derive_relation_tile_pipeline,
+    derive_relation_transport_runtime_metadata,
     derive_relation_transport_training_plan,
-    execute_relation_dispatch,
-    execute_relation_edge_dispatch,
-    execute_relation_return,
+    derive_transport_field_flow,
+    execute_dispatch_field,
+    execute_return_field,
 )
 
+_SOURCE_RANK = np.asarray([2, 0, 2, 0, 2, 0], dtype=np.int32)
+_SOURCE_LOCAL = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int32)
+_DESTINATION_RANK = np.asarray([0, 2, 2, 0], dtype=np.int32)
+_DESTINATION_LOCAL = np.asarray([0, 0, 1, 1], dtype=np.int32)
 
-def _dynamic_relation(*, route_slots: int = 3, weights: np.ndarray | None = None) -> RelationPlan:
-    destinations = np.asarray(
-        [
-            [0, 2, 3],
-            [1, 2, 0],
-            [2, 2, 1],
-            [3, 0, 2],
-            [0, 3, 1],
-            [2, 1, 3],
-        ],
-        dtype=np.int32,
-    )[:, :route_slots]
-    valid = np.asarray(
-        [
-            [True, True, False],
-            [True, True, True],
-            [True, False, True],
-            [True, True, True],
-            [True, False, True],
-            [True, True, True],
-        ],
-        dtype=np.bool_,
-    )[:, :route_slots]
-    if weights is None:
-        weights = np.arange(1, destinations.size + 1, dtype=np.float32).reshape(destinations.shape) / 10
+
+def _relation(*, route_slots: int = 3, destinations: np.ndarray | None = None) -> RelationPlan:
+    if destinations is None:
+        destinations = np.asarray(
+            [
+                [0, 1, 2],
+                [3, 1, 0],
+                [1, 2, 3],
+                [2, 0, 1],
+                [0, 3, 2],
+                [1, 3, 0],
+            ],
+            dtype=np.int32,
+        )[:, :route_slots]
+    weights = np.arange(1, destinations.size + 1, dtype=np.float32).reshape(destinations.shape) / 20
     return build_relation_plan(
         destinations,
         weights,
-        edge_valid=valid,
-        destination_rank_by_item=np.asarray([0, 0, 1, 1], dtype=np.int32),
-        destination_local_item_by_item=np.asarray([0, 1, 0, 1], dtype=np.int32),
-        padding_quantum=4,
+        destination_rank_by_item=_DESTINATION_RANK,
+        destination_local_item_by_item=_DESTINATION_LOCAL,
+        padding_quantum=2,
+    )
+
+
+def _matrix(value: int) -> tuple[tuple[int, ...], ...]:
+    return tuple(tuple(value for _destination in range(4)) for _source in range(4))
+
+
+def _template(
+    *,
+    capacity_mode: TransportCapacityMode = TransportCapacityMode.DYNAMIC,
+    destination_capacity: tuple[int, ...] = (8, 8, 8, 8),
+    coalesced_capacity: tuple[tuple[int, ...], ...] | None = None,
+    exact_capacity: tuple[tuple[int, ...], ...] | None = None,
+) -> RelationTransportTemplate:
+    return RelationTransportTemplate(
+        world_rank_count=4,
+        source_rank_count=4,
+        source_item_capacity_by_rank=(8, 0, 8, 0),
+        destination_rank_by_item=tuple(int(value) for value in _DESTINATION_RANK),
+        destination_local_item_by_item=tuple(int(value) for value in _DESTINATION_LOCAL),
+        destination_row_capacity_by_item=destination_capacity,
+        coalesced_capacity_by_rank_pair=_matrix(8) if coalesced_capacity is None else coalesced_capacity,
+        exact_edge_capacity_by_rank_pair=_matrix(16) if exact_capacity is None else exact_capacity,
+        capacity_mode=capacity_mode,
+        tile_rows=2,
+        macrobatch_rows=4,
+        epoch_protocol=TransportEpochProtocol(phase_count=2, generation_modulus=2),
+    )
+
+
+def _runtime(relation: RelationPlan | None = None, *, template: RelationTransportTemplate | None = None):
+    return derive_relation_transport_runtime_metadata(
+        _relation() if relation is None else relation,
+        template=_template() if template is None else template,
+        source_rank_by_item=_SOURCE_RANK,
+        source_local_item_by_item=_SOURCE_LOCAL,
     )
 
 
 def _field(
     name: str,
-    width: int = 8,
+    domain: TransportPayloadDomain,
     *,
-    logical_domain: TransportPayloadDomain = TransportPayloadDomain.SOURCE_ITEM,
+    width: int = 3,
 ) -> TransportPayloadField:
-    return TransportPayloadField(name, logical_domain, (width,), DType.BF16)
+    return TransportPayloadField(name, domain, (width,), DType.BF16)
 
 
-def test_runtime_relation_derives_rank_metadata_and_exact_readiness() -> None:
-    relation = _dynamic_relation()
-    source_ranks = np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int32)
-
-    plan = derive_relation_transport_training_plan(
-        relation,
-        source_rank_by_item=source_ranks,
-        capacity_mode=TransportCapacityMode.DYNAMIC,
-        primal_input_fields=(
-            _field("input"),
-            TransportPayloadField("edge_attribute", TransportPayloadDomain.RELATION_EDGE, (), DType.FP32),
-        ),
-        primal_return_fields=(_field("result", logical_domain=TransportPayloadDomain.RELATION_EDGE),),
-        cotangent_input_fields=(_field("output_cotangent"),),
-        cotangent_return_fields=(
-            _field("input_cotangent", logical_domain=TransportPayloadDomain.RELATION_EDGE),
-            TransportPayloadField("edge_cotangent", TransportPayloadDomain.RELATION_EDGE, (), DType.FP32),
-        ),
+def _epoch(epoch: int = 0):
+    return bind_transport_epoch(
+        TransportEpochProtocol(phase_count=2, generation_modulus=2),
+        epoch,
+        completed_epochs=frozenset(),
+        completed_resets=frozenset(),
     )
 
-    assert plan.metadata.logical_edge_count == relation.route_count
-    assert np.array_equal(plan.metadata.destination_group_count, relation.group_count)
-    assert np.array_equal(
-        plan.metadata.destination_physical_offset_by_rank,
-        np.asarray([0, 8, 20], dtype=np.int32),
+
+def _pipeline_graph() -> TilePipelineGraph:
+    names = ("receive_tile", "first_contract", "local_map", "second_contract", "return_ready")
+    return TilePipelineGraph(
+        stages=tuple(TilePipelineStage(name) for name in names),
+        edges=tuple(TilePipelineEdge(source, target) for source, target in pairwise(names)),
+        entry_stage="receive_tile",
+        exit_stage="return_ready",
+        tile_group_split_after="local_map",
     )
-    assert int(plan.metadata.logical_edge_count_by_rank_pair.sum()) == relation.route_count
-    dispatch_counts = tuple(count.value for count in plan.primal.dispatch.readiness.initial_count.counts)
-    return_counts = tuple(count.value for count in plan.primal.returned_edges.readiness.initial_count.counts)
-    assert dispatch_counts == tuple(int(value) for value in relation.group_count)
-    assert return_counts == tuple(int(value) for value in relation.edge_valid.sum(axis=1))
-    assert plan.primal.dispatch.readiness.memory_scope is EventMemoryScope.SYSTEM
-    assert plan.primal.dispatch.readiness.visibility.release_on_notify
-    assert plan.primal.dispatch.readiness.visibility.acquire_before_consumer
-    assert plan.primal.dispatch.runtime_inputs.event_generations == (0, 0, 0, 0)
-    assert plan.primal.returned_edges.runtime_inputs.event_generations == (1,) * relation.source_item_count
-    assert plan.cotangent.dispatch.runtime_inputs.event_generations == (2, 2, 2, 2)
-    assert plan.cotangent.returned_edges.runtime_inputs.event_generations == (3,) * relation.source_item_count
-    assert TransportMechanism.COALESCED_DISPATCH_AND_EXPAND in plan.primal.dispatch.mechanism_candidates
-    assert TransportMechanism.COALESCED_DISPATCH_AND_EXPAND not in plan.primal.returned_edges.mechanism_candidates
-    for leg in (
-        plan.primal.dispatch,
-        plan.primal.returned_edges,
-        plan.cotangent.dispatch,
-        plan.cotangent.returned_edges,
-    ):
-        verify_event_dataflow_program(leg.dataflow)
 
 
-def test_payload_transport_preserves_edges_and_leaves_weighted_fold_external() -> None:
-    relation = _dynamic_relation()
-    source = np.arange(relation.source_item_count * 4, dtype=np.float32).reshape(relation.source_item_count, 4)
+def test_runtime_metadata_has_exact_rank_pair_oracle_and_empty_world_ranks() -> None:
+    runtime = _runtime()
 
-    dispatched = execute_relation_dispatch(relation, source)
-    source_edge_attributes = relation.weight[..., None]
-    dispatched_edge_attributes = execute_relation_edge_dispatch(relation, source_edge_attributes)
-    destination_result = dispatched * 2 + np.arange(relation.destination_row_count, dtype=np.float32)[:, None]
-    returned = execute_relation_return(relation, destination_result)
+    assert np.array_equal(runtime.source_item_count_by_rank, np.asarray([3, 0, 3, 0], dtype=np.int32))
+    assert runtime.template.world_rank_count == 4
+    assert runtime.template.source_rank_count == 4
+    assert np.array_equal(runtime.source_item_offset_by_rank, np.asarray([0, 3, 3, 6, 6], dtype=np.int32))
+    assert np.array_equal(runtime.destination_item_count_by_rank, np.asarray([2, 0, 2, 0], dtype=np.int32))
+    assert np.array_equal(runtime.destination_item_offset_by_rank, np.asarray([0, 2, 2, 4, 4], dtype=np.int32))
+    oracle = np.zeros((4, 4), dtype=np.int32)
+    for edge in np.flatnonzero(runtime.edge_valid):
+        oracle[runtime.edge_source_rank[edge], runtime.edge_destination_rank[edge]] += 1
+    assert np.array_equal(runtime.exact_count_by_rank_pair, oracle)
+    assert runtime.exact_count_offset_by_rank_pair.shape == (17,)
+    assert runtime.exact_capacity_offset_by_rank_pair.shape == (17,)
+    assert np.all(runtime.exact_transport_row_to_capacity_slot[:-1] < runtime.exact_transport_row_to_capacity_slot[1:])
+    for transport_row, edge in enumerate(runtime.exact_edge_by_transport_row):
+        capacity_slot = runtime.exact_transport_row_to_capacity_slot[transport_row]
+        rank_pair = np.searchsorted(runtime.exact_capacity_offset_by_rank_pair, capacity_slot, side="right") - 1
+        assert rank_pair // 4 == runtime.edge_source_rank[edge]
+        assert rank_pair % 4 == runtime.edge_destination_rank[edge]
+    assert runtime.source_rank_by_item[0] == 2
+    assert runtime.source_local_item_by_item[0] == 0
 
-    expected_returned = np.zeros_like(returned)
-    for row in np.flatnonzero(relation.row_valid):
-        expected_returned[relation.row_source_item[row], relation.row_route_slot[row]] = destination_result[row]
-    assert np.array_equal(returned, expected_returned)
-    assert np.array_equal(dispatched_edge_attributes[relation.row_valid, 0], relation.row_weight[relation.row_valid])
 
-    folded = np.zeros((relation.source_item_count, 4), dtype=np.float32)
-    for source_item in range(relation.source_item_count):
-        for slot in range(relation.route_slots):
-            if relation.edge_valid[source_item, slot]:
-                folded[source_item] += returned[source_item, slot] * relation.weight[source_item, slot]
-    assert np.array_equal(folded, relation.weighted_merge(destination_result))
-
-    mutated_weights = np.flip(relation.weight, axis=1).copy()
-    mutated = _dynamic_relation(weights=mutated_weights)
-    mutated_dispatched = execute_relation_dispatch(mutated, source)
-    mutated_metadata = derive_relation_transport_metadata(
-        mutated,
-        source_rank_by_item=np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int32),
-        capacity_mode=TransportCapacityMode.DYNAMIC,
+def test_mixed_payload_domains_use_separate_flows_and_explicit_expand_join() -> None:
+    runtime = _runtime()
+    epoch = _epoch()
+    source_field = _field("source_value", TransportPayloadDomain.SOURCE_ITEM)
+    edge_field = _field("edge_value", TransportPayloadDomain.RELATION_EDGE)
+    source_flow = derive_transport_field_flow(
+        runtime,
+        field=source_field,
+        direction=TransportDirection.SOURCE_TO_DESTINATION,
+        name="source_flow",
+        epoch=epoch,
     )
-    original_metadata = derive_relation_transport_metadata(
-        relation,
-        source_rank_by_item=np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int32),
-        capacity_mode=TransportCapacityMode.DYNAMIC,
+    edge_flow = derive_transport_field_flow(
+        runtime,
+        field=edge_field,
+        direction=TransportDirection.SOURCE_TO_DESTINATION,
+        name="edge_flow",
+        epoch=epoch,
     )
-    assert np.array_equal(mutated_dispatched, dispatched)
-    assert np.array_equal(mutated_metadata.edge_to_destination_row, original_metadata.edge_to_destination_row)
-    assert not np.array_equal(mutated.weighted_merge(destination_result), folded)
+
+    assert source_flow.row_granularity is TransportRowGranularity.SOURCE_DESTINATION
+    assert source_flow.mechanism_candidates == (
+        TransportMechanism.COALESCED_DISPATCH,
+        TransportMechanism.ALL_TO_ALL_V,
+    )
+    assert edge_flow.row_granularity is TransportRowGranularity.RELATION_EDGE
+    assert TransportMechanism.COALESCED_DISPATCH not in edge_flow.mechanism_candidates
+    assert source_flow.join_tasks.name.endswith("destination_edge_join")
+    assert source_flow.readiness.owner_placement == "destination_rank_memory"
+    assert source_flow.readiness.owner_rank_by_event == tuple(
+        int(value) for value in runtime.destination_row_destination_rank
+    )
+
+    source = np.arange(18, dtype=np.float32).reshape(6, 3)
+    edges = np.arange(54, dtype=np.float32).reshape(6, 3, 3)
+    joined_source = execute_dispatch_field(runtime, source_field, source)
+    joined_edges = execute_dispatch_field(runtime, edge_field, edges)
+    for row in np.flatnonzero(runtime.destination_row_valid):
+        source_item = runtime.destination_row_source_item[row]
+        route_slot = runtime.destination_row_route_slot[row]
+        assert np.array_equal(joined_source[row], source[source_item])
+        assert np.array_equal(joined_edges[row], edges[source_item, route_slot])
 
 
-def test_fixed_capacity_keeps_physical_shape_while_runtime_counts_include_empty_segments() -> None:
-    relation = build_fixed_capacity_relation_plan(
-        np.asarray([[0, 1], [0, 1], [1, 0]], dtype=np.int32),
-        np.full((3, 2), 0.5, dtype=np.float32),
-        destination_rank_by_item=np.asarray([0, 0, 1, 1], dtype=np.int32),
+def test_capacity_and_topology_contracts_reject_runtime_mutations() -> None:
+    relation = _relation()
+    exact_capacity = [list(row) for row in _matrix(16)]
+    exact_capacity[0][0] = 0
+    with pytest.raises(ValueError, match="rank-pair capacity"):
+        _runtime(relation, template=_template(exact_capacity=tuple(tuple(row) for row in exact_capacity)))
+
+    with pytest.raises(ValueError, match=r"cover \[0, count\)"):
+        derive_relation_transport_runtime_metadata(
+            relation,
+            template=_template(),
+            source_rank_by_item=_SOURCE_RANK,
+            source_local_item_by_item=np.asarray([0, 0, 2, 1, 3, 2], dtype=np.int32),
+        )
+
+    changed_topology = build_relation_plan(
+        np.asarray([[0, 1], [1, 0], [0, 1], [1, 0], [0, 1], [1, 0]], dtype=np.int32),
+        np.full((6, 2), 0.5, dtype=np.float32),
+        destination_rank_by_item=np.asarray([0, 0, 2, 2], dtype=np.int32),
         destination_local_item_by_item=np.asarray([0, 1, 0, 1], dtype=np.int32),
-        destination_capacity=3,
+        padding_quantum=2,
     )
-    plan = derive_relation_transport_training_plan(
+    with pytest.raises(ValueError, match="rank/local coordinates"):
+        _runtime(changed_topology)
+
+
+def test_runtime_route_mutation_changes_counts_without_changing_template_identity() -> None:
+    template = _template(destination_capacity=(12, 12, 12, 12))
+    primary = _runtime(template=template)
+    mutated_destinations = np.tile(np.asarray([[0, 3, 0]], dtype=np.int32), (6, 1))
+    mutated = _runtime(_relation(destinations=mutated_destinations), template=template)
+
+    assert primary.template is mutated.template
+    assert not np.array_equal(primary.exact_count_by_rank_pair, mutated.exact_count_by_rank_pair)
+    assert not np.array_equal(primary.coalesced_count_by_rank_pair, mutated.coalesced_count_by_rank_pair)
+    assert np.array_equal(primary.exact_capacity_offset_by_rank_pair, mutated.exact_capacity_offset_by_rank_pair)
+
+
+def test_fixed_capacity_validates_rows_and_empty_destination_readiness() -> None:
+    relation = build_fixed_capacity_relation_plan(
+        np.asarray([[0, 1], [0, 1], [1, 0], [0, 1], [1, 0], [0, 1]], dtype=np.int32),
+        np.full((6, 2), 0.5, dtype=np.float32),
+        destination_rank_by_item=_DESTINATION_RANK,
+        destination_local_item_by_item=_DESTINATION_LOCAL,
+        destination_capacity=8,
+    )
+    runtime = _runtime(
         relation,
-        source_rank_by_item=np.asarray([0, 0, 1], dtype=np.int32),
-        capacity_mode=TransportCapacityMode.FIXED,
-        primal_input_fields=(_field("input"),),
-        primal_return_fields=(_field("result", logical_domain=TransportPayloadDomain.RELATION_EDGE),),
-        cotangent_input_fields=(_field("output_cotangent"),),
-        cotangent_return_fields=(_field("input_cotangent", logical_domain=TransportPayloadDomain.RELATION_EDGE),),
+        template=_template(capacity_mode=TransportCapacityMode.FIXED),
+    )
+    flow = derive_transport_field_flow(
+        runtime,
+        field=_field("source_value", TransportPayloadDomain.SOURCE_ITEM),
+        direction=TransportDirection.SOURCE_TO_DESTINATION,
+        name="fixed",
+        epoch=_epoch(),
     )
 
-    assert plan.metadata.physical_destination_row_count == 12
-    assert np.array_equal(plan.metadata.destination_group_capacity, np.asarray([3, 3, 3, 3], dtype=np.int32))
-    assert tuple(count.value for count in plan.primal.dispatch.readiness.initial_count.counts) == (3, 3, 0, 0)
-    assert plan.primal.dispatch.runtime_inputs.initially_ready_events == (2, 3)
-    actions = {family.name: lambda _coordinate, _state: None for family in plan.primal.dispatch.dataflow.task_families}
-    execution = execute_event_dataflow(
-        plan.primal.dispatch.dataflow,
-        actions=actions,
-        state={},
-        scheduling_mode=EventSchedulingMode.DYNAMIC,
-        generation=plan.primal.dispatch.generation,
-        random_seed=7,
+    counts = tuple(count.value for count in flow.readiness.plan.initial_count.counts)
+    expected_ready = tuple(int(row) for row in np.flatnonzero(~runtime.destination_row_valid))
+    assert tuple(index for index, count in enumerate(counts) if count == 0) == expected_ready
+    assert flow.readiness.runtime_inputs.initially_ready_events == expected_ready
+    assert flow.transfer_rows.axes[0].extent == sum(sum(row) for row in runtime.template.coalesced_capacity_by_rank_pair)
+    source = np.arange(18, dtype=np.float32).reshape(6, 3)
+    joined = execute_dispatch_field(runtime, flow.field, source)
+    for row in np.flatnonzero(runtime.destination_row_valid):
+        assert np.array_equal(joined[row], source[runtime.destination_row_source_item[row]])
+
+
+def test_epoch_protocol_requires_ordered_phase_and_wrap_resets() -> None:
+    protocol = TransportEpochProtocol(phase_count=2, generation_modulus=2)
+    first = bind_transport_epoch(
+        protocol,
+        0,
+        completed_epochs=frozenset(),
+        completed_resets=frozenset(),
     )
-    assert len(execution.executed_tasks) == 16
+    assert first.phase == 0
+    assert first.stored_generation == 0
+    assert not first.reset_transitions
 
+    with pytest.raises(ValueError, match="live phase"):
+        bind_transport_epoch(protocol, 2, completed_epochs=frozenset(), completed_resets=frozenset())
+    reused = bind_transport_epoch(
+        protocol,
+        2,
+        completed_epochs=frozenset({0}),
+        completed_resets=frozenset({(EpochResetKind.PHASE_REUSE, 2)}),
+    )
+    assert reused.stored_generation == 1
+    assert reused.reset_transitions[0].visibility.scope is EventMemoryScope.SYSTEM
 
-def test_cotangent_round_trip_is_payload_only_and_preserves_arbitrary_route_slots() -> None:
-    relation = _dynamic_relation(route_slots=2)
-    plan = derive_relation_transport_training_plan(
-        relation,
-        source_rank_by_item=np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int32),
-        capacity_mode=TransportCapacityMode.DYNAMIC,
-        primal_input_fields=(_field("input", 3),),
-        primal_return_fields=(_field("result", 3, logical_domain=TransportPayloadDomain.RELATION_EDGE),),
-        cotangent_input_fields=(_field("output_cotangent", 3),),
-        cotangent_return_fields=(
-            _field("input_cotangent", 3, logical_domain=TransportPayloadDomain.RELATION_EDGE),
-            TransportPayloadField("edge_cotangent", TransportPayloadDomain.RELATION_EDGE, (), DType.FP32),
+    with pytest.raises(ValueError, match="generation-wrap"):
+        bind_transport_epoch(
+            protocol,
+            4,
+            completed_epochs=frozenset(range(4)),
+            completed_resets=frozenset({(EpochResetKind.PHASE_REUSE, 4)}),
+        )
+    wrapped = bind_transport_epoch(
+        protocol,
+        4,
+        completed_epochs=frozenset(range(4)),
+        completed_resets=frozenset(
+            {
+                (EpochResetKind.PHASE_REUSE, 4),
+                (EpochResetKind.GENERATION_WRAP, 4),
+            }
         ),
     )
-    output_cotangent = np.arange(18, dtype=np.float32).reshape(6, 3)
-    dispatched_cotangent = execute_relation_dispatch(relation, output_cotangent)
-    edge_input_cotangent = dispatched_cotangent * 0.25
-    edge_attribute_cotangent = dispatched_cotangent.sum(axis=1)
-
-    returned_input = execute_relation_return(relation, edge_input_cotangent)
-    returned_attribute = execute_relation_return(relation, edge_attribute_cotangent[:, None])[..., 0]
-
-    assert returned_input.shape == (6, 2, 3)
-    assert returned_attribute.shape == (6, 2)
-    assert tuple(count.value for count in plan.cotangent.returned_edges.readiness.initial_count.counts) == tuple(
-        int(value) for value in relation.edge_valid.sum(axis=1)
+    assert wrapped.stored_generation == 0
+    assert tuple(transition.kind for transition in wrapped.reset_transitions) == (
+        EpochResetKind.PHASE_REUSE,
+        EpochResetKind.GENERATION_WRAP,
     )
-    for source_item in range(relation.source_item_count):
-        for slot in range(relation.route_slots):
-            if not relation.edge_valid[source_item, slot]:
-                assert np.array_equal(returned_input[source_item, slot], np.zeros(3, dtype=np.float32))
-                assert returned_attribute[source_item, slot] == 0
+    assert all(transition.task_name.startswith("reset_") for transition in wrapped.reset_transitions)
+    assert all(transition.ordered_before_initialization for transition in wrapped.reset_transitions)
+
+
+def test_tile_pipeline_keeps_exact_graph_separate_from_kernelization_candidates() -> None:
+    relation = _relation()
+    epoch = _epoch()
+    source_field = _field("source_value", TransportPayloadDomain.SOURCE_ITEM)
+    edge_field = _field("edge_attribute", TransportPayloadDomain.RELATION_EDGE)
+    result_field = _field("edge_result", TransportPayloadDomain.RELATION_EDGE)
+    training = derive_relation_transport_training_plan(
+        relation,
+        template=_template(),
+        source_rank_by_item=_SOURCE_RANK,
+        source_local_item_by_item=_SOURCE_LOCAL,
+        epoch=epoch,
+        primal_dispatch_fields=(source_field, edge_field),
+        primal_return_fields=(result_field,),
+        cotangent_dispatch_fields=(source_field,),
+        cotangent_return_fields=(result_field,),
+    )
+    pipeline = derive_relation_tile_pipeline(
+        training.runtime,
+        dispatch_flows=training.primal.dispatch_flows,
+        return_flows=training.primal.return_flows,
+        graph=_pipeline_graph(),
+        epoch=epoch,
+    )
+
+    verify_event_dataflow_program(pipeline.program)
+    assert pipeline.stage_families[0].axes[1].name == "macrobatch"
+    assert pipeline.stage_families[0].axes[2].name == "tile"
+    candidates = {candidate.policy: candidate for candidate in pipeline.kernelization_candidates}
+    assert set(candidates) == {
+        TransportKernelizationPolicy.NONE,
+        TransportKernelizationPolicy.TILE,
+        TransportKernelizationPolicy.FULL,
+    }
+    assert len(candidates[TransportKernelizationPolicy.NONE].groups) > 2
+    assert len(candidates[TransportKernelizationPolicy.TILE].groups) == 2
+    assert len(candidates[TransportKernelizationPolicy.FULL].groups) == 1
+    assert "local_map" in candidates[TransportKernelizationPolicy.TILE].groups[0]
+    assert "second_contract" in candidates[TransportKernelizationPolicy.TILE].groups[1]
+    fold_readiness = next(
+        owned for owned in pipeline.owned_events if owned.plan.trigger_relation.target == pipeline.source_fold
+    )
+    assert fold_readiness.owner_rank_by_event == tuple(int(value) for value in _SOURCE_RANK)
+    assert fold_readiness.owner_placement == "source_compute_workers"
+
+    source = np.arange(18, dtype=np.float32).reshape(6, 3)
+    edge_attribute = np.ones((6, 3, 3), dtype=np.float32)
+    joined_source = execute_dispatch_field(training.runtime, source_field, source)
+    joined_attribute = execute_dispatch_field(training.runtime, edge_field, edge_attribute)
+    mutated_attribute = execute_dispatch_field(training.runtime, edge_field, edge_attribute * 3)
+    assert not np.array_equal(joined_attribute, mutated_attribute)
+
+    destination_result = joined_source + joined_attribute
+    mutated_destination_result = joined_source + mutated_attribute
+    returned = execute_return_field(training.runtime, result_field, destination_result)
+    mutated_returned = execute_return_field(training.runtime, result_field, mutated_destination_result)
+    returned_delta = execute_return_field(
+        training.runtime,
+        result_field,
+        mutated_attribute - joined_attribute,
+    )
+    assert np.array_equal(mutated_returned - returned, returned_delta)
+    direct = np.zeros_like(returned)
+    for row in np.flatnonzero(training.runtime.destination_row_valid):
+        direct[
+            training.runtime.destination_row_source_item[row],
+            training.runtime.destination_row_route_slot[row],
+        ] = destination_result[row]
+    assert np.array_equal(returned, direct)
+    folded = np.sum(returned * relation.weight[..., None], axis=1)
+    mutated_folded = np.sum(mutated_returned * relation.weight[..., None], axis=1)
+    assert not np.array_equal(folded, mutated_folded)
