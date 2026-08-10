@@ -35,6 +35,7 @@ const router = useRouter()
 // --- Request state. Everything the server needs to resolve a panel goes in the query, so a panel is
 // a shareable URL and the filters that produced a number travel with it. ---
 const showArchived = ref(false)
+const showFlagged = ref(false)
 const completeOnly = ref(false)
 const cohort = ref('')
 const modelQuery = ref('')
@@ -51,6 +52,7 @@ const knownEvals = ref<string[]>([])
 const selection = computed<Record<string, string>>(() => {
   const params: Record<string, string> = {}
   if (completeOnly.value) params.complete = '1'
+  if (showFlagged.value) params.include_flagged = '1'
   if (cohort.value) params.cohort = cohort.value
   if (selectedEvals.size && selectedEvals.size !== knownEvals.value.length) {
     params.benchmarks = [...selectedEvals].join(',')
@@ -98,6 +100,9 @@ const activeFilters = computed(() => {
   if (showArchived.value) {
     active.push({ label: 'archived', value: 'shown', clear: () => (showArchived.value = false) })
   }
+  if (showFlagged.value) {
+    active.push({ label: 'flagged', value: 'admitted', clear: () => (showFlagged.value = false) })
+  }
   return active
 })
 
@@ -107,6 +112,7 @@ function clearFilters() {
   modelQuery.value = ''
   completeOnly.value = false
   showArchived.value = false
+  showFlagged.value = false
 }
 
 // --- Model comparison selection (2–4 models) -> the Compare surface ---
@@ -299,7 +305,9 @@ function isSuspect(cell: PanelCell): boolean {
   return cell.flags.includes(RESULT_FLAG.NO_ANSWERS)
 }
 function gapLabel(gap: MissingCell): string {
-  return gap.reason.startsWith('coverage') ? 'under-covered' : 'no result'
+  if (gap.reason.startsWith('coverage')) return 'under-covered'
+  if (gap.reason.startsWith('flagged')) return 'flagged'
+  return 'no result'
 }
 
 // --- Score-over-time modal ---
@@ -403,6 +411,13 @@ function goToModel(model: string) {
       <label class="flex items-center gap-2 text-sm text-text-secondary">
         <input v-model="showArchived" type="checkbox" class="accent-accent" />
         Show archived
+      </label>
+      <label
+        class="flex items-center gap-2 text-sm text-text-secondary"
+        title="Readmit results the engine flags as suspect — a benchmark no graded item yielded an extractable answer for scores zero on the strength of nothing"
+      >
+        <input v-model="showFlagged" type="checkbox" class="accent-accent" />
+        Show flagged results
       </label>
     </div>
 
@@ -671,8 +686,9 @@ function goToModel(model: string) {
         <p class="text-xs text-text-muted mt-2 leading-relaxed">
           An empty cell says which: <span class="text-status-warning">under-covered</span> or
           <span class="text-status-warning">no result</span> links the run that failed the panel's admission rule, and
-          — means the model never ran that benchmark. A <span class="text-status-warning">*</span> marks a score no
-          graded item produced an extractable answer for; hover the cell for what was observed.
+          — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
+          panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
+          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>.
         </p>
       </div>
     </div>

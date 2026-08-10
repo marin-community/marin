@@ -20,6 +20,7 @@ from collections.abc import Mapping
 
 from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
+    DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
     Aggregate,
     AggregationProtocol,
@@ -418,10 +419,17 @@ def panel_request(
     min_coverage: float = DEFAULT_MIN_COVERAGE,
     filters: dict[str, str] | None = None,
     model_query: str | None = None,
+    include_flagged: bool = False,
 ) -> SelectionRequest:
-    """Build a selection request from already-parsed query values."""
+    """Build a selection request from already-parsed query values.
+
+    ``include_flagged`` readmits results the engine flags as suspect, which are excluded by default
+    so one cannot stand as a model's newest result. They are always reported as the reason for the
+    empty cell, so this widens what is shown rather than revealing something that was hidden.
+    """
     return SelectionRequest(
         min_coverage=min_coverage,
+        exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
         cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
         cohort_version=cohort_version,
         panel=benchmarks,

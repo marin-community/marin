@@ -923,6 +923,7 @@ def create_app(
             min_coverage=_parse_coverage(params.get("min_coverage")),
             filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
             model_query=params.get("model") or None,
+            include_flagged=_parse_flag(params.get("include_flagged")),
         )
 
     async def api_panel(request: Request) -> JSONResponse:

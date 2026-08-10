@@ -27,7 +27,7 @@ const comparing = computed(() => selected.value.length >= 2)
 
 // The panel's selection travels in the route, so a comparison launched from a narrowed panel keeps
 // its benchmark set, cohort, and filters. Anything else in the query string is ignored.
-const SELECTION_PARAMS = ['benchmarks', 'cohort', 'complete', 'min_coverage', ...FACETS] as const
+const SELECTION_PARAMS = ['benchmarks', 'cohort', 'complete', 'min_coverage', 'include_flagged', ...FACETS] as const
 
 const { data, error, refresh } = useApi<Comparison>(() => {
   const params = new URLSearchParams({ models: selected.value.join(',') })

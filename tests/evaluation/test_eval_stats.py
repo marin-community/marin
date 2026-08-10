@@ -340,6 +340,47 @@ def test_selection_rejects_failed_runs_but_keeps_them_explainable():
     assert selection.rejections[0].reason == "status infra_failed"
 
 
+def test_a_flagged_result_does_not_replace_the_valid_one_it_supersedes():
+    """A newer run whose grader extracted nothing scored zero on the strength of nothing. Letting it
+    stand as the model's current result would report a collapse the evidence does not support, so the
+    last result that measured something holds and the flagged run is reported as the reason."""
+    measurements = [
+        _measurement(n_correct=60, created_at="2026-01-01T00:00:00+00:00", run_id="good"),
+        _measurement(
+            n_correct=0,
+            created_at="2026-02-01T00:00:00+00:00",
+            run_id="unanswered",
+            flags=frozenset({ResultFlag.NO_ANSWERS}),
+        ),
+    ]
+
+    selection = select(measurements, SelectionRequest())
+
+    assert selection.cells["m"]["gsm8k"].run_id == "good"
+    (rejection,) = selection.rejections
+    assert rejection.run_id == "unanswered"
+    assert rejection.reason == "flagged no_answers"
+
+
+def test_a_caller_can_readmit_flagged_results():
+    """Exclusion is the default policy, not a claim the result is wrong; a caller that wants to see it
+    clears the flag set and gets the newest run back."""
+    measurements = [
+        _measurement(n_correct=60, created_at="2026-01-01T00:00:00+00:00", run_id="good"),
+        _measurement(
+            n_correct=0,
+            created_at="2026-02-01T00:00:00+00:00",
+            run_id="unanswered",
+            flags=frozenset({ResultFlag.NO_ANSWERS}),
+        ),
+    ]
+
+    selection = select(measurements, SelectionRequest(exclude_flags=frozenset()))
+
+    assert selection.cells["m"]["gsm8k"].run_id == "unanswered"
+    assert selection.rejections == ()
+
+
 def test_complete_panel_filtering_drops_models_missing_a_selected_benchmark():
     measurements = [
         _measurement(benchmark="mmlu", model="full"),

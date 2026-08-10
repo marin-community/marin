@@ -73,9 +73,10 @@ Both runners establish that attempted count. Harbor reports the trials it dispat
 no such count in its aggregate results, so the evalchemy path derives it from the document indices in
 the run's own per-sample rows (`marin.evaluation.lm_eval_samples`), which also carry the pass tally and
 the count of items whose grader extracted no answer. A cell every one of whose graded items yielded no
-extractable answer is marked `no_answers` and starred in the panel: the zero is a real score, and it is
-equally consistent with a broken grader, so the dashboard reports the observation instead of ruling on
-it.
+extractable answer is flagged `no_answers`. Such a result is held out of the panel by default rather
+than standing as a model's newest score -- the zero is real but is equally consistent with a broken
+grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
+names the flag and links the run, and `include_flagged=1` admits it, starred.
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to

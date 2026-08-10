@@ -106,6 +106,11 @@ class ResultFlag(StrEnum):
     with a model that cannot do the task, so it is evidence rather than a verdict."""
 
 
+# Flags a panel excludes unless a caller asks otherwise. Kept here beside the flags themselves so
+# producers and the dashboard cannot disagree on what counts as suspect.
+DEFAULT_EXCLUDE_FLAGS = frozenset({ResultFlag.NO_ANSWERS})
+
+
 @dataclass(frozen=True)
 class Interval:
     """A closed interval on a score."""
@@ -465,6 +470,13 @@ class SelectionRequest:
     statuses: frozenset[RunStatus] = frozenset({RunStatus.SUCCEEDED})
     min_coverage: float = DEFAULT_MIN_COVERAGE
 
+    exclude_flags: frozenset[ResultFlag] = DEFAULT_EXCLUDE_FLAGS
+    """Flags that make a result inadmissible. A run whose grader extracted no answer from any item
+    scored zero on the strength of nothing, and letting it stand as a model's newest result would
+    replace a real measurement with an unresolved question about the harness. It is rejected rather
+    than dropped -- the cell names the flag and links the run -- and a caller that wants to see it
+    anyway clears this."""
+
     cohort: CohortMode = CohortMode.LATEST_VALID
     cohort_version: str | None = None
     panel: tuple[str, ...] | None = None
@@ -498,6 +510,9 @@ def _admission_reason(measurement: Measurement, request: SelectionRequest) -> st
         return f"status {measurement.status.value}"
     if ResultFlag.NO_ITEMS in measurement.flags:
         return "no item count"
+    excluded = sorted(flag.value for flag in measurement.flags & request.exclude_flags)
+    if excluded:
+        return f"flagged {', '.join(excluded)}"
     rate = measurement.coverage.rate
     if rate is not None and rate < request.min_coverage:
         return f"coverage {rate:.3f} below {request.min_coverage:.2f}"
