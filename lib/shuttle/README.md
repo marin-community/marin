@@ -24,3 +24,8 @@ historical executable specifications. It is not the production compiler path.
 Other bounded prototypes remain in `tile_lifetime` while their generic MLIR,
 planning, and lowering components move here. This package must not depend on
 `tile_lifetime`.
+
+[`mlir/xla_patch`](mlir/xla_patch/README.md) contains a source-level patch for
+the proposed native transform seam at the pinned XLA revision. It is not part
+of the installed Python package and does not constitute a built
+Shuttle-enabled jaxlib.

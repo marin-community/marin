@@ -1,0 +1,487 @@
+diff --git a/xla/pjrt/BUILD b/xla/pjrt/BUILD
+index ef7d2a5..8392095 100644
+--- a/xla/pjrt/BUILD
++++ b/xla/pjrt/BUILD
+@@ -940,2 +940,32 @@ xla_cc_test(
+
++cc_library(
++    name = "stablehlo_module_transform",
++    srcs = ["stablehlo_module_transform.cc"],
++    hdrs = ["stablehlo_module_transform.h"],
++    visibility = ["//visibility:public"],
++    deps = [
++        "@com_google_absl//absl/base:no_destructor",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/strings",
++        "@com_google_absl//absl/synchronization",
++        "@llvm-project//mlir:IR",
++    ],
++)
++
++xla_cc_test(
++    name = "stablehlo_module_transform_test",
++    srcs = ["stablehlo_module_transform_test.cc"],
++    deps = [
++        ":mlir_to_hlo",
++        ":stablehlo_module_transform",
++        "//xla/hlo/testlib:test",
++        "//xla/tsl/platform:statusor",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:status_matchers",
++        "@com_google_absl//absl/strings:string_view",
++        "@com_google_googletest//:gtest_main",
++        "@llvm-project//mlir:IR",
++    ],
++)
++
+ cc_library(
+@@ -946,2 +976,3 @@ cc_library(
+     deps = [
++        ":stablehlo_module_transform",
+         "//xla:util",
+@@ -994,2 +1025,5 @@ xla_cc_test(
+         ":mlir_to_hlo",
++        ":stablehlo_module_transform",
++        "//xla/client:executable_build_options",
++        "//xla/hlo/builder:xla_computation",
+         "//xla/hlo/testlib:test",
+diff --git a/xla/pjrt/mlir_to_hlo.cc b/xla/pjrt/mlir_to_hlo.cc
+index 994bcac..b062522 100644
+--- a/xla/pjrt/mlir_to_hlo.cc
++++ b/xla/pjrt/mlir_to_hlo.cc
+@@ -71,2 +71,3 @@ limitations under the License.
+ #include "xla/mlir_hlo/stablehlo_ext/transforms/passes.h"
++#include "xla/pjrt/stablehlo_module_transform.h"
+ #include "xla/service/spmd/shardy/constants.h"
+@@ -171,2 +172,8 @@ absl::Status MlirToXlaComputation(
+
++  if (exec_build_options && exec_build_options->has_debug_options() &&
++      exec_build_options->debug_options().xla_shuttle_enable()) {
++    TF_RETURN_IF_ERROR(StablehloModuleTransformRegistry::Global().Run(
++        module, exec_build_options->debug_options().xla_shuttle_options()));
++  }
++
+   TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> hlo_module,
+diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
+index 4a560ef..16143e5 100644
+--- a/xla/pjrt/mlir_to_hlo_test.cc
++++ b/xla/pjrt/mlir_to_hlo_test.cc
+@@ -25,2 +25,3 @@ limitations under the License.
+ #include "absl/strings/string_view.h"
++#include "mlir/IR/BuiltinAttributes.h"
+ #include "mlir/IR/BuiltinOps.h"
+@@ -29,3 +30,6 @@ limitations under the License.
+ #include "stablehlo/api/PortableApi.h"
++#include "xla/client/executable_build_options.h"
++#include "xla/hlo/builder/xla_computation.h"
+ #include "xla/hlo/testlib/test.h"
++#include "xla/pjrt/stablehlo_module_transform.h"
+ #include "xla/tsl/platform/statusor.h"
+@@ -47,2 +51,15 @@ MATCHER_P(IsVhloArtifact, version, "") {
+
++const absl::Status& RegisterOptionForwardingTestTransform() {
++  static const absl::Status status =
++      StablehloModuleTransformRegistry::Global().Register(
++          "option-forwarding-test",
++          [](mlir::ModuleOp module, absl::string_view options) {
++            module->setAttr(
++                "test.forwarded_options",
++                mlir::StringAttr::get(module.getContext(), options));
++            return absl::OkStatus();
++          });
++  return status;
++}
++
+ TEST(MlirToHloTest, StablehloTest) {
+@@ -65,2 +82,29 @@ TEST(MlirToHloTest, StablehloTest) {
+
++TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
++  constexpr absl::string_view kProgram =
++      R"(
++    func.func @negate(%arg0: tensor<f32>) -> tensor<f32> {
++      %0 = stablehlo.negate %arg0 : tensor<f32>
++      return %0 : tensor<f32>
++    }
++  )";
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  TF_ASSERT_OK(RegisterOptionForwardingTestTransform());
++  ExecutableBuildOptions build_options;
++  build_options.mutable_debug_options()->set_xla_shuttle_enable(true);
++  build_options.mutable_debug_options()->set_xla_shuttle_options(
++      "{\"numerics\":\"source_ordered\"}");
++  XlaComputation computation;
++
++  TF_EXPECT_OK(MlirToXlaComputation(*module, computation,
++                                    /*use_tuple_args=*/false,
++                                    /*return_tuple=*/false, &build_options));
++  auto forwarded_options =
++      module->getAttrOfType<mlir::StringAttr>("test.forwarded_options");
++  ASSERT_TRUE(forwarded_options);
++  EXPECT_EQ(forwarded_options.getValue(), "{\"numerics\":\"source_ordered\"}");
++}
++
+ TEST(MlirToHloTest, StablehloPluginNewerThanFramework) {
+diff --git a/xla/pjrt/pjrt_executable_test.cc b/xla/pjrt/pjrt_executable_test.cc
+index 50111fd..f94b6f7 100644
+--- a/xla/pjrt/pjrt_executable_test.cc
++++ b/xla/pjrt/pjrt_executable_test.cc
+@@ -119,2 +119,4 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+       {"xla_gpu_pgle_profile_file_or_directory_path", std::string("abc")},
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options", std::string("{\"numerics\":\"fast\"}")},
+       // Repeated fields.
+@@ -136,2 +138,4 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+   EXPECT_EQ(debug_options.xla_gpu_pgle_profile_file_or_directory_path(), "abc");
++  EXPECT_TRUE(debug_options.xla_shuttle_enable());
++  EXPECT_EQ(debug_options.xla_shuttle_options(), "{\"numerics\":\"fast\"}");
+   EXPECT_THAT(debug_options.xla_gpu_disable_async_collectives(),
+@@ -153,2 +157,23 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+
++TEST(CompileOptionsTest, ShuttleOptionsRemainDistinctWhenSerialized) {
++  CompileOptions source_ordered;
++  source_ordered.env_option_overrides = {
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options",
++       std::string("{\"numerics\":\"source_ordered\"}")}};
++  TF_ASSERT_OK(source_ordered.ApplyAllOptionOverrides());
++  TF_ASSERT_OK_AND_ASSIGN(CompileOptionsProto source_ordered_proto,
++                          source_ordered.ToProto());
++
++  CompileOptions fast;
++  fast.env_option_overrides = {
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options", std::string("{\"numerics\":\"fast\"}")}};
++  TF_ASSERT_OK(fast.ApplyAllOptionOverrides());
++  TF_ASSERT_OK_AND_ASSIGN(CompileOptionsProto fast_proto, fast.ToProto());
++
++  EXPECT_NE(source_ordered_proto.SerializeAsString(),
++            fast_proto.SerializeAsString());
++}
++
+ TEST(CompiledMemoryStatsTest, Serialization) {
+diff --git a/xla/pjrt/stablehlo_module_transform.cc b/xla/pjrt/stablehlo_module_transform.cc
+new file mode 100644
+index 0000000..92143b0
+--- /dev/null
++++ b/xla/pjrt/stablehlo_module_transform.cc
+@@ -0,0 +1,90 @@
++/* Copyright 2026 The OpenXLA Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++==============================================================================*/
++
++#include "xla/pjrt/stablehlo_module_transform.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "absl/base/no_destructor.h"
++#include "absl/status/status.h"
++#include "absl/strings/str_cat.h"
++#include "absl/strings/string_view.h"
++#include "absl/synchronization/mutex.h"
++#include "mlir/IR/BuiltinOps.h"
++#include "mlir/IR/OwningOpRef.h"
++#include "mlir/IR/Verifier.h"
++
++namespace xla {
++
++StablehloModuleTransformRegistry& StablehloModuleTransformRegistry::Global() {
++  static absl::NoDestructor<StablehloModuleTransformRegistry> global_registry;
++  return *global_registry;
++}
++
++absl::Status StablehloModuleTransformRegistry::Register(
++    absl::string_view name, StablehloModuleTransform transform) {
++  if (name.empty()) {
++    return absl::InvalidArgumentError("Transform name cannot be empty");
++  }
++  if (!transform) {
++    return absl::InvalidArgumentError("Transform cannot be empty");
++  }
++
++  absl::MutexLock lock(&mutex_);
++  for (const Entry& entry : entries_) {
++    if (entry.name == name) {
++      return absl::AlreadyExistsError(absl::StrCat(
++          "StableHLO module transform already registered: ", name));
++    }
++  }
++  entries_.push_back(Entry{std::string(name), std::move(transform)});
++  return absl::OkStatus();
++}
++
++absl::Status StablehloModuleTransformRegistry::Run(
++    mlir::ModuleOp module, absl::string_view serialized_options) const {
++  std::vector<Entry> entries;
++  {
++    absl::MutexLock lock(&mutex_);
++    entries = entries_;
++  }
++  if (entries.empty()) {
++    return absl::FailedPreconditionError(
++        "StableHLO module transforms were enabled, but none are registered");
++  }
++
++  mlir::OwningOpRef<mlir::ModuleOp> transformed(module.clone());
++  for (const Entry& entry : entries) {
++    absl::Status status = entry.transform(*transformed, serialized_options);
++    if (!status.ok()) {
++      return absl::Status(
++          status.code(),
++          absl::StrCat("StableHLO module transform '", entry.name,
++                       "' failed: ", status.message()));
++    }
++  }
++  if (mlir::failed(mlir::verify(*transformed))) {
++    return absl::InvalidArgumentError(
++        "StableHLO module transforms produced an invalid MLIR module");
++  }
++
++  module->setAttrs(transformed->getAttrs());
++  module.getBodyRegion().takeBody(transformed->getBodyRegion());
++  return absl::OkStatus();
++}
++
++}  // namespace xla
+diff --git a/xla/pjrt/stablehlo_module_transform.h b/xla/pjrt/stablehlo_module_transform.h
+new file mode 100644
+index 0000000..6af67d9
+--- /dev/null
++++ b/xla/pjrt/stablehlo_module_transform.h
+@@ -0,0 +1,72 @@
++/* Copyright 2026 The OpenXLA Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++==============================================================================*/
++
++#ifndef XLA_PJRT_STABLEHLO_MODULE_TRANSFORM_H_
++#define XLA_PJRT_STABLEHLO_MODULE_TRANSFORM_H_
++
++#include <functional>
++#include <string>
++#include <vector>
++
++#include "absl/base/thread_annotations.h"
++#include "absl/status/status.h"
++#include "absl/strings/string_view.h"
++#include "absl/synchronization/mutex.h"
++#include "mlir/IR/BuiltinOps.h"
++
++namespace xla {
++
++using StablehloModuleTransform =
++    std::function<absl::Status(mlir::ModuleOp, absl::string_view)>;
++
++// Stores StableHLO transforms supplied by components linked into XLA. Run()
++// applies a snapshot of the registered transforms to a clone and updates the
++// input module only after every transform and MLIR verification succeed.
++class StablehloModuleTransformRegistry {
++ public:
++  StablehloModuleTransformRegistry() = default;
++  ~StablehloModuleTransformRegistry() = default;
++
++  StablehloModuleTransformRegistry(const StablehloModuleTransformRegistry&) =
++      delete;
++  StablehloModuleTransformRegistry& operator=(
++      const StablehloModuleTransformRegistry&) = delete;
++
++  static StablehloModuleTransformRegistry& Global();
++
++  // Registers a transform under a stable diagnostic name. Transforms run in
++  // registration order.
++  absl::Status Register(absl::string_view name,
++                        StablehloModuleTransform transform);
++
++  // Runs all registered transforms transactionally. Returns an error without
++  // changing module when there is no transform, a transform fails, or the
++  // transformed module does not verify.
++  absl::Status Run(mlir::ModuleOp module,
++                   absl::string_view serialized_options) const;
++
++ private:
++  struct Entry {
++    std::string name;
++    StablehloModuleTransform transform;
++  };
++
++  mutable absl::Mutex mutex_;
++  std::vector<Entry> entries_ ABSL_GUARDED_BY(mutex_);
++};
++
++}  // namespace xla
++
++#endif  // XLA_PJRT_STABLEHLO_MODULE_TRANSFORM_H_
+diff --git a/xla/pjrt/stablehlo_module_transform_test.cc b/xla/pjrt/stablehlo_module_transform_test.cc
+new file mode 100644
+index 0000000..5fbd6a9
+--- /dev/null
++++ b/xla/pjrt/stablehlo_module_transform_test.cc
+@@ -0,0 +1,128 @@
++/* Copyright 2026 The OpenXLA Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++==============================================================================*/
++
++#include "xla/pjrt/stablehlo_module_transform.h"
++
++#include <gmock/gmock.h>
++#include <gtest/gtest.h>
++#include "absl/status/status.h"
++#include "absl/status/status_matchers.h"
++#include "absl/strings/string_view.h"
++#include "mlir/IR/BuiltinAttributes.h"
++#include "mlir/IR/BuiltinOps.h"
++#include "mlir/IR/MLIRContext.h"
++#include "mlir/IR/OwningOpRef.h"
++#include "mlir/IR/Verifier.h"
++#include "xla/hlo/testlib/test.h"
++#include "xla/pjrt/mlir_to_hlo.h"
++#include "xla/tsl/platform/statusor.h"
++
++namespace xla {
++namespace {
++
++using ::absl_testing::StatusIs;
++using ::testing::HasSubstr;
++
++constexpr absl::string_view kProgram = R"(
++  func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
++    %0 = stablehlo.negate %arg0 : tensor<f32>
++    return %0 : tensor<f32>
++  }
++)";
++
++TEST(StablehloModuleTransformRegistryTest, CommitsSuccessfulTransform) {
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  StablehloModuleTransformRegistry registry;
++  TF_ASSERT_OK(registry.Register(
++      "marker", [](mlir::ModuleOp module, absl::string_view options) {
++        module->setAttr("test.marker",
++                        mlir::StringAttr::get(module.getContext(), options));
++        return absl::OkStatus();
++      }));
++
++  TF_EXPECT_OK(registry.Run(*module, "source_ordered"));
++
++  auto marker = module->getAttrOfType<mlir::StringAttr>("test.marker");
++  ASSERT_TRUE(marker);
++  EXPECT_EQ(marker.getValue(), "source_ordered");
++}
++
++TEST(StablehloModuleTransformRegistryTest, FailsClosedWithoutRegistration) {
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  StablehloModuleTransformRegistry registry;
++
++  EXPECT_THAT(registry.Run(*module, "fast"),
++              StatusIs(absl::StatusCode::kFailedPrecondition,
++                       HasSubstr("none are registered")));
++}
++
++TEST(StablehloModuleTransformRegistryTest, RejectsAmbiguousRegistration) {
++  StablehloModuleTransformRegistry registry;
++  StablehloModuleTransform transform = [](mlir::ModuleOp, absl::string_view) {
++    return absl::OkStatus();
++  };
++
++  EXPECT_THAT(registry.Register("", transform),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++  EXPECT_THAT(registry.Register("empty", StablehloModuleTransform()),
++              StatusIs(absl::StatusCode::kInvalidArgument));
++  TF_ASSERT_OK(registry.Register("duplicate", transform));
++  EXPECT_THAT(registry.Register("duplicate", transform),
++              StatusIs(absl::StatusCode::kAlreadyExists));
++}
++
++TEST(StablehloModuleTransformRegistryTest, PreservesModuleAfterFailure) {
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  StablehloModuleTransformRegistry registry;
++  TF_ASSERT_OK(registry.Register(
++      "failing", [](mlir::ModuleOp module, absl::string_view) {
++        module->setAttr("test.marker",
++                        mlir::StringAttr::get(module.getContext(), "changed"));
++        return absl::InternalError("transform rejected the module");
++      }));
++
++  EXPECT_THAT(
++      registry.Run(*module, "fast"),
++      StatusIs(absl::StatusCode::kInternal, HasSubstr("failing' failed")));
++  EXPECT_FALSE(module->hasAttr("test.marker"));
++}
++
++TEST(StablehloModuleTransformRegistryTest,
++     RejectsInvalidResultTransactionally) {
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  StablehloModuleTransformRegistry registry;
++  TF_ASSERT_OK(registry.Register(
++      "invalid", [](mlir::ModuleOp module, absl::string_view) {
++        mlir::Operation& function = module.getBody()->front();
++        function.getRegion(0).front().getTerminator()->erase();
++        return absl::OkStatus();
++      }));
++
++  EXPECT_THAT(registry.Run(*module, "fast"),
++              StatusIs(absl::StatusCode::kInvalidArgument,
++                       HasSubstr("invalid MLIR module")));
++  EXPECT_TRUE(mlir::succeeded(mlir::verify(*module)));
++}
++
++}  // namespace
++}  // namespace xla
+diff --git a/xla/xla.proto b/xla/xla.proto
+index 9636f61..0e28a88 100644
+--- a/xla/xla.proto
++++ b/xla/xla.proto
+@@ -178,2 +178,6 @@ message DebugOptions {
+   optional int32 xla_recognize_reduction_optimization_level = 463;
++  // Run registered StableHLO module transforms before conversion to HLO.
++  optional bool xla_shuttle_enable = 481;
++  // Serialized options passed unchanged to registered StableHLO transforms.
++  optional string xla_shuttle_options = 482;
+   // go/keep-sorted end
+@@ -1546,3 +1550,3 @@ message DebugOptions {
+-  // Next id: 481
++  // Next id: 483
+
+   // Extra options to pass to the compilation backend (e.g. LLVM); specific
