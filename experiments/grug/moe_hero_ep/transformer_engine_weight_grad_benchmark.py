@@ -144,6 +144,14 @@ def _installed_nvidia_include_paths() -> tuple[Path, ...]:
     return tuple(sorted(include_paths))
 
 
+def _installed_nvidia_library_paths() -> tuple[Path, ...]:
+    library_paths = set()
+    for package_root in site.getsitepackages():
+        nvidia_root = Path(package_root) / "nvidia"
+        library_paths.update(path for path in nvidia_root.rglob("lib") if path.is_dir())
+    return tuple(sorted(library_paths))
+
+
 def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
@@ -210,6 +218,10 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
         )
     include_paths = (Path(target) / "include", cccl_include, *_installed_nvidia_include_paths())
     env["CPLUS_INCLUDE_PATH"] = f"{':'.join(str(path) for path in include_paths)}:{env.get('CPLUS_INCLUDE_PATH', '')}"
+    library_paths = (cuda_home / "lib", *_installed_nvidia_library_paths())
+    joined_library_paths = ":".join(str(path) for path in library_paths)
+    env["LIBRARY_PATH"] = f"{joined_library_paths}:{env.get('LIBRARY_PATH', '')}"
+    env["LD_LIBRARY_PATH"] = f"{joined_library_paths}:{env.get('LD_LIBRARY_PATH', '')}"
 
     start = time.perf_counter()
     install = subprocess.run(
