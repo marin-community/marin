@@ -155,12 +155,7 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
-    # LatentMoE (arXiv 2601.18089): routed experts operate in a latent space of this width instead
-    # of `hidden_dim`. Tokens are projected down before routing and back up after the combine, so
-    # the expert-parallel all-to-all carries `latent_dim`-wide rows -- communication falls by
-    # `hidden_dim / latent_dim`. Shared experts and the router stay at `hidden_dim`. To hold FLOPs
-    # constant the paper scales the routed bank and top-k by the same ratio. None keeps a
-    # standard MoE, in which case no projection is built and the layer is unchanged.
+    # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = None
     qb_estimator: QbEstimator = QbEstimator.TOPK
     qb_hist_bins: int = 1000  # bins for the QB histogram estimator; ignored by the top-k estimator
