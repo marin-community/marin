@@ -70,6 +70,13 @@ hook-boundary digest through pinned JAX/jaxlib 0.10.1, and the acceptance oracle
 uses the exact hook-boundary VJP structure. It still rejects old raw-export
 ordinals and any field-level structural drift.
 
+The generator emits hook-boundary metadata only for the forward and VJP
+fixtures consumed by this acceptance contract. Its default no-write audit still
+checks all six ordinary-JAX fixtures. The regression builds the complete old
+VJP contract, including its selected ordinals, excluded dependency references,
+unsupported fingerprint, and final raw-export fingerprint, and proves that the
+hook-boundary validator rejects it.
+
 A local exact-pin Bazel compile probe could not validate the updated native
 path because the pinned Darwin toolchain requests unavailable SDK
 `macosx10.11`. No Iris rerun was launched.

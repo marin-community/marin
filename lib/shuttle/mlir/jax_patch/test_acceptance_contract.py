@@ -14,6 +14,7 @@ from acceptance_contract import (
     EVENT_FIELDS,
     FORWARD_EXPECTATION,
     VJP_EXPECTATION,
+    FixtureExpectation,
     ObserverIdentity,
     decode_native_snapshot,
     match_fixture_contract,
@@ -67,7 +68,7 @@ def valid_events(fixture=VJP_EXPECTATION):
             "region_membership": "",
             "coverage_manifest": "",
             "unsupported_fingerprint": "",
-            "normalized_module_fingerprint": audited_fingerprint(fixture_path(FIXTURE_DIRECTORY, fixture)),
+            "normalized_module_fingerprint": fixture.final_normalized_fingerprint,
             "no_shuttle_semantics": True,
         }
     ]
@@ -121,10 +122,33 @@ def test_vjp_oracle_is_the_exact_audited_unsupported_chain():
 
 
 def test_rejects_pre_xla_hook_vjp_oracle():
-    events = valid_events(VJP_EXPECTATION)
-    old_region_membership = VJP_EXPECTATION.region_membership.replace("<0, 0, 1, 0>", "<0, 0, 0, 0>", 1)
-    events[0]["region_membership"] = old_region_membership
-    events[1]["region_membership"] = old_region_membership
+    pre_hook_expectation = FixtureExpectation(
+        name="vjp",
+        complete_operations=tuple(range(14)),
+        selected_regions=((0, 1), (5, 6), (7, 8, 9, 10, 11, 12, 13)),
+        excluded_manifest=(
+            "[{fingerprint = {attributes = {value = dense<1.000000e+00> : tensor<f32>}, "
+            'name = "stablehlo.constant", result_types = [tensor<f32>]}, operands = [], '
+            'reason = "unsupported_operation", source = #shuttle.source_ref<0, 0, 2, 0>}, '
+            "{fingerprint = {attributes = {broadcast_dimensions = array<i64>}, "
+            'name = "stablehlo.broadcast_in_dim", result_types = [tensor<2x4xf32>]}, '
+            'operands = [#shuttle.source_ref<0, 0, 2, 0>], reason = "unsupported_operation", '
+            "source = #shuttle.source_ref<0, 0, 3, 0>}, "
+            '{fingerprint = {attributes = {}, name = "stablehlo.subtract", '
+            "result_types = [tensor<2x4xf32>]}, operands = [#shuttle.source_ref<0, 0, 3, 0>, "
+            '#shuttle.source_ref<0, 0, 1, 0>], reason = "unsupported_operation", '
+            "source = #shuttle.source_ref<0, 0, 4, 0>}]"
+        ),
+        function_result_anchors=(13, 12, 6),
+        final_normalized_fingerprint="2d557bd5d2f259a053335a6e004f9c5290d19713961e2c41787ed197ed042891",
+    )
+    events = valid_events(pre_hook_expectation)
+
+    assert pre_hook_expectation.unsupported_fingerprint == (
+        "ef0a137534d479ad4a98caf0250938782bb874c4f0f13e2c3c5e8930667c7d05"
+    )
+    assert pre_hook_expectation.selected_regions[0] == (0, 1)
+    assert events[2]["normalized_module_fingerprint"] == pre_hook_expectation.final_normalized_fingerprint
 
     with pytest.raises(AssertionError, match="selected-region membership"):
         validate_success_events(events, IDENTITY, VJP_EXPECTATION)
