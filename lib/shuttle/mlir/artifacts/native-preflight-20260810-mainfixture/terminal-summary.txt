@@ -1,0 +1,53 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-mainfixture (/dlwh/shuttle-native-mlir-preflight-20260810-mainfixture)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: ct (1 ms)
+[ RUN      ] MlirToHloTest.StablehloTest
+[       OK ] MlirToHloTest.StablehloTest (1 ms)
+[ RUN      ] MlirToHloTest.EnabledModuleTransformReceivesOptions
+xla/pjrt/mlir_to_hlo_test.cc:110: Failure
+Value of: forwarded_options
+  Actual: false
+Expected: true
+
+[  FAILED  ] MlirToHloTest.EnabledModuleTransformReceivesOptions (4 ms)
+[ RUN      ] MlirToHloTest.ChloTanOpTest
+[       OK ] MlirToHloTest.ChloTanOpTest (1 ms)
+[ RUN      ] MlirToHloTest.InvalidBytecodeTest
+[       OK ] MlirToHloTest.InvalidBytecodeTest (0 ms)
+[ RUN      ] MlirToHloTest.ChloTest
+[       OK ] MlirToHloTest.ChloTest (1 ms)
+[----------] 9 tests from MlirToHloTest (18 ms total)
+
+[----------] Global test environment tear-down
+[==========] 9 tests from 1 test suite ran. (18 ms total)
+[  PASSED  ] 8 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] MlirToHloTest.EnabledModuleTransformReceivesOptions
+
+ 1 FAILED TEST
+================================================================================
+INFO: Found 4 test targets...
+INFO: Elapsed time: 150.214s, Critical Path: 68.25s
+INFO: 3432 processes: 1484 internal, 1948 local.
+INFO: Build completed, 1 test FAILED, 3432 total actions
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test                       PASSED in 0.0s
+//xla/pjrt:pjrt_executable_test                                          PASSED in 0.0s
+//xla/pjrt:stablehlo_module_transform_test                               PASSED in 0.0s
+//xla/pjrt:mlir_to_hlo_test                                              FAILED in 0.0s
+  /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/xla/pjrt/mlir_to_hlo_test/test.log
+
+Executed 4 out of 4 tests: 3 tests pass and 1 fails locally.
+There were tests whose specified size is too big. Use the --test_verbose_timeout_warnings command line option to see which ones these are.
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=3
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=3
+preflight_finished_utc=2026-08-10T14:14:06Z
+
+
+  TASK  STATE      EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        3  13 minutes and 58.55 seconds  -           -          ct (1 ms)
+                                                                              [ RUN      ] MlirToHloTest.StablehloTest
+                                                                              [       OK ] MlirToHloTest.StablehloTest (1 ms)
+                                                                              [ RUN      ] MlirT...

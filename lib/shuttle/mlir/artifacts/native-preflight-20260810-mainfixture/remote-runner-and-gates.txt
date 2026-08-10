@@ -1,0 +1,32 @@
+Remote runner proof and gate summary
+
+source=b1e79dd7be5eb8b59fb1b2d02ad3bcdd7a8f4cbe
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+patch_order=0001,0002
+apply_check=PASS_BOTH
+reverse_apply_check=PASS_BOTH
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=31.250s actions=1
+@shuttle_mlir//:ShuttleDialect PASS elapsed=50.226s actions=952
+@shuttle_mlir//:ShuttlePasses PASS elapsed=7.191s actions=91
+@shuttle_mlir//:shuttle-opt PASS elapsed=540.501s actions=5951
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=16.491s actions=143
+bazel test @shuttle_mlir//:mlir_tests PASS elapsed=2.868s tests=11/11
+
+//xla/pjrt:stablehlo_module_transform_test PASS
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS
+//xla/pjrt:pjrt_executable_test PASS
+//xla/pjrt:mlir_to_hlo_test FAIL internal_tests=8/9
+
+failure:
+xla/pjrt/mlir_to_hlo_test.cc:110: Failure
+Value of: forwarded_options
+  Actual: false
+Expected: true
+
+xla_gate_elapsed=150.214s
+xla_gate_actions=3432
+preflight_exit_code=3
+preflight_finished_utc=2026-08-10T14:14:06Z
