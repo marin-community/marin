@@ -96,24 +96,6 @@ class StreamingAttentionBackwardFfiBufferLayout:
     minor_to_major: tuple[int, ...]
 
 
-def derive_dense_minor_to_major_layout(
-    shape: tuple[int, ...],
-    strides: tuple[int, ...],
-) -> tuple[int, ...]:
-    """Recover an unpadded dense layout from logical-axis element strides."""
-    if len(shape) != len(strides):
-        raise ValueError(f"dense layout rank mismatch: shape {shape}, strides {strides}")
-    if any(extent <= 0 for extent in shape):
-        raise ValueError(f"dense layout requires positive extents, found {shape}")
-    if any(stride <= 0 for stride in strides):
-        raise ValueError(f"dense layout requires positive strides, found {strides}")
-    minor_to_major = tuple(sorted(range(len(shape)), key=strides.__getitem__))
-    expected = _layout_strides(shape, minor_to_major)
-    if expected != strides:
-        raise ValueError(f"strides {strides} do not describe an unpadded dense layout for shape {shape}")
-    return minor_to_major
-
-
 @dataclass(frozen=True)
 class TritonAotKernelPlan:
     """One explicit Triton AOT specialization of a generic physical skeleton."""

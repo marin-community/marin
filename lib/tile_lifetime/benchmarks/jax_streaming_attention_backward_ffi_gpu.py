@@ -17,20 +17,27 @@ import statistics
 import subprocess
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from tile_lifetime.benchmark_boundary import (
+    DenseBufferContract,
+    NumericalAcceptanceContract,
+    NumericalError,
+    numerical_error,
+    verify_dense_buffer_boundary,
+    verify_numerical_acceptance,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
-    StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
     compile_streaming_attention_backward_ffi,
-    derive_dense_minor_to_major_layout,
     generate_streaming_attention_backward_ffi,
     register_streaming_attention_backward_ffi,
 )
@@ -95,19 +102,43 @@ def _samples(
     }
 
 
-def _hash(tensors: tuple[jax.Array, ...]) -> str:
+def _hash(tensors) -> str:
     digest = hashlib.sha256()
     for tensor in tensors:
         digest.update(np.asarray(tensor).tobytes())
     return digest.hexdigest()
 
 
-def _error(actual: jax.Array, expected: jax.Array) -> dict[str, float]:
-    difference = np.abs(np.asarray(actual, dtype=np.float32) - np.asarray(expected, dtype=np.float32))
+def _errors(names, actual, expected) -> dict[str, NumericalError]:
     return {
-        "maximum_absolute_error": float(difference.max()),
-        "mean_absolute_error": float(difference.mean()),
+        name: numerical_error(actual_value, expected_value)
+        for name, actual_value, expected_value in zip(names, actual, expected, strict=True)
     }
+
+
+def _generated_buffer_contracts(specifications) -> tuple[DenseBufferContract, ...]:
+    return tuple(
+        DenseBufferContract(
+            name=specification.name,
+            dtype=specification.dtype.value,
+            shape=specification.shape,
+            strides=specification.strides,
+            minor_to_major=specification.layout,
+        )
+        for specification in specifications
+    )
+
+
+def _torch_buffer_contracts(names, tensors) -> tuple[DenseBufferContract, ...]:
+    return tuple(
+        DenseBufferContract.from_strides(
+            name=name,
+            dtype={"torch.bfloat16": "bf16"}.get(str(tensor.dtype), str(tensor.dtype)),
+            shape=tuple(tensor.shape),
+            strides=tuple(tensor.stride()),
+        )
+        for name, tensor in zip(names, tensors, strict=True)
+    )
 
 
 def _embedded_cubin(source: Path) -> dict[str, object]:
@@ -129,13 +160,13 @@ def _torch_flash_oracle(arguments, *, scale: float, return_forward_output: bool)
     torch.backends.cuda.enable_math_sdp(False)
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     torch.backends.cuda.enable_flash_sdp(True)
-    query, key, value, output_cotangent = (torch.utils.dlpack.from_dlpack(argument).detach() for argument in arguments)
-    query = query.transpose(1, 2).requires_grad_(True)
-    key = key.transpose(1, 2).requires_grad_(True)
-    value = value.transpose(1, 2).requires_grad_(True)
-    output_cotangent = output_cotangent.transpose(1, 2)
+    logical_inputs = tuple(torch.utils.dlpack.from_dlpack(argument).detach() for argument in arguments)
 
     def call():
+        query, key, value, output_cotangent = (tensor.transpose(1, 2) for tensor in logical_inputs)
+        query.requires_grad_(True)
+        key.requires_grad_(True)
+        value.requires_grad_(True)
         output = functional.scaled_dot_product_attention(
             query,
             key,
@@ -145,13 +176,14 @@ def _torch_flash_oracle(arguments, *, scale: float, return_forward_output: bool)
             enable_gqa=query.shape[1] != key.shape[1],
         )
         gradients = torch.autograd.grad(output, (query, key, value), output_cotangent)
-        return (output, *gradients) if return_forward_output else gradients
+        flash_results = (output, *gradients) if return_forward_output else gradients
+        return tuple(tensor.transpose(1, 2) for tensor in flash_results)
 
     def block(_result):
         torch.cuda.synchronize()
 
     def numpy_outputs(result):
-        return tuple(tensor.detach().transpose(1, 2).float().cpu().numpy() for tensor in result)
+        return tuple(tensor.detach().float().cpu().numpy() for tensor in result)
 
     metadata = {
         "name": "torch_flash_sdpa_training" if return_forward_output else "torch_flash_sdpa_recompute",
@@ -160,15 +192,10 @@ def _torch_flash_oracle(arguments, *, scale: float, return_forward_output: bool)
         "saved_forward_state": "internal to the timed forward/backward call",
         "returns_forward_output": return_forward_output,
         "backend_policy": "flash enabled; cuDNN, memory-efficient, and math disabled",
-        "logical_interface": "B,S,H,D outside timed call; zero-copy B,H,S,D views inside Flash-SDPA",
-        "input_strides_bhsd": {
-            "query": tuple(query.stride()),
-            "key": tuple(key.stride()),
-            "value": tuple(value.stride()),
-            "output_cotangent": tuple(output_cotangent.stride()),
-        },
+        "logical_interface": "B,S,H,D inputs and zero-copy B,S,H,D result views",
+        "timed_views": "B,S,H,D to B,H,S,D inputs and B,H,S,D to B,S,H,D results; no explicit copies",
     }
-    return call, block, numpy_outputs, metadata
+    return call, block, numpy_outputs, logical_inputs, metadata
 
 
 def main() -> None:
@@ -190,6 +217,8 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--max-absolute-error-threshold", type=float, default=0.125)
+    parser.add_argument("--mean-absolute-error-threshold", type=float, default=0.01)
     parser.add_argument("--json-output", type=Path, required=True)
     parser.add_argument("--shuttle-revision", default="working-tree")
     parser.add_argument("--oracle", choices=("jax", "torch_flash"), default="jax")
@@ -201,6 +230,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.repeats % 2:
         raise ValueError("counterbalanced benchmark requires an even repeat count")
+    numerical_acceptance = NumericalAcceptanceContract(
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        maximum_absolute_error=args.max_absolute_error_threshold,
+        mean_absolute_error=args.mean_absolute_error_threshold,
+    )
     scale = args.scale if args.scale is not None else args.head_dimension**-0.5
     config = StreamingAttentionBackwardDebugConfig(
         batch=1,
@@ -303,89 +337,88 @@ def main() -> None:
     generated_outputs = generated_bound()
     semantic_oracle_outputs = semantic_oracle_bound()
     jax.block_until_ready((generated_outputs, semantic_oracle_outputs))
+    second_generated_outputs = generated_bound()
+    jax.block_until_ready(second_generated_outputs)
+    generated_first_hash = _hash(generated_outputs)
+    generated_deterministic = generated_first_hash == _hash(second_generated_outputs)
+    generated_errors = _errors(output_names, generated_outputs, semantic_oracle_outputs)
+    verify_numerical_acceptance(
+        generated_errors,
+        deterministic=generated_deterministic,
+        contract=numerical_acceptance,
+        boundary_name="generated Shuttle",
+    )
     runtime_imports_before_expert_oracle = {
         "torch": "torch" in sys.modules,
         "triton": "triton" in sys.modules,
     }
     if args.oracle == "torch_flash":
-        oracle_bound, oracle_block, oracle_numpy_outputs, oracle_metadata = _torch_flash_oracle(
+        oracle_bound, oracle_block, oracle_numpy_outputs, oracle_inputs, oracle_metadata = _torch_flash_oracle(
             arguments,
             scale=scale,
             return_forward_output=training_boundary,
         )
+        expected_input_contracts = _generated_buffer_contracts(generated.inputs)
+        observed_input_contracts = _torch_buffer_contracts(
+            tuple(specification.name for specification in generated.inputs),
+            oracle_inputs,
+        )
+        verify_dense_buffer_boundary(
+            expected_input_contracts,
+            observed_input_contracts,
+            boundary_name="Flash-SDPA logical inputs",
+        )
         expert_outputs = oracle_bound()
         oracle_block(expert_outputs)
-        expert_result_shapes_bshd = tuple(
-            (tensor.shape[0], tensor.shape[2], tensor.shape[1], tensor.shape[3]) for tensor in expert_outputs
+        second_expert_outputs = oracle_bound()
+        oracle_block(second_expert_outputs)
+        expected_output_contracts = _generated_buffer_contracts(generated.outputs)
+        observed_output_contracts = _torch_buffer_contracts(output_names, expert_outputs)
+        verify_dense_buffer_boundary(
+            expected_output_contracts,
+            observed_output_contracts,
+            boundary_name="Flash-SDPA logical results",
         )
-        expert_result_strides_bshd = tuple(
-            (tensor.stride(0), tensor.stride(2), tensor.stride(1), tensor.stride(3)) for tensor in expert_outputs
+        expert_numpy_outputs = oracle_numpy_outputs(expert_outputs)
+        second_expert_numpy_outputs = oracle_numpy_outputs(second_expert_outputs)
+        oracle_first_hash = _hash(expert_numpy_outputs)
+        oracle_deterministic = oracle_first_hash == _hash(second_expert_numpy_outputs)
+        expert_errors = _errors(output_names, expert_numpy_outputs, semantic_oracle_outputs)
+        verify_numerical_acceptance(
+            expert_errors,
+            deterministic=oracle_deterministic,
+            contract=numerical_acceptance,
+            boundary_name="Flash-SDPA oracle",
         )
-        expert_result_layouts_bshd = tuple(
-            StreamingAttentionBackwardFfiBufferLayout(
-                name,
-                derive_dense_minor_to_major_layout(tuple(shape), tuple(strides)),
-            )
-            for name, shape, strides in zip(
-                output_names,
-                expert_result_shapes_bshd,
-                expert_result_strides_bshd,
-                strict=True,
-            )
-        )
-        generated_result_strides_bshd = tuple(output.strides for output in generated.outputs)
-        generated_result_layouts_bshd = tuple(
-            StreamingAttentionBackwardFfiBufferLayout(output.name, output.layout) for output in generated.outputs
-        )
-        generated_result_shapes_bshd = tuple(output.shape for output in generated.outputs)
-        if (
-            expert_result_shapes_bshd != generated_result_shapes_bshd
-            or expert_result_strides_bshd != generated_result_strides_bshd
-            or expert_result_layouts_bshd != generated_result_layouts_bshd
-        ):
-            raise ValueError(
-                "Flash-SDPA results do not match the generated BSHD physical output boundary: "
-                f"shapes {expert_result_shapes_bshd} != {generated_result_shapes_bshd}; "
-                f"strides {expert_result_strides_bshd} != {generated_result_strides_bshd}; "
-                f"layouts {expert_result_layouts_bshd} != {generated_result_layouts_bshd}"
-            )
-        oracle_metadata["result_shapes_bshd"] = expert_result_shapes_bshd
-        oracle_metadata["result_strides_bshd"] = expert_result_strides_bshd
-        oracle_metadata["result_layouts_bshd"] = {
-            layout.buffer_name: layout.minor_to_major for layout in expert_result_layouts_bshd
-        }
-        expert_correctness = {
-            name: _error(actual, expected)
-            for name, actual, expected in zip(
-                output_names,
-                oracle_numpy_outputs(expert_outputs),
-                semantic_oracle_outputs,
-                strict=True,
-            )
-        }
+        oracle_metadata["input_boundary_bshd"] = [asdict(contract) for contract in observed_input_contracts]
+        oracle_metadata["result_boundary_bshd"] = [asdict(contract) for contract in observed_output_contracts]
     else:
         oracle_bound = semantic_oracle_bound
         oracle_block = jax.block_until_ready
+        expert_outputs = semantic_oracle_outputs
+        second_expert_outputs = semantic_oracle_bound()
+        jax.block_until_ready(second_expert_outputs)
+        oracle_first_hash = _hash(expert_outputs)
+        oracle_deterministic = oracle_first_hash == _hash(second_expert_outputs)
+        expert_errors = _errors(output_names, expert_outputs, semantic_oracle_outputs)
+        verify_numerical_acceptance(
+            expert_errors,
+            deterministic=oracle_deterministic,
+            contract=numerical_acceptance,
+            boundary_name="natural JAX oracle",
+        )
         oracle_metadata = {
             "name": "natural_jax_vjp",
             "saved_forward_state": "owned by natural JAX boundary",
             "returns_forward_output": training_boundary,
         }
-        expert_correctness = None
 
-    first_hash = _hash(generated_outputs)
-    second_hash = _hash(generated_bound())
-    correctness = {
-        name: _error(actual, expected)
-        for name, actual, expected in zip(
-            output_names,
-            generated_outputs,
-            semantic_oracle_outputs,
-            strict=True,
-        )
+    correctness: dict[str, object] = {name: asdict(error) for name, error in generated_errors.items()}
+    correctness["deterministic"] = generated_deterministic
+    correctness["benchmark_oracle_against_semantic_reference"] = {
+        name: asdict(error) for name, error in expert_errors.items()
     }
-    correctness["deterministic"] = first_hash == second_hash
-    correctness["benchmark_oracle_against_semantic_reference"] = expert_correctness
+    correctness["benchmark_oracle_deterministic"] = oracle_deterministic
     measurements = _samples(
         generated_bound,
         oracle_bound,
@@ -430,6 +463,7 @@ def main() -> None:
             "result_layouts_minor_to_major": {output.name: output.layout for output in generated.outputs},
             "maximum_vjp": program.maximum_vjp.value,
             "numerical_policy": NumericalPolicy.ALLOW_ROUNDING_REORDER.value,
+            "numerical_acceptance": asdict(numerical_acceptance),
             "source_operation_count": len(recovered.source_operation_ids),
             "contract_operation_count": len(recovered.contract_operation_ids),
             "fold_operation_count": (
@@ -447,7 +481,8 @@ def main() -> None:
             "atomic_accumulation": False,
         },
         "correctness": correctness,
-        "deterministic_hash": first_hash,
+        "deterministic_hash": generated_first_hash,
+        "benchmark_oracle_deterministic_hash": oracle_first_hash,
         "measurements": measurements,
         "benchmark_oracle": oracle_metadata,
         "build": {
