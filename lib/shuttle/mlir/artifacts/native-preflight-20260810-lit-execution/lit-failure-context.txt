@@ -1,0 +1,179 @@
+463-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Reading rc options for 'test' from /app/sources/xla/.bazelrc:
+464-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Inherited 'build' options: --config=warnings
+465-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Reading rc options for 'test' from /app/sources/xla/tensorflow.bazelrc:
+466-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   'test' options: --test_env=GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1
+467-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Found applicable config definition common:short_logs in file /app/sources/xla/tensorflow.bazelrc: --output_filter=DONT_MATCH_ANYTHING
+468-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Found applicable config definition build:warnings in file /app/sources/xla/warnings.bazelrc: --copt=-Werror --host_copt=-Werror --per_file_copt=external/.*@-w --host_per_file_copt=external/.*@-w --copt=-Wall --copt=-Werror --copt=-Wno-address-of-packed-member --copt=-Wno-defaulted-function-deleted --copt=-Wno-deprecated-builtins --copt=-Wno-enum-compare-switch --copt=-Wno-expansion-to-defined --copt=-Wno-ignored-attributes --copt=-Wno-ignored-qualifiers --copt=-Wno-inconsistent-missing-override --copt=-Wno-nontrivial-memaccess --copt=-Wno-nullability-completeness --copt=-Wno-potentially-evaluated-expression --copt=-Wno-range-loop-analysis --copt=-Wno-return-type-c-linkage --copt=-Wno-tautological-undefined-compare --copt=-Wno-unused-but-set-variable --copt=-Wno-unused-lambda-capture --copt=-Wno-unused-local-typedef --copt=-Wno-deprecated-volatile --copt=-Wno-deprecated-anon-enum-enum-conversion --copt=-Wno-deprecated-enum-compare --copt=-Wno-deprecated-enum-enum-conversion --copt=-Wno-deprecated-enum-compare-conditional --copt=-Wno-deprecated-enum-float-conversion --copt=-Wno-deprecated-this-capture --copt=-Wno-strict-prototypes --copt=-Wno-tautological-type-limit-compare --copt=-Wno-tautological-unsigned-enum-zero-compare --copt=-Wno-tautological-unsigned-zero-compare --copt=-Wno-thread-safety-reference --copt=-Wno-undefined-func-template --copt=-Wno-bitfield-constant-conversion --copt=-Wno-bitwise-instead-of-logical --copt=-Wno-comment --copt=-Wno-compound-token-split --copt=-Wno-deprecated-non-prototype --copt=-Wno-misleading-indentation --copt=-Wno-psabi --copt=-Wno-unqualified-std-cast-call --copt=-Wno-deprecated-literal-operator --copt=-Wno-ambiguous-member-template --copt=-Wno-char-subscripts --copt=-Wno-deprecated-declarations --copt=-Wno-deprecated-pragma --copt=-Wno-extern-c-compat --copt=-Wno-gnu-alignof-expression --copt=-Wno-gnu-variable-sized-type-not-at-end --copt=-Wno-implicit-int-float-conversion --copt=-Wno-invalid-source-encoding --copt=-Wno-pointer-sign --copt=-Wno-private-header --copt=-Wno-sign-compare --copt=-Wno-strict-overflow --copt=-Wno-unknown-pragmas --copt=-Wno-unused-command-line-argument --copt=-Wno-unused-const-variable --copt=-Wno-unused-function --copt=-Wno-unused-private-field --copt=-Wno-user-defined-warnings --copt=-Wno-mismatched-tags --copt=-Wfloat-overflow-conversion --copt=-Wfloat-zero-conversion --copt=-Wfor-loop-analysis --copt=-Wgnu-redeclared-enum --copt=-Winfinite-recursion --copt=-Wself-assign --copt=-Wno-self-assign-overloaded --copt=-Wstring-conversion --copt=-Wtautological-overlap-compare --copt=-Wunused-but-set-parameter --copt=-Wunused-comparison --copt=-Wvla --copt=-Wctad-maybe-unsupported --copt=-Wthread-safety-analysis --copt=-Wno-trigraphs --copt=-Woverloaded-virtual --copt=-Wno-invalid-offsetof --copt=-Wno-final-dtor-non-final-class --copt=-Wnon-virtual-dtor --copt=-Wimplicit-fallthrough --copt=-Wno-builtin-macro-redefined --copt=-Wno-macro-redefined --copt=-Wno-deprecated-register --copt=-Wno-register
+469-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Found applicable config definition common:linux in file /app/sources/xla/tensorflow.bazelrc: --host_copt=-w --define=PREFIX=/usr --define=LIBDIR=$(PREFIX)/lib --define=INCLUDEDIR=$(PREFIX)/include --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include --cxxopt=-std=c++17 --host_cxxopt=-std=c++17 --experimental_guard_against_concurrent_changes
+470-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | WARNING: Option 'local_cpu_resources' is deprecated: --local_cpu_resources is deprecated, please use --local_resources=cpu= instead.
+471-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | WARNING: Option 'local_ram_resources' is deprecated: --local_ram_resources is deprecated, please use --local_resources=memory= instead.
+472-[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | WARNING: Build option --test_env has changed, discarding analysis cache (this can be expensive, see https://bazel.build/advanced/performance/iteration-speed).
+473-[11:35:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Analyzed 11 targets (1 packages loaded, 26934 targets configured).
+474-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: @@shuttle_mlir//:test/fail-closed.mlir.test (see /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/fail-closed.mlir.test/test.log)
+475-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: @@shuttle_mlir//:test/map-errors.mlir.test (see /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/map-errors.mlir.test/test.log)
+476-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: @@shuttle_mlir//:test/no-shuttle-errors.mlir.test (see /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/no-shuttle-errors.mlir.test/test.log)
+477-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: From Testing @@shuttle_mlir//:test/no-shuttle-errors.mlir.test:
+478-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ==================== Test output for @@shuttle_mlir//:test/no-shuttle-errors.mlir.test:
+479-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | -- Testing: 1 tests, 1 workers --
+480-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: Shuttle MLIR :: no-shuttle-errors.mlir (1 of 1)
+481:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ******************** TEST 'Shuttle MLIR :: no-shuttle-errors.mlir' FAILED ********************
+482-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Script:
+483-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+484-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 4';   shuttle-opt --split-input-file --shuttle-verify-no-shuttle-ops --verify-diagnostics /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir
+485-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+486-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Exit Code: 1
+487-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+488-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Command Output (stdout):
+489-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+490-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+491-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+492-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+493-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+494-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Command Output (stderr):
+495-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+496:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir:9:5: error: unexpected error: 'shuttle.yield' op Shuttle operation remains before HLO export
+497-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |     "shuttle.yield"() : () -> ()
+498-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |     ^
+499:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | <unknown>:0: error: loc(fused<#shuttle.source_ref<0, 0, 0, 0>>["nested"]): unexpected error: 'builtin.module' op Shuttle attribute remains in a location before HLO export
+500:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir:24:1: error: unexpected error: 'builtin.module' op Shuttle attribute remains before HLO export: "test.nested"
+501-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | module attributes {
+502-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ^
+503:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir:7:6: error: expected error "Shuttle operation remains before HLO export" was not produced
+504-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   // expected-error @+1 {{Shuttle operation remains before HLO export}}
+505-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+506:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir:18:4: error: expected error "Shuttle attribute remains in a location before HLO export" was not produced
+507-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // expected-error @+1 {{Shuttle attribute remains in a location before HLO export}}
+508-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+509:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/no-shuttle-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/no-shuttle-errors.mlir:23:4: error: expected error "Shuttle attribute remains before HLO export: test.nested" was not produced
+510-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // expected-error @+1 {{Shuttle attribute remains before HLO export: test.nested}}
+511-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+512-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+513-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+514-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+515-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+516-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+517-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Failed Tests (1):
+518-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Shuttle MLIR :: no-shuttle-errors.mlir
+519-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+520-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+521-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Testing Time: 0.03s
+522-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Failed: 1
+523-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ================================================================================
+524-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: From Testing @@shuttle_mlir//:test/fail-closed.mlir.test:
+525-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ==================== Test output for @@shuttle_mlir//:test/fail-closed.mlir.test:
+526-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | -- Testing: 1 tests, 1 workers --
+527-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: Shuttle MLIR :: fail-closed.mlir (1 of 1)
+528:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ******************** TEST 'Shuttle MLIR :: fail-closed.mlir' FAILED ********************
+529-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Script:
+530-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+531-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 4';   not shuttle-opt --shuttle-form-structural-regions /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir 2>&1 | FileCheck /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir --check-prefix=FORM
+532-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 5';   not shuttle-opt --shuttle-convert-stablehlo-to-algebra /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir 2>&1 | FileCheck /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir --check-prefix=CONVERT
+533-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 6';   not shuttle-opt --shuttle-canonicalize /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir 2>&1 | FileCheck /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir --check-prefix=CANONICALIZE
+534-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 7';   not shuttle-opt --shuttle-lower-algebra-to-stablehlo /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir 2>&1 | FileCheck /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir --check-prefix=LOWER
+535-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+536-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Exit Code: 1
+537-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+538-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Command Output (stderr):
+539-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+540-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir:11:10: error: FORM: expected string not found in input
+541-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // FORM: structural StableHLO region formation is declared but not implemented
+542-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |          ^
+543-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | <stdin>:1:1: note: scanning from here
+544:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/Output/fail-closed.mlir.script: line 1: not: command not found
+545-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ^
+546-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+547-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Input file: <stdin>
+548-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Check file: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/fail-closed.mlir
+549-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+550-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | -dump-input=help explains the following input dump.
+551-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+552-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Input was:
+553-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | <<<<<<
+554:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |           1: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/fail-closed.mlir.test.runfiles/xla/external/shuttle_mlir/test/Output/fail-closed.mlir.script: line 1: not: command not found
+555-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | check:11     X~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ error: no match found
+556-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | >>>>>>
+557-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+558-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+559-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+560-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+561-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+562-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Failed Tests (1):
+563-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Shuttle MLIR :: fail-closed.mlir
+564-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+565-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+566-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Testing Time: 0.03s
+567-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Failed: 1
+568-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ================================================================================
+569-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: From Testing @@shuttle_mlir//:test/map-errors.mlir.test:
+570-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ==================== Test output for @@shuttle_mlir//:test/map-errors.mlir.test:
+571-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | -- Testing: 1 tests, 1 workers --
+572-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | FAIL: Shuttle MLIR :: map-errors.mlir (1 of 1)
+573:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ******************** TEST 'Shuttle MLIR :: map-errors.mlir' FAILED ********************
+574-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Script:
+575-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+576-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | : 'RUN: at line 4';   shuttle-opt --split-input-file --verify-diagnostics /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/map-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/map-errors.mlir
+577-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+578-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Exit Code: 1
+579-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+580-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Command Output (stdout):
+581-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+582-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+583-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+584-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+585-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+586-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+587-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | // -----
+588-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+589-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+590-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Command Output (stderr):
+591-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+592:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/map-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/map-errors.mlir:63:17: error: unexpected error: 'shuttle.map' op map result indexing maps must cover every domain dimension exactly once
+593-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |       %mapped = "shuttle.map"(%region_arg) ({
+594-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |                 ^
+595:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/map-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/map-errors.mlir:115:17: error: unexpected error: 'shuttle.map' op map result indexing maps must cover every domain dimension exactly once
+596-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |       %mapped = "shuttle.map"(%region_arg) ({
+597-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |                 ^
+598:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/map-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/map-errors.mlir:62:10: error: expected error "every map domain dimension must be bound by a ranked tensor dimension" was not produced
+599-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |       // expected-error @+1 {{every map domain dimension must be bound by a ranked tensor dimension}}
+600-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+601:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/test/map-errors.mlir.test.runfiles/xla/external/shuttle_mlir/test/map-errors.mlir:114:10: error: expected error "a scalar-only map requires a zero-dimensional indexing domain" was not produced
+602-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |       // expected-error @+1 {{a scalar-only map requires a zero-dimensional indexing domain}}
+603-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+604-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+605-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | --
+606-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+607-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+608-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ********************
+609-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Failed Tests (1):
+610-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Shuttle MLIR :: map-errors.mlir
+611-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+612-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+613-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Testing Time: 0.04s
+614-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   Failed: 1
+615-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ================================================================================
+616-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Found 11 test targets...
+617-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Elapsed time: 2.813s, Critical Path: 0.34s
+618-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: 12 processes: 22 local.
+619:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed, 3 tests FAILED, 12 total actions
+620-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/annotate-source.mlir.test                           PASSED in 0.2s
+621-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/contract-errors.mlir.test                           PASSED in 0.2s
+622-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/coverage-errors.mlir.test                           PASSED in 0.2s
+623-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/dialect.mlir.test                                   PASSED in 0.2s
+624-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/fold-contract-errors.mlir.test                      PASSED in 0.2s
+625-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/scalar-body-errors.mlir.test                        PASSED in 0.2s
+626-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/semantic-erasure-errors.mlir.test                   PASSED in 0.2s
+627-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/verifier-errors.mlir.test                           PASSED in 0.2s
+628-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/fail-closed.mlir.test                               FAILED in 0.2s
+629-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/fail-closed.mlir.test/test.log
+630-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/map-errors.mlir.test                                FAILED in 0.2s
+631-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/map-errors.mlir.test/test.log
+632-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | @shuttle_mlir//:test/no-shuttle-errors.mlir.test                         FAILED in 0.2s
+633-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |   /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/execroot/xla/bazel-out/k8-opt/testlogs/external/shuttle_mlir/test/no-shuttle-errors.mlir.test/test.log
+634-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 |
+635:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | Executed 11 out of 11 tests: 8 tests pass and 3 fail locally.
+636-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | There were tests whose specified size is too big. Use the --test_verbose_timeout_warnings command line option to see which ones these are.
+637-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:1: finish
+638-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:27: local status=3
+639-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:28: set +x
+640-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | preflight_exit_code=3
+641-[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | preflight_finished_utc=2026-08-10T11:35:58Z

@@ -1,0 +1,29 @@
+162:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+165:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:95: git -C /app/sources/xla apply --reverse --check /app/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+168:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:97: git -C /app/sources/xla diff --check
+183:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:100: EXPECTED_LIT_RUNTIME_LABELS=('Label("//xla/backends/gpu/target_config:all_gpu_specs")' 'Label("//xla:lit.cfg.py")' 'Label("//xla:sh_test_with_runfiles.py")' 'Label("//xla/stream_executor/cuda:all_runtime")' 'Label("//xla/tsl/cuda:nvshmem_stub")' 'Label("//xla/tsl/cuda:nccl")' 'Label("//xla:lit_google_cfg.py")')
+186:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/backends/gpu/target_config:all_gpu_specs")' /app/sources/xla/xla/lit.bzl
+188:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 225:            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+190:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:lit.cfg.py")' /app/sources/xla/xla/lit.bzl
+191:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 256:        cfg = Label("//xla:lit.cfg.py"),
+193:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:sh_test_with_runfiles.py")' /app/sources/xla/xla/lit.bzl
+194:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 419:    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+196:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/stream_executor/cuda:all_runtime")' /app/sources/xla/xla/lit.bzl
+197:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 451:            Label("//xla/stream_executor/cuda:all_runtime"),
+199:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/tsl/cuda:nvshmem_stub")' /app/sources/xla/xla/lit.bzl
+200:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 452:            Label("//xla/tsl/cuda:nvshmem_stub"),
+202:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla/tsl/cuda:nccl")' /app/sources/xla/xla/lit.bzl
+203:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 454:            Label("//xla/tsl/cuda:nccl"),
+205:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:111: grep -Fn 'Label("//xla:lit_google_cfg.py")' /app/sources/xla/xla/lit.bzl
+206:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | 510:                   Label("//xla:lit_google_cfg.py"),
+207:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | ++ run_native_preflight.sh:113: grep -Fc 'Label("//xla' /app/sources/xla/xla/lit.bzl
+210:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:114: printf 'anchored_xla_runtime_label_count=%s\n' 7
+211:[11:25:07] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | anchored_xla_runtime_label_count=7
+352:[11:25:46] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed successfully, 1 total action
+375:[11:26:37] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed successfully, 952 total actions
+398:[11:26:43] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed successfully, 91 total actions
+421:[11:35:43] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed successfully, 5951 total actions
+422:[11:35:43] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:168: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:mlir_tests
+451:[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | INFO: Build completed successfully, 139 total actions
+452:[11:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | + run_native_preflight.sh:172: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root test --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 --test_output=errors @shuttle_mlir//:mlir_tests
+640:[11:35:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7/0 | preflight_exit_code=3

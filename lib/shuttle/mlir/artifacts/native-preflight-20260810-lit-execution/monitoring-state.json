@@ -1,0 +1,19 @@
+{
+  "ts": "2026-08-10T11:24:56Z",
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-litlabels7",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "resubmit_command": "/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml job run --no-wait --no-sync --enable-extra-resources --cpu 24 --memory 96GB --disk 250GB --max-retries 0 --timeout 14400 --priority interactive --job-name shuttle-native-mlir-preflight-20260810-litlabels7 -- bash run_native_preflight.sh",
+  "restart_count": 0,
+  "submission_count": 1,
+  "monitor_owner": "/root/mlir_native_build",
+  "dashboard": "https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fshuttle-native-mlir-preflight-20260810-litlabels7",
+  "terminal_state": "failed",
+  "task_exit_code": 3,
+  "task_duration_seconds": 671.6,
+  "failures": 1,
+  "preemptions": 0,
+  "terminal_utc": "2026-08-10T11:35:58Z",
+  "lit_tests_passed": 8,
+  "lit_tests_failed": 3,
+  "xla_tests": "not_run"
+}
