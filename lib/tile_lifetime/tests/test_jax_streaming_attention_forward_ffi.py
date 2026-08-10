@@ -6,12 +6,12 @@ import functools
 import jax.numpy as jnp
 import pytest
 
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.jax_streaming_attention_forward_ffi import (
     call_streaming_attention_forward_ffi,
     generate_streaming_attention_forward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import recover_stablehlo_streaming_attention_backward
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (

@@ -17,8 +17,8 @@ import numpy as np
 import torch
 from backends.h100.cute_routed_streaming_emitter import compile_h100_routed_streaming_program
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
     StreamingTileSchedule,

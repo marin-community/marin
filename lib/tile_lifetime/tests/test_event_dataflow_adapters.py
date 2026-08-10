@@ -4,6 +4,7 @@
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime.event_buffering import (
     EventRealizationKind,
     derive_bounded_buffer_plan,
@@ -23,7 +24,6 @@ from tile_lifetime.event_dataflow_adapters import (
     streaming_fold_task_dataflow,
 )
 from tile_lifetime.event_dataflow_examples import relation_segment_dependence
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,

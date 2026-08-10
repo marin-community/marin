@@ -1,0 +1,29 @@
+[build-system]
+requires = ["uv_build>=0.7.19,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "shuttle"
+
+[project]
+name = "marin-shuttle"
+version = "0.1.0"
+description = "Whole-program synthesis infrastructure for JAX programs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jaxlib==0.10.1",
+]
+
+[dependency-groups]
+test = [
+    "jax==0.10.1",
+    "pytest>=8.4",
+    "pytest-timeout",
+]
+
+[tool.pytest.ini_options]
+timeout = 30
+timeout_method = "thread"
+addopts = "--durations=10 -v --import-mode=importlib"
+pythonpath = ["src", "tests"]

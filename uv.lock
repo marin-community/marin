@@ -206,6 +206,7 @@ members = [
     "marin-levanter",
     "marin-rigging",
     "marin-root",
+    "marin-shuttle",
     "marin-tile-lifetime",
     "marin-zephyr",
 ]
@@ -5248,11 +5249,39 @@ requires-dist = [
 ]
 
 [[package]]
+name = "marin-shuttle"
+version = "0.1.0"
+source = { editable = "lib/shuttle" }
+dependencies = [
+    { name = "jaxlib" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "jax" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jaxlib", specifier = "==0.10.1" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "jax", specifier = "==0.10.1" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "marin-tile-lifetime"
 version = "0.1.0"
 source = { editable = "lib/tile_lifetime" }
 dependencies = [
     { name = "jax" },
+    { name = "marin-shuttle" },
     { name = "numpy" },
 ]
 
@@ -5265,6 +5294,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "jax", specifier = "==0.10.1" },
+    { name = "marin-shuttle", editable = "lib/shuttle" },
     { name = "numpy", specifier = ">=2.0" },
 ]
 

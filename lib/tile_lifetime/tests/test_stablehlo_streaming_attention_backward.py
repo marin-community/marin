@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from shuttle.stablehlo_import import CompareAttributes, import_stablehlo
 from tile_lifetime import (
     StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProvenance,
@@ -18,7 +19,6 @@ from tile_lifetime import (
     recover_stablehlo_streaming_attention_backward,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import CompareAttributes, import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import StableHLOStreamingAttentionBackwardError
 from tile_lifetime.streaming_attention_backward import eliminate_normalized_exp_maximum_vjp
 from tile_lifetime.streaming_attention_backward_reference import (

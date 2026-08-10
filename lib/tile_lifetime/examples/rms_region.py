@@ -6,8 +6,9 @@
 import json
 from dataclasses import asdict
 
+from shuttle.ir import DType
 from tile_lifetime.compiler import compile_reference_region
-from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.plan import NumericalPolicy
 
 

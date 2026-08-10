@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.ir import DType
+from shuttle.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
 from tile_lifetime import (
-    DType,
     GemmSkeleton,
     NumericalPolicy,
     ReductionSkeleton,
@@ -28,7 +29,6 @@ from tile_lifetime.pipeline import (
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
 from tile_lifetime.semantic_erasure import SemanticErasureError
 from tile_lifetime.semantic_recovery import recover_dense_transformer_region
-from tile_lifetime.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "dense_region_v1_14_1.mlir.bc.b64"
 

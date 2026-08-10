@@ -130,6 +130,7 @@ members = [
     "lib/finelog",
     "lib/dupekit",
     "lib/ducky",
+    "lib/shuttle",
     "lib/tile_lifetime",
     "lib/haliax",
     "lib/levanter",
@@ -167,6 +168,7 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-shuttle = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -255,7 +257,7 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["experiments", "tile_lifetime"]
+known-first-party = ["experiments", "shuttle", "tile_lifetime"]
 # "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
 # config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
@@ -278,6 +280,7 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
+    "lib/shuttle/src/**/*.py",
     "lib/tile_lifetime/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
@@ -297,6 +300,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "lib/shuttle/src",
     "lib/tile_lifetime/src",
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.

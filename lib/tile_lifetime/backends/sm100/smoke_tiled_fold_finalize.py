@@ -27,7 +27,7 @@ from clean_routed_streaming_emitter import (  # noqa: E402
 )
 from clean_routed_streaming_runtime import compile_tiled_fold_finalize  # noqa: E402
 
-from tile_lifetime import DType  # noqa: E402
+from shuttle.ir import DType  # noqa: E402
 from tile_lifetime.tensor_program import TensorAxis, serialize_scalar_expression  # noqa: E402
 from tile_lifetime.tiled_fold_finalize import (  # noqa: E402
     FoldFeatureLayout,

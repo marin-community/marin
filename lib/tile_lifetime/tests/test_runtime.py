@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     GemmSkeleton,
     NumericalPolicy,
     ReductionSkeleton,

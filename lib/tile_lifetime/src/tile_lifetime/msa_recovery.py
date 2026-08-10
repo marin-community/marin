@@ -8,7 +8,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
+from shuttle.stablehlo_import import (
+    CompareAttributes,
+    CompositeAttributes,
+    ConstantAttributes,
+    DotAttributes,
+    ReductionAttributes,
+    StableHLOGraph,
+    StableHLOOperation,
+)
 from tile_lifetime.plan import SemanticErasureReport, SemanticLoweringStep
 from tile_lifetime.relation import RelationPlan
 from tile_lifetime.routed_attention import (
@@ -23,15 +32,6 @@ from tile_lifetime.routed_attention_plan import (
     compile_routed_streaming_attention_candidates,
 )
 from tile_lifetime.semantic_erasure import semantic_erasure_errors, tensor_program_scheduling_keys
-from tile_lifetime.stablehlo_import import (
-    CompareAttributes,
-    CompositeAttributes,
-    ConstantAttributes,
-    DotAttributes,
-    ReductionAttributes,
-    StableHLOGraph,
-    StableHLOOperation,
-)
 from tile_lifetime.streaming_attention import (
     StreamingAttentionProgram,
     StreamingTileSchedule,

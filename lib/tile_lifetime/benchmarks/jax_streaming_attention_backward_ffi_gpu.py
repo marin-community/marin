@@ -23,6 +23,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.benchmark_boundary import (
     BenchmarkRepeatabilityMode,
     BenchmarkRepeatabilityPolicy,
@@ -44,7 +45,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     register_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import recover_stablehlo_streaming_attention_backward
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (

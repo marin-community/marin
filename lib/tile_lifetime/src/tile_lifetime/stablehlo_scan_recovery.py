@@ -7,14 +7,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from tile_lifetime.plan import (
-    ScanNumericalContract,
-    SemanticErasureReport,
-    SemanticLoweringStep,
-    StatefulScanSkeleton,
-)
-from tile_lifetime.semantic_erasure import SemanticErasureError, semantic_erasure_errors
-from tile_lifetime.stablehlo_import import (
+from shuttle.stablehlo_import import (
     BroadcastAttributes,
     CallAttributes,
     DotAttributes,
@@ -25,6 +18,13 @@ from tile_lifetime.stablehlo_import import (
     WhileAttributes,
     import_stablehlo_program,
 )
+from tile_lifetime.plan import (
+    ScanNumericalContract,
+    SemanticErasureReport,
+    SemanticLoweringStep,
+    StatefulScanSkeleton,
+)
+from tile_lifetime.semantic_erasure import SemanticErasureError, semantic_erasure_errors
 from tile_lifetime.stateful_scan import (
     LogicalAxis,
     ScanPrimitive,

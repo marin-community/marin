@@ -7,6 +7,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from shuttle.stablehlo_import import CompositeAttributes, GatherAttributes, import_stablehlo
 from tile_lifetime import (
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
@@ -23,7 +24,6 @@ from tile_lifetime.routed_attention_frontend import (
     export_debug_routed_attention,
     routed_attention_region,
 )
-from tile_lifetime.stablehlo_import import CompositeAttributes, GatherAttributes, import_stablehlo
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "routed_attention_v1_14_1.mlir.bc.b64"
 

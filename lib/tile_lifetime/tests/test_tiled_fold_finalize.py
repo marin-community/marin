@@ -6,7 +6,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.tensor_program import ScalarExpressionKind, TensorAxis, scalar_binary, scalar_input
 from tile_lifetime.tiled_fold_finalize import (
     FoldFeatureLayout,

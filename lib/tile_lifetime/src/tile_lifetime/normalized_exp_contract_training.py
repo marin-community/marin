@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.autodiff import differentiate_scalar_expression
-from tile_lifetime.ir import DType
 from tile_lifetime.streaming_attention import execute_tensor_program
 from tile_lifetime.tensor_program import (
     ContractPrimitive,

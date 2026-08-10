@@ -13,6 +13,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "jax==0.10.1",
+    "marin-shuttle",
     "numpy>=2.0",
 ]
 

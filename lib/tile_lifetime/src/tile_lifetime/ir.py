@@ -1,22 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Semantic tensor graph independent of GPU backend types."""
+"""Prototype semantic tensor graph independent of GPU backend types."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from math import prod
 
-
-class DType(StrEnum):
-    """Dtypes whose precision affects rewrite legality."""
-
-    BOOL = "bool"
-    BF16 = "bf16"
-    FP32 = "fp32"
-    FP64 = "fp64"
-    INT32 = "int32"
+from shuttle import ir as shuttle_ir
 
 
 @dataclass(frozen=True)
@@ -26,7 +17,7 @@ class TensorValue:
     id: int
     name: str
     shape: tuple[int, ...]
-    dtype: DType
+    dtype: shuttle_ir.DType
 
 
 @dataclass(frozen=True)
@@ -37,7 +28,7 @@ class LinearOp:
     input: TensorValue
     weight: TensorValue
     output: TensorValue
-    accumulation_dtype: DType
+    accumulation_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -62,7 +53,7 @@ class RMSNormOp:
     output: TensorValue
     axis: int
     epsilon: float
-    reduction_dtype: DType
+    reduction_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -77,7 +68,7 @@ class LayerNormOp:
     output: TensorValue
     axis: int
     epsilon: float
-    reduction_dtype: DType
+    reduction_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -92,7 +83,7 @@ class ScaledDotProductAttentionOp:
     output: TensorValue
     scale: float
     causal: bool
-    accumulation_dtype: DType
+    accumulation_dtype: shuttle_ir.DType
     source_location: str | None
 
     @property
@@ -140,7 +131,7 @@ class QKVProjectionOp:
     query: TensorValue
     key: TensorValue
     value: TensorValue
-    accumulation_dtype: DType
+    accumulation_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -195,7 +186,7 @@ class SharedExpertMLPOp:
     up: TensorValue
     hidden: TensorValue
     output: TensorValue
-    accumulation_dtype: DType
+    accumulation_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -213,7 +204,7 @@ class RoutedExpertMLPOp:
     up: TensorValue
     hidden: TensorValue
     output: TensorValue
-    accumulation_dtype: DType
+    accumulation_dtype: shuttle_ir.DType
     source_location: str | None
 
 
@@ -262,11 +253,11 @@ class TensorGraph:
     def operations(self) -> tuple[SemanticOp, ...]:
         return tuple(self._operations)
 
-    def input(self, name: str, *, shape: tuple[int, ...], dtype: DType) -> TensorValue:
+    def input(self, name: str, *, shape: tuple[int, ...], dtype: shuttle_ir.DType) -> TensorValue:
         """Add a runtime input value."""
         return self._new_value(name, shape=shape, dtype=dtype)
 
-    def parameter(self, name: str, *, shape: tuple[int, ...], dtype: DType) -> TensorValue:
+    def parameter(self, name: str, *, shape: tuple[int, ...], dtype: shuttle_ir.DType) -> TensorValue:
         """Add a parameter value."""
         return self._new_value(name, shape=shape, dtype=dtype)
 
@@ -276,7 +267,7 @@ class TensorGraph:
         weight: TensorValue,
         *,
         name: str,
-        accumulation_dtype: DType,
+        accumulation_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add a right-multiplication with explicit accumulation precision."""
@@ -349,7 +340,7 @@ class TensorGraph:
         name: str,
         axis: int,
         epsilon: float,
-        reduction_dtype: DType,
+        reduction_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add RMS normalization with an explicit reduction axis and dtype."""
@@ -385,7 +376,7 @@ class TensorGraph:
         name: str,
         axis: int,
         epsilon: float,
-        reduction_dtype: DType,
+        reduction_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add mean-centered normalization with explicit reduction precision."""
@@ -424,7 +415,7 @@ class TensorGraph:
         name: str,
         scale: float,
         causal: bool,
-        accumulation_dtype: DType,
+        accumulation_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add exact MHA or grouped-query attention with explicit semantics."""
@@ -528,7 +519,7 @@ class TensorGraph:
         query_heads: int,
         key_value_heads: int,
         head_dimension: int,
-        accumulation_dtype: DType,
+        accumulation_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> tuple[TensorValue, TensorValue, TensorValue]:
         """Add a combined QKV projection producing logical BSHD segment views."""
@@ -638,8 +629,8 @@ class TensorGraph:
             raise ValueError(f"top-k must be in [1, {logits.shape[1]}], got {top_k}")
 
         route_shape = (logits.shape[0], top_k)
-        expert_indices = self._new_value(f"{name}.expert_indices", shape=route_shape, dtype=DType.INT32)
-        route_weights = self._new_value(f"{name}.weights", shape=route_shape, dtype=DType.FP32)
+        expert_indices = self._new_value(f"{name}.expert_indices", shape=route_shape, dtype=shuttle_ir.DType.INT32)
+        route_weights = self._new_value(f"{name}.weights", shape=route_shape, dtype=shuttle_ir.DType.FP32)
         self._operations.append(
             TopKRouterOp(
                 id=len(self._operations),
@@ -661,7 +652,7 @@ class TensorGraph:
         down_weight: TensorValue,
         *,
         name: str,
-        accumulation_dtype: DType,
+        accumulation_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add an ordinary shared gate/up, SwiGLU, and down projection."""
@@ -706,7 +697,7 @@ class TensorGraph:
         down_weight: TensorValue,
         *,
         name: str,
-        accumulation_dtype: DType,
+        accumulation_dtype: shuttle_ir.DType,
         source_location: str | None = None,
     ) -> TensorValue:
         """Add top-k routed gate/up, SwiGLU, and down projections."""
@@ -714,7 +705,7 @@ class TensorGraph:
             raise ValueError("routed expert input must have shape [tokens, hidden]")
         if len(expert_indices.shape) != 2 or expert_indices.shape[0] != value.shape[0]:
             raise ValueError("expert indices must have shape [tokens, top_k]")
-        if expert_indices.dtype is not DType.INT32:
+        if expert_indices.dtype is not shuttle_ir.DType.INT32:
             raise ValueError("expert indices must have INT32 dtype")
         if len(gate_weight.shape) != 3 or gate_weight.shape[2] != value.shape[1]:
             raise ValueError("routed gate weight must have shape [local_experts, intermediate, hidden]")
@@ -762,7 +753,7 @@ class TensorGraph:
             raise ValueError("expert combine expects shared [tokens, hidden] and routed [tokens, top_k, hidden]")
         if routed.shape[0] != shared.shape[0] or routed.shape[2] != shared.shape[1]:
             raise ValueError("shared and routed expert output shapes are incompatible")
-        if route_weights.shape != routed.shape[:2] or route_weights.dtype is not DType.FP32:
+        if route_weights.shape != routed.shape[:2] or route_weights.dtype is not shuttle_ir.DType.FP32:
             raise ValueError("route weights must be FP32 with shape [tokens, top_k]")
         if shared.dtype != routed.dtype:
             raise ValueError("shared and routed expert output dtypes differ")
@@ -791,7 +782,7 @@ class TensorGraph:
         """Return operations that consume a value."""
         return tuple(operation for operation in self._operations if value in _operation_inputs(operation))
 
-    def _new_value(self, name: str, *, shape: tuple[int, ...], dtype: DType) -> TensorValue:
+    def _new_value(self, name: str, *, shape: tuple[int, ...], dtype: shuttle_ir.DType) -> TensorValue:
         if not shape or any(dimension <= 0 for dimension in shape):
             raise ValueError(f"tensor {name!r} has invalid shape {shape}")
         if any(value.name == name for value in self._values):

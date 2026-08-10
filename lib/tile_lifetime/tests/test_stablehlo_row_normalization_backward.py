@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime import (
     RowStatisticKind,
     compile_stablehlo_row_normalization_backward,
@@ -18,7 +19,6 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     generate_cuda_axis_fold,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_row_normalization_backward import (
     StableHLORowNormalizationBackwardError,
     compile_stablehlo_row_normalization_backward_ffi,

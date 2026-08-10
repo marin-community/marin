@@ -6,8 +6,8 @@ import hashlib
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
     StreamingTileSchedule,

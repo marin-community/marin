@@ -7,6 +7,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from shuttle.stablehlo_import import CompositeAttributes, import_stablehlo
 from tile_lifetime.msa_frontend import MSA_INPUT_NAMES, MSADebugConfig, export_debug_msa, msa_region
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
@@ -34,7 +35,6 @@ from tile_lifetime.semantic_erasure import semantic_erasure_errors
 from tile_lifetime.sm100_projected_routed_lowering import lower_sm100_projected_routed_candidates
 from tile_lifetime.sm100_routed_lowering import SM100RelationOrientation
 from tile_lifetime.sm100_selection_lowering import SM100SelectionStrategy
-from tile_lifetime.stablehlo_import import CompositeAttributes, import_stablehlo
 from tile_lifetime.streaming_attention import StreamingTileSchedule, derive_streaming_attention
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "projected_routed_attention_v1_14_1.mlir.bc.b64"

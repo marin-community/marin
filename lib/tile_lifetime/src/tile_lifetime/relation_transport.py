@@ -16,6 +16,7 @@ from enum import StrEnum
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
     EventGenerationPolicy,
@@ -34,7 +35,6 @@ from tile_lifetime.event_dataflow import (
     phased_event_storage_binding,
     verify_event_dataflow_program,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
 
 

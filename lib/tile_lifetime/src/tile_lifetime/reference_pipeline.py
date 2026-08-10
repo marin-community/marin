@@ -9,16 +9,16 @@ current Shuttle frontend because their accepted paths can select an opaque
 workload kernel.
 """
 
+from shuttle.ir import DType
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.attention import compile_reference_attention_region
 from tile_lifetime.compiler import RowScalePlacement, compile_reference_region
 from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_parallel_region
 from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
-from tile_lifetime.ir import DType
 from tile_lifetime.moe_recovery import RecoveredMoERegion, recover_moe_region
 from tile_lifetime.plan import NumericalPolicy, RegionPlan
 from tile_lifetime.reference_semantic_recovery import recover_reference_rms_region
 from tile_lifetime.semantic_recovery import recover_attention_region
-from tile_lifetime.stablehlo_import import import_stablehlo
 
 
 def recover_reference_stablehlo_moe_region(

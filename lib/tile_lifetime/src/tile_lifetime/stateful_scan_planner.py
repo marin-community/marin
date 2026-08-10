@@ -3,7 +3,7 @@
 
 """Physical candidate generation for recovered affine state scans."""
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.plan import (
     ChunkSummaryRepresentation,
     ScanNumericalContract,

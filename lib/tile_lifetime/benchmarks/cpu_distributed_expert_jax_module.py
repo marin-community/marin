@@ -18,7 +18,8 @@ import numpy as np
 from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
+from shuttle.ir import DType
+from tile_lifetime import ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,

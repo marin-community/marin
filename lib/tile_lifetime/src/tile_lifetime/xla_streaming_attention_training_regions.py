@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     GeneratedStreamingAttentionBackwardFfi,
     StreamingAttentionBackwardResultPolicy,

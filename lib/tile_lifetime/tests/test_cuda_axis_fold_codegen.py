@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
     AxisFoldInput,
@@ -24,7 +25,6 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     generate_cuda_axis_fold_ffi,
     generate_cuda_axis_fold_pipeline_ffi,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_constant, scalar_input
 
 

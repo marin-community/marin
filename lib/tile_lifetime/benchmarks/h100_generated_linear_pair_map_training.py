@@ -22,8 +22,8 @@ from coda.core.gemm.functional import gemm as coda_gemm
 from coda.core.gemm.functional import gemm_swiglu as coda_gemm_swiglu
 from h100_plan_runtime import H100DenseBackend
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     PairMapSavePolicy,
     build_linear_pair_map_program,
     compile_linear_pair_map_training,

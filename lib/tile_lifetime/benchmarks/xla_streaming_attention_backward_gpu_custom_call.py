@@ -31,6 +31,7 @@ from benchmark_metadata import (  # pyrefly: ignore[missing-import]
     toolchain_snapshot,
 )
 
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     call_streaming_attention_backward_ffi,
     compile_streaming_attention_backward_ffi,
@@ -38,7 +39,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     register_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import recover_stablehlo_streaming_attention_backward
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (

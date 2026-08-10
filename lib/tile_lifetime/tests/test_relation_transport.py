@@ -6,13 +6,13 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime.event_dataflow import (
     EventMemoryScope,
     EventSchedulingMode,
     execute_event_dataflow,
     verify_event_dataflow_program,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan, build_fixed_capacity_relation_plan, build_relation_plan
 from tile_lifetime.relation_transport import (
     EpochResetKind,

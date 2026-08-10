@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from tile_lifetime.ir import DType, ScaledDotProductAttentionOp, TensorGraph
+from shuttle.ir import DType
+from tile_lifetime.ir import ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.plan import (
     Attachment,
     AttachmentSite,

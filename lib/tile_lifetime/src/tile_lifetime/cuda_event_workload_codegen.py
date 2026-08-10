@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_dynamic_event_dataflow_codegen import (
     CudaEventFfiBuffer,
     CudaEventFfiKind,
@@ -24,7 +25,6 @@ from tile_lifetime.event_buffering import (
     verify_event_realizations,
 )
 from tile_lifetime.event_dataflow_adapters import SegmentedContractTaskDataflow, StreamingFoldTaskDataflow
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
 
 

@@ -9,10 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime import (
     GENERIC_H100_GEMM_BACKEND,
     AttachmentSite,
-    DType,
     GemmSkeleton,
     TileOp,
     TilePrimitive,

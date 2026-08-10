@@ -66,6 +66,11 @@ leave a `tile_lifetime` compatibility re-export facade.
 
 ### Phase 1: algebra and verification
 
+The first package slice now owns the shared `DType` vocabulary and typed
+StableHLO import in `lib/shuttle`. `tile_lifetime` depends on that package while
+the remaining algebra migrates; `shuttle` has no reverse dependency or
+compatibility re-export through `tile_lifetime`.
+
 Move these modules first:
 
 - `tensor_program.py`
@@ -156,9 +161,9 @@ generic portion has a real `shuttle` caller.
 
 ## Remaining cleanup, ranked
 
-1. Create `lib/shuttle` package metadata and the single module-transform API.
-   Move one Contract/Map forward-and-reverse vertical slice without a
-   compatibility facade.
+1. Move the generic attention importer into the existing typed StableHLO
+   boundary after its independent cleanup lands. Then add the single
+   module-transform API and one Contract/Map forward-and-reverse vertical slice.
 2. Replace bounded whole-workload recovery with the lossless generic importer;
    preserve named recognizers only as optional region-candidate analyses.
 3. Route public GDN/KDA convenience compilation through the structured

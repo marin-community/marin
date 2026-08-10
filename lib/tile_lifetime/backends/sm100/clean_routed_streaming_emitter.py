@@ -30,9 +30,9 @@ from typing import Any
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.event_dataflow_adapters import sm100_routed_right_resource_descriptor
 from tile_lifetime.ffi_command_buffer import finalize_ffi_handler_source
-from tile_lifetime.ir import DType
 from tile_lifetime.right_resource_event_schedule import (
     RightResourceFoldEventSchedule,
     derive_right_resource_fold_event_schedule,

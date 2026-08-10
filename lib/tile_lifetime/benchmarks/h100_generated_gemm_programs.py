@@ -22,8 +22,8 @@ from quack.epilogue.ops import ColVecLoad
 from quack.epilogue.rotary import rotary_cos_sin_load
 from quack.operand_transform import a_transform, transform_a_operand
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     GemmSkeleton,
     MaterializationDisposition,
     NumericalPolicy,

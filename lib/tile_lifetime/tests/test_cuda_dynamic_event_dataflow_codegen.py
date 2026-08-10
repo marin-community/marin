@@ -4,6 +4,7 @@
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_dynamic_event_dataflow_codegen import (
     CudaDynamicEventLoweringError,
     CudaEventFfiKind,
@@ -17,7 +18,6 @@ from tile_lifetime.event_dataflow_examples import (
     pipelined_contract_fold_program,
     relation_segment_dependence,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import build_relation_plan
 
 

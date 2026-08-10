@@ -46,8 +46,8 @@ from gb200_mok_gmm_probe import (  # noqa: E402  # pyrefly: ignore[missing-impor
     _validate_checkout,
 )
 
+from shuttle.ir import DType  # noqa: E402
 from tile_lifetime import (  # noqa: E402
-    DType,
     ExpertParallelConfig,
     ExpertParallelPlan,
     ExpertParallelStageKind,

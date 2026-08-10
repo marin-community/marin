@@ -32,9 +32,9 @@ import torch
 import triton
 import triton.language as tl
 
+from shuttle.ir import DType
 from tile_lifetime import (
     AttentionScoreAxis,
-    DType,
     ScalarExpression,
     ScalarExpressionKind,
     StreamingAttentionProgram,
