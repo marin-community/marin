@@ -455,7 +455,10 @@ def forward_bf16_local(
     results = jax.ffi.ffi_call(
         _FORWARD_TARGET,
         result_shapes,
-        has_side_effect=True,
+        # The runtime buffers are private scratch. The array outputs describe the
+        # complete result, so rematerialization can remove a call whose outputs
+        # were saved by the enclosing checkpoint policy.
+        has_side_effect=False,
         vmap_method="broadcast_all",
     )(
         jnp.asarray(x, dtype=jnp.bfloat16),
