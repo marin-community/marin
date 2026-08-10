@@ -153,14 +153,14 @@ class SingleTurnAimeAgent(BaseAgent):
     def version(self) -> str:
         return "1.1.0"
 
-    async def setup(self, _environment: BaseEnvironment) -> None:
+    async def setup(self, environment: BaseEnvironment) -> None:
         return
 
     async def run(
         self,
         instruction: str,
         environment: BaseEnvironment,
-        _context: AgentContext,
+        context: AgentContext,
     ) -> None:
         assert self.model_name is not None
         served_model = self.model_name.split("/", maxsplit=1)[-1]
