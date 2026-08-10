@@ -1073,3 +1073,14 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Tests: the JIT-compiled row remap preserves each active group, inserts zero alignment rows, ignores unused receiver capacity, and emits the expected padded offsets. Six hero launch/runtime contracts and the padding regression pass; changed-file lint and type checks pass.
 - Artifacts: `s3://marin-us-east-02a/marin/benchmarks/cudnn-jax-ragged-weight-grad-gb200/2026.08.10.58` and `s3://marin-us-east-02a/marin/benchmarks/cudnn-jax-ragged-weight-grad-gb200/2026.08.10.59`.
 - Next action: run the exact four-node d6144/L48/E48 process-per-GPU arm with the new backend, split-32 transport, and all periodic work disabled. Require same-rack placement, finite loss, zero routing drops, and clean steps 5-24 before accepting the projection.
+
+### 2026-08-10 19:14 UTC - cuDNN weight gradients raise ragged EP above 20% MFU
+
+- Run: `ra2a-s43-exact-ep16-e48-split32-cudnn-cute-perf-20260810`; child `/power/ra2a-s43-exact-cudnn-cute-perf-20260810-coord/grug-train-ra2a-s43-exact-ep16-e48-split32-cudnn-cute-perf-20260810`. The coordinator and all four workers succeeded on their first attempts with exit 0.
+- Placement: workers `s1zsxs64`, `s24qxs64`, `s2grxs64`, and `s33xxs64` all shared rack `dh1-r137-us-east-08a`, NVLink domain `DH1-137-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `140.6-DH1`.
+- Effective contract: exact d6144/L48/E48, width 6272, latent width 3072, top-4, capacity 1.33, EP16, batch 256, 1,048,576 tokens/step, split-32 ragged transport, four processes per four-GPU task, and 16 one-device JAX hosts. The run retained host-offloaded optimizer state. Watch, evaluation, profiling, checkpoints, and periodic metric work were disabled.
+- Correctness: all 20 scored rows were finite. Mean loss was 11.8084177; dropped assignments, drop fraction, and mean router capacity overflow were exactly zero on every scored step.
+- Timing: steps 5-24 averaged 18.7795886 seconds, 55,836.4219 tokens/s, and 20.3193283% MFU. Median duration was 18.7937531 seconds and duration sample standard deviation was 0.0565288 seconds.
+- Controlled comparison: S33's CuTe/Pallas-Wgrad control averaged 19.4428557 seconds, 53,939.6848 tokens/s, and 19.6290902% MFU. The cuDNN Wgrad adapter reduced duration by 3.411%, raised throughput by 3.516%, and gained 0.6902 MFU points. It beat the 20% threshold by 0.3193 MFU points and landed only 0.0352 seconds behind the standalone-kernel projection.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s43-exact-ep16-e48-split32-cudnn-cute-perf-20260810
+- Next arms: isolate the step-boundary optimizer-state copies by keeping state resident in HBM, then use the accepted 2.5% assignment-drop budget to test a lower receiver capacity on the winning backend. Serialize both arms and retain the same-rack acceptance rule.
