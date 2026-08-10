@@ -1,3 +1,6 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // RUN: not shuttle-opt --shuttle-form-structural-regions %s 2>&1 | FileCheck %s --check-prefix=FORM
 // RUN: not shuttle-opt --shuttle-convert-stablehlo-to-algebra %s 2>&1 | FileCheck %s --check-prefix=CONVERT
 // RUN: not shuttle-opt --shuttle-canonicalize %s 2>&1 | FileCheck %s --check-prefix=CANONICALIZE

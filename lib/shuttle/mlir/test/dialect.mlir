@@ -1,3 +1,6 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // RUN: shuttle-opt --shuttle-verify-source-coverage %s | FileCheck %s
 
 #lhs = affine_map<(m, n, k) -> (m, k)>

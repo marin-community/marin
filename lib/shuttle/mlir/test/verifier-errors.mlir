@@ -1,3 +1,6 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // RUN: shuttle-opt --split-input-file --verify-diagnostics %s
 
 #identity = affine_map<(m, n) -> (m, n)>

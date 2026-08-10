@@ -1,3 +1,6 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef SHUTTLE_IR_SHUTTLEATTRS_TD_
 #define SHUTTLE_IR_SHUTTLEATTRS_TD_
 

@@ -1,3 +1,6 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // RUN: shuttle-opt --shuttle-annotate-source --mlir-print-op-generic %s | FileCheck %s
 
 module {
