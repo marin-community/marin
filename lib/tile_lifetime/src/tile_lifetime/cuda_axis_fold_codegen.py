@@ -107,10 +107,11 @@ class AxisFoldProgram:
     output_dtype: DType
     threads: int = 256
     groups_per_block: int = 1
+    outputs_per_group: int = 1
     reassociation: AxisFoldReassociation = AxisFoldReassociation.DETERMINISTIC_TREE
 
     def __post_init__(self) -> None:
-        if min(self.rows, self.columns, self.threads, self.groups_per_block) <= 0:
+        if min(self.rows, self.columns, self.threads, self.groups_per_block, self.outputs_per_group) <= 0:
             raise ValueError("axis-Fold dimensions and thread count must be positive")
         if self.threads & (self.threads - 1):
             raise ValueError("axis-Fold thread count must be a power of two")
@@ -118,6 +119,10 @@ class AxisFoldProgram:
             raise ValueError("axis-Fold groups per block must be a power of two")
         if self.threads % self.groups_per_block:
             raise ValueError("axis-Fold groups per block must divide the thread count")
+        if self.outputs_per_group & (self.outputs_per_group - 1):
+            raise ValueError("axis-Fold outputs per group must be a power of two")
+        if self.outputs_per_group > 1 and self.groups_per_block == 1:
+            raise ValueError("multiple axis-Fold outputs per group require tiled row-axis scheduling")
         if self.groups_per_block > 1 and (
             self.reduction_axis is not AxisFoldDirection.ROWS or self.output_kind is not AxisFoldOutputKind.REDUCED
         ):
@@ -488,22 +493,24 @@ def _generate_tiled_row_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxis
     argument_declarations = ",\n    ".join(f"torch::Tensor {value.name}" for value in program.inputs)
     pointer_declarations = "\n".join(_pointer_declaration(value) for value in program.inputs)
     wrapper_checks = "\n".join(_wrapper_check(value, program) for value in program.inputs)
-    local_reductions = "\n".join(f"  float local_{value.name} = 0.0f;" for value in program.reductions)
+    local_reductions = "\n".join(f"  float local_{value.name}[kOutputsPerGroup] = {{}};" for value in program.reductions)
     contribution_updates = "\n".join(
-        f"      local_{value.name} = __fadd_rn(local_{value.name}, "
+        f"        local_{value.name}[output_lane] = __fadd_rn(local_{value.name}[output_lane], "
         f"{_cuda_expression(value.contribution, _input_aliases(program.inputs, 'row', 'column'))});"
         for value in program.reductions
     )
-    shared_declarations = "\n".join(f"  __shared__ float shared_{value.name}[kThreads];" for value in program.reductions)
+    shared_declarations = "\n".join(
+        f"  __shared__ float shared_{value.name}[kThreads * kOutputsPerGroup];" for value in program.reductions
+    )
     shared_initialization = "\n".join(
-        f"  shared_{value.name}[threadIdx.x] = local_{value.name};" for value in program.reductions
+        f"    shared_{value.name}[shared_index] = local_{value.name}[output_lane];" for value in program.reductions
     )
     shared_updates = "\n".join(
-        f"      shared_{value.name}[threadIdx.x] = __fadd_rn("
-        f"shared_{value.name}[threadIdx.x], shared_{value.name}[threadIdx.x + stride * kGroupsPerBlock]);"
+        f"        shared_{value.name}[shared_index] = __fadd_rn("
+        f"shared_{value.name}[shared_index], shared_{value.name}[shared_index + stride * kGroupsPerBlock]);"
         for value in program.reductions
     )
-    reduction_aliases = {value.name: f"shared_{value.name}[threadIdx.x]" for value in program.reductions}
+    reduction_aliases = {value.name: f"shared_{value.name}[shared_index]" for value in program.reductions}
     output_aliases = _reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
     output_expression = _cuda_expression(program.output_expression, output_aliases)
     output_store = _output_store(program.output_dtype, "group", output_expression)
@@ -527,6 +534,7 @@ constexpr int kRows = {program.rows};
 constexpr int kColumns = {program.columns};
 constexpr int kThreads = {program.threads};
 constexpr int kGroupsPerBlock = {program.groups_per_block};
+constexpr int kOutputsPerGroup = {program.outputs_per_group};
 constexpr int kReductionLanes = kThreads / kGroupsPerBlock;
 
 __global__ __launch_bounds__(kThreads) void shuttle_axis_fold_kernel(
@@ -535,24 +543,44 @@ __global__ __launch_bounds__(kThreads) void shuttle_axis_fold_kernel(
 {shared_declarations}
   const int group_lane = threadIdx.x % kGroupsPerBlock;
   const int reduction_lane = threadIdx.x / kGroupsPerBlock;
-  const int group = blockIdx.x * kGroupsPerBlock + group_lane;
 {local_reductions}
-  if (group < kColumns) {{
-    for (int row = reduction_lane; row < kRows; row += kReductionLanes) {{
-      const int column = group;
+  #pragma unroll
+  for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+    const int group = blockIdx.x * kGroupsPerBlock * kOutputsPerGroup
+        + output_lane * kGroupsPerBlock + group_lane;
+    if (group < kColumns) {{
+      for (int row = reduction_lane; row < kRows; row += kReductionLanes) {{
+        const int column = group;
 {contribution_updates}
+      }}
     }}
   }}
+  #pragma unroll
+  for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+    const int shared_index = output_lane * kThreads + threadIdx.x;
 {shared_initialization}
+  }}
   __syncthreads();
   for (int stride = kReductionLanes / 2; stride > 0; stride /= 2) {{
     if (reduction_lane < stride) {{
+      #pragma unroll
+      for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+        const int shared_index = output_lane * kThreads + threadIdx.x;
 {shared_updates}
+      }}
     }}
     __syncthreads();
   }}
-  if (reduction_lane == 0 && group < kColumns) {{
-    {output_store}
+  if (reduction_lane == 0) {{
+    #pragma unroll
+    for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+      const int group = blockIdx.x * kGroupsPerBlock * kOutputsPerGroup
+          + output_lane * kGroupsPerBlock + group_lane;
+      const int shared_index = output_lane * kThreads + threadIdx.x;
+      if (group < kColumns) {{
+        {output_store}
+      }}
+    }}
   }}
 }}
 
@@ -570,7 +598,8 @@ torch::Tensor shuttle_axis_fold_out(
   const c10::cuda::CUDAGuard device_guard(output.device());
 {pointer_declarations}
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  constexpr int kBlocks = (kColumns + kGroupsPerBlock - 1) / kGroupsPerBlock;
+  constexpr int kBlocks =
+      (kColumns + kGroupsPerBlock * kOutputsPerGroup - 1) / (kGroupsPerBlock * kOutputsPerGroup);
   shuttle_axis_fold_kernel<<<kBlocks, kThreads, 0, stream>>>(
       {', '.join(f'{value.name}_pointer' for value in program.inputs)},
       reinterpret_cast<{output_pointer_type}*>(output.data_ptr()));
@@ -1066,50 +1095,78 @@ def _ffi_tiled_row_axis_fold_kernel(
     columns = f"k{prefix}Columns"
     threads = f"k{prefix}Threads"
     groups = f"k{prefix}GroupsPerBlock"
+    outputs = f"k{prefix}OutputsPerGroup"
     lanes = f"k{prefix}ReductionLanes"
     aliases = _ffi_input_aliases(program.inputs, "row", "column", columns)
     contribution_updates = "\n".join(
-        f"      local_{value.name} = __fadd_rn(local_{value.name}, " f"{_cuda_expression(value.contribution, aliases)});"
+        f"        local_{value.name}[output_lane] = __fadd_rn(local_{value.name}[output_lane], "
+        f"{_cuda_expression(value.contribution, aliases)});"
         for value in program.reductions
     )
     shared_updates = "\n".join(
-        f"      shared_{value.name}[threadIdx.x] = __fadd_rn("
-        f"shared_{value.name}[threadIdx.x], shared_{value.name}[threadIdx.x + stride * {groups}]);"
+        f"        shared_{value.name}[shared_index] = __fadd_rn("
+        f"shared_{value.name}[shared_index], shared_{value.name}[shared_index + stride * {groups}]);"
         for value in program.reductions
     )
-    reduction_aliases = {value.name: f"shared_{value.name}[threadIdx.x]" for value in program.reductions}
+    reduction_aliases = {value.name: f"shared_{value.name}[shared_index]" for value in program.reductions}
     output_aliases = _ffi_reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
     output_expression = _cuda_expression(program.output_expression, output_aliases)
     output_store = _output_store(program.output_dtype, "group", output_expression)
+    local_reductions = "\n".join(f"  float local_{value.name}[{outputs}] = {{}};" for value in program.reductions)
+    shared_declarations = "\n".join(
+        f"  __shared__ float shared_{value.name}[{threads} * {outputs}];" for value in program.reductions
+    )
+    shared_initialization = "\n".join(
+        f"    shared_{value.name}[shared_index] = local_{value.name}[output_lane];" for value in program.reductions
+    )
     return f"""
 constexpr int {rows} = {program.rows};
 constexpr int {columns} = {program.columns};
 constexpr int {threads} = {program.threads};
 constexpr int {groups} = {program.groups_per_block};
+constexpr int {outputs} = {program.outputs_per_group};
 constexpr int {lanes} = {threads} / {groups};
 
 __global__ __launch_bounds__({threads}) void {symbol}({parameters}) {{
 {shared_declarations}
   const int group_lane = threadIdx.x % {groups};
   const int reduction_lane = threadIdx.x / {groups};
-  const int group = blockIdx.x * {groups} + group_lane;
 {local_reductions}
-  if (group < {columns}) {{
-    for (int row = reduction_lane; row < {rows}; row += {lanes}) {{
-      const int column = group;
+  #pragma unroll
+  for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+    const int group = blockIdx.x * {groups} * {outputs} + output_lane * {groups} + group_lane;
+    if (group < {columns}) {{
+      for (int row = reduction_lane; row < {rows}; row += {lanes}) {{
+        const int column = group;
 {contribution_updates}
+      }}
     }}
   }}
+  #pragma unroll
+  for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+    const int shared_index = output_lane * {threads} + threadIdx.x;
 {shared_initialization}
+  }}
   __syncthreads();
   for (int stride = {lanes} / 2; stride > 0; stride /= 2) {{
     if (reduction_lane < stride) {{
+      #pragma unroll
+      for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+        const int shared_index = output_lane * {threads} + threadIdx.x;
 {shared_updates}
+      }}
     }}
     __syncthreads();
   }}
-  if (reduction_lane == 0 && group < {columns}) {{
-    {output_store}
+  if (reduction_lane == 0) {{
+    #pragma unroll
+    for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+      const int group = blockIdx.x * {groups} * {outputs} + output_lane * {groups} + group_lane;
+      const int shared_index = output_lane * {threads} + threadIdx.x;
+      if (group < {columns}) {{
+        {output_store}
+      }}
+    }}
   }}
 }}
 """.strip()
@@ -1190,7 +1247,8 @@ def _ffi_axis_fold_launch(program: AxisFoldProgram, *, index: int, output: CudaA
 def _ffi_axis_fold_launch_to_pointer(program: AxisFoldProgram, *, index: int, output_pointer: str) -> str:
     prefix = f"Program{index}"
     blocks = (
-        f"(k{prefix}Columns + k{prefix}GroupsPerBlock - 1) / k{prefix}GroupsPerBlock"
+        f"(k{prefix}Columns + k{prefix}GroupsPerBlock * k{prefix}OutputsPerGroup - 1) / "
+        f"(k{prefix}GroupsPerBlock * k{prefix}OutputsPerGroup)"
         if program.groups_per_block > 1
         else (f"k{prefix}Columns" if program.reduction_axis is AxisFoldDirection.ROWS else f"k{prefix}Rows")
     )

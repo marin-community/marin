@@ -238,6 +238,7 @@ def test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_st
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         threads=8,
         feature_groups_per_block=8,
+        feature_outputs_per_group=2,
     )
     assert centered.recovered.statistic_kind is RowStatisticKind.CENTERED_SECOND_MOMENT
     assert tuple(stage.output_name for stage in centered.pipeline.stages) == (
@@ -250,6 +251,8 @@ def test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_st
         stage.program.semantic_fingerprint for stage in centered.pipeline.stages
     )
     assert "ShuttleAxisFoldKernel3" in centered.generated.source
+    assert centered.pipeline.stages[-1].program.outputs_per_group == 2
+    assert "kProgram3OutputsPerGroup = 2" in centered.generated.source
     assert "layernorm" not in centered.generated.source.lower()
 
     rng = np.random.default_rng(31)

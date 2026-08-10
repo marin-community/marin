@@ -60,6 +60,7 @@ def test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast(
     program = _scaled_column_sum_program()
     another_schedule = replace(program, threads=128)
     tiled_schedule = replace(program, threads=128, groups_per_block=16)
+    two_output_schedule = replace(tiled_schedule, outputs_per_group=2)
     mutation = replace(
         program,
         output_expression=scalar_binary(
@@ -73,14 +74,38 @@ def test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast(
 
     assert another_schedule.semantic_fingerprint == program.semantic_fingerprint
     assert tiled_schedule.semantic_fingerprint == program.semantic_fingerprint
+    assert two_output_schedule.semantic_fingerprint == program.semantic_fingerprint
     assert generate_cuda_axis_fold(another_schedule).source != generate_cuda_axis_fold(program).source
     assert "constexpr int kGroupsPerBlock = 16" in generate_cuda_axis_fold(tiled_schedule).source
     assert "stride * kGroupsPerBlock" in generate_cuda_axis_fold(tiled_schedule).source
+    generated_two_output = generate_cuda_axis_fold(two_output_schedule)
+    assert "constexpr int kOutputsPerGroup = 2" in generated_two_output.source
+    assert "output_lane * kGroupsPerBlock + group_lane" in generated_two_output.source
     assert mutation.semantic_fingerprint != program.semantic_fingerprint
     np.testing.assert_array_equal(
         evaluate_axis_fold_program(mutation, {"value": values, "scale": scale}),
         evaluate_axis_fold_program(program, {"value": values, "scale": scale}) * 0.5,
     )
+
+
+def test_tiled_row_fold_multiple_outputs_preserve_tail_column_semantics() -> None:
+    program = replace(
+        _scaled_column_sum_program(threads=64),
+        rows=7,
+        columns=35,
+        groups_per_block=16,
+        outputs_per_group=2,
+    )
+    values = np.arange(program.rows * program.columns, dtype=np.float32).reshape(program.rows, program.columns)
+    scale = np.linspace(0.5, 1.5, program.columns, dtype=np.float32)
+
+    actual = evaluate_axis_fold_program(program, {"value": values, "scale": scale})
+    generated = generate_cuda_axis_fold_ffi((program,), target_name="shuttle.axis_fold_two_output_v1")
+
+    np.testing.assert_array_equal(actual, np.sum(values, axis=0, dtype=np.float32) * scale)
+    assert "kProgram0OutputsPerGroup = 2" in generated.source
+    assert "kProgram0GroupsPerBlock * kProgram0OutputsPerGroup" in generated.source
+    assert "if (group < kProgram0Columns)" in generated.source
 
 
 def test_axis_fold_codegen_exposes_generated_scalar_body_without_workload_kernel() -> None:

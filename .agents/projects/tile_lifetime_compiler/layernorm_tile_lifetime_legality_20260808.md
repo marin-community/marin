@@ -129,7 +129,18 @@ tolerance.
 This is an executable-generation proof, not a GPU performance result. The
 centered pipeline is currently four separate GPU stages, and the generic
 feature-axis Fold remains slower than XLA in the measured uncentered case.
-Remaining work is a Welford/two-pass Fold for a source-ordered statistics
-policy, a faster generic row-Fold lowering, H100/GB200 measurement of the
-centered path, and cache invalidation for the delayed `gamma @ W` and `beta @
-W` inference candidate.
+
+The row-axis Fold now has a second bounded physical candidate. Each reduction
+group can own two adjacent logical output columns while retaining the same
+lane-level deterministic tree for each column. The group-major mapping keeps
+each warp's loads contiguous, doubles independent accumulator state per lane,
+and halves the number of CTAs for the measured 32-group schedule. This changes
+only schedule metadata: the semantic fingerprint and CPU Fold result are
+unchanged, tail columns are predicated, and both centered and uncentered
+normalization use the same implementation. The candidate is compiled by the
+Torch-free typed-FFI generator but is not yet measured on H100 or GB200.
+
+Remaining work is direct GPU comparison of one-output and two-output row-Fold
+schedules, a Welford/two-pass Fold for a source-ordered statistics policy,
+H100/GB200 measurement of the centered path, and cache invalidation for the
+delayed `gamma @ W` and `beta @ W` inference candidate.

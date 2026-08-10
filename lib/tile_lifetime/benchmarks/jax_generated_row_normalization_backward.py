@@ -190,6 +190,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
             threads=args.threads,
             feature_groups_per_block=args.column_groups_per_block,
+            feature_outputs_per_group=args.column_outputs_per_group,
             pipeline_schedule=schedule,
         )
         generated = compilation.generated
@@ -216,6 +217,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             replace(
                 component_compilation.programs.feature_scale_cotangent,
                 groups_per_block=args.column_groups_per_block,
+                outputs_per_group=args.column_outputs_per_group,
             ),
         )
         input_generated = generate_cuda_axis_fold_ffi((programs[0],), target_name=_INPUT_TARGET_NAME)
@@ -493,6 +495,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "source_sha256": generated.source_sha256,
             "semantic_fingerprints": list(generated.semantic_fingerprints),
             "pipeline_schedule": generated.pipeline_schedule.value,
+            "feature_groups_per_block": args.column_groups_per_block,
+            "feature_outputs_per_group": args.column_outputs_per_group,
             "handler_executions": _handler_call_count(library),
         },
         "generated_schedule_comparison": {
@@ -553,6 +557,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=4096)
     parser.add_argument("--threads", type=int, default=256)
     parser.add_argument("--column-groups-per-block", type=int, default=32)
+    parser.add_argument("--column-outputs-per-group", type=int, default=1)
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=10)
