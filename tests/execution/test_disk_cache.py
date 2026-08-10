@@ -3,10 +3,14 @@
 
 import json
 import os
+import threading
 from functools import cache
 from pathlib import Path
 
 import cloudpickle
+import marin.execution.step_runner as step_runner_module
+import marin.execution.step_status as step_status_module
+from fray.types import ResourceConfig
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.step_runner import check_cache, run_step
@@ -15,8 +19,10 @@ from marin.execution.step_status import (
     STATUS_SUCCESS,
     StatusFile,
     distributed_lock,
+    get_status_path,
 )
 from pydantic import BaseModel
+from rigging.cancellation import current_cancellation_token
 
 
 def _make_fn():
@@ -180,6 +186,80 @@ def test_run_step_with_cache_and_lock(tmp_path: Path):
     # Second run: cache hit, should not re-execute
     run_step(spec)
     assert call_count == 1
+
+
+def test_run_step_waits_for_winner_after_lease_loss(tmp_path: Path, monkeypatch):
+    """A losing worker does not overwrite the winner's terminal status."""
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    call_count = 0
+
+    def lose_lease(output_path: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        token = current_cancellation_token()
+        assert token is not None
+
+        Path(f"{get_status_path(output_path)}.lock").unlink()
+        winner = StatusFile(output_path, "winner")
+        assert winner.try_acquire_lock()
+        assert token.wait(timeout=5.0)
+        winner.write_status(STATUS_SUCCESS)
+        winner.release_lock()
+        raise RuntimeError("losing work stopped")
+
+    spec = StepSpec(name="lose-lease", output_path_prefix=tmp_path.as_posix(), fn=lose_lease)
+
+    run_step(spec)
+
+    assert call_count == 1
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+
+def test_run_step_terminates_remote_job_after_lease_loss(tmp_path: Path, monkeypatch):
+    """A lease loss terminates the remote step job before waiting for the winner."""
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    submitted = threading.Event()
+    terminated = threading.Event()
+
+    class BlockingHandle:
+        def wait(self, raise_on_failure: bool = False) -> None:
+            submitted.set()
+            assert terminated.wait(timeout=5.0)
+            raise RuntimeError("remote job terminated")
+
+        def terminate(self) -> None:
+            terminated.set()
+
+    class BlockingClient:
+        def submit(self, _request):
+            return BlockingHandle()
+
+    monkeypatch.setattr(step_runner_module, "current_client", lambda: BlockingClient())
+
+    spec = StepSpec(
+        name="remote-lease-loss",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=lambda _output_path: None,
+        resources=ResourceConfig.with_cpu(cpu=1, ram="1g"),
+    )
+
+    def complete_as_winner() -> None:
+        assert submitted.wait(timeout=5.0)
+        Path(f"{get_status_path(spec.output_path)}.lock").unlink()
+        winner = StatusFile(spec.output_path, "winner")
+        assert winner.try_acquire_lock()
+        assert terminated.wait(timeout=5.0)
+        winner.write_status(STATUS_SUCCESS)
+        winner.release_lock()
+
+    winner_thread = threading.Thread(target=complete_as_winner)
+    winner_thread.start()
+    run_step(spec)
+    winner_thread.join(timeout=5.0)
+
+    assert not winner_thread.is_alive()
+    assert terminated.is_set()
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
 
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):

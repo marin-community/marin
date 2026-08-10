@@ -369,6 +369,57 @@ def test_pull_task_rotates_between_executions(coordinator):
     assert execution_order == ["run-1", "run-2", "run-1", "run-2"]
 
 
+def test_abort_execution_does_not_abort_other_execution(coordinator):
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=_TEST_TASK_COST,
+    )
+    cancelled = start_test_stage(coordinator, [task], execution_id="cancelled")
+    active = start_test_stage(coordinator, [task], execution_id="active")
+
+    coordinator.abort_execution("cancelled", "step lease lost")
+
+    assert cancelled.fatal_error == "step lease lost"
+    assert not cancelled.task_queue
+    assert active.fatal_error is None
+    assert list(active.task_queue) == [task]
+
+
+def test_abort_execution_does_not_charge_shard_failure_budget(coordinator):
+    task = _make_task("cancelled")
+    run = start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock())
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work is not None
+
+    coordinator.abort_execution(_TEST_EXECUTION_ID, "step lease lost")
+    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "terminated", work.stage_generation)
+
+    assert run.task_error_attempts[0] == 0
+    assert not run.in_flight
+
+
+def test_abort_execution_between_stages_remains_cancelled(coordinator):
+    run = start_test_stage(coordinator, [_make_task("first")])
+    coordinator.abort_execution(_TEST_EXECUTION_ID, "step lease lost")
+
+    with pytest.raises(ZephyrWorkerError, match="step lease lost"):
+        coordinator._start_stage(run, "second", 1, [_make_task("second")])
+
+
+def test_abort_execution_before_registration_rejects_pipeline(coordinator):
+    coordinator.abort_execution("not-registered", "step lease lost")
+    plan = compute_plan(Dataset.from_list([1]).map(lambda value: value))
+
+    with pytest.raises(ZephyrWorkerError, match="step lease lost"):
+        coordinator.run_pipeline(plan, "not-registered", _TEST_TASK_COST, _TEST_TASK_COST)
+
+
 def test_duplicate_execution_id_joins_terminal_execution(coordinator):
     """A repeated execution ID returns the retained terminal result."""
     plan = compute_plan(Dataset.from_list([]))

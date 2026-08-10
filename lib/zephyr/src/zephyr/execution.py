@@ -25,6 +25,7 @@ from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
+from rigging.cancellation import current_cancellation_token
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
 
@@ -561,18 +562,28 @@ class ZephyrContext:
     ) -> ZephyrExecutionResult:
         """Run one plan on an existing coordinator and read its stored result."""
         result_path = _execution_result_path(self.chunk_storage_prefix, execution_id)
+        operation = coordinator.run_pipeline.submit(
+            plan,
+            execution_id,
+            ZephyrTaskResources.from_resource_config(map_task_resources),
+            ZephyrTaskResources.from_resource_config(reduce_task_resources),
+        )
+        cancellation_token = current_cancellation_token()
+        remove_callback = None
+        if cancellation_token is not None:
+            remove_callback = cancellation_token.add_callback(
+                lambda reason: coordinator.abort_execution(execution_id, reason)
+            )
         try:
-            coordinator.run_pipeline.submit(
-                plan,
-                execution_id,
-                ZephyrTaskResources.from_resource_config(map_task_resources),
-                ZephyrTaskResources.from_resource_config(reduce_task_resources),
-            ).result()
+            operation.result()
         except Exception:
             payload = _try_read_coordinator_result(result_path)
             if isinstance(payload, Exception):
                 raise payload from None
             raise
+        finally:
+            if remove_callback is not None:
+                remove_callback()
 
         payload = _read_coordinator_result(result_path)
         if isinstance(payload, Exception):

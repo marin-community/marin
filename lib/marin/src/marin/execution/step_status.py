@@ -22,6 +22,7 @@ from time import sleep
 from typing import TypeVar
 
 from iris.cluster.client.job_info import get_job_info
+from rigging.cancellation import CancellationToken, cancellation_scope
 from rigging.filesystem import prefix_join, url_to_fs
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
@@ -249,6 +250,9 @@ def step_lock(
     writes inside the context do not release the lock; this context manager owns
     release ordering so the heartbeat is stopped first.
 
+    A lease loss cancels the context-local token so registered work can stop
+    before this context exits.
+
     Raises ``StepAlreadyDone`` if another worker completed the step
     while we waited for the lock. ``force_rerun`` rebuilds over an existing
     success (mutable ``dev`` artifacts).
@@ -259,7 +263,7 @@ def step_lock(
 
     # Start heartbeat — LeaseLostError is fatal and signals the main thread.
     stop_event = Event()
-    lease_lost_event = Event()
+    cancellation_token = CancellationToken()
 
     def _heartbeat():
         while not stop_event.wait(HEARTBEAT_INTERVAL):
@@ -267,19 +271,22 @@ def step_lock(
                 status_file.refresh_lock()
             except LeaseLostError:
                 logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
-                lease_lost_event.set()
+                cancellation_token.cancel(f"Lease lost during execution of {output_path}")
                 return
 
     heartbeat_thread = Thread(target=_heartbeat, daemon=True)
     heartbeat_thread.start()
 
     try:
-        yield status_file
+        with cancellation_scope(cancellation_token):
+            yield status_file
     finally:
         stop_event.set()
         heartbeat_thread.join(timeout=5)
-        if lease_lost_event.is_set():
-            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
+        if cancellation_token.cancelled:
+            reason = cancellation_token.reason
+            assert reason is not None
+            raise LeaseLostError(reason)
         status_file.release_lock()
 
 

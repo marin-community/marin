@@ -26,7 +26,9 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
+from rigging.cancellation import current_cancellation_token
 from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.distributed_lock import LeaseLostError
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -428,6 +430,12 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
     )
 
 
+def _raise_if_step_cancelled(output_path: str) -> None:
+    token = current_cancellation_token()
+    if token is not None and token.cancelled:
+        raise LeaseLostError(token.reason or f"Lease lost during execution of {output_path}")
+
+
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
@@ -447,32 +455,49 @@ def run_step(step: StepSpec) -> None:
     if not mutable and check_cache(output_path):
         return
 
-    # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
-    try:
-        with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
-            # 3. Run the function
-            try:
-                t0 = time.monotonic()
-                if step.resources is not None:
-                    _run_iris_job(step, output_path)
-                elif isinstance(step.fn, RemoteCallable):
-                    _run_remote_step(step, output_path)
-                else:
-                    result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    # A lazy step writes its own full record; a plain step's return is saved
-                    # with its identity + lineage (name, deps, config) so the output is traceable.
-                    if not step.writes_record:
-                        write_step_record(_step_record_identity(step), output_path=output_path, result=result)
-                elapsed = timedelta(seconds=time.monotonic() - t0)
+    # 2. Acquire the lock. A lost owner waits for the current owner before it returns.
+    lease_was_lost = False
+    while True:
+        try:
+            with step_lock(output_path, step_label, force_rerun=mutable and not lease_was_lost) as status_file:
+                # 3. Run the function
+                try:
+                    t0 = time.monotonic()
+                    if step.resources is not None:
+                        _run_iris_job(step, output_path)
+                    elif isinstance(step.fn, RemoteCallable):
+                        _run_remote_step(step, output_path)
+                    else:
+                        result = step.fn(output_path)  # pyrefly: ignore[not-callable]
+                        _raise_if_step_cancelled(output_path)
+                        # A lazy step writes its own full record; a plain step's return is saved
+                        # with its identity + lineage (name, deps, config) so the output is traceable.
+                        if not step.writes_record:
+                            write_step_record(_step_record_identity(step), output_path=output_path, result=result)
+                    elapsed = timedelta(seconds=time.monotonic() - t0)
 
-                # 4. Mark success
-                status_file.write_status(STATUS_SUCCESS)
-                logger.info(f"Step {step_label} succeeded in {elapsed}")
-            except Exception:
-                status_file.write_status(STATUS_FAILED)
-                raise
-    except StepAlreadyDone:
-        logger.info(f"Step {step_label} completed by another worker")
+                    # 4. Mark success only while this worker still owns the lease.
+                    _raise_if_step_cancelled(output_path)
+                    status_file.refresh_lock()
+                    status_file.write_status(STATUS_SUCCESS)
+                    logger.info(f"Step {step_label} succeeded in {elapsed}")
+                except LeaseLostError:
+                    raise
+                except Exception as error:
+                    try:
+                        _raise_if_step_cancelled(output_path)
+                        status_file.refresh_lock()
+                    except LeaseLostError as lease_error:
+                        raise lease_error from error
+                    status_file.write_status(STATUS_FAILED)
+                    raise
+            return
+        except StepAlreadyDone:
+            logger.info(f"Step {step_label} completed by another worker")
+            return
+        except LeaseLostError:
+            lease_was_lost = True
+            logger.info("Step %s lost its lease; waiting for the current owner", step_label)
 
 
 def _submit_iris_job(
@@ -508,7 +533,15 @@ def _submit_iris_job(
         ),
     )
     handle = current_client().submit(request)
-    handle.wait(raise_on_failure=True)
+    cancellation_token = current_cancellation_token()
+    remove_callback = None
+    if cancellation_token is not None:
+        remove_callback = cancellation_token.add_callback(lambda _reason: handle.terminate())
+    try:
+        handle.wait(raise_on_failure=True)
+    finally:
+        if remove_callback is not None:
+            remove_callback()
 
 
 def _run_iris_job(step: StepSpec, output_path: str) -> None:

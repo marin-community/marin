@@ -67,7 +67,9 @@ class ZephyrWorker:
         self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
-        self._active_runners: list[StageRunner] = []
+        self._active_runners: list[tuple[str, StageRunner]] = []
+        # Keep cancellation tombstones because a pulled task can still be in transit.
+        self._cancelled_executions: set[str] = set()
         self._active_task_count: int = 0
         self._current_stage_name: str = ""
 
@@ -230,7 +232,10 @@ class ZephyrWorker:
 
             runner = self._stage_runner_factory()
             with self._resources_lock:
-                self._active_runners.append(runner)
+                self._active_runners.append((work.execution_id, runner))
+                execution_cancelled = work.execution_id in self._cancelled_executions
+            if execution_cancelled:
+                runner.cancel()
             self._active_task_count += 1
             self._current_stage_name = work.task.stage_name
 
@@ -284,6 +289,16 @@ class ZephyrWorker:
         """Tombstone one table and release its values."""
         self._memory_store.destroy(table_id)
 
+    def cancel_execution(self, execution_id: str) -> None:
+        """Cancel active shard runners for one execution."""
+        with self._resources_lock:
+            self._cancelled_executions.add(execution_id)
+            runners = [
+                runner for active_execution_id, runner in self._active_runners if active_execution_id == execution_id
+            ]
+        for runner in runners:
+            runner.cancel()
+
     def _task_thread(
         self,
         work: PullTask,
@@ -319,8 +334,9 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-                if runner in self._active_runners:
-                    self._active_runners.remove(runner)
+                active_runner = (work.execution_id, runner)
+                if active_runner in self._active_runners:
+                    self._active_runners.remove(active_runner)
             self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
 
@@ -340,7 +356,7 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
-            runners = list(self._active_runners)
+            runners = [runner for _execution_id, runner in self._active_runners]
         current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
         if current == self._last_reported_counters:
             return None
