@@ -13,6 +13,7 @@ import site
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 import click
@@ -92,6 +93,7 @@ class BenchmarkResult(BaseModel):
     install_stdout_tail: str
     install_stderr_tail: str
     platform_machine: str
+    cuda_home: str | None
     cuda_version: int | None
     cublas_lt_version: int | None
     grouped_gemm_workspace_size: int | None
@@ -108,13 +110,26 @@ class TransformerEngineWeightGradBenchmarkConfig:
     output_path: str
 
 
-def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None]:
+def _pip_cuda_home() -> Path | None:
+    for package_root in site.getsitepackages():
+        cuda_home = Path(package_root) / "nvidia" / "cu13"
+        if (cuda_home / "include" / "cuda_runtime_api.h").is_file():
+            return cuda_home
+    return None
+
+
+def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
     env = dict(os.environ)
     env["UV_CACHE_DIR"] = "/tmp/ra2a-transformer-engine-uv-cache"
-    env["PATH"] = f"{target}/bin:{env['PATH']}"
+    cuda_home = _pip_cuda_home()
+    if cuda_home is None:
+        return None, 0.0, "", "", "CUDA 13 pip toolkit headers were not found", None
+    env["CUDA_HOME"] = str(cuda_home)
+    env["PATH"] = f"{target}/bin:{cuda_home}/bin:{env['PATH']}"
     env["PYTHONPATH"] = f"{target}:{env.get('PYTHONPATH', '')}"
+    env["LIBRARY_PATH"] = f"{cuda_home}/lib:{env.get('LIBRARY_PATH', '')}"
 
     setup = subprocess.run(
         [
@@ -135,7 +150,14 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     )
     if setup.returncode != 0:
         error = f"build tool installation exited {setup.returncode}"
-        return None, 0.0, setup.stdout[-INSTALL_LOG_TAIL:], setup.stderr[-INSTALL_LOG_TAIL:], error
+        return (
+            None,
+            0.0,
+            setup.stdout[-INSTALL_LOG_TAIL:],
+            setup.stderr[-INSTALL_LOG_TAIL:],
+            error,
+            str(cuda_home),
+        )
 
     start = time.perf_counter()
     install = subprocess.run(
@@ -161,7 +183,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     stderr = install.stderr[-INSTALL_LOG_TAIL:]
     if install.returncode != 0:
         error = f"Transformer Engine installation exited {install.returncode}"
-        return None, install_time, stdout, stderr, error
+        return None, install_time, stdout, stderr, error, str(cuda_home)
 
     site.addsitedir(target)
     try:
@@ -169,8 +191,8 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
         importlib.import_module("transformer_engine.jax")
     except (ImportError, OSError, RuntimeError) as exc:
         error = f"{type(exc).__name__}: {exc}"
-        return None, install_time, stdout, stderr, error
-    return transformer_engine_jax, install_time, stdout, stderr, None
+        return None, install_time, stdout, stderr, error, str(cuda_home)
+    return transformer_engine_jax, install_time, stdout, stderr, None, str(cuda_home)
 
 
 def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
@@ -274,7 +296,7 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
 
 
 def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
-    te_jax, install_time, install_stdout, install_stderr, install_error = _install_transformer_engine()
+    te_jax, install_time, install_stdout, install_stderr, install_error, cuda_home = _install_transformer_engine()
     cuda_version = None
     cublas_lt_version = None
     grouped_gemm_workspace_size = None
@@ -296,6 +318,7 @@ def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
         install_stdout_tail=install_stdout,
         install_stderr_tail=install_stderr,
         platform_machine=os.uname().machine,
+        cuda_home=cuda_home,
         cuda_version=cuda_version,
         cublas_lt_version=cublas_lt_version,
         grouped_gemm_workspace_size=grouped_gemm_workspace_size,
