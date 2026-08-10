@@ -143,3 +143,12 @@ CuTe physical source, constructs the `cutlass_call`, verifies that Torch was
 not imported, and records source plus EventTensor fingerprints. It does not
 execute a device kernel. A GB200 allocation remains blocked until that
 dependency-only preflight is preserved and green.
+
+The gate passed on the CPU-only Iris job
+`/dlwh/shuttle-event-jax-preflight-7` at Shuttle commit `a407da4e4d`. The
+preserved result is under
+`benchmarks/artifacts/event_tensor_right_resource_jax_preflight_sm100_v0`.
+It compiled the generated Fold handler, instantiated the extracted physical
+class as a CUTLASS JAX `PjitFunction`, retained the program fingerprint across
+a relation mutation, changed the runtime fingerprint, and confirmed that
+Torch was neither installed nor loaded. Device execution remains unproven.
