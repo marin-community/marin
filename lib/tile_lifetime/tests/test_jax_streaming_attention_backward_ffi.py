@@ -10,9 +10,12 @@ import jax.numpy as jnp
 import pytest
 
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
+    StreamingAttentionBackwardFfiBufferLayout,
+    StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
     _run_triton_aot_compile,
     call_streaming_attention_backward_ffi,
+    call_streaming_attention_training_ffi,
     compile_streaming_attention_backward_ffi,
     generate_streaming_attention_backward_ffi,
 )
@@ -114,6 +117,7 @@ def test_recompute_plan_preserves_natural_vjp_signature_and_emits_three_aot_kern
     )
 
     assert generated.state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE
+    assert generated.result_policy is StreamingAttentionBackwardResultPolicy.GRADIENTS_ONLY
     assert tuple(value.name for value in generated.inputs) == ("query", "key", "value", "output_cotangent")
     assert tuple(value.name for value in generated.outputs) == (
         "query_cotangent",
@@ -131,6 +135,75 @@ def test_recompute_plan_preserves_natural_vjp_signature_and_emits_three_aot_kern
     assert "triton" not in generated.handler_template.lower()
     assert "ScratchAllocator" in generated.handler_template
     assert "{forward_launcher}" in generated.handler_template
+
+
+def test_training_plan_returns_recomputed_forward_output_without_output_scratch() -> None:
+    program, schedule = _program_and_schedule()
+
+    generated = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_training.recompute_test_v1",
+        result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
+        output_layouts=tuple(
+            StreamingAttentionBackwardFfiBufferLayout(name, (3, 1, 2, 0))
+            for name in ("forward_output", "query_cotangent", "key_cotangent", "value_cotangent")
+        ),
+    )
+
+    assert generated.state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE
+    assert generated.result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS
+    assert tuple(value.name for value in generated.outputs) == (
+        "forward_output",
+        "query_cotangent",
+        "key_cotangent",
+        "value_cotangent",
+    )
+    assert generated.aot_kernels[0].signature[26:30] == tuple(str(stride) for stride in generated.outputs[0].strides)
+    assert tuple(kernel.kernel_name for kernel in generated.aot_kernels) == (
+        "_streaming_grouped_query_forward",
+        "_streaming_dq_kernel",
+        "_streaming_dkdv_kernel",
+    )
+
+
+def test_training_and_reverse_calls_require_their_explicit_result_policy() -> None:
+    program, schedule = _program_and_schedule()
+    reverse = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_reverse.result_policy_test_v1",
+    )
+    training = generate_streaming_attention_backward_ffi(
+        program,
+        schedule,
+        target_name="shuttle.streaming_training.result_policy_test_v1",
+        result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
+    )
+    arguments = {
+        "query": jnp.zeros(reverse.inputs[0].shape, dtype=jnp.bfloat16),
+        "key": jnp.zeros(reverse.inputs[1].shape, dtype=jnp.bfloat16),
+        "value": jnp.zeros(reverse.inputs[2].shape, dtype=jnp.bfloat16),
+        "output_cotangent": jnp.zeros(reverse.inputs[3].shape, dtype=jnp.bfloat16),
+    }
+
+    with pytest.raises(ValueError, match="training call requires"):
+        call_streaming_attention_training_ffi(reverse, **arguments)
+    with pytest.raises(ValueError, match="reverse-only call requires"):
+        call_streaming_attention_backward_ffi(training, **arguments)
+
+
+def test_training_result_rejects_external_saved_state_boundary() -> None:
+    program, schedule = _program_and_schedule()
+
+    with pytest.raises(ValueError, match="recomputed forward state"):
+        generate_streaming_attention_backward_ffi(
+            program,
+            schedule,
+            target_name="shuttle.streaming_training.saved_state_rejected_v1",
+            state_policy=StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP,
+            result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
+        )
 
 
 def test_short_d16_plan_legalizes_only_physical_aot_tiles() -> None:
@@ -207,11 +280,13 @@ def test_score_scale_mutation_changes_semantic_digest_and_aot_specialization() -
         first_program,
         first_schedule,
         target_name="shuttle.streaming_reverse.scale_first_v1",
+        result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
     )
     second = generate_streaming_attention_backward_ffi(
         second_program,
         second_schedule,
         target_name="shuttle.streaming_reverse.scale_second_v1",
+        result_policy=StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS,
     )
 
     assert first.semantic_fingerprint != second.semantic_fingerprint
