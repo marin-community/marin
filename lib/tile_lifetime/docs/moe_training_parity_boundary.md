@@ -111,3 +111,12 @@ allowed only after a source audit proves that the generated executor contains
 no semantic expert kernel, small multi-rank correctness covers every returned
 cotangent, the exact pinned MoK backward passes independently, and build/runtime
 preflight succeeds before allocation.
+
+The first authorized one-GB200 compile/correctness smoke did not reach holder
+submission. The corrected low-resource command failed because the local
+workspace bundle exceeded the controller client's 25 MB limit. No device was
+allocated or accessed, and the no-retry policy preserved this as a rejected
+bootstrap artifact. The audit also records that the current SM100 probe adapter
+is Torch-bound even though the scalar generator and CPU reference are
+Torch-free. Both the bootstrap and physical-adapter boundary must be corrected
+before the next GPU gate is proposed.

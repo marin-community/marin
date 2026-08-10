@@ -1,0 +1,99 @@
+{
+  "artifact_status": "sealed_bootstrap_failure",
+  "acceptance_status": "rejected",
+  "attempt_policy": {
+    "gpu_execution_limit": 1,
+    "performance_measurement": false,
+    "retry_after_bootstrap_failure": false,
+    "tuning": false
+  },
+  "attempts": [
+    {
+      "command": "uv run scripts/iris/dev_gpu.py --config lib/iris/config/cw-us-east-08a.yaml --name dlwh-shuttle-moe-bwd-smoke allocate --gpu-variant gb200 --gpus-per-node 1 --nodes 1 --priority batch --cpu 8 --memory 96GB --disk 100GB --timeout 1800 --pod-timeout 300",
+      "device_accessed": false,
+      "holder_submitted": false,
+      "result": "cli_validation_failure",
+      "stderr": "Error: No such option: --gpus-per-node"
+    },
+    {
+      "command": "uv run scripts/iris/dev_gpu.py --config lib/iris/config/cw-us-east-08a.yaml --name dlwh-shuttle-moe-bwd-smoke allocate --gpu-variant gb200 --gpu-count 1 --priority batch --cpu 8 --memory 96GB --disk 100GB --timeout 1800 --pod-timeout 300",
+      "device_accessed": false,
+      "holder_submitted": false,
+      "requested_resources": {
+        "cpu": 8,
+        "disk": "100GB",
+        "gpu_count": 1,
+        "gpu_variant": "GB200",
+        "memory": "96GB",
+        "priority": "batch"
+      },
+      "result": "workspace_bundle_failure",
+      "stderr": "ValueError: Bundle size 35.7MB exceeds maximum 25MB. Consider excluding large files or using .gitignore."
+    }
+  ],
+  "exact_source": {
+    "shuttle_revision": "ad5caa3392d4488f02e689f3319728ba1f55a8d4",
+    "worktree_clean_before_attempt": true,
+    "files": {
+      "cuda_expert_parallel_training_codegen.py": "4adf11e89bbec45d6dfed8580b99ece1910dda26fa32e8d47163420a32eef057",
+      "expert_parallel_training_runtime.py": "a4a026b9645360361898ef41cff2ca5d5a6c86bebff897ccf84ccdbc6689098c",
+      "gb200_moe_backward_component_smoke.py": "5cd1588415361eb91f24ec0373de935f7b6dd98f3d82cf8f5fb711c5d7bb0266",
+      "generated_training.inc": "192c9784619fe1d038c34747fdcf86ead68fb9de588bf36afa7edfbf910f3a92",
+      "mok_gmm_probe.cu": "3e904d6e289fa3daf162cb318b852f9660136a0cdc7787656eeeceac5b092ec1"
+    }
+  },
+  "gates": {
+    "cpu_four_rank_reference": {
+      "evidence": "natural JAX VJP equality plus bitwise repeated execution in test_expert_parallel_training.py",
+      "status": "passed"
+    },
+    "four_rank_abi": {
+      "edge_count": 49152,
+      "expert_count": 384,
+      "rank_count": 4,
+      "status": "passed_static",
+      "tokens_per_rank": 2048
+    },
+    "gpu_compile": {
+      "reason": "workspace bundling failed before holder submission",
+      "status": "not_run"
+    },
+    "gpu_determinism": {
+      "status": "not_run"
+    },
+    "gpu_numerical_correctness": {
+      "status": "not_run"
+    },
+    "payload_and_return_mapping": {
+      "physical_transport_execution": "not_run",
+      "reference_relation_dispatch_inverse_dispatch": "passed",
+      "semantic_combine_in_transport": false,
+      "status": "partial"
+    },
+    "source_audit": {
+      "atomic_accumulation": false,
+      "opaque_deepep_or_mok_semantic_call": false,
+      "status": "passed"
+    },
+    "torch_free_runtime": {
+      "cpu_reference": true,
+      "generated_scalar_semantics": true,
+      "physical_sm100_adapter": false,
+      "reason": "mok_gmm_probe.cu exposes at::Tensor/pybind entry points and the smoke uses Torch tensors",
+      "status": "rejected"
+    }
+  },
+  "release_proof": {
+    "active_dev_gpu_session": false,
+    "controller_jobs_matching_holder": 0,
+    "pods_matching_holder": 0,
+    "release_required": false
+  },
+  "toolchain": {
+    "cluster_config": "lib/iris/config/cw-us-east-08a.yaml",
+    "cluster_config_sha256": "b14ceab144dbcbb257cada236ec64b6708702877485349abe29b5491d1c3e22a",
+    "cuda": "not_observed",
+    "driver": "not_observed",
+    "gpu": "not_allocated"
+  }
+}
