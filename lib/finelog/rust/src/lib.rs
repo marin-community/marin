@@ -5,6 +5,10 @@ pub mod proto {
 }
 
 pub mod errors;
+pub(crate) mod json;
 pub mod query;
 pub mod server;
 pub mod store;
+
+#[cfg(test)]
+pub mod test_support;

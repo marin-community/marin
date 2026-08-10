@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import io
 import logging
 import threading
@@ -13,6 +11,7 @@ from typing import ClassVar
 import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
+import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePolicy, schema_from_dataclass
@@ -24,7 +23,16 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import Column, Schema, schema_to_proto
+from finelog.schema import (
+    MAP_STRING_STRING,
+    Column,
+    CoveringProjection,
+    GroupedExtrema,
+    Schema,
+    schema_from_proto,
+    schema_to_arrow,
+    schema_to_proto,
+)
 
 
 class FakeLogClient:
@@ -129,6 +137,38 @@ class _FakeStatsServiceClient:
         pass
 
 
+class _RecordingHttpClient:
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, str]] = []
+
+    def post(self, *, url, headers, content, timeout):
+        del timeout
+        encoding = headers.get("content-encoding")
+        decoded = zstandard.ZstdDecompressor().decompress(content)
+        if url.endswith("/RegisterTable"):
+            request = stats_pb2.RegisterTableRequest()
+            request.ParseFromString(decoded)
+            response = stats_pb2.RegisterTableResponse(
+                effective_schema=request.schema,
+                effective_policy=request.storage_policy,
+            )
+        elif url.endswith("/WriteRows"):
+            request = stats_pb2.WriteRowsRequest()
+            request.ParseFromString(decoded)
+            self.writes.append((request.namespace, encoding))
+            response = stats_pb2.WriteRowsResponse(rows_written=_decode_ipc_row_count(request.arrow_ipc))
+        else:
+            raise AssertionError(f"unexpected request URL: {url}")
+        return SimpleNamespace(
+            status=200,
+            headers={"content-type": "application/proto"},
+            content=response.SerializeToString(),
+        )
+
+    def close(self) -> None:
+        pass
+
+
 def _decode_ipc_row_count(blob: bytes) -> int:
     reader = paipc.open_stream(pa.BufferReader(blob))
     table = reader.read_all()
@@ -194,6 +234,28 @@ def test_connect_returns_usable_client(tracked_clients):
         client.close()
 
 
+def test_all_log_client_table_writes_use_zstd(monkeypatch: pytest.MonkeyPatch) -> None:
+    http_client = _RecordingHttpClient()
+    stats_client_class = log_client_mod.StatsServiceClientSync
+
+    def factory(address, **kwargs):
+        return stats_client_class(address=address, http_client=http_client, **kwargs)
+
+    monkeypatch.setattr(log_client_mod, "StatsServiceClientSync", factory)
+    client = LogClient.connect("http://finelog")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        client.write_batch("key", [logging_pb2.LogEntry(source="stdout", data="hello")])
+        assert client.flush(timeout=5.0) == FlushResult.SUCCEEDED
+    finally:
+        client.close()
+
+    assert sorted(http_client.writes) == [("iris.worker", "zstd"), ("log", "zstd")]
+
+
 def test_close_is_idempotent(tracked_clients):
     client = LogClient.connect("http://h:1")
     client.close()
@@ -227,6 +289,46 @@ def test_resolver_runs_per_resolve(tracked_clients):
     finally:
         client.close()
     assert resolver_calls == ["/system/log-server"]
+
+
+def test_write_batch_not_blocked_by_in_progress_resolve(tracked_clients):
+    """A blocked resolver must not wedge concurrent log writes.
+
+    The background flush thread resolves the stats endpoint under the client
+    lock, and in iris that resolver issues a blocking controller RPC. A
+    foreground log emit (``write_batch`` -> ``_get_log_table``) must not wait on
+    that same lock, or a shutdown-path ``logger.warning`` deadlocks teardown
+    against a hung resolve (observed as an iris smoke teardown timeout).
+    """
+    resolving = threading.Event()
+    release = threading.Event()
+
+    def resolver(url: str) -> str:
+        resolving.set()
+        assert release.wait(timeout=10.0), "resolver was never released"
+        return url
+
+    wrote = threading.Event()
+
+    def do_second_write():
+        client.write_batch("k", [logging_pb2.LogEntry(source="t", data="second")])
+        wrote.set()
+
+    client = LogClient.connect("http://h:1", resolver=resolver)
+    second_write = threading.Thread(target=do_second_write)
+    try:
+        # First write spins up the log Table; its flush thread enters the
+        # resolver and (pre-fix) parks there holding the client lock.
+        client.write_batch("k", [logging_pb2.LogEntry(source="t", data="first")])
+        assert resolving.wait(timeout=5.0), "flush thread never reached the resolver"
+
+        # A second write must not block on the lock held during the resolve.
+        second_write.start()
+        assert wrote.wait(timeout=2.0), "write_batch blocked behind an in-progress resolve"
+    finally:
+        release.set()
+        second_write.join(timeout=5.0)
+        client.close()
 
 
 def test_invalidates_on_connection_refused(tracked_clients, monkeypatch):
@@ -317,6 +419,37 @@ def test_get_table_with_explicit_schema(tracked_clients):
         assert table.schema.key_column == "ts"
         table.write([SimpleNamespace(ts=1, value=1.5)])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+    finally:
+        client.close()
+
+
+def test_get_table_with_map_column_round_trips(tracked_clients):
+    # A COLUMN_TYPE_MAP column encodes Python dicts as a native Map<Utf8,Utf8>
+    # Arrow column on the WriteRows IPC (a None row is a null map cell).
+    schema = Schema(
+        columns=(
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_MAP),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+    )
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.probes", schema)
+        table.write(
+            [
+                SimpleNamespace(labels={"scope": "fleet", "region": "us-east"}, timestamp_ms=1),
+                SimpleNamespace(labels=None, timestamp_ms=2),
+            ]
+        )
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        write_req = tracked_clients[0].writes[0]
+        decoded = paipc.open_stream(pa.BufferReader(write_req.arrow_ipc)).read_all()
+        assert decoded.num_rows == 2
+        assert decoded.schema.field("labels").type == MAP_STRING_STRING
+        assert decoded.column("labels").to_pylist() == [
+            [("scope", "fleet"), ("region", "us-east")],
+            None,
+        ]
     finally:
         client.close()
 
@@ -632,6 +765,26 @@ def test_schema_from_dataclass_rejects_unsupported_type():
         schema_from_dataclass(Stat)
 
 
+def test_schema_from_dataclass_infers_dict_str_str_as_map():
+    @dataclass
+    class Probe:
+        labels: dict[str, str]
+        optional_labels: dict[str, str] | None
+        timestamp_ms: int
+
+    s = schema_from_dataclass(Probe)
+    types = {c.name: c.type for c in s.columns}
+    assert types["labels"] == stats_pb2.COLUMN_TYPE_MAP
+    assert types["optional_labels"] == stats_pb2.COLUMN_TYPE_MAP
+    assert types["timestamp_ms"] == stats_pb2.COLUMN_TYPE_INT64
+
+
+def test_schema_to_arrow_maps_map_column_to_native_map():
+    s = Schema(columns=(Column(name="labels", type=stats_pb2.COLUMN_TYPE_MAP),))
+    arrow = schema_to_arrow(s)
+    assert arrow.field("labels").type == MAP_STRING_STRING
+
+
 def test_remote_log_handler_writes_via_log_client(tracked_clients):
     client = LogClient.connect("http://h:1")
     handler = RemoteLogHandler(client, key="proc")
@@ -714,3 +867,84 @@ def test_schema_from_proto_consistency():
         assert proto_col.name == src_col.name
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
+        assert proto_col.index.trigram == src_col.trigram_index
+        assert tuple(proto_col.index.exact_values) == src_col.exact_values
+        assert proto_col.index.value_counts == src_col.value_counts
+
+
+def test_trigram_index_round_trips_through_proto():
+    s = Schema(
+        columns=(
+            Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
+            Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+    )
+    back = schema_from_proto(schema_to_proto(s))
+    assert {c.name: c.trigram_index for c in back.columns} == {
+        "data": True,
+        "level": False,
+        "timestamp_ms": False,
+    }
+
+
+def test_exact_indexes_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(
+                name="name",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                exact_values=("phase", "step"),
+            ),
+            Column(
+                name="service",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                value_counts=True,
+            ),
+        )
+    )
+    back = schema_from_proto(schema_to_proto(schema))
+    assert back.columns[0].exact_values == ("phase", "step")
+    assert back.columns[1].value_counts
+
+
+def test_covering_projections_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="name", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="value", type=stats_pb2.COLUMN_TYPE_FLOAT64),
+        ),
+        projections=(
+            CoveringProjection(
+                name="training-status",
+                predicate_column="name",
+                predicate_values=("phase", "step"),
+                columns=("name", "value"),
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_grouped_extrema_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="timestamp", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="scope", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        ),
+        key_column="timestamp",
+        grouped_extrema=(
+            GroupedExtrema(
+                filter_column="scope",
+                group_json_column="labels",
+                group_json_key="identity",
+                extrema_column="timestamp",
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema

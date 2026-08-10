@@ -1,0 +1,14 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Warning rules remain visible in Grafana while this recurring interval mutes
+# their notification policy. Critical rules do not reference this interval.
+apiVersion: 1
+
+muteTimes:
+  - orgId: 1
+    name: dashboard-only
+    time_intervals:
+      - times:
+          - { start_time: "00:00", end_time: "24:00" }
+        location: UTC

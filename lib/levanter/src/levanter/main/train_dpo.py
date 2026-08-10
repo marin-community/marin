@@ -17,6 +17,8 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 from jaxtyping import PRNGKeyArray
 
 import levanter
+import levanter.config
+import levanter.tracker
 import levanter.callbacks
 import levanter.eval
 from levanter import callbacks
@@ -29,10 +31,9 @@ from levanter.adaptor import (
 from levanter.compat.hf_checkpoints import build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import (
-    BlockShuffleConfig,
+from levanter.data.text.datasets import BlockShuffleConfig, LmDataConfig
+from levanter.data.text.preference import (
     DpoExample,
-    LmDataConfig,
     PreferenceChatLmDatasetFormat,
     PreferenceLmDataConfig,
     dataset_for_preference_format,
@@ -51,7 +52,7 @@ from levanter.dpo import (
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.utils.jax_utils import parameter_count
@@ -577,7 +578,7 @@ def main(config: TrainDpoConfig):
     if model_context.model is not config.model:
         config = dataclasses.replace(config, model=model_context.model)
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
     reference_provider: AdapterBaseReferenceModelProvider | None = None
 
@@ -767,23 +768,17 @@ def main(config: TrainDpoConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example),
             every=1,
         )
+        trainer.add_hook(
+            callbacks.iris_status_reporter(
+                Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
+            ),
+            every=10,
+        )
 
         if isinstance(train_dataset, MixtureDataset):
-            last_stage = -1
-
-            def log_mixture_weights(step_info):
-                nonlocal last_stage
-                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // train_dataset.block_size
-                stage = train_dataset._get_stage_for_block(block_id)
-                weights = train_dataset.weight_stages[stage][1]
-                if stage != last_stage:
-                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
-                    metrics["mixture/stage"] = stage
-                    levanter.tracker.log(metrics, step=step_info.step)
-                    last_stage = stage
-
-            trainer.add_hook(log_mixture_weights, every=1)
+            trainer.add_hook(
+                callbacks.mixture_weight_logging_hook(trainer.config.batch_schedule, train_dataset), every=1
+            )
 
         lm_eval_callback: Callable[[Any], Any] | None = None
         if config.lm_validation_data is not None:

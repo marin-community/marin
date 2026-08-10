@@ -1,810 +1,442 @@
-# CoreWeave Platform Integration
+# Iris on CoreWeave
 
-**Issue**: [#2822 -- Iris: Implement CoreWeave platform](https://github.com/marin-community/marin/issues/2822)
+Iris runs CoreWeave jobs directly as Kubernetes Pods. The controller does not
+start Iris worker daemons on CoreWeave. This page describes the current
+architecture and configuration boundary.
 
-## 1. Overview
+Use the [cloud GPU tutorial](../../../docs/tutorials/cloud-gpu.md) to run a job,
+the [federation reference](federation.md) to understand cross-cluster routing,
+and the [Iris operations guide](../OPS.md) for live diagnosis and approved
+operational changes.
 
-Iris runs on CoreWeave CKS (bare-metal Kubernetes) using a shared NodePool model.
-Each Iris scale group maps to one CoreWeave NodePool with autoscaling enabled.
-CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
-Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
-which replaced an originally-planned containerd/crictl approach during implementation.
+## Quickstart
 
-Example config: `lib/iris/config/coreweave.yaml`
+The `marin` federation config lists three CoreWeave research peers:
 
-## 2. Architecture
+| Iris cluster | Accelerator | GPUs per node |
+| --- | --- | ---: |
+| `cw-rno2a` | H100 | 8 |
+| `cw-us-east-02a` | H100 | 8 |
+| `cw-us-east-08a` | GB200 | 4 |
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  CoreWeave CKS Cluster                                              │
-│                                                                     │
-│  ┌──────────────────────────────────┐                               │
-│  │  Controller Deployment           │  <-- created by               │
-│  │  (iris-controller)               │      start_controller()       │
-│  │                                  │                               │
-│  │  ghcr.io/.../iris-controller     │                               │
-│  │  port 10000                      │                               │
-│  │  in-cluster K8s auth             │  <-- ServiceAccount           │
-│  │  /etc/iris/config.json           │  <-- ConfigMap                │
-│  └────────┬─────────────────────────┘                               │
-│           │                                                         │
-│  Service: iris-controller-svc (ClusterIP:10000)                     │
-│           │                                                         │
-│  ┌────────▼─────────────────────────┐  ┌──────────────────────────┐ │
-│  │  Shared NodePool: iris-h100-8x   │  │ Shared NodePool: ...     │ │
-│  │  (one per scale group)           │  │ (one per scale group)    │ │
-│  │  instanceType: gd-8xh100ib-i128 │  │                          │ │
-│  │  autoscaling: true               │  │                          │ │
-│  │  minNodes: 0, maxNodes: N        │  │                          │ │
-│  │                                  │  │                          │ │
-│  │  Pod: iris-worker-{slice-id}     │  │  Pod: iris-worker-...    │ │
-│  │  (light: no GPU/RDMA requests)   │  │                          │ │
-│  │    ↓                             │  │                          │ │
-│  │  Pod: iris-task-{uuid}           │  │                          │ │
-│  │  (claims GPU/RDMA from device    │  │                          │ │
-│  │   plugin, hostNetwork: true)     │  │                          │ │
-│  └──────────────────────────────────┘  └──────────────────────────┘ │
-│                                                                     │
-│  All resources auto-created by `iris cluster start`:                │
-│    Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding,      │
-│    ConfigMap, NodePools, Controller Deployment+Service, S3 Secret   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+The table identifies configured hardware, not live free capacity. The canonical
+inventory is [`lib/iris/config/marin.yaml`](../config/marin.yaml); each peer's
+hardware and Kubernetes settings live in `lib/iris/config/<cluster>.yaml`.
 
-Key architectural properties:
-
-- **TASK_BACKEND-placement `TaskBackend`**: When the cluster config sets
-  `kubernetes_provider`, the controller runs `K8sTaskProvider`
-  (`src/iris/cluster/backends/k8s/tasks.py`) — a `PlacementOwner.TASK_BACKEND`
-  `TaskBackend` with `manages_capacity=True`. Kueue performs scheduling and the
-  cluster autoscaler provisions nodes, so Iris runs no scheduling or autoscaler
-  loop for this backend; the controller only reconciles desired vs. observed Pods
-  each tick. The dashboard reflects this via the backend descriptor served by
-  `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
-  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
-  See `docs/architecture.md` "The TaskBackend contract".
-- **Shared NodePool model**: One NodePool per scale group (not per slice). CoreWeave
-  autoscaling is enabled (`autoscaling: true`). NodePool names follow
-  `{label_prefix}-{scale_group_name}`. NodePools scale to zero when idle.
-- **Controller as K8s Deployment**: Created by `start_controller()`, discovered by
-  workers via in-cluster DNS (`iris-controller-svc.iris.svc.cluster.local:10000`).
-- **KubernetesRuntime (Pod-per-task)**: Task Pods claim GPU/RDMA resources directly
-  from the kubelet device plugin. Worker Pods are "light" (no GPU/RDMA requests).
-  Task Pods request `nvidia.com/gpu: N` and optionally `rdma/ib: 1`. They also
-  receive tolerations for the `nvidia.com/gpu` NoSchedule taint on GPU nodes.
-- **hostNetwork**: Both worker and task Pods use `hostNetwork: true` for RDMA/GPU
-  performance and flat-network endpoint registration. `dnsPolicy` is set to
-  `ClusterFirstWithHostNet` to preserve in-cluster DNS resolution.
-- **In-cluster auth**: The controller uses the `iris-controller` ServiceAccount.
-  No kubeconfig needed inside the cluster.
-- **Public images**: All images on `ghcr.io/marin-community/` are public. No
-  `imagePullSecrets` required.
-
-## 3. Tools
-
-### CoreWeave Intelligent CLI (`cwic`)
-
-CoreWeave provides `cwic` for cluster-level operations beyond standard `kubectl`:
-
-- `cwic auth login` — Authenticate to CoreWeave
-- NodePool upgrades and rollback (`cwic rollback`)
-- Object storage bucket management
-
-See [CoreWeave CLI docs](https://docs.coreweave.com) for installation.
-
-### kubectl
-
-Standard Kubernetes operations. CoreWeave adds the `NodePool` CRD
-(`compute.coreweave.com/v1alpha1`):
+Use the [reserve-GPU skill](../../../.agents/skills/reserve-gpu/SKILL.md) for a
+short development session and the [cloud GPU
+tutorial](../../../docs/tutorials/cloud-gpu.md) for a normal Iris job. These
+commands give a read-only view of a candidate cluster:
 
 ```bash
-kubectl get nodepool                    # List pools (TARGET vs CURRENT)
-kubectl describe nodepool <name>        # Check conditions (Valid, AtTarget)
-kubectl get pods -n iris                # List Iris Pods
-kubectl describe pod <name> -n iris     # Check scheduling / pull events
-kubectl logs <pod> -n iris              # Read Pod logs
-kubectl get nodes --show-labels         # Verify GPU node labels
+CLUSTER=cw-rno2a
+
+uv run iris --cluster="$CLUSTER" cluster status
+uv run iris --cluster="$CLUSTER" rpc controller list-backends
+uv run iris --cluster="$CLUSTER" cluster dashboard
 ```
 
-### CoreWeave Observe (Managed Grafana)
+`list-backends` reports accelerator groups, nodes, and current availability.
+CoreWeave has no Iris worker daemon, so the worker count in `cluster status` is
+not a capacity signal. `cluster dashboard` holds a port-forward open until
+Ctrl+C.
 
-Free, fully-managed Grafana included with every CKS cluster. Pre-configured
-dashboards for CKS (control plane, Pods), Fleet (node/resource trends),
-and Network (traffic, latency). No setup required.
+Controller lifecycle commands and direct Kubernetes writes change a shared
+cluster. Use the [deployment
+skill](../../../.agents/skills/deploy-iris-controllers/SKILL.md) and obtain
+explicit approval before running them.
 
-## 4. Operator Setup Guide
+## Connecting
 
-### Prerequisites
+Operator-side Kubernetes access uses the kubeconfig and context in the selected
+cluster file. Current research configs use `~/.kube/coreweave-iris` and pin a
+context, so do not switch the file's current context.
 
-- A CoreWeave CKS cluster (created via Console or Terraform)
-- A kubeconfig downloaded from CoreWeave Console > Tokens
-- Images pushed to `ghcr.io/marin-community/`
-- Controller extras in the local Iris venv:
-  `uv pip install 'marin-iris[controller]'`
+For first-time access, follow CoreWeave's [token and kubeconfig
+guide](https://docs.coreweave.com/security/authn-authz/manage-api-access-tokens)
+for each required CKS cluster. Merge the downloaded cluster, user, and context
+entries into `~/.kube/coreweave-iris`; preserve existing entries and set the
+file mode to `600`.
 
-This document is the canonical runbook for day-to-day CoreWeave operations.
-
-### Step 1: Save kubeconfig
+If `cluster status` or `cluster dashboard` says the context does not exist,
+compare the configured values with the file Iris is actually reading:
 
 ```bash
-mkdir -p ~/.kube
-mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
-export KUBECONFIG=~/.kube/coreweave-iris
-kubectl cluster-info
+CLUSTER=cw-rno2a
+
+printf 'KUBECONFIG=%s\n' "${KUBECONFIG:-<unset>}"
+rg -n 'kubeconfig_path|kube_context|namespace' "lib/iris/config/${CLUSTER}.yaml"
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
+
+env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
 ```
 
-### Step 2: Set S3 credentials (if using S3 storage)
+An exported `KUBECONFIG` selects the file, while the cluster config still pins
+the context. Unset a stale override instead of copying contexts between files.
+Iris commands that target CoreWeave use a Kubernetes port-forward and loopback
+trust; they do not need `iris login`.
+
+For a live access incident, continue in [CoreWeave GPU
+Operations](../OPS.md#coreweave-gpu-operations). It separates the port-forward,
+controller Service, Traefik ingress, and public LoadBalancer layers.
+
+## Architecture
+
+The control path is:
+
+1. The Iris controller runs as a Kubernetes Deployment in the cluster.
+2. `K8sTaskProvider` applies one Pod for each task attempt and reconciles Pod
+   state back into Iris.
+3. Kueue admits every task Pod. It gang-admits coscheduled jobs and applies the
+   configured topology constraints.
+4. Kubernetes places Pods on CoreWeave NodePools. CoreWeave, not Iris, manages
+   node provisioning.
+
+There is no Iris worker daemon, synthetic worker row, or Iris-managed slice on
+this path. An Iris node-agent DaemonSet publishes same-node host and GPU
+measurements to `telemetry_v1`. The cluster view retains Kubernetes readiness,
+allocatable capacity, scheduling, and Pod state; hardware history remains in
+`telemetry_v1`. `K8sTaskProvider.schedule()` and `autoscale()` are no-ops.
+Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
+
+GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
+also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
+Kueue topology annotations derived from
+`kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
+map is empty.
+
+Task logs are shipped from the node's container log file to Finelog by a
+sidecar. Process inspection and profiling run against the task container with
+`kubectl exec`; they do not call a worker service.
+
+### Federation ingress, authentication, and DNS
+
+The public controller hostname is only a federation route. DNS points it at the
+CoreWeave Traefik LoadBalancer, cert-manager issues its TLS certificate, and the
+`iris-federation-ipallowlist` middleware admits only the configured federation
+parent egress addresses. The controller then applies a second gate:
+
+- in-cluster private addresses and loopback are trusted by `auth.trusted_cidrs`;
+- off-cluster requests must carry a bearer token;
+- federation tokens are verified with the public keys in
+  `auth.federation_peers`.
+
+The allowlist and controller authentication are independent. Do not weaken one
+because the other is working. Pulumi owns Traefik, cert-manager, the Middleware,
+and Cloudflare DNS; the cluster config supplies their inputs. See the [network
+manifest builders](../src/iris/cluster/platforms/k8s/network_manifests.py), the
+[Pulumi Traefik component](../../../infra/pulumi/src/iac/coreweave/traefik.py),
+and the [federation reference](federation.md) for the handoff protocol.
+
+### GPU topology and Kueue safety
+
+H100 gangs use preferred InfiniBand leaf-group colocation. GB200 and GB300
+NVL72 gangs use stricter rack-aware placement:
+
+- an 18-node rack has 16 nodes guaranteed schedulable at once;
+- up to 16 replicas bind to one NVLink domain;
+- larger gangs require one node-saturating Pod with all four GPUs per tray, then
+  split evenly over the fewest racks with 10 to 16 replicas per rack slice.
+  Valid examples include 20, 24, 32, and 48 replicas.
+
+Invalid multi-rack shapes fail before submission rather than silently losing
+the one-slice-per-rack guarantee. The canonical arithmetic is in
+[`coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py).
+
+Kueue's admission webhooks must remain scoped to the Iris task namespace. An
+unscoped fail-closed webhook can block CNI and system Pods and deadlock node
+delivery before Kueue itself starts. Pulumi pins the chart and applies the
+namespace scope in
+[`KueueAddon`](../../../infra/pulumi/src/iac/coreweave/kueue.py); do not replace
+that release with an ad hoc cluster-wide install.
+
+#### TAS preemption and CPU spillover
+
+All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+`iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
+Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
+in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
+can then remove a lower-priority CPU Workload from the topology snapshot before
+retrying a blocked GPU gang's fit.
+
+Accelerator-free jobs use any compatible node by default. Iris does not expose
+a CPU-only placement constraint; rare jobs that require hard CPU-node placement
+must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
+requests exclude CPU nodes without an additional selector.
+
+Kueue requires every node in a TAS flavor to carry every level in the referenced
+Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
+labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
+leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
+level. The synthetic values do not advertise GPU or RDMA resources.
+
+This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
+[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
+not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
+tracked by
+[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
+When migrating from the split flavors, apply the NodePool labels before
+switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
+topology cache.
+
+## Resource ownership
+
+| Resource | Owner |
+| --- | --- |
+| CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
+| Namespace, RBAC, NodePools, Kueue cluster objects, ingress, and DNS | `infra/pulumi` |
+| Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
+| Task Pods and their lifecycle | `K8sTaskProvider` |
+| Node scheduling and provisioning | Kubernetes and CoreWeave |
+
+`K8sControllerProvider.verify_prerequisites()` only checks that the
+Pulumi-owned resources exist. It does not create or repair them. Read the
+[Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
+a destructive NodePool plan can deprovision reserved hardware.
+
+## Configuration
+
+`lib/iris/src/iris/cluster/config.py` defines the schema. The checked-in cluster
+files are the source of truth for deployed values.
+
+### Platform and controller
+
+| Field | Meaning |
+| --- | --- |
+| `platform.label_prefix` | Prefix for managed labels and NodePool names. |
+| `platform.coreweave.region` | CoreWeave region for this CKS cluster. |
+| `platform.coreweave.namespace` | Namespace used by the controller lifecycle; defaults to `iris`. |
+| `platform.coreweave.kubeconfig_path` | Operator-side kubeconfig. Current clusters use `~/.kube/coreweave-iris`. |
+| `platform.coreweave.kube_context` | Context bound to every operator-side Kubernetes call. Do not rely on the kubeconfig's current context. |
+| `platform.coreweave.object_storage_endpoint` | S3 endpoint seen by Pods inside CoreWeave. |
+| `platform.coreweave.external_object_storage_endpoint` | Endpoint for the same store when Iris runs outside CoreWeave. It falls back to the internal endpoint when empty. |
+| `controller.coreweave.port` | Controller RPC port; defaults to `10000`. |
+| `controller.coreweave.service_name` | In-cluster Service name; defaults to `iris-controller-svc`. |
+| `controller.coreweave.scale_group` | CPU scale group that hosts the controller. This is required. |
+| `controller.coreweave.ingress_class` | Ingress class used by the external federation route. |
+
+The operator kubeconfig path and context are removed before the cluster config
+is written to the in-cluster ConfigMap. The controller and task provider use
+their Kubernetes service account inside the cluster.
+
+### Kubernetes task provider
+
+| Field | Meaning |
+| --- | --- |
+| `kubernetes_provider.namespace` | Namespace for task Pods and the LocalQueue. |
+| `kubernetes_provider.service_account` | Optional service account assigned to task Pods. |
+| `kubernetes_provider.host_network` | Enables host networking and RDMA requests for GPU Pods. |
+| `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
+| `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
+| `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
+| `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
+| `kubernetes_provider.preempt_namespaces` | Namespaces containing provider health-check Pods that Iris may clear when they block an admitted GPU job. |
+
+An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
+is the normal CoreWeave controller configuration.
+
+### Scale groups and NodePools
+
+Each CoreWeave scale group becomes one NodePool:
+
+| Field | Effect |
+| --- | --- |
+| `resources.device_variant` and `resources.device_count` | Accelerator identity and per-node count advertised to Iris. |
+| `resources.cpu`, `resources.ram`, and `resources.disk` | Per-node capacity recorded in the scale-group config. |
+| `buffer_slices` | Minimum node count for node-based pools. |
+| `max_slices` | Maximum node count for node-based pools. |
+| `slice_template.num_vms` | Multiplier applied to the node counts. Current CoreWeave groups use one VM per slice. |
+| `slice_template.coreweave.instance_type` | CoreWeave node SKU. |
+
+CoreWeave Console display names do not always match the Kubernetes
+`spec.instanceType`. Use the value accepted by the live NodePool API.
+
+For rack-based NVL72 SKUs, the NodePool uses `targetRacks` instead of the node
+autoscaler fields. `max_slices * num_vms` must be divisible by the 18-node rack
+size. `infra/pulumi/src/iac/nodepools.py` and
+`lib/iris/src/iris/cluster/platforms/k8s/nodepool_manifests.py` contain the
+projection rules.
+
+## CoreWeave AI Object Storage access
+
+The research clusters set `MARIN_PREFIX` to CoreWeave object storage. Use it for
+durable inputs, outputs, and caches. Use
+[`marin_temp_bucket`](../../../docs/tutorials/cloud-gpu.md#keep-data-on-coreweave)
+for disposable data with a lifecycle deadline. Do not read or copy GCS data
+from CoreWeave without explicit approval because the transfer incurs egress
+cost.
+
+The cluster config carries two endpoints for the same S3-compatible store:
+
+| Caller | Config field | Current endpoint |
+| --- | --- | --- |
+| Task or controller Pod inside CoreWeave | `platform.coreweave.object_storage_endpoint` | `http://cwlota.com` |
+| Operator process outside CoreWeave | `platform.coreweave.external_object_storage_endpoint` | `https://cwobject.com` |
+
+Both domains require virtual-hosted bucket addressing. Let Iris, Rigging, or
+[`fsutil`](../../../docs/references/fsutil.md) derive it; do not build endpoint
+URLs by hand. For operator-side access, create a CoreWeave object-storage access
+key and expose only its expected names:
 
 ```bash
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+export CW_KEY_ID=<key-id>
+export CW_KEY_SECRET=<key-secret>
+uv run fsutil buckets
 ```
 
-`iris cluster start` creates a K8s Secret (`iris-s3-credentials`) from these
-environment variables automatically.
+During a controller deployment, Iris maps these values to the S3 variables in
+`iris-task-env`. Normal task submissions then receive cluster-managed storage
+access without carrying the operator's shell environment.
 
-> **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
-> virtual-hosted-style S3 addressing, which is auto-detected and configured.
-> However, this addressing style is incompatible with JAX's GCS/S3 backend.
-> Use Cloudflare R2 or another path-style-compatible endpoint for JAX workloads.
+Task working directories and caches are node-local:
 
-### Step 3: Start the cluster
+| Container path | Kubernetes volume | Lifetime |
+| --- | --- | --- |
+| `/app`, `/tmp` | `emptyDir` | Pod |
+| `/uv/cache`, `/hf/cache`, `/cargo`, `/cache` | `hostPath` below `kubernetes_provider.cache_dir` | Node |
+| `/dev/shm` | memory-backed `emptyDir` | Pod |
+
+Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
+Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
+it may contain the submitter's token. HostPath caches are not durable and are
+not automatically pruned, so they can grow until the node is replaced or an
+operator cleans them. Durable outputs belong in object storage.
+
+`/cache` is unclaimed node-local scratch: a task that needs a real directory on
+the node rather than a bucket picks its own subdirectory there. Nothing prunes
+it, so treat anything written there as recoverable. `iris.runtime.jax_init` uses
+`/cache/xla` for XLA's per-fusion autotune results on GPU tasks, because XLA
+opens that directory from C++ and cannot read an object-store URL. JAX's own
+compilation cache is the opposite case and stays on object storage under the
+Marin prefix: JAX writes it only from process 0, so a node-local copy would
+leave every other node permanently cold.
+
+`storage.local_state_dir` controls controller SQLite storage. When it is empty,
+Iris creates a controller state PVC. `storage.remote_state_dir` stores durable
+controller checkpoints in object storage.
+
+## Credentials Summary
+
+Credentials have separate owners and scopes:
+
+| Location | Scope |
+| --- | --- |
+| `~/.kube/coreweave-iris` | Operator access to CKS. It is not copied into Pods. |
+| Checkout-local `.marin.yaml` or explicit job environment | Submitter-provided values such as W&B or Hugging Face credentials. |
+| Operator `CW_KEY_ID` and `CW_KEY_SECRET` | Input used when deploying the cluster-managed object-storage Secret. |
+| `iris-task-env` Secret | Object-storage credentials and names listed in `defaults.inject_env`; mounted by the controller and task Pods. |
+| `iris-controller-env` Secret | Controller-only credentials such as the cluster signing key; task Pods do not mount it. |
+| `defaults.task_env` | Non-secret cluster defaults written into task Pod environments. |
+
+The Iris CLI loads `.marin.yaml` only when run from that checkout. SDK
+submissions and commands from another directory must pass their task environment
+explicitly. The deploy path rejects literal secrets before writing
+`iris-cluster-config`: references remain in the ConfigMap, while resolved values
+go through the two Secrets above.
+
+Do not dump Pod environments or use `kubectl describe pod` on a task Pod; literal
+job environment values can appear in the output. Inspect named keys and
+scheduling fields instead, without printing Secret values.
+
+## Troubleshooting
+
+Start with Iris's retained task view. It already joins Pod, scheduler, and Kueue
+state and remains available after Kubernetes garbage collection:
 
 ```bash
-iris --cluster=coreweave cluster start
+CLUSTER=cw-rno2a
+TASK=/<user>/<job>/0
+
+uv run iris --cluster="$CLUSTER" task describe "$TASK"
+uv run iris --cluster="$CLUSTER" task events "$TASK"
+uv run iris --cluster="$CLUSTER" rpc controller list-backends
 ```
 
-This is fully idempotent. It creates/reconciles:
-1. Namespace (`iris`) and RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
-2. S3 credentials Secret (if S3 storage URIs are configured)
-3. ConfigMap (`iris-cluster-config`) with the cluster config as JSON
-4. Shared NodePools (one per scale group, in parallel)
-5. Controller Deployment (`iris-controller`) — images are built and pushed automatically
-6. Controller Service (`iris-controller-svc`, ClusterIP)
+`task events` records `ImagePullBackOff` and `CrashLoopBackOff` warnings. Pair it
+with `iris job logs /<user>/<job>` for task output. An `Evicted` task can
+indicate ephemeral-storage pressure. Raise the task's `disk` request only when
+its `/app`, `/tmp`, or writable container layer is full; escalate node
+`DiskPressure` instead of editing the Pod or NodePool.
 
-### Step 4: Use the cluster
+For a Pending task, use these read-only Kubernetes checks when the Iris message
+is not enough. Read the kubeconfig, context, and namespace from the cluster
+config rather than copying the example values:
 
 ```bash
-iris --cluster=coreweave cluster status
-iris --cluster=coreweave cluster dashboard
+KUBECONFIG=~/.kube/coreweave-iris
+CONTEXT=<platform.coreweave.kube_context>
+NAMESPACE=<kubernetes_provider.namespace>
+
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" get nodepool -o wide
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  get pods,workloads.kueue.x-k8s.io -o wide
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
+  get workload <workload-name> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
 ```
 
-### Step 5: Stop
-
-```bash
-iris --cluster=coreweave cluster stop
-```
-
-Deletes worker Pods and controller resources. NodePools are left in place (they
-scale to zero when idle).
-
-### Connecting
-
-Preferred: use `--cluster=NAME` so Iris opens and closes the controller tunnel:
-
-```bash
-iris --cluster=coreweave-ci job logs /runner/my-job
-iris cluster list
-```
-
-`--cluster=NAME` resolves to a config under `lib/iris/config/` and opens a
-`kubectl port-forward` to the controller service. This path requires the
-`iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`). Without them,
-auto-tunneled CoreWeave commands fail before connecting:
-`ImportError: Install iris[controller] to use CloudK8sService`.
-
-Fallback: manual port-forward if you need a long-lived tunnel:
-
-```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris \
-  port-forward -n <namespace> svc/<service_name> 10000:10000 &
-iris --controller-url=http://localhost:10000 ...
-```
-
-| Cluster name | Namespace | Service | Config file |
-|--------------|-----------|---------|-------------|
-| `coreweave` | `iris` | `iris-controller-svc` | `coreweave.yaml` |
-| `coreweave-ci` | `iris-ci` | `iris-ci-controller-svc` | `coreweave-ci.yaml` |
-
-### GPU Configs
-
-| Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
-|--------|-------------|-----------------|-----------------------|
-| H100 | `lib/iris/config/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
-| GH200 | `lib/iris/config/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
-| B200 | `lib/iris/config/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
-
-Use `GH200x1` for RNO2A. `H200x1` also schedules there today; both land on
-CoreWeave `gd-1xgh200` nodes labeled `gpu.nvidia.com/model=GH200_480GB` and
-report `NVIDIA GH200 480GB`.
-
-Before the full GPU canary, run one tiny direct JAX job for each row. It should
-prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
-
-Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
-GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
-CUDA 13.x.
-
-### Grug MoE Canary Warm-Node Multinode Smoke
-
-For a realistic Grug MoE multinode smoke, use the GPU path in
-`experiments.ferries.canary_ferry`. This is a temporary warm-node validation
-while cold-start/gang scheduling is tracked in #5480: before submitting the job,
-verify that the required GPU nodes are already `CURRENT`, free, and schedulable.
-
-Warm-node preflight:
-
-```bash
-# Confirm the target pool is not already occupied by another Iris workload.
-uv run iris --cluster=<cluster> job list --state running
-
-# Confirm the requested nodes are already warm, not still provisioning.
-kubectl --kubeconfig <kubeconfig> get nodepool.compute.coreweave.com <nodepool> \
-  -o custom-columns=NAME:.metadata.name,TARGET:.spec.targetNodes,CURRENT:.status.currentNodes,INPROGRESS:.status.inProgress,QUEUED:.status.queuedNodes
-
-# Confirm the scheduler-visible pods are not already consuming the target nodes.
-kubectl --kubeconfig <kubeconfig> -n <namespace> get pods -o wide
-```
-
-Starting smoke settings:
-
-| Target | Cluster | Namespace | Kubeconfig | NodePool | `CANARY_GPU_*` | Batch | `NCCL_SOCKET_IFNAME` |
-|--------|---------|-----------|------------|----------|-----------------|-------|----------------------|
-| H100x8 x 2 | `coreweave-ci` | `iris-ci` | `~/.kube/coreweave-iris` | `iris-ci-h100-8x` | `TYPE=H100`, `COUNT=8`, `REPLICAS=2` | 64 | `=enp157s0np0` |
-| B200x8 x 2 | `coreweave-usw09b` | `iris` | `~/.kube/cw-usw09b.yaml` | `iris-usw09b-b200-8x` | `TYPE=B200`, `COUNT=8`, `REPLICAS=2` | 128 | `=enp44s0np0` |
-| GH200x1 x 2 | `coreweave-rno2a` | `iris` | `~/.kube/cw-rno2a.yaml` | `iris-rno2a-gh200-1x` | `TYPE=GH200`, `COUNT=1`, `REPLICAS=2` | 16 | `=eth0` |
-
-For H100, manually warm the second node before launch and restore the pool after
-the run:
-
-```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
-  --type merge -p '{"spec":{"targetNodes":2}}'
-
-# After the smoke:
-kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
-  --type merge -p '{"spec":{"targetNodes":1}}'
-```
-
-The GitHub CoreWeave canary workflow uses the same H100 pool; run it and manual
-H100 validation sequentially. If the controller restarts after warming the H100
-pool, recheck `targetNodes`; startup may reconcile the pool back toward the
-single-node target.
-
-Submit with explicit `-e` environment variables. Iris job containers do not
-inherit arbitrary shell variables from the submitter. Because this canary uses
-real SlimPajama data, use a shared durable `MARIN_PREFIX` plus the credentials
-needed to read/write that prefix. `CANARY_TRACKER=json_logger` avoids requiring
-W&B for this smoke.
-
-| Use | Prefix | Endpoint | Credentials |
-|-----|--------|----------|-------------|
-| H100 CI state and canary data | `s3://marin-na/...` | Cloudflare R2 | R2 credentials |
-| B200/GH200 controller state | `s3://marin-poc/iris/state/...` | `https://cwobject.com` | CoreWeave object storage credentials |
-| B200/GH200 canary data with `MARIN_PREFIX=s3://marin-na/marin/` | `s3://marin-na/marin/` | Cloudflare R2 | R2 credentials |
-
-Set `AWS_ENDPOINT_URL` to the endpoint that matches the prefix and credentials.
-For R2/CoreWeave S3-compatible endpoints, leave `AWS_REGION` and
-`AWS_DEFAULT_REGION` as `auto`; use a real AWS region only for AWS S3.
-
-```bash
-RUN_ID="cw-grug-mn-warm-<target>-$(date -u +%Y%m%d-%H%M%S)"
-LOG="/tmp/marin-cw-grug-moe/${RUN_ID}.log"
-mkdir -p "$(dirname "$LOG")"
-
-# TODO(#5524): remove CANARY_PROFILER_NUM_STEPS once Levanter profiler stop is
-# idempotent. The shorter window keeps 20-step smokes from stopping the
-# profiler on the final forced callback.
-uv run iris --cluster=<cluster> job run \
-  --job-name "$RUN_ID" \
-  --cpu 1 --memory 2GB --disk 8GB --extra cpu \
-  -e MARIN_PREFIX <shared-marin-prefix> \
-  -e RUN_ID "$RUN_ID" \
-  -e CANARY_ACCELERATOR gpu \
-  -e CANARY_GPU_TYPE <H100|B200|GH200> \
-  -e CANARY_GPU_COUNT <8|1> \
-  -e CANARY_GPU_REPLICAS 2 \
-  -e CANARY_STEPS 20 \
-  -e CANARY_BATCH_SIZE <64|128|16> \
-  -e CANARY_PROFILER_ENABLED true \
-  -e CANARY_PROFILER_NUM_STEPS 10 \
-  -e CANARY_TRACKER json_logger \
-  -e NCCL_SOCKET_IFNAME '<interface>' \
-  -e HF_TOKEN "$HF_TOKEN" \
-  -e AWS_ACCESS_KEY_ID "$AWS_ACCESS_KEY_ID" \
-  -e AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY" \
-  -e AWS_ENDPOINT_URL "$AWS_ENDPOINT_URL" \
-  -e AWS_REGION "${AWS_REGION:-auto}" \
-  -e AWS_DEFAULT_REGION "${AWS_DEFAULT_REGION:-auto}" \
-  -- python -m experiments.ferries.canary_ferry 2>&1 | tee "$LOG"
-```
-
-Expected success signals: both replicas report JAX 0.10.0, both enter
-`initialize_jax` with `IRIS_NUM_TASKS=2`, both emit tracker summaries, the
-profiler starts and records a JAX profile artifact, the step reaches 20/20, a
-checkpoint is committed, and the parent job exits `JOB_STATE_SUCCEEDED`. H100
-batch 128 has OOMed with the current Grug MoE model; use batch 64 for functional
-validation.
-
-### KubernetesProvider Operations
-
-On CoreWeave, there are no persistent worker daemons. The controller dispatches
-tasks directly as Kubernetes Pods, `list-workers` returns empty, and the
-`workers` SQL table is empty. Use:
-
-```bash
-kci get pods -n iris -l iris.managed=true
-kci get nodepools
-kci get events -n iris --sort-by=.lastTimestamp | tail -30
-kci logs -n iris deployment/iris-controller -f
-iris rpc controller get-kubernetes-cluster-status
-```
-
-(`kci` = `kubectl --kubeconfig ~/.kube/coreweave-iris`)
-
-### NodePool Operations
-
-```bash
-kci get nodepools
-kci patch nodepool <name> --type=merge -p '{"spec":{"targetNodes":N}}'
-kci delete nodepool <name>
-```
-
-Do not use `kubectl scale --replicas` for NodePools; patch
-`spec.targetNodes`.
-
-If deletion is stuck because the autoscaler fights deletion or the node is
-mid-delivery:
-
-```bash
-kci scale deployment iris-controller -n iris --replicas=0
-kci patch nodepool <name> --type=merge -p '{"spec":{"autoscaling":false,"targetNodes":0}}'
-kci patch nodepool <name> --type=json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
-kci delete nodepool <name>
-```
-
-`iris cluster stop` deletes pods but NodePools survive. Delete managed NodePools
-explicitly to avoid lingering GPU costs:
-
-```bash
-iris cluster stop
-kci delete nodepool -l iris-<label_prefix>-managed=true
-```
-
-### Gotchas
-
-- **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
-- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly.
-- **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
-- **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
-- **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
-- **H100 quota is account-wide.** If a canary pod is stuck with `NotTriggerScaleUp: 2 max node group size reached`, check `kci get nodepools -A`; another H100 pool can consume the shared US-WEST-04A cap.
-
-Cold-start timings:
-
-| Resource | Time |
-|----------|------|
-| CW CPU node | ~14 min |
-| CW H100 bare-metal | ~20 min |
-| CW first training step (from zero) | ~25-30 min |
-
-## 5. RBAC Permissions
-
-`iris cluster start` auto-applies these resources via `ensure_rbac()` (defined
-in `CoreweavePlatform`):
-
-| Resource | Purpose |
-|----------|---------|
-| `iris` Namespace | Isolation for all Iris resources |
-| `iris-controller` ServiceAccount | In-cluster K8s API auth for controller and worker Pods |
-| `iris-controller-{namespace}` ClusterRole | API permissions (see below). Namespace-qualified to support multiple Iris instances on the same CKS cluster. |
-| `iris-controller-{namespace}` ClusterRoleBinding | Binds ServiceAccount to ClusterRole. Namespace-qualified to avoid collisions. |
-
-**ClusterRole permissions**:
-
-| API Group | Resources | Verbs |
-|-----------|-----------|-------|
-| `compute.coreweave.com` | `nodepools` | get, list, watch, create, update, patch, delete |
-| core (`""`) | `pods`, `pods/exec`, `pods/log` | get, list, watch, create, update, patch, delete |
-| core (`""`) | `nodes` | get, list, watch |
-| core (`""`) | `configmaps` | get |
-
-## 6. Configuration Reference
-
-### CoreweavePlatformConfig
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `region` | string | — | CoreWeave region (e.g. `US-WEST-04A`) |
-| `namespace` | string | `iris` | Kubernetes namespace for all resources |
-| `kubeconfig_path` | string | — | Only needed when running CLI outside the cluster |
-| `object_storage_endpoint` | string | — | S3-compatible endpoint URL |
-
-### CoreweaveControllerConfig
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `port` | int | `10000` | Controller listening port |
-| `service_name` | string | `iris-controller-svc` | K8s Service name |
-| `scale_group` | string | **required** | Scale group to schedule the controller onto |
-
-### CoreweaveSliceConfig (per scale group)
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `region` | string | — | Scale group region |
-| `instance_type` | string | — | CoreWeave instance type (e.g. `gd-8xh100ib-i128`) |
-| `gpu_class` | string | — | GPU model (e.g. `H100`) |
-| `infiniband` | bool | `false` | Request `rdma/ib: 1` resource on task Pods |
-
-### Bootstrap config
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `docker_image` | string | — | Worker image |
-| `worker_port` | int | — | Worker listening port |
-| `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
-| `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
-
-> **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
-> as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
-> point to NVMe (e.g. `/mnt/local/iris-cache`). Using the default root path will
-> fill the RAM disk immediately and cause Pod eviction.
-
-### Startup grace period
-
-The default `startup_grace_period` is 2400s (40 minutes). This covers CoreWeave
-bare-metal node provisioning (20-30 min) plus Pod image pull and startup time.
-
-## 7. Instance Type Naming
-
-CoreWeave instance types follow the pattern `{prefix}-{count}x{model}{networking}-i{cpu}`:
-
-| Component | Meaning | Example |
-|-----------|---------|---------|
-| `gd` | GPU device | `gd-8xh100ib-i128` |
-| `cd` | CPU device | `cd-gp-i64-erapids` |
-| `8x` | GPU count | 8 GPUs |
-| `h100` | GPU model | NVIDIA H100 |
-| `ib` | InfiniBand | High-bandwidth interconnect |
-| `i128` | vCPU count | 128 vCPUs |
-
-**Known-good instance types**:
-
-| Instance Type | GPUs | vCPUs | RAM | Use Case |
-|---------------|------|-------|-----|----------|
-| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | GPU training (primary) |
-| `cd-gp-i64-erapids` | none | 64 | 256 GB | Controller / CPU tasks |
-
-Full list: [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
-
-## 8. Key Design Decisions
-
-### Shared NodePools with CoreWeave autoscaling
-
-Each scale group maps to one shared NodePool with `autoscaling: true`. CoreWeave
-provisions bare-metal nodes on demand when Pods are scheduled and deprovisions
-them when idle. Iris does not manage node lifecycle directly.
-
-NodePools are created idempotently by `ensure_nodepools()` during `start_controller()`.
-Stale NodePools (from renamed/removed scale groups) are garbage-collected automatically.
-For existing pools, `targetNodes` is clamped to `min(currentNodes, 1)` to prevent
-runaway autoscaling from system pods.
-
-### Controller as a Kubernetes Deployment
-
-The controller runs as a single-replica Deployment scheduled onto the configured
-`scale_group` NodePool. Workers discover it via K8s Service DNS. The controller
-Pod uses in-cluster ServiceAccount auth for all kubectl operations and requests
-dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
-Guaranteed QoS instead of BestEffort.
-
-Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
-256 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
-smaller bare-metal nodes.
-
-### Bootstrap via Platform.create_slice() with async state model
-
-`create_slice()` returns a `SliceHandle` immediately in `CREATING` state. A
-background thread drives the handle through `CREATING -> BOOTSTRAPPING -> READY`
-(or `FAILED`). The autoscaler observes transitions via `handle.describe()` and
-does not drive bootstrap logic.
-
-On failure, the platform cleans up its own resources (deletes the worker Pod) and
-marks the handle as `FAILED`. The autoscaler calls `handle.terminate()` as a
-safety net.
-
-### KubernetesRuntime for task execution (Pod-per-task)
-
-Each task attempt is a separate Kubernetes Pod created by `KubernetesRuntime`.
-Task Pods:
-- Claim GPU/RDMA resources from the kubelet device plugin (`nvidia.com/gpu: N`,
-  `rdma/ib: 1` when `infiniband: true`)
-- Receive tolerations for `nvidia.com/gpu` NoSchedule taints automatically
-- Use `hostNetwork: true` with `dnsPolicy: ClusterFirstWithHostNet`
-- Get S3 credentials via `secretKeyRef` from the platform-managed Secret
-- Use `emptyDir` for `/app` (workdir) so tasks can run on any node
-- Materialize code bundles in-pod via fsspec
-- Have `ownerReferences` pointing to the worker Pod for GC
-
-The worker Pod intentionally does **not** request GPU/RDMA resources when
-`runtime: kubernetes` is configured, so task Pods can claim them instead.
-
-### Reconcile-driven recovery
-
-Correctness does not depend on in-memory thread state. After a controller restart,
-`list_all_slices()` discovers existing worker Pods by labels and reconstructs
-slice handles with the correct state based on Pod phase and readiness conditions.
-
-## 9. Early Failure Detection
-
-The platform detects fatal errors before the full timeout expires:
-
-| Error | Detection | Behavior |
-|-------|-----------|----------|
-| `ErrImagePull`, `ImagePullBackOff`, `InvalidImageName` | Container waiting reason | Immediate failure with error message |
-| `CreateContainerConfigError` | Container waiting reason | Immediate failure (usually missing Secret/ConfigMap) |
-| `CrashLoopBackOff` | Waiting reason + `restartCount >= 2` | Fail with last 30 lines of logs |
-| `FailedMount`, `FailedAttachVolume` | Pod events, `count >= 3`, after 90s grace | Immediate failure |
-
-## 10. Environment Variables
-
-### Operator (outside cluster)
-
-| Variable | Purpose |
-|----------|---------|
-| `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
-| `R2_ACCESS_KEY_ID` | S3/R2 access key (required if storage uses `s3://`) |
-| `R2_SECRET_ACCESS_KEY` | S3/R2 secret key |
-
-### Auto-injected into worker and task Pods
-
-| Variable | Source | Description |
-|----------|--------|-------------|
-| `IRIS_WORKER_NODE_NAME` | Downward API (`spec.nodeName`) | Kubernetes node name |
-| `IRIS_POD_NAMESPACE` | Downward API (`metadata.namespace`) | Pod's namespace |
-| `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |
-| `IRIS_POD_UID` | Downward API (`metadata.uid`) | Pod's UID |
-| `IRIS_SERVICE_ACCOUNT_NAME` | Platform | ServiceAccount for task Pods (set when `runtime: kubernetes`) |
-| `IRIS_S3_SECRET_NAME` | Platform | K8s Secret name for S3 credentials |
-| `AWS_ACCESS_KEY_ID` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_SECRET_ACCESS_KEY` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_ENDPOINT_URL` | Config | S3 endpoint URL |
-| `FSSPEC_S3` | Platform | JSON-encoded fsspec S3 config (includes endpoint and addressing style) |
-
-## 11. Timeouts
-
-| Timeout | Default | Description |
-|---------|---------|-------------|
-| Pod readiness | 2400s (40 min) | Max wait for worker Pod to pass readiness probe |
-| Deployment readiness | 2400s (40 min) | Max wait for controller Deployment availability |
-| kubectl commands | 1800s (30 min) | Default subprocess timeout for kubectl calls |
-| Mount failure grace | 90s | Grace period before treating FailedMount as fatal |
-
-## 12. Control Flow
-
-### Cluster startup (`iris cluster start`)
-
-`CoreweavePlatform.start_controller()` orchestrates the full startup sequence.
-See `lib/iris/src/iris/providers/k8s/coreweave.py`.
-
-1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole `iris-controller-{ns}`, ClusterRoleBinding `iris-controller-{ns}`)
-2. Create S3 credentials Secret (if S3 storage configured)
-3. Apply ConfigMap with cluster config
-4. Create/reconcile all shared NodePools in parallel via `ensure_nodepools()`
-5. Apply controller Deployment (with rollout restart)
-6. Apply controller Service (ClusterIP)
-7. Wait for Deployment availability (polls with early failure detection for
-   image pull errors, crash loops, and volume mount failures)
-8. Return controller address (K8s Service DNS)
-
-### Scale-up (autoscaler creates a worker slice)
-
-1. Autoscaler calls `create_slice(config, bootstrap_config)`
-2. Platform generates slice ID: `{label_prefix}-{scale_group}-{timestamp_ms}`
-3. Platform applies worker Pod to the scale group's shared NodePool via
-   `nodeSelector` matching the scale group label
-4. Platform returns `CoreweaveSliceHandle` immediately (state: CREATING)
-5. Background thread:
-   a. Transitions to BOOTSTRAPPING
-   b. Creates worker Pod (image, ports, env from bootstrap_config)
-   c. Polls Pod readiness (with early failure detection)
-   d. On ready: extracts Pod IP, creates `CoreweaveWorkerHandle`, marks READY
-   e. On failure: deletes Pod, marks FAILED
-
-### Worker registration
-
-Worker Pod runs `iris.cluster.worker.main serve --runtime=kubernetes`. It:
-1. Reads config from ConfigMap mount (`/etc/iris/config.json`)
-2. Discovers controller via `iris-controller-svc.iris.svc.cluster.local:10000`
-3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME`,
-   `IRIS_S3_SECRET_NAME` from environment)
-4. Registers with controller, enters heartbeat loop
-
-### Task execution
-
-Standard Iris flow. Controller assigns task via heartbeat RPC. Worker calls
-`KubernetesRuntime.create_container()` which creates a task Pod. See
-`lib/iris/src/iris/cluster/runtime/kubernetes.py`.
-
-### Scale-down
-
-1. Autoscaler selects the idle slice
-2. `handle.terminate()` force-deletes the worker Pod
-3. CoreWeave autoscaler deprovisions the bare-metal node when no Pods remain
-
-## 13. Multi-VM Jobs
-
-Multi-VM scale groups allow training across multiple nodes. Each slice in a
-multi-VM group provisions N worker Pods (one per VM) that share a single
-ConfigMap. All Pods in a slice must reach Ready before the slice is usable.
-
-### Configuration
-
-Define a scale group with `num_vms > 1` in the cluster config. The
-`slice_template.num_vms` must match the top-level `num_vms`. For CoreWeave GPU
-groups, define at least one topology label in `worker.attributes`; use
-`same-slice` to discover the leader pod's node label value and pin follower
-pods to that same topology domain:
-
-```yaml
-scale_groups:
-  h100-16x:
-    num_vms: 2
-    resources:
-      cpu: 128
-      ram: 2048GB
-      disk: 1TB
-      device_type: gpu
-      device_variant: H100
-      device_count: 8
-    worker:
-      attributes:
-        region: US-WEST-04A
-        pool: h100-16x
-        backend.coreweave.cloud/superpod: same-slice
-    buffer_slices: 0
-    max_slices: 1
-    priority: 50
-    slice_template:
-      num_vms: 2
-      coreweave:
-        region: US-WEST-04A
-        instance_type: gd-8xh100ib-i128
-```
-
-### Submitting multi-replica jobs
-
-Jobs targeting a multi-VM CoreWeave GPU group should use coscheduling so all
-replicas are launched together. Include `ports=["jax"]` so Iris allocates a
-named port for JAX coordinator discovery:
-
-```python
-from iris.sdk import IrisClient, CoschedulingConfig
-
-client = IrisClient()
-client.submit(
-    name="multi-node-training",
-    image="ghcr.io/marin-community/iris-task:latest",
-    command=["python", "train.py"],
-    replicas=2,
-    ports=["jax"],
-    coscheduling=CoschedulingConfig(group_by="leafgroup"),
-    resources={"gpu": 8},
-)
-```
-
-Each replica receives `IRIS_TASK_ID` (0 or 1), `IRIS_NUM_TASKS` (2), and
-`IRIS_PORT_JAX` (the allocated coordinator port). Task code calls
-`iris.runtime.jax_init.initialize_jax()` to bootstrap JAX distributed — task 0
-registers its coordinator address via the endpoint API, and task 1 discovers it
-by polling.
-
-### Requirements
-
-- **Coscheduling is mandatory for multi-host GPU groups**: replicas must
-  launch together on workers from the same CoreWeave pool.
-- **Topology labels are mandatory for multi-host GPU groups**: set at least one
-  CoreWeave topology key in `worker.attributes`, such as
-  `backend.coreweave.cloud/superpod: same-slice`.
-- **hostNetwork anti-affinity**: Because worker Pods use `hostNetwork: true`,
-  two Pods binding the same port cannot schedule on the same node. This
-  provides implicit anti-affinity — no explicit `podAntiAffinity` rule needed.
-- **Gang semantics**: If any task in a coscheduled group fails terminally, all
-  siblings are killed and the entire group retries together.
-
-## 14. Credentials Summary
-
-### Platform-managed (all created by `iris cluster start`)
-
-| Resource | Purpose | Created By |
-|----------|---------|------------|
-| `iris` Namespace + RBAC | K8s API auth and permissions | `start_controller()` via `ensure_rbac()` |
-| `iris-s3-credentials` Secret | S3 object storage auth | `start_controller()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` env vars |
-| `iris-cluster-config` ConfigMap | Cluster config for controller and workers | `start_controller()` |
-| In-cluster ServiceAccount token | kubectl calls from controller Pod | Auto-mounted by Kubernetes |
-
-### Operator-managed
-
-| Resource | Purpose | How to Obtain |
-|----------|---------|---------------|
-| CoreWeave API token | kubeconfig auth | Console > Tokens > Create Token |
-| Kubeconfig file | Operator's kubectl access | Console > Tokens > Download Kubeconfig |
-
-The `kubeconfig_path` config field is only needed when running the CLI
-**outside** the cluster (e.g., `iris cluster start` from a laptop). Inside the
-cluster, Pods use in-cluster auth automatically.
-
-## 15. Open Questions / Known Limitations
-
-1. **NodePool rate limits**: Creating many NodePools at scale has not been
-   validated with CoreWeave.
-
-2. **Task Pod GC**: `ownerReferences` on task Pods only trigger GC when the
-   worker Pod object is deleted. If the worker crash-loops in place, stale task
-   Pods can accumulate. See TODO in `kubernetes.py`.
-
-## 16. Troubleshooting
-
-### NodePool not scaling up
-
-```bash
-kubectl get nodepool                     # Check TARGET vs CURRENT
-kubectl describe nodepool <name>         # Check conditions: Valid, AtTarget
-```
-
-If `Valid` is `False`, the instance type or configuration is rejected.
-
-### Pod stuck in Pending
-
-```bash
-kubectl describe pod <name> -n iris      # Check Events section
-kubectl get events -n iris --sort-by='.lastTimestamp'
-```
-
-Common causes: node not yet provisioned (wait for autoscaler), resource limits
-exceeded, or missing tolerations.
-
-### Image pull errors
-
-The platform detects `ErrImagePull` / `ImagePullBackOff` and fails immediately.
-Verify the image exists and is public:
-
-```bash
-docker pull ghcr.io/marin-community/iris-worker:latest
-```
-
-### CrashLoopBackOff
-
-The platform detects crash loops after 2+ restarts and reports the last 30 log
-lines. To inspect manually:
-
-```bash
-kubectl logs <pod> -n iris --previous    # Logs from the last crash
-```
-
-### Disk full / Pod eviction
-
-If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
-instantly. Fix in config and redeploy.
-
-## 17. References
-
-- [CoreWeave CKS Introduction](https://docs.coreweave.com/docs/products/cks)
-- [CKS Cluster Creation](https://docs.coreweave.com/docs/products/cks/clusters/create)
-- [API Access Tokens and Kubeconfig](https://docs.coreweave.com/docs/products/cks/auth-access/manage-api-access-tokens)
-- [CoreWeave Node Pools](https://docs.coreweave.com/docs/products/cks/nodes/nodes-and-node-pools)
-- [CoreWeave Autoscaling](https://docs.coreweave.com/docs/products/cks/nodes/autoscaling)
-- [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
-- [CoreWeave Observe (Managed Grafana)](https://docs.coreweave.com/docs/observability/managed-grafana)
-- [CoreWeave Terraform Provider](https://docs.coreweave.com/docs/products/cks/terraform/about)
-
-### Source files
-
-| File | Description |
-|------|-------------|
-| `lib/iris/src/iris/providers/k8s/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
-| `lib/iris/src/iris/cluster/runtime/kubernetes.py` | KubernetesRuntime (Pod-per-task) |
-| `lib/iris/src/iris/providers/k8s/service.py` | Kubectl CLI wrapper |
-| `lib/iris/config/coreweave.yaml` | Example cluster config |
-| `lib/iris/AGENTS.md` | CoreWeave integration notes for agents |
+`SchedulingGated` means Kueue has not admitted the Workload.
+`QuotaReserved=False` explains quota or topology-fit failures. A NodePool with
+`Valid=False` has a rejected configuration; a target/current mismatch usually
+means nodes are still provisioning or unhealthy. Do not work around either by
+editing the live objects. Pulumi owns NodePools and cluster-scoped Kueue
+resources.
+
+For actor-level Kubernetes API history after ordinary Events expire, use the
+Kubernetes Audit Logs dashboard in CoreWeave Observe. `iris task events` is the
+Iris-side record of backend observations and controller decisions; it is not an
+API audit log.
+
+For context errors, return to [Connecting](#connecting). For public federation
+timeouts, controller restarts, kernel-deadlock recovery, or other live faults,
+use [CoreWeave GPU Operations](../OPS.md#coreweave-gpu-operations). Kubernetes
+`apply`, `delete`, `scale`, `drain`, `cordon`, and `uncordon` require explicit
+operator approval.
+
+## Onboarding and source routing
+
+For a new CoreWeave cluster, follow the ownership boundary in order:
+
+1. Obtain the CKS cluster, operator kubeconfig, object-storage bucket, and access
+   keys. CKS and object storage are not Pulumi-managed today.
+2. Add `lib/iris/config/<cluster>.yaml` from live cluster facts and the schema in
+   [`config.py`](../src/iris/cluster/config.py). Do not copy fleet sizes from a
+   document.
+3. Provision the controller signing key with `iris cluster init-keys` and
+   reference its private half from `auth.signing_key`. Add each parent
+   controller's public key under `auth.federation_peers` so the CoreWeave
+   controller can verify handoffs. Signing keys stay out of Pulumi state. See
+   [federation credentials](federation.md#credentials-do-not-travel).
+4. Follow the [Pulumi guide](../../../infra/pulumi/README.md) to create or adopt
+   RBAC, NodePools, Kueue, Traefik, TLS, and DNS. Stop on any NodePool replacement
+   or deletion in the preview.
+5. If the cluster names a Finelog config, follow the [Finelog operations
+   guide](../../finelog/OPS.md#onboarding-a-cluster-onto-the-forwarding-hub) for
+   its separate forwarding key and deploy that service before the Iris
+   controller.
+6. Register the peer in the parent federation config and deploy the controller
+   through the [deployment
+   skill](../../../.agents/skills/deploy-iris-controllers/SKILL.md).
+7. Verify `cluster status`, `list-backends`, the public federation route, and one
+   representative topology-aware smoke before sending normal jobs.
+
+Use this page for CoreWeave architecture and config, the [federation
+reference](federation.md) for cross-cluster job semantics, the [Pulumi
+guide](../../../infra/pulumi/README.md) for infrastructure, and
+[`OPS.md`](../OPS.md) for live diagnosis.
+
+## Source map
+
+- [`backends/k8s/tasks.py`](../src/iris/cluster/backends/k8s/tasks.py) — task Pod
+  manifests, Kueue status, profiling, and cleanup.
+- [`platforms/k8s/controller.py`](../src/iris/cluster/platforms/k8s/controller.py)
+  — controller resources, prerequisite checks, and Secret projection.
+- [`platforms/k8s/service.py`](../src/iris/cluster/platforms/k8s/service.py) —
+  context-bound Kubernetes calls and port-forwarding.
+- [`platforms/k8s/coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py)
+  — topology labels and NVL72 rack rules.
+- [`platforms/k8s/nodepool_manifests.py`](../src/iris/cluster/platforms/k8s/nodepool_manifests.py)
+  — NodePool manifests shared by Iris and Pulumi.
+- [`composer.py`](../src/iris/cluster/composer.py) — config-to-backend wiring.
+- [`infra/pulumi/src/iac/coreweave/cluster.py`](../../../infra/pulumi/src/iac/coreweave/cluster.py)
+  — Pulumi ownership of CoreWeave prerequisites.

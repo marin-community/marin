@@ -1,0 +1,11 @@
+# Read-only snapshot from GCP IAM on 2026-07-20. The Pulumi program does not read this file.
+# Move a reviewed entry into typed stack config before making Pulumi authoritative for it.
+project_roles:
+  roles/compute.admin:
+    - user:held@stanford.edu
+  roles/cloudkms.admin:
+    - user:wbmoss@gmail.com
+kms_key_roles:
+  projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key:
+    roles/cloudkms.cryptoKeyEncrypterDecrypter:
+      - user:wbmoss@gmail.com

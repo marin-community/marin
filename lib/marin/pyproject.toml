@@ -1,40 +1,38 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.14"
 
 [project]
 name = "marin-core"
 version = "0.2.0"
 
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
+    # Provides the compression.zstd module that fsspec imports to register its
+    # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
     "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
-    "cryptography>=46.0.6",
     "datasets<5.0.0",
-    "deepdiff>=8.6.2",
-    "draccus>=0.11.5",
-    "fasteners>=0.19",
+    "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
-    "flask>=3.1.3",
     "marin-fray",
+    "marin-finestore",
     "marin-iris",
-    "marin-rigging",
+    "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
-    "google-cloud-storage-transfer",
+    "huggingface-hub",
     "marin-haliax",
-    "jax>=0.9.2,<0.11",
+    "jax>=0.9.2,<0.12",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
-    "lxml[html_clean]",
-    "lxml-html-clean>=0.4.4",
+    "transformers>=5.5.3,<6.0",
     "markdownify>=0.14.1",
-    "multiprocess==0.70.16",
-    "mcp>=1.25.0",
+    "mcp>=1.28.1",
+    "msgspec>=0.18.0",
     "numpy",
     "openai",
     "pandas>=2.0",
@@ -44,11 +42,9 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "toml",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
-    "warcio",
     "marin-zephyr",
 ]
 
@@ -57,6 +53,7 @@ file = "../../LICENSE"
 
 [project.scripts]
 marin-mcp-babysitter = "marin.mcp.babysitter:main"
+marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
@@ -64,19 +61,13 @@ test = [
     "pytest-asyncio",
     "pytest-xdist",
     "pytest-timeout",
-    "pytest-cov",
-    "pytest-profiling",
-    # need this for integration tests
-    "pip",
-    "openai-responses",
     # for scaling law plotting tests
     "plotly",
 ]
 lint = [
     "ruff==0.14.3",
     "black>=26.3.1",
-    "mypy>=1.4.1",
-    "pyrefly>=0.42.0",
+    "pyrefly>=1.0.0,<1.1.0",
     "types-PyYAML",
     "types-requests",
     "click>=8.0",
@@ -94,15 +85,10 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
-
-metrics = ["google-cloud-logging"]
-
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
-    { include-group = "math" },
 ]
 
 [tool.uv]
@@ -115,29 +101,20 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
-    [
-        { extra = "vllm" },
-        { extra = "cpu" },
-    ],
-    [
-        # The vllm extra ships vllm-tpu only, so it must use CPU/torch_xla
-        # torch rather than the cu128-pinned torch from the gpu extra.
-        { extra = "vllm" },
-        { extra = "gpu" },
-    ],
 ]
 
 
 [project.optional-dependencies]
 
 gpu = [
-  "jax[cuda13]==0.10.0",
+  "jax[cuda13]==0.11.0",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
-  "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
-  "nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
@@ -148,70 +125,41 @@ gpu = [
   "torch==2.11.0",
   "torchvision==0.26.0",
 ]
-tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39", "torch==2.10.0", "torchvision==0.25.0"]
+tpu = [
+  "jax==0.10.1",
+  "jaxlib==0.10.1",
+  "libtpu==0.0.41",
+  "torch==2.11.0",
+  # Linux x86_64
+  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 (AMD64)
+  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Linux aarch64, macOS arm64: PyPI default wheel
+  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
 
 cpu = [
-  "jax==0.9.2",
-  "torch==2.10.0",
+  "jax==0.10.1",
+  "torch==2.11.0",
   # Linux x86_64
-  "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-rl = [
-    "prime",
-    "sympy>=1.12.1,<1.14",
-    "verifiers==0.1.5",
-]
-
-eval = [
-    "lm-eval[math,api,ifeval]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-]
-
-# Evalchemy for reasoning-focused LLM evaluations (AIME, MATH500, HumanEval+, etc.)
-# Note: Evalchemy is cloned and run at runtime by the EvalchemyEvaluator rather than
-# being installed as a pip dependency, due to local file dependencies in evalchemy's
-# pyproject.toml that don't work with pip git installs.
-# The evaluator clones from commit 6ed674159b37f740f2353a86f596f49f6ac13c19 (2025-01-08)
-evalchemy = [
-    # Core dependencies needed to run evalchemy
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-    "sympy>=1.12.1,<1.14",
-    "antlr4-python3-runtime==4.11",
-    "bespokelabs-curator==0.1.16",  # Required by evalchemy's curator_lm module
-    "sqlalchemy",  # Required by evalchemy's database models
-    # For code evals
-    "fire",
-]
+# Evalchemy runs from a commit-pinned uvx environment against a served OpenAI URL, so lm-eval does
+# not share Marin's project environment. See marin.evaluation.evalchemy.runtime.
 
 vizier = [
     "google-vizier[jax]",
 ]
 
-vllm = [
-    "jax==0.9.2",
-    "jaxlib==0.9.2",
-    "vllm-tpu==0.19.0",
-    "tpu-inference==0.19.0",
-    "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
-    # Pin torch + torchvision explicitly so the per-extra source map below
-    # routes them to the pytorch-cpu index during fresh Iris resolves.
-    "torch==2.10.0",
-    "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
-    "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-]
-
-harbor = [
-    "harbor>=0.1.42",
-]
-
 dedup = [
-    # Native (maturin) nightly wheel; floor mirrors the root pyproject.toml pin.
-    "marin-dupekit >= 0.1.2.dev202606060824",
+    # Pure-Python workspace member; it pulls the native marin-dupekit-native
+    # kernels transitively (see lib/dupekit/pyproject.toml).
+    "marin-dupekit",
 ]
 
 datakit = [
@@ -220,9 +168,8 @@ datakit = [
     "faiss-cpu",
     "scikit-learn",
     "scipy",
+    "duckdb>=1.0.0",
 ]
-
-math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
@@ -230,10 +177,9 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 torchvision = [
-    # Default to the CPU index for TPU/CPU/vLLM builds
+    # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "vllm" },
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
@@ -243,7 +189,6 @@ torch = [
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "vllm" },
 ]
 
 [[tool.uv.index]]
@@ -262,6 +207,14 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin"]
+# The serving dashboard's node project lives inside the package for colocation;
+# only its build artifact (serve_dashboard.html) ships.
+exclude = ["src/marin/inference/dashboard"]
 
 [tool.hatch.build.targets.sdist]
 packages = ["src/marin"]
+exclude = [
+  "src/marin/inference/dashboard/node_modules",
+  "src/marin/inference/dashboard/dist",
+  "src/marin/inference/dashboard/.rsbuild",
+]

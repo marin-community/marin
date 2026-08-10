@@ -16,9 +16,9 @@ import json
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
@@ -27,6 +27,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -36,6 +37,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import (
+    StoragePath,
     check_path_in_region,
     marin_temp_bucket,
     region_from_metadata,
@@ -105,11 +107,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-nemotron-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.from_path(normalized, NormalizedData),
+            source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
-            worker_resources=ResourceConfig(cpu=3.5, ram="12g", disk="5g"),
-            max_workers=460,
-            map_workers_per_actor=3,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="64g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
         ),
         override_output_path=f"{base}/minhash",
     )  # ~1,380 output shards
@@ -117,14 +119,14 @@ def build_steps(run_id: str) -> list[StepSpec]:
     deduped = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
+            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
-            max_parallelism=690,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=2.5, ram="20g", disk="5g"),
-            map_workers_per_actor=2,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
         ),
         override_output_path=f"{base}/fuzzy_dups",
     )  # ~1,380 output shards
@@ -133,23 +135,22 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-nemotron-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.from_path(normalized, NormalizedData).main_output_dir,
+            input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.from_path(deduped, FuzzyDupsAttrData)
-                    .sources[Artifact.from_path(normalized, NormalizedData).main_output_dir]
-                    .attr_dir,
+                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                        read_artifact(normalized.output_path, NormalizedData).main_output_dir
+                    ),
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
             ],
-            worker_resources=ResourceConfig(cpu=8.5, ram="16g", disk="5g"),
-            max_workers=173,
-            map_workers_per_actor=8,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="32g", disk="16g")),
+            map_task_resources=resources.scale(1 / 16),
         ),
         override_output_path=f"{base}/consolidate",
     )  # ~1,380 output shards
@@ -164,9 +165,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer="gpt2",
-                max_workers=460,
-                worker_resources=ResourceConfig(cpu=3.5, ram="15g", disk="5g"),
-                map_workers_per_actor=3,
+                worker_resources=(resources := ResourceConfig(cpu=16, ram="80g", disk="16g")),
+                map_task_resources=resources.scale(1 / 16),
             )
         ),
         override_output_path=f"{base}/tokens",
@@ -181,9 +181,7 @@ def _write_status(status: str, marin_prefix: str) -> None:
     if not status_path:
         return
     payload = json.dumps({"status": status, "marin_prefix": marin_prefix})
-    fs, _ = url_to_fs(status_path)
-    with fs.open(status_path, "w") as f:
-        f.write(payload)
+    StoragePath(status_path).write_text(payload)
     logger.info("Wrote ferry status to %s", status_path)
 
 

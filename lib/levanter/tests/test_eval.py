@@ -12,6 +12,7 @@ import numpy as np
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
+from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import (
     GrugLmExample,
@@ -34,8 +35,8 @@ from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.tree_utils import inference_mode
 
-from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
-from .test_utils import use_test_mesh
+from test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
+from test_utils import use_test_mesh
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():
@@ -318,11 +319,12 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
 
     callback = cb_tagged_evaluate(_FakeEvaluator(), prefix="eval", eval_current=True, eval_ema=True)
 
+    events = []
     with current_tracker(tracker):
-        step0 = SimpleNamespace(step=0, model=object(), eval_model=object())
+        step0 = SimpleNamespace(step=0, model=object(), eval_model=object(), emit_event=events.append)
         callback(step0)
         callback(step0, force=True)
-        step1 = SimpleNamespace(step=1, model=object(), eval_model=object())
+        step1 = SimpleNamespace(step=1, model=object(), eval_model=object(), emit_event=events.append)
         callback(step1)
 
     log_events = []
@@ -339,3 +341,9 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
     assert "eval/ema/loss" in log_events[1]["metrics"]
     assert "eval/loss" in log_events[2]["metrics"]
     assert "eval/ema/loss" in log_events[3]["metrics"]
+    assert events == [
+        ProgressEvent.EVALUATION_STARTED,
+        ProgressEvent.EVALUATION_FINISHED,
+        ProgressEvent.EVALUATION_STARTED,
+        ProgressEvent.EVALUATION_FINISHED,
+    ]

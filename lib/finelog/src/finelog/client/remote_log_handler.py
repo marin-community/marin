@@ -7,8 +7,6 @@ Batching, retries, and backoff live inside the LogClient's per-namespace
 Table; the handler just formats records and calls ``write_batch``.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Protocol
 

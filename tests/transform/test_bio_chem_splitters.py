@@ -8,8 +8,6 @@ reproduces the original byte sequence" — that is the definition of a
 format-preserving splitter.
 """
 
-from __future__ import annotations
-
 from marin.transform.bio_chem.splitters import (
     SamplingCap,
     iter_fasta_records,

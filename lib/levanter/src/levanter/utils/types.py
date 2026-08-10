@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, Union, cast
+from typing import Any, Callable, Optional, Protocol, TypeVar, Union, cast
 
 from jaxtyping import PyTree
 
@@ -9,17 +9,8 @@ import haliax as hax
 from haliax.types import Scalar
 
 
-M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", contravariant=True)  # Model
 X = TypeVar("X", contravariant=True)  # Input
-
-
-class ValAndGradFn(Protocol[M, X]):
-    def __call__(self, model: M, *inputs: X, **input_kwargs) -> Tuple[Scalar, M]: ...
-
-
-class ValFn(Protocol[M_con, X]):
-    def __call__(self, model: M_con, *inputs: X, **input_kwargs) -> Scalar: ...
 
 
 FilterSpec = Union[bool, Callable[[Any], bool]]

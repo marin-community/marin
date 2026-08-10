@@ -1,8 +1,12 @@
 /**
- * Connect-RPC composable for finelog services.
+ * Calls into the finelog server: the Connect-RPC services and the `/api/*`
+ * introspection routes.
  *
  * Wraps fetch() with reactive loading/error state. Caller invokes refresh() to fetch.
  * Body may be a static record or a factory that closes over reactive state.
+ *
+ * Every URL here is RELATIVE, so a dashboard served under a proxy sub-path
+ * addresses its own server rather than the proxy root.
  */
 import { ref, type Ref } from 'vue'
 
@@ -87,6 +91,20 @@ export async function statsRpcCall<T>(method: string, body?: Record<string, unkn
   })
   if (!resp.ok) {
     throw new Error(await formatConnectError(method, resp))
+  }
+  return resp.json() as Promise<T>
+}
+
+/**
+ * GET one of the server's `/api/*` introspection routes. These are plain JSON,
+ * not Connect, so failures arrive as a status line plus a text body.
+ */
+export async function apiGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const query = params ? `?${new URLSearchParams(params)}` : ''
+  const resp = await fetch(`api/${path}${query}`)
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '')
+    throw new Error(`api/${path}: ${resp.status} ${resp.statusText}${detail ? ` — ${detail}` : ''}`)
   }
   return resp.json() as Promise<T>
 }

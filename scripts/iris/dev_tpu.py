@@ -4,8 +4,6 @@
 
 """Allocate and use development TPUs on Iris-managed clusters."""
 
-from __future__ import annotations
-
 import atexit
 import getpass
 import json
@@ -27,10 +25,12 @@ from urllib.parse import urlsplit
 import click
 import yaml
 from iris.client import IrisClient, JobAlreadyExists
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -82,7 +82,7 @@ class DevTpuState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevTpuState:
+    def from_json(cls, raw: str) -> "DevTpuState":
         data = json.loads(raw)
         workers = [
             DevTpuWorker(
@@ -296,8 +296,8 @@ def save_state(path: Path, state: DevTpuState) -> None:
     path.write_text(state.to_json())
 
 
-def _require_gcp_platform(config) -> str:
-    if not config.platform.HasField("gcp"):
+def _require_gcp_platform(config: IrisClusterConfig) -> str:
+    if config.platform.platform_kind() != "gcp":
         raise click.ClickException("Iris dev TPU currently supports only GCP-backed clusters.")
     project = config.platform.gcp.project_id or gcp.get_project_id()
     if not project:
@@ -315,13 +315,13 @@ def find_workspace_root(start: Path) -> Path | None:
 
 @contextmanager
 def controller_client(config_file: str) -> Iterable[IrisClient]:
-    iris_config = IrisConfig.load(config_file)
+    iris_config = load_config(config_file)
     controller_address = iris_config.controller_address()
-    providers = iris_config.provider_bundle()
+    providers = provider_bundle(iris_config)
     controller = providers.controller
     workspace = find_workspace_root(Path.cwd())
     if not controller_address:
-        controller_address = controller.discover_controller(iris_config.proto.controller)
+        controller_address = controller.discover_controller(iris_config.controller)
     with controller.tunnel(address=controller_address) as tunneled:
         client = IrisClient.remote(tunneled, workspace=workspace)
         try:
@@ -500,7 +500,7 @@ set -e
 cd "$HOME/marin"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source "$HOME/.local/bin/env"
-uv sync --all-packages --extra=tpu --python=3.11 || true
+uv sync --all-packages --extra=tpu --python=3.12 || true
 """
     run_remote_command(node, "bash -lc " + shlex.quote(setup_script))
 
@@ -704,19 +704,32 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
 
 @cli.command("allocate")
 @click.option("--tpu-type", required=True, help="TPU type to reserve (for example, v5p-8).")
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Iris priority band for the holder job (default: interactive; production requires authorization).",
+)
 @click.option("--sync-path", default=".", show_default=True, help="Local path to sync to the remote host(s).")
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
 @click.option("--setup-env/--no-setup-env", default=True, help="Install/update the remote uv environment after sync.")
 @click.option("--zone", type=str, default=None, help="Restrict the holder job to a specific zone.")
+@click.option("--cpu", type=float, default=0.5, show_default=True, help="Host CPU cores reserved by the holder job.")
+@click.option("--ram", default="1GB", show_default=True, help="Host RAM reserved by the holder job.")
+@click.option("--disk", default="5GB", show_default=True, help="Host disk reserved by the holder job.")
 @click.option("--timeout", type=int, default=900, show_default=True, help="Seconds to wait for workers to come up.")
 @click.pass_context
 def allocate(
     ctx,
     tpu_type: str,
+    priority: str | None,
     sync_path: str,
     no_sync: bool,
     setup_env: bool,
     zone: str | None,
+    cpu: float,
+    ram: str,
+    disk: str,
     timeout: int,
 ) -> None:
     """Allocate a dev TPU session and hold it until Ctrl-C."""
@@ -734,8 +747,8 @@ def allocate(
             f"Dev TPU session '{session_name}' already exists. Use release first or choose a new --tpu-name."
         )
 
-    iris_config = IrisConfig.load(ctx.obj.config_file)
-    project = _require_gcp_platform(iris_config.proto)
+    iris_config = load_config(ctx.obj.config_file)
+    project = _require_gcp_platform(iris_config)
     client_cm = None
     client: IrisClient | None = None
     job = None
@@ -744,7 +757,8 @@ def allocate(
     try:
         client_cm = controller_client(ctx.obj.config_file)
         client = client_cm.__enter__()
-        resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=tpu_device(tpu_type))
+        resources = ResourceSpec(cpu=cpu, memory=ram, disk=disk, device=tpu_device(tpu_type))
+        priority_band = job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)
         constraints = []
         if zone:
             constraints.append(zone_constraint(zone))
@@ -754,13 +768,22 @@ def allocate(
                 name=f"dev-tpu-{session_name}",
                 resources=resources,
                 constraints=constraints or None,
+                priority_band=priority_band,
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
 
         workers = wait_for_workers(job, client, timeout=timeout, project=project)
         for worker in workers:
-            ensure_ssh_access(worker.node)
+            try:
+                ensure_ssh_access(worker.node)
+            except subprocess.CalledProcessError as exc:
+                raise click.ClickException(
+                    f"Direct SSH is unavailable for {worker.node.name}. The dev TPU helper requires SSH for "
+                    "sync, connect, setup_env, execute, and watch, even when allocation uses --no-sync. "
+                    "Fix GCP SSH/OS Login access and retry; external identities may require the organization-level "
+                    "roles/compute.osLoginExternalUser role. The holder will be released."
+                ) from exc
 
         state = DevTpuState(
             session_name=session_name,

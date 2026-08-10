@@ -284,6 +284,11 @@ def _zeropower_via_newtonschulz_replicated(
     assert X.ndim == 2
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
+    # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
+    # cast back to the param dtype on exit so optimizer state stays fp32.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
     if has_mesh:
@@ -305,7 +310,7 @@ def _zeropower_via_newtonschulz_replicated(
     if transpose:
         X = X.T
 
-    return X
+    return X.astype(orig_dtype)
 
 
 def _zeropower_via_newtonschulz_batched_stack_sharded(
@@ -317,6 +322,11 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
 ) -> jax.Array:
     """Run Newton-Schulz on a stacked batch of matrices with only the batch axis sharded."""
     assert X.ndim == 3
+
+    # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
+    # cast back to the param dtype on exit so optimizer state stays fp32.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
@@ -343,4 +353,4 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
     if transpose:
         X = jnp.swapaxes(X, -1, -2)
 
-    return X
+    return X.astype(orig_dtype)

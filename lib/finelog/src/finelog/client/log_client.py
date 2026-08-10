@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import io
 import logging
@@ -16,7 +14,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeVar
 
 import pyarrow as pa
 import pyarrow.ipc as paipc
@@ -81,13 +79,9 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Compression policy: zstd for both directions; gzip kept only as a fallback
-# the server still accepts. Every deployed finelog server has accepted zstd
-# since #5457 (2026-05-05), so the send-side gzip workaround is no longer
-# needed — gzip.decompress was the dominant CPU cost on the server when
-# clients sent gzip bodies.
-_SEND_COMPRESSION = ZstdCompression()
-_ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
+_FINELOG_ZSTD_LEVEL = 1
+_SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
+_ACCEPT_COMPRESSIONS = (_SEND_COMPRESSION, GzipCompression())
 
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
@@ -120,6 +114,25 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
     bytes: stats_pb2.COLUMN_TYPE_BYTES,
     datetime: stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
 }
+
+# Human-readable list of the dataclass field types finelog can infer a column
+# from, for the unsupported-type error message.
+_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str]"
+
+
+def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
+    """Resolve a non-``Optional`` field annotation to a ``ColumnType``.
+
+    Returns ``None`` for an unsupported annotation. ``dict[str, str]`` infers to
+    ``COLUMN_TYPE_MAP`` (a native ``Map<Utf8,Utf8>`` column); every other
+    supported field is a bare primitive class in ``_PRIMITIVE_TYPE_MAP``.
+    """
+    primitive = _PRIMITIVE_TYPE_MAP.get(inner)
+    if primitive is not None:
+        return primitive
+    if typing.get_origin(inner) is dict and typing.get_args(inner) == (str, str):
+        return stats_pb2.COLUMN_TYPE_MAP
+    return None
 
 
 def _strip_optional(annotation: Any) -> tuple[Any, bool]:
@@ -167,11 +180,11 @@ def schema_from_dataclass(cls: type) -> Schema:
         # rebuild and wedge all writes. _strip_optional still runs to unwrap the
         # inner type of ``T | None`` fields and to reject unsupported unions.
         inner, _nullable = _strip_optional(annotation)
-        col_type = _PRIMITIVE_TYPE_MAP.get(inner)
+        col_type = _column_type_for_annotation(inner)
         if col_type is None:
             raise SchemaValidationError(
                 f"dataclass {cls.__name__}: field {field.name!r} has unsupported "
-                f"type {annotation!r} (supported: str, int, float, bool, bytes, datetime)"
+                f"type {annotation!r} (supported: {_SUPPORTED_FIELD_TYPES})"
             )
         columns.append(Column(name=field.name, type=col_type, nullable=True))
     key_column = getattr(cls, "key_column", "")
@@ -330,6 +343,12 @@ class Table:
             self._cond.notify_all()
         self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
         with self._cond:
+            if self._processed_seq < self._pushed_seq:
+                logger.warning(
+                    "Table(%s) close() timed out before draining %d pending row(s); they were not sent",
+                    self._namespace,
+                    self._pushed_seq - self._processed_seq,
+                )
             self._closed = True
             self._cond.notify_all()
 
@@ -454,6 +473,9 @@ class Table:
         self._registered = True
 
 
+_ClientT = TypeVar("_ClientT")
+
+
 class LogClient:
     """Domain client for the finelog process.
 
@@ -491,7 +513,7 @@ class LogClient:
         resolver: Callable[[str], str] | None = None,
         timeout_ms: int = 10_000,
         interceptors: Iterable[Interceptor] = (),
-    ) -> LogClient:
+    ) -> "LogClient":
         """Construct a LogClient against ``endpoint``.
 
         ``endpoint`` is either an HTTP URL string or a ``(host, port)``
@@ -691,13 +713,40 @@ class LogClient:
             self._tables[LOG_NAMESPACE] = tbl
             return tbl
 
-    def _get_stats_client(self) -> StatsServiceClientSync:
+    def _get_or_resolve_client(
+        self,
+        cached: Callable[[], _ClientT | None],
+        create: Callable[[str], _ClientT],
+        label: str,
+    ) -> _ClientT:
+        """Return the cached RPC client, resolving and building it once if absent.
+
+        ``create`` builds the client and installs it in its cache slot; it runs
+        under the lock so the install is atomic with the ``cached`` re-check.
+        """
         with self._lock:
             if self._closed:
                 raise RuntimeError("LogClient is closed")
-            if self._stats_client is not None:
-                return self._stats_client
-            address = self._resolve()
+            if (client := cached()) is not None:
+                return client
+        # Resolve outside the lock: the resolver may block on a network RPC (iris
+        # resolves the endpoint via the controller), and holding _lock across it
+        # stalls every other caller — notably a shutdown-path log emit parked on
+        # the same lock in _get_log_table, which deadlocks teardown. Re-check
+        # under the lock afterward so a caller that loses the resolve race reuses
+        # the winner's client instead of building a second one.
+        address = self._resolve()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LogClient is closed")
+            if (client := cached()) is not None:
+                return client
+            client = create(address)
+            logger.info("LogClient resolved %s -> %s (%s)", self._server_url, address, label)
+            return client
+
+    def _get_stats_client(self) -> StatsServiceClientSync:
+        def create(address: str) -> StatsServiceClientSync:
             self._stats_client = StatsServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
@@ -705,16 +754,12 @@ class LogClient:
                 send_compression=_SEND_COMPRESSION,
                 accept_compression=_ACCEPT_COMPRESSIONS,
             )
-            logger.info("LogClient resolved %s -> %s (stats)", self._server_url, address)
             return self._stats_client
 
+        return self._get_or_resolve_client(lambda: self._stats_client, create, "stats")
+
     def _get_log_service_client(self) -> LogServiceClientSync:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("LogClient is closed")
-            if self._log_service_client is not None:
-                return self._log_service_client
-            address = self._resolve()
+        def create(address: str) -> LogServiceClientSync:
             self._log_service_client = LogServiceClientSync(
                 address=address,
                 timeout_ms=self._timeout_ms,
@@ -722,8 +767,9 @@ class LogClient:
                 send_compression=_SEND_COMPRESSION,
                 accept_compression=_ACCEPT_COMPRESSIONS,
             )
-            logger.info("LogClient resolved %s -> %s (log)", self._server_url, address)
             return self._log_service_client
+
+        return self._get_or_resolve_client(lambda: self._log_service_client, create, "log")
 
     def _resolve(self) -> str:
         address = self._resolver(self._server_url)

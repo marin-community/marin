@@ -1,34 +1,45 @@
 //! DataFusion read engine.
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
-//! shape (Utf8 strings, DuckDB parsing dialect) with the compat UDFs registered.
+//! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
 //! `run_query_over()` registers every live namespace as a `TableProvider`, runs
-//! the user SQL verbatim, collects the result, and deregisters — the body of the
-//! `StatsService::Query` handler.
+//! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
+//! the result, and deregisters — the body of the `StatsService::Query` handler.
 //!
 //! Query visibility = sealed parquet segments ONLY (see `provider.rs`). The
 //! durability contract makes written rows visible because they are sealed before
 //! WriteRows/PushLogs ack.
 
+pub mod exact_aggregate;
+pub mod exact_prune;
+pub(crate) mod file_scan;
+pub mod group_extrema;
+pub mod index_cache;
 pub mod optimizer;
+pub(crate) mod predicate;
 pub mod provider;
-pub mod sidecar;
+pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
+use crate::query::string_values::StringValues;
 
 /// A namespace ready to register: its exact name (used verbatim in `FROM`) and
 /// its provider over the snapshotted sealed segments.
@@ -46,6 +57,14 @@ const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
 /// headroom for non-pool allocations (parquet decode scratch, IPC encode,
 /// tokio/allocator overhead).
 const QUERY_POOL_FRACTION: f64 = 0.7;
+
+const MEBIBYTE: usize = 1024 * 1024;
+
+/// Repartition multi-file Parquet scans once they contain enough work to
+/// amortize parallel decoder setup. DataFusion's 10 MiB default serialized the
+/// narrow covering projections used by dashboard queries, even when they
+/// represented hundreds of thousands of rows across several files.
+const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -92,6 +111,43 @@ fn query_pool_bytes() -> usize {
     }
 }
 
+fn build_runtime_env(
+    memory_pool_bytes: usize,
+    metadata_cache_bytes: Option<usize>,
+) -> Arc<RuntimeEnv> {
+    let mut builder = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_pool_bytes)));
+    if let Some(bytes) = metadata_cache_bytes {
+        builder = builder.with_metadata_cache_limit(bytes);
+    }
+    builder.build_arc().expect("build query RuntimeEnv")
+}
+
+static SHARED_RUNTIME_ENV: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
+
+fn configured_runtime_env(metadata_cache_mb: Option<usize>) -> Arc<RuntimeEnv> {
+    let memory_pool_bytes = query_pool_bytes();
+    let metadata_cache_bytes = metadata_cache_mb.map(|mb| mb.saturating_mul(MEBIBYTE));
+    let runtime = build_runtime_env(memory_pool_bytes, metadata_cache_bytes);
+    tracing::info!(
+        memory_pool_limit_mb = memory_pool_bytes / MEBIBYTE,
+        metadata_cache_limit_mb = runtime.cache_manager.get_metadata_cache_limit() / MEBIBYTE,
+        "query engine configured"
+    );
+    runtime
+}
+
+/// Initialize the process-wide DataFusion runtime before serving requests.
+///
+/// `metadata_cache_mb = None` preserves DataFusion's default. The deployment
+/// entry point calls this once with its parsed CLI configuration; library users
+/// that only call [`make_ctx`] receive the default.
+pub fn configure_query_runtime(metadata_cache_mb: Option<usize>) -> Result<(), &'static str> {
+    SHARED_RUNTIME_ENV
+        .set(configured_runtime_env(metadata_cache_mb))
+        .map_err(|_| "query runtime is already initialized")
+}
+
 /// A process-wide `RuntimeEnv` whose `GreedyMemoryPool` bounds total query
 /// memory. Shared across every `make_ctx` so concurrent queries compete for one
 /// budget (bounding the SERVER, not each query independently): a runaway query
@@ -101,19 +157,42 @@ fn query_pool_bytes() -> usize {
 /// OOM-killing the process (which surfaces to clients as a dropped connection /
 /// 502).
 fn shared_runtime_env() -> Arc<RuntimeEnv> {
-    static RT: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
-    RT.get_or_init(|| {
-        let bytes = query_pool_bytes();
-        tracing::info!(
-            limit_mb = bytes / (1024 * 1024),
-            "query engine: bounded memory pool (GreedyMemoryPool)"
-        );
-        RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
-            .build_arc()
-            .expect("build query RuntimeEnv")
-    })
-    .clone()
+    SHARED_RUNTIME_ENV
+        .get_or_init(|| configured_runtime_env(None))
+        .clone()
+}
+
+/// Occupancy of the process-wide parquet metadata cache.
+///
+/// The cache holds decoded footers, so it is what stands between a query and a
+/// re-parse of every segment's row-group statistics. `size_bytes` at the limit
+/// with a low hit count says the working set of footers no longer fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetadataCacheStats {
+    pub limit_bytes: usize,
+    pub size_bytes: usize,
+    pub entries: usize,
+    pub hits: usize,
+}
+
+/// Read the shared metadata cache's occupancy.
+pub fn metadata_cache_stats() -> MetadataCacheStats {
+    cache_stats_of(&shared_runtime_env())
+}
+
+fn cache_stats_of(runtime: &RuntimeEnv) -> MetadataCacheStats {
+    let cache_manager = &runtime.cache_manager;
+    let entries = cache_manager.get_file_metadata_cache().list_entries();
+    MetadataCacheStats {
+        limit_bytes: cache_manager.get_metadata_cache_limit(),
+        size_bytes: entries.values().fold(0_usize, |total, entry| {
+            total.saturating_add(entry.size_bytes)
+        }),
+        entries: entries.len(),
+        hits: entries
+            .values()
+            .fold(0_usize, |total, entry| total.saturating_add(entry.hits)),
+    }
 }
 
 /// Build a read-only `SessionContext` matching DuckDB's externally-observable
@@ -135,11 +214,12 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
 ///   DuckDB's late materialization reads zero blobs for a non-matching key. This
 ///   is the dominant cost in the dashboard's profile-history query.
 ///
-/// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
-/// corpus and FetchLogs resolve them, and the [`PrefixRangeRewrite`] analyzer
-/// rule rewrites starts-with predicates to expose a prunable key range to the
-/// planner (so both FetchLogs and the generic Query API prune row groups on the
-/// `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
+/// The scalar UDFs (`prefix`/`regexp_matches`/`contains` and the `json_*`
+/// extraction family — see [`crate::query::udf`]) are registered so the corpus,
+/// FetchLogs, and JSON-label queries resolve them, and the [`PrefixRangeRewrite`]
+/// analyzer rule rewrites starts-with predicates to expose a prunable key range
+/// to the planner (so both FetchLogs and the generic Query API prune row groups
+/// on the `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
 ///
 /// The context runs on a shared, memory-bounded `RuntimeEnv` (see
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
@@ -150,21 +230,28 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
-    let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
+    cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let state = SessionStateBuilder::new_with_default_features()
+        .with_config(cfg)
+        .with_runtime_env(shared_runtime_env())
+        .with_query_planner(Arc::new(exact_aggregate::FinelogQueryPlanner))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
-    udf::register_compat_udfs(&ctx);
+    udf::register_scalar_udfs(&ctx);
     ctx
 }
 
 /// A collected query result: its arrow schema (always present, even for an
 /// empty result so the IPC stream can carry it) and the result batches.
+#[derive(Clone)]
 pub struct QueryResult {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
 }
 
-/// Relax every field in `schema` to `nullable = true` and re-stamp `batches`
-/// with the relaxed schema.
+/// Normalize a result for the wire: every field nullable, and every `Utf8View`
+/// column materialized back to `Utf8`.
 ///
 /// DuckDB returns ALL result columns as nullable, while
 /// DataFusion propagates source non-nullability (e.g. the store-form `seq`
@@ -173,27 +260,44 @@ pub struct QueryResult {
 /// makes the QueryResponse IPC schema match DuckDB exactly. Widening
 /// non-nullable -> nullable is always valid (a non-null array satisfies a
 /// nullable field), so no array data is touched.
-fn relax_result_nullability(
+///
+/// The scan reads string columns as `Utf8View` (see
+/// [`crate::query::provider::view_typed_schema`]), which is an in-memory layout
+/// clients do not need to know about. Converting here — after `LIMIT` and after
+/// any aggregation — costs the result's size rather than the scan's.
+fn normalize_result(
     schema: &SchemaRef,
     batches: Vec<RecordBatch>,
 ) -> DFResult<(SchemaRef, Vec<RecordBatch>)> {
     let fields: Vec<Field> = schema
         .fields()
         .iter()
-        .map(|f| f.as_ref().clone().with_nullable(true))
+        .map(|f| {
+            let f = f.as_ref().clone().with_nullable(true);
+            match f.data_type() {
+                DataType::Utf8View => f.with_data_type(DataType::Utf8),
+                _ => f,
+            }
+        })
         .collect();
-    let relaxed: SchemaRef = Arc::new(ArrowSchema::new_with_metadata(
+    let normalized: SchemaRef = Arc::new(ArrowSchema::new_with_metadata(
         fields,
         schema.metadata().clone(),
     ));
     let mut out = Vec::with_capacity(batches.len());
     for b in batches {
-        out.push(RecordBatch::try_new(
-            Arc::clone(&relaxed),
-            b.columns().to_vec(),
-        )?);
+        let columns = b
+            .columns()
+            .iter()
+            .zip(normalized.fields())
+            .map(|(c, f)| match (c.data_type(), f.data_type()) {
+                (DataType::Utf8View, DataType::Utf8) => cast(c, &DataType::Utf8),
+                _ => Ok(Arc::clone(c)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        out.push(RecordBatch::try_new(Arc::clone(&normalized), columns)?);
     }
-    Ok((relaxed, out))
+    Ok((normalized, out))
 }
 
 /// Threshold (ms) at or above which a completed query is logged at WARN with its
@@ -212,10 +316,56 @@ fn slow_query_log_ms() -> u128 {
     })
 }
 
+/// Default server-side wall-clock deadline for a single Query RPC. A query
+/// still running when this elapses is aborted (its execution future is dropped,
+/// cancelling the scan) and the caller gets `deadline_exceeded` — so one
+/// pathological query can no longer run unbounded and crash-loop the hub on
+/// memory. This bounds the SERVER independently of any client deadline, which
+/// a caller may set huge or omit entirely.
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
+/// `0` to disable the deadline entirely (ops escape hatch for a known-heavy
+/// backfill), or absent/unparseable → [`DEFAULT_QUERY_TIMEOUT`].
+fn parse_query_timeout(raw: Option<&str>) -> Option<Duration> {
+    match raw {
+        None => Some(DEFAULT_QUERY_TIMEOUT),
+        Some(v) => match v.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(ms) => Some(Duration::from_millis(ms)),
+            Err(_) => Some(DEFAULT_QUERY_TIMEOUT),
+        },
+    }
+}
+
+fn earliest_timeout(
+    server_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+) -> Option<Duration> {
+    match (server_timeout, request_timeout) {
+        (Some(server), Some(request)) => Some(server.min(request)),
+        (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+        (None, None) => None,
+    }
+}
+
+/// The earlier of the server Query deadline and the caller's remaining budget.
+///
+/// `FINELOG_QUERY_TIMEOUT_MS` configures the server deadline (see
+/// [`parse_query_timeout`]); `0` disables only that ceiling, so a caller's
+/// shorter deadline still cancels its scan.
+pub(crate) fn query_timeout(request_timeout: Option<Duration>) -> Option<Duration> {
+    static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
+    let server_timeout = *TIMEOUT.get_or_init(|| {
+        parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
+    });
+    earliest_timeout(server_timeout, request_timeout)
+}
+
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
 /// a char boundary — never mid-codepoint — so non-ASCII SQL can't panic the
 /// logger, in a single pass over at most `MAX_CHARS + 1` chars.
-fn truncate_sql_for_log(sql: &str) -> String {
+pub(crate) fn truncate_sql_for_log(sql: &str) -> String {
     const MAX_CHARS: usize = 4000;
     let mut chars = sql.chars();
     let head: String = chars.by_ref().take(MAX_CHARS).collect();
@@ -230,24 +380,56 @@ fn truncate_sql_for_log(sql: &str) -> String {
 /// threshold. `rows` is the result row count on success, `None` when the query
 /// errored — a slow *failed* query (e.g. `ResourcesExhausted` after a long scan)
 /// is exactly the case worth seeing.
-fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>) {
+fn log_slow_query(
+    ctx: &SessionContext,
+    elapsed: Duration,
+    kind: &str,
+    sql: &str,
+    rows: Option<usize>,
+) {
     let elapsed_ms = elapsed.as_millis();
     if elapsed_ms < slow_query_log_ms() {
         return;
     }
     let preview = truncate_sql_for_log(sql);
     let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
+    let cache = cache_stats_of(&ctx.runtime_env());
     tracing::warn!(
         kind,
         elapsed_ms = elapsed_ms as u64,
         rows = %rows_str,
+        metadata_cache_limit_bytes = cache.limit_bytes,
+        metadata_cache_size_bytes = cache.size_bytes,
+        metadata_cache_entries = cache.entries,
+        metadata_cache_hits = cache.hits,
         sql = %preview,
         "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
     );
 }
 
-/// Register every namespace in `providers`, run `sql` verbatim, collect, and
-/// deregister. Returns the result schema + batches.
+/// The SQL surface the generic Query RPC exposes: `SELECT` only.
+///
+/// DDL (`CREATE`/`DROP`), DML (`INSERT` and `COPY … TO`), and statements
+/// (`SET`/`BEGIN`) are denied at plan-verification time (`verify_plan` inside
+/// [`SessionContext::sql_with_options`]) — a denied plan surfaces as
+/// `DataFusionError::Plan`, which the handler maps to `invalid_argument`.
+///
+/// DML is the load-bearing denial. DataFusion's default object-store registry
+/// registers a `LocalFileSystem` rooted at `/` for `file://`, so an admitted
+/// caller could otherwise `COPY <table> TO 'file:///…'` and write the finelog
+/// VM's own filesystem (the registered GCS/S3 stores live only in the store's
+/// remote-sync layer, not on this query context, so those stay out of reach).
+/// Denying DML closes both the store-mutation and the host-write paths.
+fn read_only_sql_options() -> SQLOptions {
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
+/// Register every namespace in `providers`, run `sql` (SELECT-only, see
+/// [`read_only_sql_options`]), collect, and deregister. Returns the result
+/// schema + batches.
 ///
 /// Registration is per-call (a fresh `ctx`): names are used exactly as the
 /// catalog records them, so `FROM "iris.worker"` resolves. An unknown namespace
@@ -260,6 +442,19 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
+        .iter()
+        .map(|provider| {
+            (
+                provider.name.clone(),
+                exact_aggregate::AggregateSource {
+                    segment_paths: provider.provider.segment_paths().to_vec(),
+                    index_cache: Arc::clone(provider.provider.index_cache()),
+                    schema: provider.provider.schema(),
+                },
+            )
+        })
+        .collect();
     let names: Vec<String> = providers.iter().map(|p| p.name.clone()).collect();
     for rp in providers {
         // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
@@ -267,14 +462,20 @@ pub async fn run_query_over(
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
+    ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
+        aggregate_sources.clone(),
+    )));
+    ctx.add_optimizer_rule(Arc::new(group_extrema::GroupExtremaRewrite::new(
+        aggregate_sources,
+    )));
     let started = Instant::now();
     let result = async {
-        let df = ctx.sql(sql).await?;
+        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
         // keeps source non-nullability that DuckDB would have dropped).
-        let (schema, batches) = relax_result_nullability(&schema, batches)?;
+        let (schema, batches) = normalize_result(&schema, batches)?;
         Ok(QueryResult { schema, batches })
     }
     .await;
@@ -288,7 +489,7 @@ pub async fn run_query_over(
         .as_ref()
         .ok()
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
-    log_slow_query(elapsed, "Query", sql, rows);
+    log_slow_query(ctx, elapsed, "Query", sql, rows);
     result
 }
 
@@ -307,7 +508,7 @@ pub async fn fetch_log_rows(
     tail: bool,
     max_lines: i32,
 ) -> DFResult<Vec<crate::store::log_read::LogRow>> {
-    use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
+    use datafusion::arrow::array::{Int32Array, Int64Array};
 
     const LOG_TABLE: &str = "__finelog_log";
     ctx.register_table(TableReference::bare(LOG_TABLE), Arc::new(provider))?;
@@ -347,7 +548,7 @@ pub async fn fetch_log_rows(
         .as_ref()
         .ok()
         .map(|b| b.iter().map(|x| x.num_rows()).sum());
-    log_slow_query(elapsed, "FetchLogs", &sql, rows);
+    log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows);
     let batches = collected?;
 
     let mut rows = Vec::new();
@@ -356,17 +557,12 @@ pub async fn fetch_log_rows(
             .column_by_name("seq")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
         let key = if include_key {
-            b.column_by_name("key")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            b.column_by_name("key").and_then(StringValues::new)
         } else {
             None
         };
-        let source = b
-            .column_by_name("source")
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let data = b
-            .column_by_name("data")
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let source = b.column_by_name("source").and_then(StringValues::new);
+        let data = b.column_by_name("data").and_then(StringValues::new);
         let epoch_ms = b
             .column_by_name("epoch_ms")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
@@ -383,7 +579,7 @@ pub async fn fetch_log_rows(
         for i in 0..b.num_rows() {
             rows.push(crate::store::log_read::LogRow {
                 seq: seq.value(i),
-                key: key.map(|k| k.value(i).to_string()),
+                key: key.as_ref().map(|k| k.value(i).to_string()),
                 source: source.value(i).to_string(),
                 data: data.value(i).to_string(),
                 epoch_ms: epoch_ms.value(i),
@@ -398,6 +594,7 @@ pub async fn fetch_log_rows(
 mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
+    use crate::test_support::unique_dir;
     use datafusion::arrow::array::Int64Array;
 
     #[test]
@@ -412,6 +609,108 @@ mod tests {
         let out = truncate_sql_for_log(&long);
         assert!(out.ends_with("…[truncated]"));
         assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
+
+    #[test]
+    fn parse_query_timeout_variants() {
+        // Absent, unparseable, and negative-ish garbage all fall back to the default.
+        assert_eq!(
+            parse_query_timeout(None),
+            Some(Duration::from_secs(10)),
+            "the default must shed work before dashboard clients retry"
+        );
+        assert_eq!(
+            parse_query_timeout(Some("nonsense")),
+            Some(DEFAULT_QUERY_TIMEOUT)
+        );
+        assert_eq!(parse_query_timeout(Some("-5")), Some(DEFAULT_QUERY_TIMEOUT));
+        // An explicit millisecond budget (whitespace tolerated).
+        assert_eq!(
+            parse_query_timeout(Some("5000")),
+            Some(Duration::from_millis(5000))
+        );
+        assert_eq!(
+            parse_query_timeout(Some("  250 ")),
+            Some(Duration::from_millis(250))
+        );
+        // Zero is the explicit disable escape hatch.
+        assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[test]
+    fn query_timeout_uses_the_earliest_available_deadline() {
+        let server = Some(Duration::from_secs(10));
+        let short_request = Some(Duration::from_secs(3));
+        let long_request = Some(Duration::from_secs(30));
+
+        assert_eq!(
+            earliest_timeout(server, short_request),
+            short_request,
+            "a caller deadline must stop work before the server ceiling"
+        );
+        assert_eq!(earliest_timeout(server, long_request), server);
+        assert_eq!(earliest_timeout(None, short_request), short_request);
+        assert_eq!(earliest_timeout(server, None), server);
+        assert_eq!(earliest_timeout(None, None), None);
+    }
+
+    #[tokio::test]
+    async fn read_only_options_reject_mutations() {
+        // The generic Query RPC exposes SELECT only. Each mutating statement is
+        // rejected at plan verification as a `Plan` error (which the handler maps
+        // to invalid_argument) — never executed, so nothing is created or written.
+        // These plan without any registered table, so the rejection is the gate,
+        // not a missing-table error.
+        let ctx = make_ctx();
+        let copy_target = std::env::temp_dir().join(format!(
+            "finelog_copy_gate_{}.parquet",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let copy_sql = format!("COPY (SELECT 1 AS n) TO 'file://{}'", copy_target.display());
+        let cases = [
+            ("CREATE TABLE t (x INT)", "DDL not supported"),
+            (copy_sql.as_str(), "DML not supported"),
+            (
+                "SET datafusion.execution.batch_size = 1",
+                "Statement not supported",
+            ),
+        ];
+        for (sql, expected) in cases {
+            let err = match run_query_over(&ctx, Vec::new(), sql).await {
+                Ok(_) => panic!("{sql} should have been rejected, but ran"),
+                Err(e) => e,
+            };
+            assert!(
+                matches!(err.find_root(), datafusion::error::DataFusionError::Plan(_)),
+                "{sql} should be rejected as a Plan error, got: {err}"
+            );
+            assert!(
+                err.to_string().contains(expected),
+                "{sql} error should mention {expected:?}, got: {err}"
+            );
+        }
+        // The rejected COPY must not have touched the VM filesystem.
+        assert!(
+            !copy_target.exists(),
+            "COPY was rejected but still wrote {}",
+            copy_target.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_options_allow_select() {
+        // The positive control: a plain SELECT still runs through the gated path.
+        let ctx = make_ctx();
+        let result = run_query_over(&ctx, Vec::new(), "SELECT 1 AS n")
+            .await
+            .unwrap();
+        assert_eq!(
+            result.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -527,7 +826,12 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -543,6 +847,139 @@ mod tests {
         let mut got: Vec<String> = rows.into_iter().filter_map(|r| r.key).collect();
         got.sort();
         assert_eq!(got, vec!["/a/1".to_string(), "/a/2".to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The real store-form `log` arrow schema (single source of truth), so these
+    /// tests track any column change instead of hand-copying the layout.
+    fn log_arrow() -> SchemaRef {
+        crate::store::schema::schema_to_arrow(&crate::store::schema::with_implicit_seq(
+            crate::store::store::log_registered_schema(),
+        ))
+    }
+
+    /// The same schema minus the `cluster` column — the layout of a segment
+    /// written before the column was added, expressed as a derivation rather than
+    /// a duplicated literal.
+    fn log_arrow_pre_cluster() -> SchemaRef {
+        let fields: Vec<Field> = log_arrow()
+            .fields()
+            .iter()
+            .filter(|f| f.name() != "cluster")
+            .map(|f| f.as_ref().clone())
+            .collect();
+        Arc::new(ArrowSchema::new(fields))
+    }
+
+    #[tokio::test]
+    async fn cluster_filter_namespaces_mixed_old_and_new_segments() {
+        // The read filter namespaces a global finelog by server-stamped origin
+        // across the realistic production mix: new segments carry the `cluster`
+        // column; a pre-evolution segment lacks it and null-fills on read. A
+        // `cluster = <peer>` filter returns exactly that peer's rows (excluding
+        // other peers and the null-filled legacy rows); an empty filter returns
+        // every origin — the local single-cluster read behavior.
+        use crate::proto::finelog::logging::MatchScope;
+        use crate::query::provider::NamespaceProvider;
+        use crate::store::log_read::{add_cluster_filter, build_log_predicates};
+        use crate::store::segment::{discover_segments, write_segment_to_dir};
+        use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
+
+        let dir = unique_dir("cluster_mixed");
+        let full = log_arrow();
+
+        // A post-evolution segment stamped for two federated peers.
+        let new_batch = RecordBatch::try_new(
+            Arc::clone(&full),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=2)),
+                Arc::new(StringArray::from(vec!["/job/alpha", "/job/bravo"])),
+                Arc::new(StringArray::from(vec!["stdout"; 2])),
+                Arc::new(StringArray::from(vec!["line"; 2])),
+                Arc::new(Int64Array::from_iter_values(1..=2)),
+                Arc::new(Int32Array::from(vec![2; 2])),
+                Arc::new(StringArray::from(vec!["alpha", "bravo"])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 1, 1, &new_batch).unwrap();
+
+        // A pre-evolution segment with no `cluster` column at all.
+        let legacy_batch = RecordBatch::try_new(
+            log_arrow_pre_cluster(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(3..=3)),
+                Arc::new(StringArray::from(vec!["/job/legacy"])),
+                Arc::new(StringArray::from(vec!["stdout"; 1])),
+                Arc::new(StringArray::from(vec!["line"; 1])),
+                Arc::new(Int64Array::from_iter_values(3..=3)),
+                Arc::new(Int32Array::from(vec![2; 1])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 1, 3, &legacy_batch).unwrap();
+
+        let paths: Vec<String> = discover_segments(&dir)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let ctx = make_ctx();
+
+        // Read every `/job/` key visible under the given cluster filter, sorted.
+        let read_keys = |cluster: &str| {
+            let mut preds =
+                build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
+            add_cluster_filter(&mut preds.where_parts, cluster);
+            NamespaceProvider::build(
+                Arc::clone(&full),
+                &paths,
+                crate::query::index_cache::test_index_cache(),
+            )
+            .map(|provider| (provider, preds))
+            .unwrap()
+        };
+        let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
+            rows.sort_by(|a, b| a.key.cmp(&b.key));
+            rows.into_iter()
+                .filter_map(|r| r.key)
+                .collect::<Vec<String>>()
+        };
+
+        // Filtered to one peer → only that peer's row.
+        let (provider, preds) = read_keys("alpha");
+        let rows = fetch_log_rows(
+            &ctx,
+            provider,
+            &preds.where_parts,
+            preds.include_key,
+            false,
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sorted_keys(rows), vec!["/job/alpha".to_string()]);
+
+        // Empty filter → every origin, including the null-filled legacy row.
+        let (provider, preds) = read_keys("");
+        let rows = fetch_log_rows(
+            &ctx,
+            provider,
+            &preds.where_parts,
+            preds.include_key,
+            false,
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sorted_keys(rows),
+            vec![
+                "/job/alpha".to_string(),
+                "/job/bravo".to_string(),
+                "/job/legacy".to_string(),
+            ]
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

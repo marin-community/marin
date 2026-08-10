@@ -3,8 +3,6 @@
 
 """Sanity tests for the AmazonScience/massive function-calling converter."""
 
-from __future__ import annotations
-
 import io
 import json
 import tarfile

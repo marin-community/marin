@@ -1,44 +1,45 @@
 # GitHub Actions Workflows
 
-This directory contains thin trigger YAML around behavior implemented in `scripts/workflows/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
+This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
-## Inventory
+## Agent prose cleanup
 
-| File | Workflow Name | Trigger | Gate Type | Owner Domain | Local Reproduction |
-| --- | --- | --- | --- | --- | --- |
-| `dupekit-release-wheels.yaml` | Dupekit - Release Wheels | PR + push to main + workflow_dispatch | release | dupekit | see job steps |
-| `dupekit-unit.yaml` | Dupekit - Unit | PR + push to main | unit | dupekit | `cd lib/dupekit && uv run --frozen --group test pytest tests/ -v` |
-| `fray-unit.yaml` | Fray - Unit | PR + push to main | unit | fray | `cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/` |
-| `haliax-unit.yaml` | Haliax - Unit | PR + push to main | unit | haliax | `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax pytest -c pyproject.toml tests` |
-| `iris-dev-restart.yaml` | Iris - Dev Restart | schedule (daily) + workflow_dispatch | ops | iris | see job steps |
-| `iris-release-iap-proxy.yaml` | Iris - Release IAP Proxy | PR + push to main | release | iris | see job steps |
-| `iris-smoke-coreweave.yaml` | Iris - Smoke - CoreWeave | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-smoke-gcp.yaml` | Iris - Smoke - GCP | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/` |
-| `levanter-dev-launch-small-fast.yaml` | Levanter - Dev - Launch Small Fast | workflow_dispatch | dev | levanter | see job steps |
-| `levanter-integration-gpt2-small.yaml` | Levanter - Integration - GPT-2 Small | workflow_dispatch | integration | levanter | see job steps |
-| `levanter-unit.yaml` | Levanter - Unit | PR + push to main | unit | levanter | `uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not slow and not torch"` |
-| `marin-canary-datakit-nemotron.yaml` | Marin - Canary - Datakit Nemotron | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-canary-ferry-coreweave.yaml` | Marin - Canary Ferry - CoreWeave | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-canary-ferry.yaml` | Marin - Canary Ferry | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-docs.yaml` | Marin - Docs | PR + push to main | docs | marin | `uv run python infra/check_docs_source_links.py` |
-| `marin-integration.yaml` | Marin - Integration | PR + push to main + workflow_dispatch | integration | marin | `uv run pytest tests/integration/iris/` |
-| `marin-lint.yaml` | Marin - Lint | PR + push to main | lint | marin | `./infra/pre-commit.py --all-files` |
-| `marin-release-libs-wheels.yaml` | Marin - Release Libs Wheels | PR + tag push + schedule + workflow_dispatch | release | marin | see job steps |
-| `marin-smoke-datakit.yaml` | Marin - Smoke - Datakit | schedule + workflow_dispatch | smoke | marin | see job steps |
-| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin-core --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
-| `ops-claude-review.yaml` | Ops - Claude Review | PR + issue_comment | ops | claude | see job steps |
-| `ops-claude.yaml` | Ops - Claude | issue_comment + issues | ops | claude | see job steps |
-| `ops-codeql.yaml` | Ops - CodeQL | PR + push to main + schedule | ops | ops | see job steps |
-| `ops-docker-images.yaml` | Ops - Docker Images | schedule (weekly) + workflow_dispatch | ops | ops | see job steps |
-| `ops-grug-variant-diff.yaml` | Ops - Grug Variant Diff | PR | ops | ops | see job steps |
-| `ops-infra-dashboard.yaml` | Ops - Infra Dashboard | PR + push to main | ops | ops | see job steps |
-| `ops-nightshift-ci-tests.yaml` | Ops - Nightshift CI Tests | schedule + workflow_dispatch | integration | ops | see job steps |
-| `ops-nightshift-cleanup.yaml` | Ops - Nightshift Cleanup | schedule + workflow_dispatch | ops | ops | see job steps |
-| `ops-nightshift-doc-drift.yaml` | Ops - Nightshift Doc Drift | schedule + workflow_dispatch | docs | ops | see job steps |
-| `ops-stale.yaml` | Ops - Stale | schedule + workflow_dispatch | ops | ops | see job steps |
-| `zephyr-integration-shuffle.yaml` | Zephyr - Integration - Shuffle | workflow_dispatch | integration | zephyr | see job steps |
-| `zephyr-unit.yaml` | Zephyr - Unit | PR + push to main | unit | zephyr | `uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/` |
+`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
+`agent-generated` label. It runs when an item is opened, edited, reopened, or
+labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
+default branch; `pull_request_target` never checks out the PR head.
+
+Claude reads the common writing-style guide, the AI-writing checklist, and the
+applicable issue or pull request guide from `.agents/skills/writing-style/`, then
+rewrites the description as a permanent record for a technical reader. The
+workflow prompt narrows that policy to a soft edit: preserve source facts,
+measurements, caveats, links, and useful code examples; do not import facts from
+the diff or comments; do not target a word count; and leave compliant text and
+titles unchanged.
+
+The model job has read-only repository permissions, receives only the filesystem
+`Read` tool, and returns a schema-validated body. A separate write job runs the
+Python finalizer, which applies deterministic presentation checks outside fenced
+and inline code, rejects empty or oversized rewrites, and prepares the GitHub
+update.
+
+Before an edit, the workflow stores the exact prior description in a collapsed
+`github-actions[bot]` comment. The edited description ends with an `Original
+description` link to that comment. Content hashes make archive creation
+idempotent across retries, and the workflow rechecks the current description
+before writing so a queued run cannot overwrite a newer edit. It skips cleanup
+when the archive or updated body would exceed GitHub's size limit.
+
+## External dependency updates
+
+`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
+MarinSkyRL projects at 09:00 UTC each day. It runs
+`uv run config/update-external.py` without a project selector, records each
+resolved version and commit in the job summary, and includes every upstream
+commit subject between the old and new revisions. It opens or refreshes one
+`automation/external-dependencies` pull request when generated state changes
+and enables squash auto-merge. The Nightshift GitHub App token lets normal pull
+request checks run on the automation branch.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
@@ -97,11 +98,15 @@ echo "pr_url=$PR_URL" >>"$GITHUB_OUTPUT"
 echo "pr_created=true" >>"$GITHUB_OUTPUT"
 ```
 
+
+
 ### Three details that bit v1
 
 - **URL capture.** `gh pr create` writes a human banner before the URL on non-TTY runners; capture from `gh pr view --json url` (or `gh pr list --json url`) instead of parsing `gh pr create` stdout.
-- **Stale branch + `--force-with-lease`.** `git checkout -B` against `HEAD` with no knowledge of `origin/$BRANCH` yields an empty lease, and the push will be rejected. Always `git fetch` the branch first and reset onto it when present, then re-apply the build-step edits before staging.
+- **Stale branch +** `--force-with-lease`**.** `git checkout -B` against `HEAD` with no knowledge of `origin/$BRANCH` yields an empty lease, and the push will be rejected. Always `git fetch` the branch first and reset onto it when present, then re-apply the build-step edits before staging.
 - **Label semantics.** `gh pr edit --add-label` accumulates; peter-evans `labels:` replaced. The reconcile loop above expresses replace-semantics explicitly. If callers want accumulate-only, they should set `DESIRED_LABELS` to the union and skip the second loop.
+
+
 
 ### `gh` token and permissions notes
 
@@ -125,7 +130,8 @@ steps:
       BODY_FILE: pr_body.md
       COMMIT_MESSAGE: "Auto-update artifacts"
       DESIRED_LABELS: "agent-generated automated"
-    run: ./scripts/workflows/_open_pr.sh   # or inline the snippet
+    run: |
+      # inline the open-or-update-PR snippet from the section above
 ```
 
 The README is the source of truth — when fixing the recipe, fix it here. The spec.md copy is illustrative.

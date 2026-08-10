@@ -63,14 +63,18 @@ export function formatDuration(startMs: number, endMs?: number): string {
   return `${hours}h ${mins}m`
 }
 
-/** Format epoch ms as "HH:MM:SS.mmm". */
-export function formatLogTime(epochMs: number): string {
+/**
+ * Format epoch ms as "HH:MM:SS.mmm" in the browser's local zone, or in UTC when
+ * `utc` is set. UTC matches the timestamps most processes embed in their raw log
+ * lines, so the rendered prefix lines up with the line text.
+ */
+export function formatLogTime(epochMs: number, utc = false): string {
   if (!epochMs) return ''
   const d = new Date(epochMs)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  const ms = String(d.getMilliseconds()).padStart(3, '0')
+  const hh = String(utc ? d.getUTCHours() : d.getHours()).padStart(2, '0')
+  const mm = String(utc ? d.getUTCMinutes() : d.getMinutes()).padStart(2, '0')
+  const ss = String(utc ? d.getUTCSeconds() : d.getSeconds()).padStart(2, '0')
+  const ms = String(utc ? d.getUTCMilliseconds() : d.getMilliseconds()).padStart(3, '0')
   return `${hh}:${mm}:${ss}.${ms}`
 }
 
@@ -88,10 +92,31 @@ export function formatUptime(uptimeMs?: string): string {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
 }
 
-/** CSS class for a log level string. */
+/** The severity names a `LogEntry.level` can normalize to. */
+export type LogLevelName = 'unknown' | 'debug' | 'info' | 'warning' | 'error' | 'critical'
+
+/**
+ * Normalize a wire `LogLevel` to its bare severity name.
+ *
+ * proto3 JSON renders an enum as its declared name, so the wire carries
+ * `"LOG_LEVEL_ERROR"`, not `"ERROR"`. Levels finelog could not parse from the
+ * line arrive as `LOG_LEVEL_UNKNOWN` and normalize to `'unknown'`.
+ */
+export function logLevelName(level: string | undefined): LogLevelName {
+  const name = (level ?? '').toLowerCase().replace(/^log_level_/, '')
+  switch (name) {
+    case 'debug':
+    case 'info':
+    case 'warning':
+    case 'error':
+    case 'critical': return name
+    default: return 'unknown'
+  }
+}
+
+/** Text color class for a log level string. */
 export function logLevelClass(level: string | undefined): string {
-  const lvl = (level ?? 'info').toLowerCase()
-  switch (lvl) {
+  switch (logLevelName(level)) {
     case 'debug': return 'text-text-muted'
     case 'warning': return 'text-status-warning'
     case 'error':

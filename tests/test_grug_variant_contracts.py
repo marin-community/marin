@@ -27,7 +27,7 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -35,6 +35,14 @@ from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.artifact import ArtifactRecord, write_record
+from marin.execution.lazy import materialized_config
+from marin.processing.tokenize.tokenize import TokenizedCache
+
+from experiments.ferries import canary_ferry
+from experiments.llama import llama3_tokenizer
+
+_TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -145,15 +153,71 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.segment_ids is mask.segment_ids
 
 
-def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
+def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
+    if jax.default_backend() != "gpu":
+        pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
+
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=8)
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=512,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=1,
+        max_seq_len=8,
+        sliding_window=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        attention_implementation="gpu_fa4_thd",
+    )
+
+    def forward():
+        attn = model_module.CausalSelfAttention.init(cfg, key=jax.random.PRNGKey(0))
+        x = jax.sharding.reshard(
+            jnp.zeros((8, 16, cfg.hidden_dim), dtype=jnp.bfloat16),
+            jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None, None),
+        )
+        segment_ids = jnp.zeros((8, 16), dtype=jnp.int32)
+        mask = GrugAttentionMask.causal().with_segment_ids(segment_ids, max_segments=1)
+        return attn(x, mask)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_shape = eqx.filter_eval_shape(forward)
+
+    assert out_shape.shape == (8, 16, cfg.hidden_dim)
+
+
+def _seed_cache_records(step, prefix: str) -> None:
+    """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
+    ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
+    datasets materialize first as build dependencies)."""
+    for dep in step.deps:
+        if dep.artifact_type is TokenizedCache:
+            write_record(
+                ArtifactRecord(
+                    name=dep.name,
+                    version=dep.version,
+                    output_path=dep.path(prefix),
+                    result_type=_TOKENIZED_CACHE,
+                    config={"tokenizer": llama3_tokenizer, "format": {"text_key": "text"}},
+                )
+            )
+
+
+def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tmp_path):
     monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
     monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
     monkeypatch.setenv("CANARY_TRACKER", "json_logger")
     monkeypatch.setenv("RUN_ID", "test-thd")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    canary_ferry = importlib.import_module("experiments.ferries.canary_ferry")
-    canary_ferry = importlib.reload(canary_ferry)
-    data = canary_ferry.canary_moe_step.config.data
+    # build() reads the env at call time, so set it above before resolving the config.
+    step = canary_ferry.build()
+    _seed_cache_records(step, str(tmp_path))
+    data = materialized_config(step, str(tmp_path)).data
 
     components = list(data.components.values())
     assert components
@@ -181,8 +245,8 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
     mesh, token_pspec = mesh_fn(num_devices=4)
     batch = GrugLmExample(
-        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
-        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        tokens=jnp.zeros((32, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((32, 4), dtype=jnp.float32),
         attn_mask=GrugAttentionMask.causal(),
     )
 

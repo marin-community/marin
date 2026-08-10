@@ -37,9 +37,11 @@ SAMPLE_NEMOTRON_RECORDS = [
 ]
 
 
-def _zstd_jsonl(records: list[dict]) -> bytes:
-    jsonl = ("\n".join(json.dumps(r) for r in records) + "\n").encode("utf-8")
-    return zstd.ZstdCompressor().compress(jsonl)
+def _zstd_jsonl(records: list[dict], trailing_newline: bool = True) -> bytes:
+    body = "\n".join(json.dumps(r) for r in records)
+    if trailing_newline:
+        body += "\n"
+    return zstd.ZstdCompressor().compress(body.encode("utf-8"))
 
 
 def _gzip_text(lines: list[str]) -> bytes:
@@ -106,6 +108,22 @@ def test_download_nemotron_cc_pipeline(tmp_path, local_ncc_server):
     for record in all_records:
         assert record["source"] == "nemotron"
         assert "metadata" in record
+
+
+def test_download_nemotron_cc_no_trailing_newline(tmp_path, local_ncc_server):
+    """The last record must survive even when the source stream lacks a trailing newline."""
+    base_url, server_root = local_ncc_server
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    path = "contrib/Nemotron/no_trailing_newline.jsonl.zstd"
+    _publish(server_root, NCC_PATHS_SUFFIX, _gzip_text([path]))
+    _publish(server_root, path, _zstd_jsonl(SAMPLE_NEMOTRON_RECORDS, trailing_newline=False))
+
+    download_nemotron_cc(str(output_dir), base_url=base_url)
+
+    all_records = _read_all_jsonl_zst(output_dir / "contrib" / "Nemotron")
+    assert [r["id"] for r in all_records] == ["record-001", "record-002", "record-003"]
 
 
 def test_download_nemotron_cc_dolma_format(tmp_path, local_ncc_server):

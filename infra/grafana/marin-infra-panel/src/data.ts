@@ -1,0 +1,193 @@
+import { DataFrame, Field } from '@grafana/data';
+import {
+  CommitRow,
+  NightlyCell,
+  ProvisioningRegion,
+  ProvisioningRow,
+  SeriesPoint,
+  WandbPoint,
+  WorkerRegion,
+} from './types';
+
+type Row = Record<string, unknown>;
+
+function rows(frame: DataFrame): Row[] {
+  return Array.from({ length: frame.length }, (_, index) =>
+    Object.fromEntries(frame.fields.map((field) => [field.name, field.values[index]]))
+  );
+}
+
+function requiredString(row: Row, key: string): string {
+  const value = row[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Missing required string field: ${key}`);
+  }
+  return value;
+}
+
+function optionalString(row: Row, key: string): string | undefined {
+  const value = row[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function requiredNumber(row: Row, key: string): number {
+  const value = row[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Missing required number field: ${key}`);
+  }
+  return value;
+}
+
+function optionalNumber(row: Row, key: string): number | undefined {
+  const value = row[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(row: Row, key: string): boolean {
+  const value = row[key];
+  return value === true || value === 1 || value === 'true';
+}
+
+export function nightlyCells(frame: DataFrame): NightlyCell[] {
+  const seen = new Set<string>();
+  return rows(frame).map((row, index) => {
+    const date = requiredString(row, 'date');
+    const laneId = requiredString(row, 'lane_id');
+    const key = `${laneId}\u0000${date}`;
+    if (seen.has(key)) {
+      throw new Error(`Duplicate nightly cell: ${laneId} on ${date}`);
+    }
+    seen.add(key);
+    return {
+      date,
+      laneId,
+      lane: requiredString(row, 'lane'),
+      label: requiredString(row, 'label'),
+      group: requiredString(row, 'group'),
+      subgroup: requiredString(row, 'subgroup'),
+      state: requiredString(row, 'state'),
+      durationState: requiredString(row, 'duration_state'),
+      durationSeconds: optionalNumber(row, 'duration_seconds'),
+      conclusion: optionalString(row, 'conclusion'),
+      url: optionalString(row, 'url'),
+      workflowUrl: optionalString(row, 'workflow_url'),
+      healthy: booleanValue(row, 'healthy'),
+      due: booleanValue(row, 'due'),
+      sourceError: optionalString(row, 'source_error'),
+      laneOrder: optionalNumber(row, 'lane_order') ?? index,
+    };
+  });
+}
+
+export function commits(frame: DataFrame): CommitRow[] {
+  return rows(frame).map((row) => ({
+    oid: requiredString(row, 'oid'),
+    shortOid: requiredString(row, 'short_oid'),
+    headline: requiredString(row, 'headline'),
+    author: requiredString(row, 'author'),
+    avatarUrl: optionalString(row, 'avatar_url'),
+    state: requiredString(row, 'state'),
+    committedAt: requiredNumber(row, 'committed_at'),
+    url: requiredString(row, 'url'),
+    successRate: optionalNumber(row, 'success_rate'),
+  }));
+}
+
+export function wandbPoints(frame: DataFrame): WandbPoint[] {
+  return rows(frame).map((row) => ({
+    chart: requiredString(row, 'chart'),
+    run: requiredString(row, 'run'),
+    tokens: requiredNumber(row, 'tokens'),
+    value: requiredNumber(row, 'value'),
+    reportTitle: requiredString(row, 'report_title'),
+    reportUrl: requiredString(row, 'report_url'),
+  }));
+}
+
+export function workerRegions(frame: DataFrame): WorkerRegion[] {
+  return rows(frame).map((row) => ({
+    region: requiredString(row, 'region'),
+    healthy: requiredNumber(row, 'healthy'),
+    cpuMillicores: requiredNumber(row, 'cpu_millicores'),
+    memoryBytes: requiredNumber(row, 'memory_bytes'),
+    tpuChips: requiredNumber(row, 'tpu_chips'),
+  }));
+}
+
+export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
+  return rows(frame).map((row) => ({
+    scope: requiredString(row, 'scope'),
+    collectedAt: requiredNumber(row, 'collected_at'),
+    zone: optionalString(row, 'zone') ?? '',
+    ready: requiredNumber(row, 'ready'),
+    stockout: requiredNumber(row, 'stockout'),
+    error: requiredNumber(row, 'error'),
+    preempted: requiredNumber(row, 'preempted'),
+    outcomes: requiredNumber(row, 'outcomes'),
+    successRatio: optionalNumber(row, 'success_ratio'),
+    poolsPlacing: requiredNumber(row, 'pools_placing'),
+    poolsNoReadyOutcome: requiredNumber(row, 'pools_no_ready_outcome'),
+    latencyP50Seconds: optionalNumber(row, 'latency_p50_seconds'),
+    latencyP95Seconds: optionalNumber(row, 'latency_p95_seconds'),
+    windowHours: optionalNumber(row, 'window_hours'),
+  }));
+}
+
+type ProvisioningRegionSource = Pick<ProvisioningRow, 'scope' | 'zone' | 'ready' | 'outcomes'>;
+
+function regionFromProvisioningZone(zone: string): string {
+  return /^[a-z]+-[a-z]+\d+-[a-z]$/.test(zone) ? zone.replace(/-[a-z]$/, '') : zone;
+}
+
+export function provisioningRegions(provisioning: ProvisioningRegionSource[]): ProvisioningRegion[] {
+  const totals = new Map<string, { ready: number; outcomes: number }>();
+  for (const pool of provisioning) {
+    if (pool.scope !== 'pool' || !pool.zone || pool.outcomes <= 0) {
+      continue;
+    }
+    const region = regionFromProvisioningZone(pool.zone);
+    const counts = totals.get(region);
+    if (counts) {
+      counts.ready += pool.ready;
+      counts.outcomes += pool.outcomes;
+    } else {
+      totals.set(region, { ready: pool.ready, outcomes: pool.outcomes });
+    }
+  }
+  return [...totals.entries()].map(([region, counts]) => ({
+    region,
+    ready: counts.ready,
+    outcomes: counts.outcomes,
+    successRatio: counts.ready / counts.outcomes,
+  }));
+}
+
+export function seriesPoints(frame: DataFrame, seriesField: string, valueField: string): SeriesPoint[] {
+  return rows(frame).map((row) => ({
+    time: requiredNumber(row, 'time'),
+    series: requiredString(row, seriesField),
+    value: requiredNumber(row, valueField),
+  }));
+}
+
+export function frameByRefId(frames: DataFrame[], refId: string): DataFrame | undefined {
+  const matching = frames.filter((frame) => frame.refId === refId);
+  if (matching.length > 1) {
+    throw new Error(`Expected one data frame for ${refId}; received ${matching.length}`);
+  }
+  return matching[0];
+}
+
+/**
+ * The single query frame carrying `fieldName`, or `undefined` when the query
+ * returned nothing yet (empty, still loading, or upstream error). Callers render
+ * an empty state for `undefined`; only a genuinely ambiguous result — more than
+ * one frame with the field — is a misconfiguration worth failing loudly on.
+ */
+export function frameWithField(frames: DataFrame[], fieldName: string): DataFrame | undefined {
+  const matching = frames.filter((frame) => frame.fields.some((field: Field) => field.name === fieldName));
+  if (matching.length > 1) {
+    throw new Error(`Expected one data frame containing ${fieldName}; received ${matching.length}`);
+  }
+  return matching[0];
+}

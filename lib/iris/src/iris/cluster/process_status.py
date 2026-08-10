@@ -15,6 +15,7 @@ import threading
 
 from rigging.timing import Timer
 
+from iris.cluster.provenance import provenance_from_env, provenance_to_proto
 from iris.cluster.runtime.process import _read_proc_cpu_millicores
 from iris.rpc import job_pb2
 
@@ -76,6 +77,7 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
         os.getpid(), _prev_cpu_total, _prev_cpu_utime
     )
 
+    provenance = provenance_from_env()
     return job_pb2.ProcessInfo(
         hostname=platform.node(),
         pid=os.getpid(),
@@ -88,7 +90,7 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
         open_fd_count=_open_fd_count(),
         memory_total_bytes=_total_memory_bytes(),
         cpu_count=os.cpu_count() or 0,
-        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
+        provenance=provenance_to_proto(provenance),
     )
 
 

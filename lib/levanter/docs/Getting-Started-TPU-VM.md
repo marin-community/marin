@@ -77,10 +77,11 @@ to set up ssh keys and [using `ssh-agent`](https://kb.iu.edu/d/aeww) to make exe
 You will need a [Docker installation](https://docs.docker.com/engine/install/)
 on your development machine to build and run images on TPUs.
 
-First create a configuration file for future launches in your Levanter directory:
+First create a personal configuration file for future launches:
 
 ```bash
-cat > .levanter.yaml <<EOF
+mkdir -p ~/.config/marin
+cat > ~/.config/marin/config.yaml <<EOF
 env:
     WANDB_API_KEY:
     WANDB_ENTITY:
@@ -103,6 +104,9 @@ capacity_type: "preemptible"
 subnetwork: "default"  # default
 EOF
 ```
+
+Levanter also reads `.levanter.yaml` from the current checkout. Use it for repository-specific values that should
+override your personal defaults in `~/.config/marin/config.yaml`.
 
 If you want to customize the docker image that is created and uploaded to Artifact Registry, you can add config `image_name: "YOUR-DOCKER-NAME"`.
 

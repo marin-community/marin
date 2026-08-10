@@ -21,8 +21,6 @@ Usage:
         --workers 128
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time
@@ -33,16 +31,16 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 import click
-import fsspec
 import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
-from iris.actor import ActorServer
 from iris.actor.client import ActorClient
+from iris.actor.server import ActorServer
 from iris.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
+from rigging.filesystem import StoragePath
 
 from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,
@@ -81,6 +79,23 @@ STRAGGLER_GRACE_SECONDS = 300
 # Hard wall-clock cap on the whole scan. Beyond this we terminate workers
 # and finalize whatever we have, even if some tasks are still in flight.
 MAX_SCAN_SECONDS = 90 * 60
+
+# Drain-based early finish. Once only a handful of tasks remain in flight
+# (queue + active workers) and stay there for DRAIN_GRACE_SECONDS, finalize
+# instead of waiting out MAX_SCAN_SECONDS. The straggler tail is a few huge
+# flat prefixes that keep streaming objects (so the no-progress timeout never
+# fires) but contribute marginally to a directory-level report. This mirrors
+# the manual "kill the scan when <100 tasks are left" operating practice.
+DRAIN_TASK_THRESHOLD = 100
+DRAIN_GRACE_SECONDS = 300
+
+# Lower bound on elapsed wall-clock before the drain-based early finish is even
+# considered. Early in a run the in-flight count can briefly dip to/below
+# DRAIN_TASK_THRESHOLD before adaptive splitting fans the queue back out, so
+# without a floor we could finalize prematurely and miss large swaths of the
+# namespace. Below this threshold we never take the early exit; the no-progress
+# straggler timeout and the MAX_SCAN_SECONDS cap still apply as backstops.
+DRAIN_MIN_SCAN_SECONDS = 45 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +157,7 @@ def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
 
     segment_id = uuid.uuid4().hex[:12]
     path = f"{staging_dir}/objects_{segment_id}.parquet"
-    with fsspec.open(path, "wb") as f:
+    with StoragePath(path).open("wb") as f:
         pq.write_table(table, f, compression="zstd")
     return path
 
@@ -155,14 +170,13 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     sees N-way duplicated (bucket, name) rows.
     """
 
-    fs, _ = fsspec.core.url_to_fs(staging_dir)
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
-    existing = fs.glob(pattern)
+    existing = StoragePath(pattern).glob()
     if not existing:
         return
     print(f"Truncating {len(existing)} stale segments under {staging_dir}")
     for path in existing:
-        fs.rm(path)
+        path.rm()
 
 
 # ---------------------------------------------------------------------------
@@ -635,10 +649,14 @@ def run_distributed(
 
     # Monitor progress
     start_time = time.monotonic()
+    # Monotonic time when the in-flight task count first dropped to the drain
+    # threshold; reset whenever it climbs back above (new sub-prefixes queued).
+    drained_since: float | None = None
     try:
         while True:
             status = coordinator.get_status()
             elapsed = time.monotonic() - start_time
+            remaining = status["queue_size"] + status["active_workers"]
 
             print(
                 f"[{elapsed:6.0f}s] "
@@ -652,6 +670,19 @@ def run_distributed(
 
             if status["done"]:
                 break
+
+            # Only consider the drain-based early finish after a minimum
+            # elapsed time, so a transient early dip in the in-flight count
+            # (before adaptive splitting fans the queue back out) can't finalize
+            # the scan prematurely.
+            if elapsed >= DRAIN_MIN_SCAN_SECONDS and remaining <= DRAIN_TASK_THRESHOLD:
+                if drained_since is None:
+                    drained_since = time.monotonic()
+                elif time.monotonic() - drained_since >= DRAIN_GRACE_SECONDS:
+                    print(f"Only {remaining} tasks left for {DRAIN_GRACE_SECONDS}s; abandoning stragglers, finalizing")
+                    break
+            else:
+                drained_since = None
 
             if elapsed >= MAX_SCAN_SECONDS:
                 print(f"Wall-clock cap of {MAX_SCAN_SECONDS}s hit; abandoning stragglers and finalizing")

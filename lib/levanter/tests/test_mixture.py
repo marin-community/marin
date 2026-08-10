@@ -7,7 +7,8 @@ import jax
 import numpy as np
 import pytest
 
-from levanter.data import ListAsyncDataset, MixtureDataset, PermutationDataset
+from levanter.data.dataset import ListAsyncDataset, PermutationDataset
+from levanter.data.mixture import MixtureDataset
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import ConcatDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.schedule import BatchSchedule, ScheduleStep

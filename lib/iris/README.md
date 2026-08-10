@@ -4,7 +4,7 @@ Distributed job orchestration for Marin.
 
 ## Quick Start
 
-### Production: GCP Cluster
+### Cluster Basics
 
 ```bash
 # Start controller VM (runs autoscaler internally)
@@ -43,7 +43,9 @@ job.wait()
 ```
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
-`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+`--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
+been obtained (a live, non-erroring slice in the region), and the job waits otherwise; it does not
+attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capacity.
 
 ## Architecture
 
@@ -164,9 +166,32 @@ The controller reconciles the response:
 
 See [`docs/reconcile_rpc.md`](docs/reconcile_rpc.md) for the protocol details.
 
-## Job State Transitions
+## Jobs, Tasks, Replicas, and Sub-jobs
 
-Jobs progress through the following states:
+A **job** is the user-facing workload submitted to Iris. A **task** is the
+independently scheduled unit of execution created for that job. Job state is
+derived from the states of its tasks.
+
+By default a job creates a single task, but setting `replicas=N` creates N sibling
+tasks under the same job, with task IDs like `/user/job/0`, `/user/job/1`, and so on.
+Use replicas when one logical workload needs multiple peer containers, such as
+multi-host training ranks or gang-scheduled TPU/GPU jobs.
+
+Scheduling and failure happen at task granularity: the scheduler places
+each task on eligible capacity; failures retry a given task.
+See [`docs/task-states.md`](docs/task-states.md) for the task state machine,
+retry rules, and job-state rollup.
+
+A **sub-job** is a separate job submitted by code already running inside an Iris
+job, usually via `iris_ctx().client.submit(...)`. Sub-jobs get hierarchical IDs
+like `/user/parent/child`, can have their own entrypoint and resources, and may
+themselves create multiple replicas. Use sub-jobs when a launcher or
+orchestrator job needs to admit independent follow-on work over time.
+
+### Job State Transitions
+
+Jobs progress through the following states. For task states, retry budgets, and
+job-state rollup rules, see [`docs/task-states.md`](docs/task-states.md).
 
 | State | Description |
 |-------|-------------|
@@ -209,7 +234,7 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 
 **Docker flags:**
 - `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
-- `--shm-size=100g` - Large shared memory for TPU operations
+- `--shm-size=<task memory>` - Shared-memory capacity; `/dev/shm` usage and direct memory share the task memory limit. TPU requests without a memory limit retain a 100 GiB fallback.
 - `--cap-add=SYS_RESOURCE` - Resource management capabilities
 - `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
 
@@ -238,14 +263,10 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ### Multi-Region Bundle Storage
 
-**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
-
-**Rationale:**
-- Bundles are small (~4MB each)
-- Cross-region transfer costs are negligible at expected scale:
-  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
-- The complexity of regional bundle caching is not justified by these costs
-- Centralized storage simplifies operations and reduces infrastructure complexity
+Bundles are stored in one centralized GCS bucket and fetched by workers in all
+regions. Bundles are small enough that cross-region transfer is cheaper than
+operating regional caches, and centralized storage keeps worker bootstrap
+simple.
 
 ## CLI Reference
 
@@ -314,9 +335,12 @@ iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
 
+# Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
+iris --config cluster.yaml job wait /my-job
+
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop /my-job --no-include-children
+iris --config cluster.yaml job stop --prefix /my-job-prefix
 ```
 
 ## Smoke Test
@@ -329,7 +353,7 @@ dashboard rendering, log levels, profiling, and constraint routing.
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
-# iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
@@ -410,33 +434,10 @@ scale_groups:
         ssh_key_file: ~/.ssh/manual_key
 ```
 
-## Directory Structure
-
-```
-src/iris/
-├── actor/                    # Actor RPC system
-│   ├── client.py            # Actor method invocation
-│   ├── pool.py              # Multi-endpoint management
-│   ├── resolver.py          # Endpoint discovery
-│   └── server.py            # Actor hosting
-├── client/                   # High-level client layer
-│   ├── client.py            # IrisClient and IrisContext
-│   ├── resolver.py          # ClusterResolver
-│   └── worker_pool.py       # Task dispatch
-├── cluster/                  # Cluster orchestration
-│   ├── lifecycle.py         # connect_cluster() lifecycle helper
-│   ├── controller/          # Controller service + autoscaler
-│   ├── worker/              # Worker service
-│   └── providers/           # Provider abstractions (GCP, Manual, Local, CoreWeave)
-├── rpc/                      # Protocol definitions + generated code
-└── cli/                      # CLI package
-    ├── main.py               # Top-level iris group
-    ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
-    ├── build.py              # Image build commands
-    ├── run.py                # Job submission (command passthrough)
-    └── rpc.py                # Dynamic RPC CLI
-```
-
 ## References
 
+- [Architecture](docs/architecture.md) - source layout, import layers, and the `TaskBackend` contract
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
+- [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
+- [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
+- [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 
 defineProps<{
   title: string
-  backTo?: string
+  backTo?: RouteLocationRaw
   backLabel?: string
 }>()
 </script>

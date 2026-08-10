@@ -14,10 +14,11 @@ pages (``text_by_page_src``); we fall back when the corrected list is
 missing or empty. Pages are joined with a blank line.
 """
 
-from __future__ import annotations
-
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -40,10 +41,10 @@ def row_to_doc(row: dict) -> list[dict]:
     pages = row.get("text_by_page_gen") or row.get("text_by_page_src") or []
     pages = [p for p in pages if p]
     if not pages:
-        counters.increment("institutional_books/dropped")
+        counters.pipeline.update_counter("institutional_books/dropped", 1)
         return []
 
-    counters.increment("institutional_books/kept")
+    counters.pipeline.update_counter("institutional_books/kept", 1)
     return [
         {
             "text": PAGE_SEPARATOR.join(pages),

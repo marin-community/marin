@@ -40,8 +40,6 @@ Usage:
     ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 import sys
@@ -49,15 +47,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-import fsspec
-from fray import ResourceConfig
-from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
+from fray.types import ResourceConfig
+from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.config_discovery import resolve_cluster_config
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import StoragePath
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.render_report import (
@@ -164,8 +161,7 @@ def _report_stage(deduped_dir: str, report_path: str, history_dir: str, today: s
         )
 
     report = generate_report(conn, changes_section=changes_section)
-    with fsspec.open(report_path, "w") as f:
-        f.write(report)
+    StoragePath(report_path).write_text(report)
 
     write_snapshot(current, snapshot_path(history_dir, today))
     print(f"Report written to {report_path}; snapshot archived for {today}", file=sys.stderr)
@@ -279,31 +275,6 @@ def _compose_discord_message(report_md: str, *, date: str, gist_url: str | None)
     return f"**Weekly storage report** (UTC {date})\n- totals: {headline}\n{report_line}\n{change_section}"
 
 
-def _open_iris_client(cluster: str) -> tuple[IrisClient, object]:
-    """Resolve the named cluster, open a controller tunnel, and return a client.
-
-    Returns ``(client, tunnel_ctx)``; callers must close the tunnel context
-    when finished (it backs the controller URL the client talks to).
-    """
-    config_path = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    iris_config = IrisConfig.load(config_path)
-
-    token_provider = None
-    cluster_name = resolve_cluster_name(iris_config.proto, None, cluster)
-    if iris_config.proto.HasField("auth"):
-        token_provider = create_client_token_provider(iris_config.proto.auth, cluster_name=cluster_name)
-
-    bundle = iris_config.provider_bundle()
-    controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.proto.controller
-    )
-
-    tunnel_cm = bundle.controller.tunnel(address=controller_address)
-    tunnel_url = tunnel_cm.__enter__()
-    client = IrisClient.remote(tunnel_url, workspace=REPO_ROOT, token_provider=token_provider)
-    return client, tunnel_cm
-
-
 def _submit_callable(
     client: IrisClient,
     *,
@@ -402,8 +373,7 @@ def main(
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     run_id = run_id or today
 
-    client, tunnel_cm = _open_iris_client(cluster)
-    try:
+    with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
         if not skip_scan:
             print("=== Stage 1: distributed scan on Iris ===", file=sys.stderr)
             # Pin the scan coordinator to non-preemptible (on-demand) capacity so a
@@ -454,8 +424,6 @@ def main(
                 # ~10 GB deduped download + DuckDB spill headroom.
                 disk="100GB",
             )
-    finally:
-        tunnel_cm.__exit__(None, None, None)
 
     if gist_visibility == "none" and not discord_channel:
         print(f"=== Done. Report at {report_path} (nothing published) ===", file=sys.stderr)

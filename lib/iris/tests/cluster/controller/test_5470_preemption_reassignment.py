@@ -37,7 +37,6 @@ from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, update
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -150,8 +149,6 @@ def _build_context(scheduler, state):
         user_spend={},
         user_budget_limits={},
         requested_bands={},
-        reserved_job_ids=frozenset(),
-        reservation_entry_counts={},
         user_budget_defaults=UserBudgetDefaults(),
     )
 
@@ -188,7 +185,6 @@ def _transition_to_running(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -211,7 +207,6 @@ def _heartbeat_killed(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
 
@@ -236,7 +231,6 @@ def _worker_fail_one_task(state, task):
                 )
             ],
             health=state._health,
-            endpoints=state._endpoints,
             now=Timestamp.now(),
         )
     return result
@@ -431,10 +425,7 @@ class TestPreemptionReassignment:
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ControllerTestState(
             ctrl._db,
-            health=ctrl._health,
-            endpoints=ctrl._endpoints,
-            worker_attrs=ctrl._worker_attrs,
-            run_template_cache=ctrl._run_template_cache,
+            health=ctrl.provider.health,
         )
 
         job_a_id, job_b_id = self._setup_two_gangs_running(ctrl, state)
@@ -480,8 +471,7 @@ class TestPreemptionReassignment:
             apply_task_observations(
                 cur,
                 [fail_request],
-                health=ctrl._health,
-                endpoints=ctrl._endpoints,
+                health=ctrl.provider.health,
                 now=Timestamp.now(),
             )
         ctrl._run_scheduling()

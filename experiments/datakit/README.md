@@ -1,0 +1,169 @@
+# Datakit reference pipeline
+
+End-to-end DAG from normalized Datakit sources to the per-(cluster, quality)
+Levanter store. [`reference_pipeline.py`](reference_pipeline.py) builds the
+StepSpec graph and runs it as a single iris job, in one of two modes:
+
+- `--mode full`: sources from `marin.datakit.sources.all_sources`, K=5000.
+- `--mode sample`: a pre-built testbed sample registered as already-normalized
+  sources (`--sample-prefix`), K=64 — a true end-to-end run on real data.
+
+All worker CPU/RAM is one `PoolConfig` (`n_workers` x `worker`, overridable with
+`--pool-workers/--pool-cpu/--pool-ram`) shared across the stages. Each stage runs
+its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
+`ZephyrContext`), sized by that config; `--max-concurrent` bounds how many stages
+the StepRunner walks at once.
+
+Most stages keep one step per source with its own output dir
+(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy dedup, the
+decontamination DF filter, and the store combine sources. Steps write their
+main output under `outputs/main/` plus, where it makes sense, a small site/sample side output
+(`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
+reports ([`reports/`](reports/)) read.
+
+Materialized source identities are paths relative to `MARIN_PREFIX`, such as
+`datakit/normalize/foo_<hash>/outputs/main`. Datakit models use absolute data
+paths at runtime. Artifact result payloads store paths relative to the active
+`MARIN_PREFIX`. `read_artifact` restores the active prefix for consumers. The
+target prefix must contain the same materialized data after a region change.
+Paths outside the active prefix stay absolute. Existing payloads with absolute
+paths load without data recomputation. The framework lineage fields
+`output_path` and `dep_paths` stay absolute.
+
+Datakit attribute Parquet files use a flat schema. The top-level `id` column
+is the join key. Each attribute is another top-level column, such as
+`contaminated`, `dup_doc`, or `is_cluster_canonical`. Attribute files do not
+use a nested `attributes` struct.
+
+Global exact deduplication is one shared step. It selects one canonical record
+for each record ID, with source names as the canonical order. The step writes
+sparse co-partitioned attributes with `dup_doc=true` for the other
+records. Only source shards with duplicates get an attribute file; a missing
+file means that the source shard has no exact duplicates. The step does not copy
+normalized text.
+
+The final store uses fuzzy canonical markers when they exist. It applies exact
+duplicate markers only to records without fuzzy markers, which covers records
+that MinHash skipped without conflicting with fuzzy canonical selection.
+
+Global exact and fuzzy dedup outputs write `.source_manifest.json` at the output
+root. The file maps each `source_NNN` tag to its source key and its relative
+`outputs/source_NNN` attribute directory.
+
+A source-set change gives a new global exact-dedup output and a new store
+identity. It does not change the identity of tokenization, embedding, quality,
+decontamination, or MinHash steps.
+
+Each `datakit/report/<stage>` step depends only on that stage's steps, so it
+runs as soon as the stage finishes — reports are not deferred to the end of the
+run, and only `report/store` waits on the store. They are separate steps (not
+folded into the data steps) so a report can be regenerated without recomputing
+the stage. Global exact dedup, embed, and minhash have no standalone report.
+
+```mermaid
+flowchart TD
+    subgraph inputs["external inputs"]
+        SRC[("normalized sources<br/>NormalizedData, per source")]
+        MODEL[("quality model dir<br/>*.eqx + remap + meta + calib_bme.json")]
+        EVALS[("eval corpus<br/>&lt;prefix&gt;/datakit/decontam/evals")]
+    end
+
+    subgraph per_source["per source"]
+        TOK["tokenize<br/>datakit/tokenize/&lt;src&gt;"]
+        EMB["embed luxical-one<br/>datakit/embed/&lt;src&gt;"]
+        ASG["domain assign<br/>datakit/cluster_assign/&lt;src&gt;"]
+        QUAL["quality: pooled fast-transformer<br/>datakit/quality/&lt;src&gt;"]
+        DECON["decontam<br/>datakit/decontam/&lt;src&gt;"]
+        MH["minhash<br/>datakit/minhash/&lt;src&gt;"]
+    end
+
+    subgraph domain_model["domain centroids (inline unless pre-staged)"]
+        SAMP["sample centroid inputs<br/>datakit/cluster/sample_centroids"]
+        KM["train K-means + K views<br/>datakit/cluster/train_centroids"]
+    end
+
+    BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
+    DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
+    EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
+    DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
+    STORE["store: shuffle attribute join, apply filters,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
+
+    SRC --> EXACT
+    SRC --> TOK
+    SRC --> EMB
+    SRC --> QUAL
+    SRC --> DECON
+    SRC --> MH
+    MODEL --> QUAL
+    EVALS --> BLOOM --> DF --> DECON
+    SRC --> DF
+    BLOOM --> DECON
+    EMB --> SAMP --> KM --> ASG
+    EMB --> ASG
+    MH --> DEDUP
+    TOK --> STORE
+    ASG --> STORE
+    QUAL --> STORE
+    DECON --> STORE
+    EXACT --> STORE
+    DEDUP --> STORE
+
+    subgraph reports["stage reports — one HTML page each, run when the stage finishes (dashed = reads counters + site/sample outputs)"]
+        RN["datakit/report/normalize"]
+        RT["datakit/report/tokenize"]
+        RQ["datakit/report/quality"]
+        RD["datakit/report/domain"]
+        RC["datakit/report/decontam"]
+        RU["datakit/report/dedup"]
+        RS["datakit/report/store"]
+    end
+
+    SRC -.-> RN
+    TOK -.-> RT
+    QUAL -.-> RQ
+    ASG -.-> RD
+    DECON -.-> RC
+    DEDUP -.-> RU
+    STORE -.-> RS
+```
+
+## Testbed samples
+
+Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
+(CoreWeave `us-east-02a`). Each is a tree of already-normalized sources named
+`sample_<tokens>_<hash>`. Pass the full S3 root as `--sample-prefix` (it is used
+verbatim — the bucket prefix is not prepended):
+
+| `--sample-prefix` | Approx. size |
+| --- | --- |
+| `s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7` | ~0.1B tokens (default `SAMPLE_PREFIX`) |
+| `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` | ~100B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_100b_e273e96d` | ~100B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_500b_32c52319` | ~500B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_1t_733c8c5c` | ~1T tokens |
+
+List them with:
+
+```bash
+aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
+```
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
+| `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
+| `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
+| `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
+| `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
+| `store/datakit_store.py` | Shuffle attribute join → compact per-(cluster, quality) Levanter caches |
+| `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
+| `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
+| `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |
+
+## Running
+
+Submission commands (full and sample mode) live in the `reference_pipeline.py`
+module docstring.

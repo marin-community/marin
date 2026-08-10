@@ -30,9 +30,9 @@ jobs:
       RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: tpu
       CANARY_TPU_TYPE: "v5p-8,v4-8"
-      CANARY_BATCH_SIZE: "512"
-      CANARY_TARGET_TOKENS: "1000000000"
-      CANARY_MIN_STEPS: "400"
+      CANARY_BATCH_SIZE: "128"
+      CANARY_TARGET_TOKENS: "250000000"
+      CANARY_MIN_STEPS: "200"
       CANARY_MAX_LOSS: "8.0"
       CANARY_CHILD_WAIT_TIMEOUT: "12600"
       WANDB_ENTITY: marin-community
@@ -58,12 +58,12 @@ jobs:
         run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -113,17 +113,20 @@ jobs:
       # this wall clock. Healthy runs finish in ~2h, so 300 leaves 60m for
       # diagnostics + triage.
       - name: Wait for canary ferry
+        id: wait
         timeout-minutes: 300
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
             --child-wait-timeout "${{ env.CANARY_CHILD_WAIT_TIMEOUT }}" \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Validate canary metrics
+        if: steps.wait.outputs.resource_exhausted != 'true'
         # target_tokens / tpu_type overrides change the step's versioned config, so the
         # output path this step recomputes (with no CANARY_* env) no longer matches the
         # submitted run — tolerate the resulting read miss on a manual dispatch.
@@ -139,9 +142,10 @@ jobs:
         # scans all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
-        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
+        run: .venv/bin/python scripts/ci/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile
+        if: steps.wait.outputs.resource_exhausted != 'true'
         continue-on-error: true
         shell: bash -l {0}
         run: |
@@ -161,7 +165,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/canary-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --provider gcp \
@@ -173,7 +177,7 @@ jobs:
 
       - name: Upload diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-diagnostics
           path: canary-diagnostics/
@@ -203,7 +207,7 @@ jobs:
       # https://github.com/marin-community/marin/actions/runs/24498461666.
       - name: Upload Slack message
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slack-message
           path: slack_message.md
@@ -221,7 +225,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: ./.github/actions/notify-slack
+        uses: marin-community/marin-style/actions/notify-slack@main
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *TPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

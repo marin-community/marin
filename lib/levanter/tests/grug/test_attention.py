@@ -9,7 +9,7 @@ import pytest
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from levanter.data.text import GrugLmExample
+from levanter.data.text.examples import GrugLmExample
 import levanter.grug.attention._fa4_thd as fa4_thd
 from levanter.grug.attention import (
     AttentionMask,
@@ -128,45 +128,6 @@ def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
         jax.block_until_ready(mask.thd_segment_metadata.segment_lengths)
 
 
-def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
-    def fake_fwd(q, k, v, cu_seqlens, *, softmax_scale, kernel_config):
-        del k, v, cu_seqlens, softmax_scale, kernel_config
-        return q * jnp.asarray(2, dtype=q.dtype), jnp.zeros((q.shape[1], q.shape[0]), dtype=jnp.float32)
-
-    def fake_bwd(q, k, v, out, dout, lse, cu_seqlens, *, softmax_scale, kernel_config):
-        del out, lse, cu_seqlens, softmax_scale, kernel_config
-        return (
-            dout * jnp.asarray(2, dtype=dout.dtype),
-            jnp.zeros_like(k),
-            jnp.zeros_like(v),
-        )
-
-    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_forward", fake_fwd)
-    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_backward", fake_bwd)
-    monkeypatch.setattr(
-        fa4_thd,
-        "_thd_kernel_config",
-        lambda head_dim: fa4_thd.Flash4CuteKernelConfig(
-            forward_tile=(128, 128),
-            backward_tile=(128, 128),
-            num_threads=384,
-        ),
-    )
-    monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
-
-    q = jnp.ones((2, 4, 2, 8), dtype=jnp.float32)
-    k = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
-    v = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
-    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3]], dtype=jnp.int32)
-    mask = AttentionMask.causal().with_segment_ids(segment_ids, max_segments=2)
-
-    out = jax.jit(lambda q_arg: attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))(q)
-    np.testing.assert_array_equal(out, jnp.full_like(q, 2))
-
-    grad = jax.jit(jax.grad(lambda q_arg: jnp.sum(attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))))(q)
-    np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
-
-
 def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
     monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
 
@@ -180,18 +141,15 @@ def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
         attention(q, k, v, mask, implementation="gpu_fa4_thd")
 
 
-def test_gpu_fa4_thd_accepts_full_sequence_window():
+def test_gpu_fa4_thd_rejects_nonpositive_sliding_window():
     q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
     k = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
     v = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
     segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
 
-    full_window = AttentionMask.causal(sliding_window=4).with_segment_ids(segment_ids, max_segments=2)
-    fa4_thd._validate_simple_causal_self_attention(q, k, v, full_window, backend_name="gpu_fa4_thd_attention")
-
-    short_window = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids, max_segments=2)
-    with pytest.raises(NotImplementedError, match="sliding-window"):
-        fa4_thd._validate_simple_causal_self_attention(q, k, v, short_window, backend_name="gpu_fa4_thd_attention")
+    zero_window = AttentionMask.causal(sliding_window=0).with_segment_ids(segment_ids, max_segments=2)
+    with pytest.raises(ValueError, match="sliding_window must be positive"):
+        fa4_thd._validate_simple_causal_self_attention(q, k, v, zero_window, backend_name="gpu_fa4_thd_attention")
 
 
 def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
@@ -269,12 +227,51 @@ def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
             backward_tile=(64, 128),
             num_threads=384,
         ),
+        sliding_window=None,
     )
 
     assert captured_kwargs["PdS_stage"] == 1
     assert captured_kwargs["SdP_swapAB"] is True
     assert captured_kwargs["AtomLayoutNdKV"] == 2
     assert captured_kwargs["num_threads"] == 384
+
+
+@pytest.mark.parametrize("sliding_window", [None, 5], ids=["full-causal", "sliding-window"])
+def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(sliding_window):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4 THD correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    arch_family = fa4_thd._gpu_compute_arch() // 10
+    if arch_family not in fa4_thd._SUPPORTED_ARCH_FAMILIES:
+        pytest.skip("gpu_fa4_thd_attention supports only SM90/SM100/SM110.")
+    if sliding_window is not None and arch_family == fa4_thd._HOPPER_ARCH_FAMILY:
+        pytest.skip("FA4 THD sliding-window attention is not wired for SM90.")
+
+    q_key, k_key, v_key, cotangent_key = jax.random.split(jax.random.PRNGKey(0), 4)
+    q = jax.random.normal(q_key, (1, 64, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    segment_ids = jnp.array([[3] * 31 + [8] * 33], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(segment_ids, max_segments=2)
+
+    def fa4(q_arg, k_arg, v_arg):
+        return attention(q_arg, k_arg, v_arg, mask, implementation="gpu_fa4_thd")
+
+    def reference(q_arg, k_arg, v_arg):
+        return reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+
+    def weighted_sum(fn):
+        return lambda *args: jnp.sum(fn(*args).astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    np.testing.assert_allclose(jax.jit(fa4)(q, k, v), jax.jit(reference)(q, k, v), atol=7e-2, rtol=7e-2)
+
+    actual_grads = jax.jit(jax.grad(weighted_sum(fa4), argnums=(0, 1, 2)))(q, k, v)
+    expected_grads = jax.jit(jax.grad(weighted_sum(reference), argnums=(0, 1, 2)))(q, k, v)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
 
 
 def test_attention_rejects_unknown_implementation():

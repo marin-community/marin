@@ -4,10 +4,14 @@
 """Tests for actor client and pool retry on transient errors."""
 
 import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.actor import ActorClient, ActorPool
+from iris.actor.client import ActorClient
+from iris.actor.pool import ActorPool
 from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
 from rigging.timing import ExponentialBackoff
@@ -47,6 +51,51 @@ class SwitchingResolver:
         return resolver.resolve(name)
 
 
+@pytest.fixture
+def actor_wire_receiver() -> Iterator[tuple[str, dict[str, str]]]:
+    received_headers: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received_headers.update({key.lower(): value for key, value in self.headers.items()})
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received_headers
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_actor_client_sends_zstd_over_http(actor_wire_receiver):
+    address, headers = actor_wire_receiver
+    client = ActorClient(FixedResolver({"counter": address}), "counter", max_call_attempts=1)
+
+    with pytest.raises(ConnectError):
+        client.increment("payload" * 100)
+
+    assert headers["content-encoding"] == "zstd"
+    assert "zstd" in headers["accept-encoding"].split(",")
+
+
+def test_actor_pool_sends_zstd_over_http(actor_wire_receiver):
+    address, headers = actor_wire_receiver
+    with ActorPool(FixedResolver({"counter": address}), "counter", max_call_attempts=1) as pool:
+        with pytest.raises(ConnectError):
+            pool.call().increment("payload" * 100)
+
+    assert headers["content-encoding"] == "zstd"
+    assert "zstd" in headers["accept-encoding"].split(",")
+
+
 def test_actor_client_retries_on_transient_rpc_error():
     """ActorClient should retry with re-resolution when an RPC call fails
     with a transient error (UNAVAILABLE, INTERNAL)."""
@@ -81,13 +130,81 @@ def test_actor_client_retries_on_transient_rpc_error():
         server.stop()
 
 
+def test_actor_client_reresolves_endpoint_when_actor_is_missing():
+    stale_server = ActorServer(host="127.0.0.1")
+    stale_port = stale_server.serve_background()
+    replacement_server = ActorServer(host="127.0.0.1")
+    replacement_server.register("counter", Counter())
+    replacement_port = replacement_server.serve_background()
+
+    try:
+        resolver = SwitchingResolver(
+            [
+                {"counter": f"http://127.0.0.1:{stale_port}"},
+                {"counter": f"http://127.0.0.1:{replacement_port}"},
+            ]
+        )
+        client = ActorClient(
+            resolver,
+            "counter",
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+        assert client.increment() == 1
+    finally:
+        stale_server.stop()
+        replacement_server.stop()
+
+
+def test_actor_client_does_not_reresolve_endpoint_when_method_is_missing():
+    class CounterWithProbe(Counter):
+        def probe(self) -> str:
+            return "replacement"
+
+    original_server = ActorServer(host="127.0.0.1")
+    original_server.register("counter", Counter())
+    original_port = original_server.serve_background()
+    replacement_server = ActorServer(host="127.0.0.1")
+    replacement_server.register("counter", CounterWithProbe())
+    replacement_port = replacement_server.serve_background()
+
+    try:
+        resolver = SwitchingResolver(
+            [
+                {"counter": f"http://127.0.0.1:{original_port}"},
+                {"counter": f"http://127.0.0.1:{replacement_port}"},
+            ]
+        )
+        client = ActorClient(
+            resolver,
+            "counter",
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+        with pytest.raises(ConnectError) as exc_info:
+            client.probe()
+        assert exc_info.value.code is Code.NOT_FOUND
+    finally:
+        original_server.stop()
+        replacement_server.stop()
+
+
 def test_actor_client_does_not_retry_on_application_error():
     """ActorClient should NOT retry when the actor method itself raises."""
     server = ActorServer(host="127.0.0.1")
 
     class Divider:
+        def __init__(self) -> None:
+            self.attempts = 0
+
         def divide(self, a: int, b: int) -> float:
+            self.attempts += 1
             return a / b
+
+        def invocation_count(self) -> int:
+            return self.attempts
 
     server.register("divider", Divider())
     port = server.serve_background()
@@ -96,10 +213,9 @@ def test_actor_client_does_not_retry_on_application_error():
         resolver = FixedResolver({"divider": f"http://127.0.0.1:{port}"})
         client = ActorClient(resolver, "divider", max_call_attempts=3)
 
-        # ZeroDivisionError is an application error, not a transient RPC error.
-        # It should propagate immediately without retry.
         with pytest.raises(ZeroDivisionError):
             client.divide(1, 0)
+        assert client.invocation_count() == 1
     finally:
         server.stop()
 

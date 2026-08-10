@@ -1,0 +1,141 @@
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+:root{
+  --ground:#fbfcfd; --panel:#ffffff; --panel2:#f3f5f8; --ink:#141821; --ink2:#5a6473;
+  --line:#dbe0e8; --accent:#0f8f8c; --accent-ink:#0b6b69;
+  --q0:#c1443b; --q1:#d98b3f; --q2:#c9b23e; --q3:#86a94e; --q4:#3f9457;
+  --shadow:0 1px 2px rgba(20,30,50,.06),0 3px 12px rgba(20,30,50,.05);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#0f1319; --panel:#161b23; --panel2:#1c222c; --ink:#e7ecf3; --ink2:#94a0b2;
+  --line:#28303c; --accent:#2bb7b3; --accent-ink:#8fe3e0; --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.35);
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 120px}
+h1{font-size:20px;font-weight:650;margin:0;letter-spacing:-.01em}
+h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink2);
+  margin:38px 0 14px;display:flex;align-items:center;gap:10px}
+h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.sub{color:var(--ink2);font-size:13px;margin-top:5px;font-family:var(--mono)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 16px;box-shadow:var(--shadow)}
+.card .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink2)}
+.card .v{font-family:var(--mono);font-size:24px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .d{font-size:12px;color:var(--ink2);margin-top:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:right;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink2);position:sticky;top:0;background:var(--panel)}
+td:first-child,th:first-child{text-align:left;font-family:var(--mono)}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tablewrap{max-height:560px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0 0;font-size:12px;color:var(--ink2)}
+.hist .hrow{display:grid;grid-template-columns:110px 1fr 70px;align-items:center;gap:12px;margin:5px 0}
+.hist .hrow .lbl{font-family:var(--mono);font-size:12px;color:var(--ink2);text-align:right}
+.hist .hrow .cnt{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.hist .hbar{height:14px;border-radius:4px;background:var(--accent);min-width:2px}
+details.src{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:10px;box-shadow:var(--shadow)}
+details.src summary{cursor:pointer;padding:12px 16px;font-family:var(--mono);font-size:13px;
+  display:flex;justify-content:space-between;align-items:center;gap:12px}
+details.src summary .n{color:var(--ink2);font-size:12px}
+.doc{border-top:1px solid var(--line);padding:10px 16px 14px}
+.doc .docmeta{font-family:var(--mono);font-size:11px;color:var(--ink2);margin-bottom:6px}
+.doc pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;
+  background:var(--panel2);border-radius:8px;padding:10px 12px;max-height:220px;overflow:auto}
+.warn{background:#fff6e6;border:1px solid #e6b450;color:#7a521a;border-radius:11px;padding:12px 16px;
+  margin-top:18px;font-size:13px;line-height:1.55}
+@media (prefers-color-scheme:dark){.warn{background:#2a2114;border-color:#7a5a1e;color:#e8c67a}}
+</style>
+<div class="wrap">
+  <header>
+    <h1>__TITLE__</h1>
+    <div class="sub" id="meta"></div>
+    <div class="sub" id="provenance"></div>
+  </header>
+  <div class="warn" id="samplewarn" hidden></div>
+  <div class="cards" id="cards"></div>
+  <h2 id="funnel-h2">per-source funnel</h2>
+  <div class="tablewrap"><table id="funnel"></table></div>
+  <h2>sampled text length</h2>
+  <div class="panel hist" id="hist"></div>
+  <h2>spot check</h2>
+  <div class="sub" id="spotnote" style="margin:0 0 12px"></div>
+  <div id="spot"></div>
+</div>
+<script>
+const D = __DATA__;
+const fmt = n => n >= 1e12 ? (n/1e12).toFixed(2)+"T" : n >= 1e9 ? (n/1e9).toFixed(2)+"B"
+  : n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : String(n);
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const pct = (a,b) => b ? (100*a/b).toFixed(2)+"%" : "·";
+const S = D.stats, C = D.spot_check, M = D.meta;
+document.getElementById("meta").textContent =
+  `${S.n_sources} sources · spot check ${C.n_sampled} × ${C.rows_per_source} docs · text clipped to ${fmt(C.text_chars)} chars`;
+document.getElementById("provenance").textContent = `input: ${M.data_root} · ${M.sampling}`;
+if (M.is_sample) {
+  const w = document.getElementById("samplewarn");
+  w.hidden = false;
+  w.innerHTML = "⚠ <b>Sampled corpus.</b> These sources are a testbed sample, so the normalize " +
+    "funnel counters (records in, empty filtered, exact dups, whitespace, bytes) are not recorded — " +
+    "only the sampled document count is available. The funnel table and cards are reduced accordingly.";
+}
+// Sampled runs only carry a real doc count; drop the funnel columns/cards that read as fake zeros.
+const cards = M.is_sample ? [
+  ["sources", S.n_sources, "in sample"],
+  ["sampled docs", fmt(S.docs_out), "rows in sample"],
+] : [
+  ["sources", S.n_sources, "normalized"],
+  ["records in", fmt(S.records_in), "raw rows read"],
+  ["docs out", fmt(S.docs_out), "unique, main output"],
+  ["exact dups", fmt(S.dups), `${pct(S.dups, S.docs_out + S.dups)} of grouped`],
+  ["empty filtered", fmt(S.empty_filtered), "missing/blank text"],
+  ["ws compacted", fmt(S.ws_compacted), "long whitespace runs"],
+];
+document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>
+  `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+let rows;
+if (M.is_sample) {
+  document.getElementById("funnel-h2").textContent = "per-source docs (sampled)";
+  rows = `<tr><th>source</th><th>sampled docs</th></tr>`;
+  for (const r of D.rows) {
+    rows += `<tr><td title="${esc(r.main_output_dir)}">${esc(r.source)}</td>` +
+      `<td class="num">${fmt(r.docs_out)}</td></tr>`;
+  }
+} else {
+  const hasBytes = D.rows.some(r => r.bytes_processed > 0);
+  rows = `<tr><th>source</th><th>records in</th><th>empty filtered</th><th>docs out</th><th>dups</th>` +
+    `<th>dup %</th><th>ws compacted</th>${hasBytes ? "<th>bytes</th>" : ""}</tr>`;
+  for (const r of D.rows) {
+    rows += `<tr><td title="${esc(r.main_output_dir)}">${esc(r.source)}</td>` +
+      `<td class="num">${fmt(r.records_in)}</td><td class="num">${fmt(r.empty_filtered)}</td>` +
+      `<td class="num">${fmt(r.docs_out)}</td><td class="num">${fmt(r.dups)}</td>` +
+      `<td class="num">${pct(r.dups, r.docs_out + r.dups)}</td><td class="num">${fmt(r.ws_compacted)}</td>` +
+      (hasBytes ? `<td class="num">${fmt(r.bytes_processed)}</td>` : "") + `</tr>`;
+  }
+}
+document.getElementById("funnel").innerHTML = rows;
+const lens = Object.values(D.samples).flat().map(d => d.n_chars);
+const edges = [10, 100, 1e3, 1e4, 1e5, 1e6];
+const labels = ["&lt;10", "10–100", "100–1K", "1K–10K", "10K–100K", "100K–1M", "≥1M"];
+const counts = labels.map(() => 0);
+for (const n of lens) { const i = edges.findIndex(e => n < e); counts[i === -1 ? edges.length : i]++; }
+const maxC = Math.max(1, ...counts);
+document.getElementById("hist").innerHTML = labels.map((l, i) =>
+  `<div class="hrow"><span class="lbl">${l}</span>` +
+  `<div>${counts[i] ? `<div class="hbar" style="width:${(100*counts[i]/maxC).toFixed(1)}%"></div>` : ""}</div>` +
+  `<span class="cnt">${counts[i]}</span></div>`).join("") +
+  `<div class="legend">chars per doc across ${lens.length} sampled docs</div>`;
+document.getElementById("spotnote").textContent =
+  `all ${C.n_sampled} sources · first ${C.rows_per_source} docs each (file order preview, not a count)`;
+document.getElementById("spot").innerHTML = Object.entries(D.samples).map(([name, docs]) =>
+  `<details class="src"><summary><span>${esc(name)}</span><span class="n">${docs.length} docs</span></summary>` +
+  docs.map(d =>
+    `<div class="doc"><div class="docmeta">${esc(d.id)} · ${d.n_chars.toLocaleString()} chars` +
+    `${d.text.length < d.n_chars ? " · clipped" : ""}</div><pre>${esc(d.text)}</pre></div>`).join("") +
+  `</details>`).join("");
+</script>

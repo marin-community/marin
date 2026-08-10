@@ -226,7 +226,7 @@ class TreeCache:
 ### `ml-missing-isinstance-narrow` — Manual type check instead of `isinstance`
 
 **Why it's bad:** Non-`isinstance` type checks (attribute probing, `type(x)
-is Foo`) don't narrow under the type checker; pyrefly / mypy can't validate
+is Foo`) don't narrow under the type checker; pyrefly can't validate
 downstream code.
 
 **When allowed:** Genuinely structural duck-typing where the caller can't

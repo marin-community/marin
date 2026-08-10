@@ -3,8 +3,6 @@
 
 """Shared constants and tiny helpers for the storage tooling."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

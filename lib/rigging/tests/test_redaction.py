@@ -34,6 +34,69 @@ def test_redact_value_redacts_sensitive_key_names():
     }
 
 
+def test_is_sensitive_key_name_matches_whole_words_not_substrings():
+    # Regression: the matcher used a bare substring search, so every name
+    # merely *containing* "token" or "auth" was treated as a secret.
+    for name in [
+        "TOKENIZERS_PARALLELISM",
+        "TOKENIZER_PATH",
+        "HF_TOKENIZER",
+        "tokenizer",
+        "AUTHOR",
+        "author_name",
+        "AUTHORIZED_USERS",
+        "AUTHORITY",
+    ]:
+        assert not is_sensitive_key_name(name), name
+
+
+def test_is_sensitive_key_name_matches_real_secret_names():
+    for name in [
+        "HF_TOKEN",
+        "token",
+        "access-token",
+        "refresh_token",
+        "api_key",
+        "apiKey",
+        "x-api-key",
+        "WANDB_API_KEY",
+        "wandbApiKey",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "Authorization",
+        "AUTHORIZATION",
+        "PRIVATE_KEY",
+        "password",
+        "passphrase",
+        "bearer_token",
+        "client_secret",
+    ]:
+        assert is_sensitive_key_name(name), name
+
+
+def test_is_sensitive_key_name_reads_token_counts_as_lengths():
+    # "token" is a sequence length here, not a credential.
+    for name in ["max_tokens", "num_tokens", "token_count", "max_new_tokens", "tokens_per_second"]:
+        assert not is_sensitive_key_name(name), name
+
+
+def test_counting_word_does_not_launder_a_real_secret():
+    # A counting word only reinterprets "token" when nothing else in the key is
+    # sensitive; it must not unmask a key that names a credential outright.
+    assert is_sensitive_key_name("session_token_count")
+    assert is_sensitive_key_name("max_auth_tokens")
+    assert is_sensitive_key_name("secret_token_limit")
+
+
+def test_redact_value_preserves_tokenizers_parallelism():
+    # Iris injects TOKENIZERS_PARALLELISM into every job's env; it must survive
+    # redaction so the dashboard shows it beside a genuinely redacted API key.
+    value = {"WANDB_API_KEY": "local-4f8ac21e9b3d5c760a1e2f3b4c5d6e7f8a9b0c1d", "TOKENIZERS_PARALLELISM": "false"}
+
+    assert redact_value(value) == {"WANDB_API_KEY": REDACTED_VALUE, "TOKENIZERS_PARALLELISM": "false"}
+
+
 def test_redact_string_redacts_prefixed_tokens():
     slack_token = "xox" + "b-1234567890-abcdefghijklmnopqrstuvwxyz"
     raw = (

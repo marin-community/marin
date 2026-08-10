@@ -10,12 +10,15 @@ import numpy as np
 import pytest
 from zephyr.execution import ZephyrWorkerError
 
-from levanter.data import BatchProcessor, ShardedDataSource, batched
+from levanter.data._preprocessor import BatchProcessor
+from levanter.data.sharded_datasource import ShardedDataSource
+from levanter.data.utils import batched
 from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
     SerialCacheWriter,
+    ShardedCacheLayout,
     TreeCache,
     TreeStore,
     build_or_load_cache,
@@ -199,6 +202,66 @@ def test_sharded_flat_field_offsets_read_shards_concurrently(monkeypatch):
     assert max_active_reads == len(shard_names)
 
 
+def test_sharded_jagged_array_tree_flattens_list_valued_field(monkeypatch):
+    """Regression for #7351.
+
+    A structural exemplar from tokenize keys sequence fields as python lists, e.g.
+    ``{"input_ids": [0, 0]}``. The writer's ledger records the flat leaf ``input_ids``
+    (``heuristic_is_leaf`` treats a list-of-scalars as one leaf). The sharded reader must
+    address the same flat field, not walk the list into ``input_ids/0``.
+    """
+    shard_names = ["shard_0", "shard_1"]
+    field_counts_by_shard = {"shard_0": {"input_ids": 2}, "shard_1": {"input_ids": 3}}
+    ledger = CacheLedger(
+        total_num_rows=2,
+        shard_rows={shard_name: 1 for shard_name in shard_names},
+        is_finished=True,
+        finished_shards=shard_names,
+        field_counts={"input_ids": 5},
+        field_counts_by_shard=field_counts_by_shard,
+        layout=CACHE_LAYOUT_SHARDED,
+    )
+    cache = TreeCache("/unused", {"input_ids": [0, 0]}, ledger)
+
+    requested_fields = []
+
+    class FakeRead:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __await__(self):
+            async def read():
+                return np.array([self.value], dtype=np.int64)
+
+            return read().__await__()
+
+    class FakeOffsets:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __getitem__(self, item):
+            return self
+
+        def read(self):
+            return FakeRead(self.value)
+
+    class FakeFieldStore:
+        def __init__(self, value: int):
+            self.offsets = FakeOffsets(value)
+
+    async def shard_field_store(shard_name: str, field: str):
+        requested_fields.append(field)
+        return FakeFieldStore(field_counts_by_shard[shard_name][field])
+
+    monkeypatch.setattr(cache, "_shard_field_store_async", shard_field_store)
+
+    input_ids_store = cache.jagged_array_tree()["input_ids"]
+    offsets = input_ids_store.offsets[0:3].read().result()
+
+    np.testing.assert_array_equal(offsets, np.array([2, 2, 5], dtype=np.int64))
+    assert set(requested_fields) == {"input_ids"}
+
+
 @pytest.mark.asyncio
 async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     shard_names = ["shard_0", "shard_1", "shard_2"]
@@ -246,6 +309,56 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     cached_offsets = await cache._ensure_flat_field_offsets_async("data")
     np.testing.assert_array_equal(cached_offsets, expected_offsets)
     assert build_count == 1
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path", "expected"),
+    [
+        # gs:// shard strictly under output.
+        ("gs://bucket/cache", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A trailing slash on output_path (a trailing-slash MARIN_PREFIX) must not fork
+        # the relative key from the no-trailing-slash writer.
+        ("gs://bucket/cache/", "gs://bucket/cache/train/shard_0", "train/shard_0"),
+        # A doubled interior separator on either side collapses structurally.
+        ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
+        # Local absolute paths.
+        ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
+        # An object-store key may contain a literal `..` segment (keys are not
+        # normalized), so it passes through rather than escaping a directory.
+        ("gs://bucket/cache", "gs://bucket/cache/../weird", "../weird"),
+    ],
+)
+def test_relative_shard_path_structural(output_path, shard_path, expected):
+    assert ShardedCacheLayout.parse(output_path).relative_shard(shard_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("output_path", "shard_path"),
+    [
+        # Sibling, not descendant.
+        ("gs://bucket/cache", "gs://bucket/other/shard_0"),
+        # Different bucket.
+        ("gs://bucket/cache", "gs://other/cache/shard_0"),
+        # shard_path equals output_path — no relative key to emit.
+        ("gs://bucket/cache", "gs://bucket/cache"),
+        # A `..` segment in a local path escapes the cache directory once joined back.
+        ("/tmp/cache", "/tmp/cache/../outside/part"),
+        ("/tmp/cache", "/tmp/cache/a/../../etc"),
+    ],
+)
+def test_relative_shard_path_rejects_non_descendants(output_path, shard_path):
+    with pytest.raises(ValueError, match="not under output path"):
+        ShardedCacheLayout.parse(output_path).relative_shard(shard_path)
+
+
+def test_sharded_cache_layout_members():
+    # A trailing slash on the root must not double the separator on any derived path.
+    layout = ShardedCacheLayout.parse("gs://bucket/cache/")
+    assert layout.ledger == "gs://bucket/cache/shard_ledger.json"
+    assert layout.shard("part-00000-of-00010") == "gs://bucket/cache/part-00000-of-00010"
+    child = layout.child("train")
+    assert str(child) == "gs://bucket/cache/train"
+    assert child.ledger == "gs://bucket/cache/train/shard_ledger.json"
 
 
 def test_sharded_cache_rejects_drifted_aggregate_field_counts():

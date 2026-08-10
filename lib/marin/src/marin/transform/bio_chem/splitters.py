@@ -10,8 +10,6 @@ the bytes that appeared in the input. Where a format requires a terminator
 that was not associated with any record.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 

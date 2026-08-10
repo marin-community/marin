@@ -1,36 +1,48 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
+import http.client
+import io
 import json
+import tarfile
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
+import requests
+from marin.datakit.download import diagnostic_logs
 from marin.datakit.download.diagnostic_logs import (
-    GHALOGS_ROUGH_TOKENS_B,
+    GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
+    GHALOGS_STAGED_PREFIX,
     SOURCE_INVENTORY,
     DiagnosticPartition,
     ExtractedDiagnosticLogs,
     ExtractedPartitionedDiagnosticLogs,
     MaterializedDiagnosticLogParquet,
     assign_partition,
+    download_ghalogs_step,
     extract_diagnostic_logs,
+    extract_ghalogs,
     extract_ghalogs_step,
-    ghalogs_member_to_record,
+    ghalogs_member_to_records,
     ghalogs_public_normalize_steps,
     logchunks_example_to_record,
     loghub_file_to_record,
     materialize_ghalogs_partition_to_parquet,
     materialize_ghalogs_to_parquet,
     sanitize_diagnostic_log_text,
+    stage_ghalogs_archive,
 )
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
+from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
-from experiments.pretraining_datasets.diagnostic_logs import ghalogs_normalized, tokenize_ghalogs
+from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -45,9 +57,34 @@ def _read_parquet_rows(directory: Path) -> list[dict[str, object]]:
     return rows
 
 
+def _run_archive_member(run_logs: dict[str, bytes]) -> bytes:
+    """Build one GHALogs zip member: a gzipped tar of one workflow run's log files."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in run_logs.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _write_ghalogs_archive(archive_path: Path, job_logs: dict[str, bytes]) -> None:
+    """Write a GHALogs zip whose members are run archives holding one job log each."""
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for member_path, job_log in job_logs.items():
+            archive.writestr(member_path, _run_archive_member({"0_build.txt": job_log}))
+
+
+_THREE_RUN_JOB_LOGS = {
+    "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+    "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+    "logs/owner/repo-c/workflow_1234/3-1.tar.gz": b"WARNING path=/home/bob/src",
+}
+
+
 def _member_path_for_partition(partition: DiagnosticPartition) -> str:
     for index in range(10_000):
-        member_path = f"repo-{partition.value}/run-{index}/job.log"
+        member_path = f"logs/owner/repo-{partition.value}/workflow_1234/{index}-1.tar.gz"
         if assign_partition(f"ghalogs:{member_path}") == partition:
             return member_path
     raise AssertionError(f"Could not find member path for {partition}")
@@ -70,21 +107,98 @@ def test_sanitize_diagnostic_log_text_redacts_secrets_and_identifiers():
     assert "user <USER_0> failed" in redacted
 
 
-def test_ghalogs_member_to_record_sanitizes_and_partitions():
-    record = ghalogs_member_to_record(
-        "owner/repo/run-1/job.log",
-        b"ERROR token=abc123456789 contact alice@example.com path=/home/alice/project",
+def test_ghalogs_member_to_records_extracts_job_logs_and_ignores_step_copies():
+    member_path = "logs/owner/repo/build_1234/7-1.tar.gz"
+    content = _run_archive_member(
+        {
+            "0_build.txt": b"ERROR token=abc123456789 contact alice@example.com path=/home/alice/project",
+            "build/": b"",
+            "build/1_Set up job.txt": b"ERROR token=abc123456789 contact alice@example.com",
+        }
     )
 
-    assert record is not None
-    assert record["source"] == "ghalogs"
-    assert record["archive_path"] == "owner/repo/run-1/job.log"
-    assert "abc123456789" not in record["text"]
-    assert "alice@example.com" not in record["text"]
-    assert "<REDACTED_SECRET>" in record["text"]
-    assert "<USER_0_EMAIL>" in record["text"]
-    assert "/home/<USER_0>/project" in record["text"]
-    assert record["partition"] in {"train", "dev", "test", "issue_5093_holdout"}
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["archive_path"] for record in records] == [f"{member_path}!0_build.txt#0"]
+    assert records[0]["source"] == "ghalogs"
+    assert "abc123456789" not in records[0]["text"]
+    assert "<REDACTED_SECRET>" in records[0]["text"]
+    assert "<USER_0_EMAIL>" in records[0]["text"]
+    assert "/home/<USER_0>/project" in records[0]["text"]
+
+
+def test_ghalogs_member_to_records_keeps_one_partition_for_each_run():
+    member_path = _member_path_for_partition(DiagnosticPartition.DEV)
+    content = _run_archive_member(
+        {"0_build.txt": b"first job log line", "1_test.txt": b"second job log line"},
+    )
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert {record["partition"] for record in records} == {DiagnosticPartition.DEV.value}
+    assert len({record["id"] for record in records}) == 2
+
+
+def test_ghalogs_member_to_records_rejects_binary_job_logs():
+    member_path = "logs/owner/repo/build_1234/8-1.tar.gz"
+    content = _run_archive_member(
+        {
+            "0_build.txt": gzip.compress(b"log line that was compressed\n" * 64),
+            "1_test.txt": b"plain job log line\n",
+        }
+    )
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["archive_path"] for record in records] == [f"{member_path}!1_test.txt#0"]
+
+
+def test_ghalogs_member_to_records_removes_stray_control_bytes_and_keeps_ansi_color():
+    member_path = "logs/owner/repo/build_1234/9-1.tar.gz"
+    content = _run_archive_member(
+        {"0_build.txt": b"\x1b[36;1mmake build\x1b[0m\nstep output\x00 continues\n" + b"more log output\n" * 64},
+    )
+
+    (record,) = list(ghalogs_member_to_records(member_path, content))
+
+    assert "\x00" not in record["text"]
+    assert "step output continues" in record["text"]
+    assert "\x1b[36;1mmake build\x1b[0m" in record["text"]
+
+
+def test_ghalogs_member_to_records_splits_long_job_logs_into_chunks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 1024)
+    member_path = "logs/owner/repo/build_1234/10-1.tar.gz"
+    long_log = b"".join(f"byte dump line {index} of a pytest assertion diff\n".encode() for index in range(64))
+    content = _run_archive_member({"0_build.txt": long_log, "1_test.txt": b"plain job log line\n"})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    chunks = [record for record in records if "0_build.txt" in record["archive_path"]]
+    assert len(chunks) > 1
+    assert [record["archive_path"] for record in chunks] == [
+        f"{member_path}!0_build.txt#{index}" for index in range(len(chunks))
+    ]
+    assert all(len(record["text"]) <= 1024 for record in chunks)
+    # No line is split across chunks, and no line is lost or repeated.
+    assert "\n".join(record["text"] for record in chunks).splitlines() == long_log.decode().splitlines()
+    # A job log that fits in one chunk still gives one record.
+    assert f"{member_path}!1_test.txt#0" in {record["archive_path"] for record in records}
+
+
+def test_ghalogs_member_to_records_splits_a_job_log_without_line_breaks(monkeypatch):
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_JOB_LOG_CHUNK_BYTES", 64)
+    member_path = "logs/owner/repo/build_1234/13-1.tar.gz"
+    content = _run_archive_member({"0_build.txt": b"x" * 256})
+
+    records = list(ghalogs_member_to_records(member_path, content))
+
+    assert [record["text"] for record in records] == ["x" * 64] * 4
+
+
+def test_ghalogs_member_to_records_rejects_an_unexpected_member_layout():
+    with pytest.raises(ValueError, match=r"\.tar\.gz"):
+        list(ghalogs_member_to_records("logs/owner/repo/build_1234/11-1.txt", b"plain job log line"))
 
 
 def test_logchunks_example_to_record_sanitizes():
@@ -124,7 +238,6 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 
     assert inventory["ghalogs"].policy.training_allowed is True
     assert inventory["ghalogs"].policy.requires_sanitization is True
-    assert inventory["ghalogs"].rough_tokens_b == GHALOGS_ROUGH_TOKENS_B
     assert inventory["logchunks"].policy.eval_only is True
     assert inventory["loghub"].compressed_size_bytes == 7_513_088
 
@@ -132,21 +245,26 @@ def test_source_inventory_uses_shared_manifest_policy_metadata():
 def test_all_sources_includes_normalized_ghalogs_public():
     source = all_sources()["ghalogs/public"]
 
-    assert source.rough_token_count_b == GHALOGS_ROUGH_TOKENS_B
     assert [step.name for step in source.normalize_steps] == [
+        "raw/diagnostic_logs/ghalogs_public_archive",
         "processed/diagnostic_logs/ghalogs_public_parquet",
         "processed/diagnostic_logs/ghalogs_public_train_parquet",
         "normalized/ghalogs/public",
     ]
-    assert source.normalized.deps == [source.normalize_steps[1]]
+    # normalize depends on the train partition; the parquet materialize depends
+    # on the archive download so the ~142 GB archive is auto-staged first.
+    assert source.normalized.deps == [source.normalize_steps[-2]]
+    assert source.normalize_steps[1].deps == [source.normalize_steps[0]]
 
 
-def test_tokenize_ghalogs_reads_datakit_normalized_output():
-    step = tokenize_ghalogs(tokenizer="test-tokenizer")
+def test_ghalogs_dataset_reads_datakit_normalized_output():
+    step = ghalogs_dataset(tokenizer="test-tokenizer")
+    normalized = _ghalogs_normalized()
 
-    assert ghalogs_normalized.name == "normalized/ghalogs/public"
-    assert step.config.train_paths == [ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"]
-    assert step.config.validation_paths.value == []
+    assert normalized.name == "normalized/ghalogs/public"
+    cfg = materialized_config(step, "gs://prefix")
+    assert cfg.train_paths == [f"{normalized.path('gs://prefix')}/outputs/main/*.parquet"]
+    assert cfg.validation_paths == []
 
 
 def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
@@ -156,9 +274,13 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
 
     ghalogs_dir = input_dir / "ghalogs" / "zenodo-14796970" / "zenodo.org" / "records" / "14796970" / "files"
     ghalogs_dir.mkdir(parents=True)
-    with zipfile.ZipFile(ghalogs_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
+    _write_ghalogs_archive(
+        ghalogs_dir / "github_run_logs.zip",
+        {
+            "logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback",
+            "logs/owner/repo-b/workflow_1234/2-1.tar.gz": b"FAILED alice@example.com /Users/alice/project",
+        },
+    )
 
     with zipfile.ZipFile(input_dir / "LogChunks.zip", "w") as archive:
         archive.writestr(
@@ -229,14 +351,52 @@ def test_extract_diagnostic_logs_is_sample_capped(tmp_path):
     assert loghub_metadata["source_manifest"]["policy"]["eval_only"] is True
 
 
+def test_extract_ghalogs_caps_run_archives_not_records(tmp_path):
+    """max_members bounds run archives; one capped run still yields all of its job logs."""
+    archive_dir = tmp_path / "zenodo.org" / "records" / "14796970" / "files"
+    archive_dir.mkdir(parents=True)
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        for member_path in ("logs/owner/repo-a/w_1/1-1.tar.gz", "logs/owner/repo-b/w_1/2-1.tar.gz"):
+            archive.writestr(
+                member_path,
+                _run_archive_member(
+                    {
+                        "0_build.txt": b"build job log",
+                        "1_test.txt": b"test job log",
+                        "2_deploy.txt": b"deploy job log",
+                        # Per-step files repeat the job text, so they are not records.
+                        "0_build/1_checkout.txt": b"build job log",
+                    }
+                ),
+            )
+
+    extracted = extract_ghalogs(str(tmp_path), str(tmp_path / "output"), max_members=1)
+
+    metadata = json.loads((tmp_path / "output" / "metadata.json").read_text())
+    assert metadata["materialized_output"]["metadata"]["counters"]["seen_members"] == 1
+    assert extracted.record_count == 3
+    records = []
+    for partition in DiagnosticPartition:
+        records.extend(_read_jsonl(str(tmp_path / "output" / partition.value / "data-00000-of-00001.jsonl")))
+    assert sorted(record["archive_path"] for record in records) == [
+        "logs/owner/repo-a/w_1/1-1.tar.gz!0_build.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!1_test.txt#0",
+        "logs/owner/repo-a/w_1/1-1.tar.gz!2_deploy.txt#0",
+    ]
+    # All job logs of one run share the run's partition.
+    assert len({record["partition"] for record in records}) == 1
+
+
 def test_extract_diagnostic_logs_uses_staged_ghalogs_and_fetches_missing_eval_sources(tmp_path, monkeypatch):
     ghalogs_input_dir = tmp_path / "ghalogs" / "zenodo-14796970"
     ghalogs_archive_dir = ghalogs_input_dir / "zenodo.org" / "records" / "14796970" / "files"
     output_dir = tmp_path / "output"
     ghalogs_archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(ghalogs_archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+    _write_ghalogs_archive(
+        ghalogs_archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     def _fake_fetch_logchunks(destination_dir: str) -> str:
         destination = Path(destination_dir)
@@ -295,8 +455,10 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {"logs/owner/repo-a/workflow_1234/1-1.tar.gz": b"ERROR token=abc123456789 traceback"},
+    )
 
     step = extract_ghalogs_step(
         source_path=str(input_dir),
@@ -305,7 +467,7 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     )
     StepRunner().run([step])
 
-    loaded = Artifact.from_path(step, ExtractedPartitionedDiagnosticLogs)
+    loaded = read_artifact(step.output_path, ExtractedPartitionedDiagnosticLogs)
     assert loaded.source_label == "ghalogs"
     assert loaded.record_count == 1
     assert loaded.metadata_path.endswith("/metadata.json")
@@ -317,10 +479,7 @@ def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
     output_dir = tmp_path / "materialized"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
-        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialized = materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -340,6 +499,41 @@ def test_materialize_ghalogs_to_parquet_writes_reusable_shards(tmp_path):
     assert all("abc123456789" not in row["text"] for row in rows)
 
 
+def test_materialize_ghalogs_to_parquet_drops_malformed_run_archives(tmp_path):
+    input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
+    archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
+    output_dir = tmp_path / "materialized"
+    archive_dir.mkdir(parents=True)
+
+    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
+        archive.writestr(
+            "logs/owner/repo-a/workflow_1234/1-1.tar.gz",
+            _run_archive_member({"0_build.txt": b"first valid run"}),
+        )
+        archive.writestr("logs/owner/repo-b/workflow_1234/2-1.tar.gz", b"\x1f\x8b\x08\x00broken gzip")
+        archive.writestr(
+            "logs/owner/repo-c/workflow_1234/3-1.tar.gz",
+            gzip.compress(b"valid gzip containing an invalid tar"),
+        )
+        archive.writestr(
+            "logs/owner/repo-d/workflow_1234/4-1.tar.gz",
+            _run_archive_member({"0_build.txt": b"second valid run"}),
+        )
+
+    materialized = materialize_ghalogs_to_parquet(
+        str(input_dir),
+        str(output_dir),
+        max_members=4,
+        num_shards=1,
+        max_workers=1,
+    )
+
+    rows = _read_parquet_rows(output_dir)
+    assert {row["text"] for row in rows} == {"first valid run", "second valid run"}
+    assert materialized.record_count == 2
+    assert materialized.counters["ghalogs_materialize/dropped_invalid_archive"] == 2
+
+
 def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path):
     input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
@@ -347,10 +541,7 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     partition_dir = tmp_path / "train_only"
     archive_dir.mkdir(parents=True)
 
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr("repo-a/run-1/job.log", "ERROR token=abc123456789 traceback")
-        archive.writestr("repo-b/run-2/job.log", "FAILED alice@example.com /Users/alice/project")
-        archive.writestr("repo-c/run-3/job.log", "WARNING path=/home/bob/src")
+    _write_ghalogs_archive(archive_dir / "github_run_logs.zip", _THREE_RUN_JOB_LOGS)
 
     materialize_ghalogs_to_parquet(
         str(input_dir),
@@ -373,16 +564,21 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
     assert all(row["partition"] == DiagnosticPartition.TRAIN.value for row in train_rows)
 
 
-def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition(tmp_path):
+def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition(tmp_path, monkeypatch):
     input_dir = tmp_path / "input" / "ghalogs" / "zenodo-14796970"
     archive_dir = input_dir / "zenodo.org" / "records" / "14796970" / "files"
     archive_dir.mkdir(parents=True)
 
     train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
     dev_member = _member_path_for_partition(DiagnosticPartition.DEV)
-    with zipfile.ZipFile(archive_dir / "github_run_logs.zip", "w") as archive:
-        archive.writestr(train_member, "ERROR token=abc123456789 traceback")
-        archive.writestr(dev_member, "FAILED validation-only log")
+    _write_ghalogs_archive(
+        archive_dir / "github_run_logs.zip",
+        {train_member: b"ERROR token=abc123456789 traceback", dev_member: b"FAILED validation-only log"},
+    )
+
+    # The archive is already staged at ``source_path``; no-op the Zenodo stream
+    # so the download step doesn't try to fetch the real ~142 GB archive.
+    monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
 
     steps = ghalogs_public_normalize_steps(
         source_path=str(input_dir),
@@ -392,12 +588,306 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
     )
     StepRunner().run(list(steps))
 
-    normalized = Artifact.from_path(steps[-1], NormalizedData)
+    normalized = read_artifact(steps[-1].output_path, NormalizedData)
     rows = _read_parquet_rows(Path(normalized.main_output_dir))
 
     assert len(rows) == 1
     assert rows[0]["source"] == "ghalogs"
-    assert rows[0]["archive_path"] == train_member
+    assert rows[0]["archive_path"] == f"{train_member}!0_build.txt#0"
     assert rows[0]["partition"] == DiagnosticPartition.TRAIN.value
     assert "abc123456789" not in rows[0]["text"]
     assert rows[0]["source_id"] != rows[0]["id"]
+
+
+def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monkeypatch):
+    # Regression: with a custom output_path_prefix and the default relative
+    # source_path, the download step resolves its output under output_path_prefix
+    # while materialize must read from that same location (not marin_prefix()).
+    steps_prefix = tmp_path / "steps"
+    download, materialized, _train, _normalized = ghalogs_public_normalize_steps(
+        max_members=1,
+        num_materialize_shards=1,
+        output_path_prefix=str(steps_prefix),
+    )
+
+    # Stage the fixture archive exactly where the download step resolves its
+    # output — a location distinct from marin_prefix(), which the misaligned
+    # version read from and would have missed.
+    staged_archive = Path(download.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    staged_archive.parent.mkdir(parents=True)
+    train_member = _member_path_for_partition(DiagnosticPartition.TRAIN)
+    _write_ghalogs_archive(staged_archive, {train_member: b"ERROR token=abc123456789 traceback"})
+
+    # Archive is pre-staged; no-op the Zenodo stream.
+    monkeypatch.setattr(diagnostic_logs, "stage_ghalogs_archive", lambda output_path: None)
+    StepRunner().run([download, materialized])
+
+    rows = _read_parquet_rows(Path(materialized.output_path))
+    assert [row["archive_path"] for row in rows] == [f"{train_member}!0_build.txt#0"]
+
+
+class _FakeStreamResponse:
+    """Minimal stand-in for a streamed ``requests`` response."""
+
+    def __init__(self, status_code: int, chunks: list[bytes], break_exc: Exception | None = None):
+        self.status_code = status_code
+        self._chunks = chunks
+        self._break_exc = break_exc
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"status {self.status_code}")
+
+    def iter_content(self, chunk_size: int):
+        yield from self._chunks
+        if self._break_exc is not None:
+            raise self._break_exc
+
+
+class _FakeZenodoServer:
+    """Range-aware fake of the Zenodo archive endpoint.
+
+    Serves ``available`` bytes, honoring bounded ``Range: bytes=a-b`` requests
+    the way Zenodo does (206 with exactly the requested slice). ``breaks`` is
+    a per-GET plan: the i-th GET yields at most ``breaks[i]`` bytes of its
+    requested range and then raises ``ChunkedEncodingError`` (``None`` = serve
+    the range to completion), simulating a mid-stream drop. A ``Range`` request
+    at/beyond ``available`` returns 416 so the caller sees "no more data".
+    ``ignore_range`` forces a 200 (full-body) reply even to a ``Range`` request,
+    modeling a server that drops resume support. Records every requested start
+    offset in ``ranges``.
+    """
+
+    def __init__(
+        self,
+        available: bytes,
+        *,
+        breaks: list[int | None] | None = None,
+        ignore_range: bool = False,
+        out_chunk: int = 40,
+    ):
+        self.available = available
+        self.breaks = list(breaks or [])
+        self.ignore_range = ignore_range
+        self.out_chunk = out_chunk
+        self.get_calls = 0
+        self.ranges: list[int] = []
+
+    def get(self, url: str, *, stream: bool, timeout, headers=None) -> _FakeStreamResponse:
+        headers = headers or {}
+        ranged = "Range" in headers
+        start, end = 0, None
+        if ranged:
+            start_spec, _, end_spec = headers["Range"].split("=")[1].partition("-")
+            start = int(start_spec)
+            end = int(end_spec) if end_spec else None
+        self.get_calls += 1
+        self.ranges.append(start)
+
+        if ranged and start >= len(self.available):
+            return _FakeStreamResponse(http.client.REQUESTED_RANGE_NOT_SATISFIABLE, [])
+
+        if ranged and self.ignore_range:
+            body, status = self.available, http.client.OK
+        else:
+            stop = len(self.available) if end is None else min(end + 1, len(self.available))
+            body = self.available[start:stop]
+            status = http.client.PARTIAL_CONTENT if ranged else http.client.OK
+
+        break_after_bytes = self.breaks.pop(0) if self.breaks else None
+        if break_after_bytes is not None:
+            return _FakeStreamResponse(
+                status,
+                [body[:break_after_bytes]],
+                break_exc=requests.exceptions.ChunkedEncodingError("connection broken"),
+            )
+        chunks = [body[i : i + self.out_chunk] for i in range(0, len(body), self.out_chunk)] or [b""]
+        return _FakeStreamResponse(status, chunks)
+
+
+class _EmptyBodyServer:
+    """Always replies successfully with an empty body and a clean close.
+
+    Models a proxy/CDN that keeps acknowledging the (ranged) request but never
+    delivers bytes — no exception is raised, so the caller must detect the lack
+    of progress itself rather than re-request the same offset forever.
+    """
+
+    def __init__(self):
+        self.get_calls = 0
+
+    def get(self, url: str, *, stream: bool, timeout, headers=None) -> _FakeStreamResponse:
+        self.get_calls += 1
+        status = http.client.PARTIAL_CONTENT if (headers and "Range" in headers) else http.client.OK
+        return _FakeStreamResponse(status, [])
+
+
+def _patch_zenodo(monkeypatch, server, declared_bytes: int):
+    monkeypatch.setattr(diagnostic_logs, "build_retrying_session", lambda: server)
+    monkeypatch.setattr(diagnostic_logs, "GHALOGS_ARCHIVE_BYTES", declared_bytes)
+    # Make stall retries instant without patching time.sleep process-wide (the
+    # zephyr coordinator running the staging pipeline relies on real sleeps).
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_RESUME_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(diagnostic_logs, "_GHALOGS_RESUME_BACKOFF_CAP", 0.0)
+    return server
+
+
+def test_stage_ghalogs_archive_shards_merges_and_cleans_up(tmp_path, monkeypatch):
+    payload = b"PK\x03\x04" + b"github-run-log-bytes" * 64  # 1284 bytes
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
+
+    stage_ghalogs_archive(str(tmp_path), num_shards=3, max_workers=1)
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload
+    # One bounded range request per shard, starting at each shard boundary.
+    assert sorted(server.ranges) == [0, 428, 856]
+    # The intermediate parts are removed once the merged archive is verified.
+    assert not staged.with_name(f"{staged.name}.parts").exists()
+
+
+def test_stage_ghalogs_archive_resumes_after_midstream_break(tmp_path, monkeypatch):
+    payload = b"PK\x03\x04" + b"github-run-log-bytes" * 64  # 1284 bytes
+    # First GET yields 500 bytes then drops; second drops again at 900; third completes.
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[500, 400]), len(payload))
+
+    stage_ghalogs_archive(str(tmp_path), num_shards=1, max_workers=1)
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload
+    # Resumed from the last written offset each time (Range: bytes=500-, then
+    # 900-), never restarting the shard from zero.
+    assert server.ranges == [0, 500, 900]
+
+
+def test_stage_ghalogs_archive_reuses_completed_parts(tmp_path, monkeypatch):
+    payload = b"PK\x03\x04" + b"github-run-log-bytes" * 64  # 1284 bytes
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
+
+    # A prior run already downloaded the first shard (bytes 0-427); a re-run
+    # must skip it (write_binary skip_existing) instead of re-requesting the range.
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    parts_dir = staged.with_name(f"{staged.name}.parts")
+    parts_dir.mkdir(parents=True)
+    first = diagnostic_logs._ShardRange(0, 428)
+    part_name = Path(diagnostic_logs._ghalogs_part_path(str(parts_dir), first)).name
+    (parts_dir / part_name).write_bytes(payload[:428])
+
+    stage_ghalogs_archive(str(tmp_path), num_shards=3, max_workers=1)
+
+    assert staged.read_bytes() == payload
+    assert sorted(server.ranges) == [428, 856]
+
+
+def test_ghalogs_range_aborts_if_server_ignores_range(monkeypatch):
+    payload = b"resume-must-not-corrupt" * 16
+    # Reply 200 (full body) to the bounded range request — the body would not
+    # match the requested slice, so the range must refuse rather than corrupt.
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, ignore_range=True), len(payload))
+
+    with pytest.raises(RuntimeError, match="ignored Range"):
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, len(payload))))
+
+    assert server.ranges == [0]
+
+
+def test_ghalogs_range_gives_up_after_stalls_without_progress(monkeypatch):
+    payload = b"never-fully-delivered" * 8
+    # Every ranged resume yields zero bytes then drops: no forward progress, so
+    # the stall budget must be exhausted and the range must fail (not loop forever).
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[50] + [0] * 20), len(payload))
+
+    with pytest.raises(RuntimeError, match="stalled"):
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, len(payload))))
+
+
+def test_ghalogs_range_gives_up_on_clean_empty_responses(monkeypatch):
+    # A server that keeps returning a successful but empty body makes no forward
+    # progress and raises no exception; the loop must still give up via the stall
+    # budget instead of re-requesting the same offset forever.
+    server = _patch_zenodo(monkeypatch, _EmptyBodyServer(), declared_bytes=64)
+
+    with pytest.raises(RuntimeError, match="stalled"):
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, 64)))
+
+    # Bounded by the stall budget rather than looping unboundedly.
+    assert server.get_calls <= diagnostic_logs._GHALOGS_MAX_RESUME_STALLS + 1
+
+
+def test_ghalogs_parts_prefix_uses_same_bucket_ttl_temp(monkeypatch):
+    archive = "gs://marin-eu-west4/raw/diagnostic_logs/ghalogs/files/github_run_logs.zip"
+    monkeypatch.setattr(
+        diagnostic_logs,
+        "marin_temp_bucket",
+        lambda ttl_days, prefix="", *, source_prefix=None: f"gs://marin-eu-west4/tmp/ttl={ttl_days}d/{prefix}",
+    )
+
+    parts = diagnostic_logs._ghalogs_parts_prefix(archive)
+
+    # Same bucket (GCS compose cannot cross buckets), under the TTL'd temp
+    # prefix, keyed by the archive path so the location is stable across runs.
+    assert parts == "gs://marin-eu-west4/tmp/ttl=7d/ghalogs-parts/raw/diagnostic_logs/ghalogs/files/github_run_logs.zip"
+
+
+def test_ghalogs_parts_prefix_falls_back_beside_archive_when_temp_bucket_differs(tmp_path, monkeypatch):
+    # The temp helper routes unknown buckets to the marin prefix, which lives in
+    # a different bucket — compose could not merge from there, so parts must
+    # stay next to the archive. Local paths (no bucket) fall back the same way.
+    archive = "gs://not-a-marin-bucket/data/github_run_logs.zip"
+    monkeypatch.setattr(
+        diagnostic_logs,
+        "marin_temp_bucket",
+        lambda ttl_days, prefix="", *, source_prefix=None: f"gs://marin-us-central2/tmp/ttl={ttl_days}d/{prefix}",
+    )
+
+    assert diagnostic_logs._ghalogs_parts_prefix(archive) == f"{archive}.parts"
+    local_archive = str(tmp_path / "github_run_logs.zip")
+    assert diagnostic_logs._ghalogs_parts_prefix(local_archive) == f"{local_archive}.parts"
+
+
+def test_stage_ghalogs_archive_skips_when_correctly_sized_copy_exists(tmp_path, monkeypatch):
+    payload = b"already-staged-archive-bytes"
+    server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
+
+    staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(payload)
+
+    stage_ghalogs_archive(str(tmp_path))
+
+    # A correctly-sized copy short-circuits before any HTTP request.
+    assert server.get_calls == 0
+    assert staged.read_bytes() == payload
+
+
+def test_stage_ghalogs_archive_raises_on_size_mismatch(tmp_path, monkeypatch):
+    # Server only ever has 10 bytes but the manifest declares 25; the ranged
+    # request past EOF returns 416, so the shard stops short and flags the
+    # shortfall, failing the staging pipeline.
+    available = b"only-ten!!"
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(available), declared_bytes=25)
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        stage_ghalogs_archive(str(tmp_path), num_shards=1, max_workers=1)
+
+    # Failed staging must not publish a partial archive at the final path.
+    assert not (tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH).exists()
+
+
+def test_download_ghalogs_step_targets_staged_prefix_and_streams_archive(tmp_path, monkeypatch):
+    payload = b"downloaded-archive-payload"
+    _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
+
+    step = download_ghalogs_step(output_path_prefix=str(tmp_path))
+    assert step.output_path == f"{tmp_path}/{GHALOGS_STAGED_PREFIX}"
+
+    StepRunner().run([step])
+
+    staged = Path(step.output_path) / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
+    assert staged.read_bytes() == payload

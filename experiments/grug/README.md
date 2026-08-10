@@ -6,15 +6,16 @@
 
 - `base/model.py`: model config and model implementation (`init` + `__call__` + loss method).
 - `base/train.py`: train loop, optimizer step, callbacks, eval/checkpoint wiring.
-- `base/launch.py`: experiment config and execution entrypoint (`ExecutorStep` + resources).
+- `base/launch.py`: experiment config and execution entrypoint (builds a lazy `Checkpoint` + resources).
 
 ## Entry-point guide
 
 - Start in `base/launch.py` for normal run edits.
 - `GrugBaseLaunchConfig` is the user-facing knob surface (model/data/optimizer/trainer/eval/run metadata).
-- `versioned(...)` marks config values that should affect executor step version/hash.
-- `this_output_path()` resolves to the current step's output root.
-- `run_grug(...)` in `base/train.py` is the runtime entry point used by the `ExecutorStep`.
+- `grug_base_trial(...)` returns a typed `Checkpoint` handle addressed by `name@version`; its recipe's
+  `build_config` is what the fingerprint is computed from.
+- `ctx.out` (inside `build_config`) resolves to the current step's output root.
+- `run_grug(...)` in `base/train.py` is the runtime entry point the recipe's `fn` (`run_grug_base_trial`) calls.
 - `P` in train/model code is the usual JAX alias for `PartitionSpec`; see the JAX explicit sharding tutorial: [Explicit Sharding (JAX)](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html).
 
 ## How to use it
@@ -27,14 +28,25 @@
 
 ## Variant notes
 
-Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
+Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
-Local executor run:
+The launcher takes the shared experiment CLI (`marin.experiment.cli`): `--version` sets the
+checkpoint version and is required, and `--run` builds the trial (without it the lowered plan is
+printed and nothing runs). The checkpoint version is deferred to `--version`, so pass `--version dev`
+to iterate (per-user namespace, rebuilds each run) or a calendar version `YYYY.MM.DD` to keep a run.
+
+Print the plan (no run):
 
 ```bash
-uv run python experiments/grug/base/launch.py
+uv run python experiments/grug/base/launch.py --version dev
+```
+
+Local run (lowers the trial and runs it through the `StepRunner`):
+
+```bash
+uv run python experiments/grug/base/launch.py --version dev --run
 ```
 
 Iris cluster run (from a dev box, on `marin` prod cluster):
@@ -42,17 +54,17 @@ Iris cluster run (from a dev box, on `marin` prod cluster):
 ```bash
 uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.grug.base.launch
+  -- python -m experiments.grug.base.launch --version dev --run
 ```
 
-The entrypoint job is CPU-only; `executor_main` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
+The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
 
 ## Visual diff for template variants
 
 When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
 
 ```bash
-uv run python scripts/grug_dir_diff.py \
+uv run python scripts/ci/grug_dir_diff.py \
   experiments/grug/base \
   experiments/grug/<variant> \
   --out /tmp/grug-diff
@@ -88,8 +100,13 @@ Useful flags:
 ## Checkpoints and resume
 
 - Checkpoints are written to `<output_path>/checkpoints` by default in `base/launch.py`.
-- `run_grug` restores from `trainer.load_checkpoint_path` when set, otherwise tries the run checkpoint path.
-- If `trainer.load_checkpoint=True` and no checkpoint is found, startup fails; otherwise it starts from scratch.
+- An own-run checkpoint resumes the complete state, including the optimizer and step, and takes precedence over
+  `trainer.initialize_from`.
+- `trainer.initialize_from` initializes a new phase from external model weights when no own-run checkpoint was loaded.
+  The optimizer and step remain fresh. MoE runs also load `pending_qb_betas`; EMA starts from the loaded parameters.
+- `trainer.load_checkpoint_path` is a complete-state resume, not a phase-chaining input.
+- If `trainer.load_checkpoint=True` and no resume checkpoint is found, startup fails. With no resume checkpoint and no
+  `trainer.initialize_from`, the run starts from scratch.
 
 ## Environment variables you will likely use
 
@@ -103,7 +120,7 @@ Useful flags:
 - Checkpoints: `<output_path>/checkpoints`.
 - Profiler traces (if enabled): `<trainer.log_dir>/<run_id>/profiler`.
 - Backward-flow artifacts: `<trainer.log_dir>/<run_id>/artifacts/backward_flow`, plus `backward_flow/dag` as native HTML media in W&B. Base Grug samples every 50 steps by default; set `trainer.backward_flow.interval=0` to disable.
-- Executor step outputs: `this_output_path()` root for the step.
+- Step outputs: the `ctx.out` root for the step.
 
 ## Logged metrics
 
@@ -165,7 +182,6 @@ enforces these minimum interfaces:
 - Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
 - Backward-flow recipe: [`/docs/recipes/add_grug_backward_flow_logging.md`](../../docs/recipes/add_grug_backward_flow_logging.md)
 - HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
-- Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
-- Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
+- Lazy artifact mechanics: [`/docs/explanations/lazy-artifacts.md`](../../docs/explanations/lazy-artifacts.md)
 - TPU debug workflow: [`.agents/skills/reserve-tpu/`](../../.agents/skills/reserve-tpu/SKILL.md)
 - Cluster launch details: [`lib/iris/OPS.md`](../../lib/iris/OPS.md), [`.agents/skills/run-ferries/SKILL.md`](../../.agents/skills/run-ferries/SKILL.md)

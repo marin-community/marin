@@ -3,8 +3,6 @@
 
 """Query and comparison helpers for normalized profile summaries."""
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -17,8 +15,8 @@ from marin.profiling.schema import (
     RegionAggregate,
     SemanticFamilyAggregate,
     StepClassSummary,
+    hierarchical_root_totals,
 )
-from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
 
 
 @dataclass(frozen=True)
@@ -102,7 +100,7 @@ def query_profile_summary(summary: ProfileSummary, question: str, *, top_k: int 
         }
 
     if "region" in normalized or "hierarch" in normalized:
-        root_totals = _hierarchical_root_totals(summary)
+        root_totals = hierarchical_root_totals(summary)
         fallback_total = max(root_totals.values(), default=0.0)
         return {
             "query_type": "hierarchical_regions",
@@ -165,10 +163,7 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
     before_step_classes = _step_class_rows(before.step_time.classes)
     after_step_classes = _step_class_rows(after.step_time.classes)
     step_class_delta = _compare_step_classes(before.step_time.classes, after.step_time.classes)
-    semantic_family_delta = _compare_semantic_families(
-        _semantic_families_for_summary(before),
-        _semantic_families_for_summary(after),
-    )
+    semantic_family_delta = _compare_semantic_families(before.semantic_families, after.semantic_families)
     provenance_checks = _compare_provenance(before, after)
 
     return {
@@ -260,62 +255,8 @@ def _compare_step_classes(before: list[StepClassSummary], after: list[StepClassS
                 "median_before": before_median,
                 "median_after": after_median,
                 "median_delta": _delta(before_median, after_median),
-                "median_regression_pct": _pct_delta(before_median, after_median),
+                "median_regression_pct": pct_delta(before_median, after_median),
             }
-        )
-    return rows
-
-
-def _semantic_families_for_summary(summary: ProfileSummary) -> list[SemanticFamilyAggregate]:
-    if summary.semantic_families:
-        return summary.semantic_families
-
-    # Backward-compatible fallback for older summaries.
-    aggregate: dict[str, dict[str, float | int | str | None]] = {}
-    total_duration = summary.time_breakdown.total_duration
-    for op in summary.hot_ops:
-        family = classify_semantic_family(op.name)
-        bucket = aggregate.setdefault(
-            family,
-            {
-                "count": 0,
-                "total_duration": 0.0,
-                "exclusive_duration": 0.0,
-                "example_op": op.name,
-                "flop_proxy_total": 0.0,
-                "flop_proxy_count": 0,
-            },
-        )
-        bucket["count"] = int(bucket["count"]) + op.count
-        bucket["total_duration"] = float(bucket["total_duration"]) + op.total_duration
-        bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + op.exclusive_duration
-        flop_proxy = op.flop_proxy_per_invocation
-        if flop_proxy is None and op.shape_signature:
-            flop_proxy = estimate_flop_proxy(family, op.shape_signature)
-        if flop_proxy is not None and op.count > 0:
-            bucket["flop_proxy_total"] = float(bucket["flop_proxy_total"]) + (flop_proxy * op.count)
-            bucket["flop_proxy_count"] = int(bucket["flop_proxy_count"]) + op.count
-
-    rows: list[SemanticFamilyAggregate] = []
-    for family, stats in sorted(aggregate.items(), key=lambda item: (-float(item[1]["exclusive_duration"]), item[0])):
-        count = int(stats["count"])
-        total = float(stats["total_duration"])
-        exclusive = float(stats["exclusive_duration"])
-        flop_proxy_total = float(stats["flop_proxy_total"])
-        rows.append(
-            SemanticFamilyAggregate(
-                family=family,
-                count=count,
-                total_duration=total,
-                exclusive_duration=exclusive,
-                share_of_total=(exclusive / total_duration) if total_duration > 0 else 0.0,
-                avg_duration=(total / count) if count else 0.0,
-                avg_exclusive_duration=(exclusive / count) if count else 0.0,
-                example_op=str(stats["example_op"]),
-                dominant_shape_signature=None,
-                flop_proxy_total=flop_proxy_total if flop_proxy_total > 0 else None,
-                time_per_flop_proxy=(exclusive / flop_proxy_total) if flop_proxy_total > 0 else None,
-            )
         )
     return rows
 
@@ -344,13 +285,13 @@ def _compare_semantic_families(
                 "before_exclusive_duration": before_exclusive,
                 "after_exclusive_duration": after_exclusive,
                 "exclusive_duration_delta": after_exclusive - before_exclusive,
-                "exclusive_regression_pct": _pct_delta(before_exclusive, after_exclusive),
+                "exclusive_regression_pct": pct_delta(before_exclusive, after_exclusive),
                 "before_flop_proxy_total": before_flops,
                 "after_flop_proxy_total": after_flops,
                 "flop_proxy_ratio": flop_ratio,
                 "before_time_per_flop_proxy": before_time_per_flop,
                 "after_time_per_flop_proxy": after_time_per_flop,
-                "time_per_flop_regression_pct": _pct_delta(before_time_per_flop, after_time_per_flop),
+                "time_per_flop_regression_pct": pct_delta(before_time_per_flop, after_time_per_flop),
                 "time_ratio": time_ratio,
                 "work_ratio": flop_ratio,
                 "efficiency_ratio": (time_ratio / flop_ratio) if time_ratio is not None and flop_ratio else None,
@@ -414,7 +355,8 @@ def _delta(before: float | None, after: float | None) -> float | None:
     return after - before
 
 
-def _pct_delta(before: float | None, after: float | None) -> float | None:
+def pct_delta(before: float | None, after: float | None) -> float | None:
+    """Percent change from ``before`` to ``after``, or ``None`` when undefined."""
     if before is None or after is None:
         return None
     if before <= 0:
@@ -478,15 +420,6 @@ def _region_to_dict(
         "inclusive_share_of_total": inclusive_share,
         "exclusive_share_of_total": exclusive_share,
     }
-
-
-def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for region in summary.hierarchical_regions:
-        if region.depth != 1:
-            continue
-        totals[region.path] = max(0.0, float(region.inclusive_duration))
-    return totals
 
 
 def _find_gap_contexts(summary: ProfileSummary, target: str | None, *, top_k: int) -> list[GapRegionContext]:

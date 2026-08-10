@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 

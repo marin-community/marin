@@ -18,28 +18,29 @@ from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple
 import deepdiff
 import jax
 import jax.tree_util as jtu
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from fsspec import AbstractFileSystem
+from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr import counters as zephyr_counters
 from rigging.filesystem import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
-from levanter.data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
+from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore
+from .tree_store import TreeStore, heuristic_is_leaf
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -52,8 +53,59 @@ CONSOLIDATE_DATA_SIZE_WORKERS = 32
 CACHE_LAYOUT_CONSOLIDATED = "consolidated"
 CACHE_LAYOUT_SHARDED = "sharded"
 
-DEFAULT_LOG_LEVEL = pylogging.INFO
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+def _cache_zephyr_context(*, resources: ResourceConfig, max_workers: int, name: str) -> ZephyrContext:
+    return ZephyrContext(
+        resources=resources,
+        coordinator_resources=ResourceConfig(cpu=1, ram="4g", preemptible=False),
+        max_workers=max_workers,
+        name=name,
+    )
+
+
+@dataclass(frozen=True)
+class ShardedCacheLayout:
+    """Storage paths of a sharded Levanter cache: its top-level ledger and per-shard subdirectories."""
+
+    root: StoragePath
+
+    @staticmethod
+    def parse(root: str) -> "ShardedCacheLayout":
+        return ShardedCacheLayout(StoragePath.parse(root))
+
+    def __str__(self) -> str:
+        return str(self.root)
+
+    @property
+    def ledger(self) -> str:
+        """Path of the top-level ledger that aggregates the per-shard ledgers."""
+        return str(self.root / LEDGER_FILE_NAME)
+
+    def child(self, name: str) -> "ShardedCacheLayout":
+        """The sub-cache rooted at ``root/name`` (e.g. a per-split cache)."""
+        return ShardedCacheLayout(self.root / name)
+
+    def shard(self, shard_name: str) -> str:
+        """Absolute path of the shard subdirectory ``shard_name`` under this cache."""
+        return str(self.root / shard_name)
+
+    def relative_shard(self, shard_path: str) -> str:
+        """``shard_path`` as the ledger key relative to this root; raises unless strictly under it.
+
+        Segment comparison keeps a trailing or doubled separator from forking writer and
+        reader; a ``..`` that escapes a scheme-less (local) root is also rejected.
+        """
+        try:
+            relative = StoragePath.parse(shard_path).relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}") from exc
+        # A local relative key with a `..` segment escapes the cache directory when
+        # joined back; object-store keys treat `..` as a literal segment, so this only
+        # applies to scheme-less filesystem paths.
+        escapes = self.root.scheme is None and ".." in relative.split("/")
+        if not relative or escapes:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}")
+        return relative
 
 
 @dataclass(frozen=True)
@@ -100,6 +152,7 @@ class TreeCache(AsyncDataset[T_co]):
     ):
         super().__init__()
         self.cache_dir = cache_dir
+        self._layout = ShardedCacheLayout.parse(cache_dir)
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
@@ -127,9 +180,6 @@ class TreeCache(AsyncDataset[T_co]):
     @property
     def is_sharded(self) -> bool:
         return self.ledger.layout == CACHE_LAYOUT_SHARDED
-
-    def _shard_path(self, shard_name: str) -> str:
-        return os.path.join(self.cache_dir, shard_name)
 
     async def async_len(self) -> int:
         return await self._reader.async_len()
@@ -273,7 +323,7 @@ class TreeCache(AsyncDataset[T_co]):
     def _shard_store(self, shard_name: str) -> TreeStore[T_co]:
         store = self._shard_stores.get(shard_name)
         if store is None:
-            store = TreeStore.open(self._exemplar, self._shard_path(shard_name), mode="r", cache_metadata=True)
+            store = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
             self._shard_stores[shard_name] = store
         return store
 
@@ -283,7 +333,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = TreeStore.open(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
@@ -297,7 +347,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
@@ -560,7 +610,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
             field = "/".join(_render_path_elem(part) for part in path)
             return _ShardedJaggedArrayStore(self._cache, field)
 
-        return jtu.tree_map_with_path(field_store, self._cache._exemplar)
+        return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]:
         if len(offsets) == 0:
@@ -583,25 +633,11 @@ class CacheLedger:
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
 
     @staticmethod
-    def load_or_initialize(cache_dir: str, source: ShardedDataSource, processor: BatchProcessor):
-        metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
-        try:
-            return CacheLedger.load(cache_dir, metadata)
-        except FileNotFoundError:
-            return CacheLedger(
-                total_num_rows=0,
-                shard_rows={shard: 0 for shard in source.shard_names},
-                is_finished=False,
-                metadata=metadata,
-            )
-
-    @staticmethod
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":
-        ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        ledger_path = ShardedCacheLayout.parse(cache_dir).ledger
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
-            with open_url(ledger_path) as file:
-                cache_ledger = CacheLedger.from_json(file.read())  # type: ignore[arg-type]
+            cache_ledger = CacheLedger.from_json(StoragePath(ledger_path).read_text())  # type: ignore[arg-type]
             if metadata:
                 diff = cache_ledger.metadata.compare_to(metadata)
                 if diff:
@@ -611,7 +647,7 @@ class CacheLedger:
             raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
 
     def _serialize_and_commit(self, cache_dir):
-        path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        path = ShardedCacheLayout.parse(cache_dir).ledger
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
 
 
@@ -811,7 +847,7 @@ class SerialCacheWriter:
         if isinstance(batch, pa.RecordBatch):
             batch = dict_from_record_batch(batch)
 
-        cbatch = _canonicalize_batch(batch)  # type: ignore[arg-type]
+        cbatch = canonicalize_batch(batch)  # type: ignore[arg-type]
         self._tree_store.extend(cbatch)
 
 
@@ -863,18 +899,17 @@ def write_levanter_cache(
             with ThreadedBatchWriter(_drain_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
-                zephyr_counters.increment("zephyr/records_out")
+                zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)
                 for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
-                    zephyr_counters.increment("zephyr/records_out", len(batch))
+                    zephyr_counters.pipeline.update_counter("zephyr/records_out", len(batch))
                     logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with open_url(f"{output_path}/.success", "w") as f:
-        f.write("")
+    StoragePath(f"{output_path}/.success").write_text("")
 
     return {"path": output_path, "count": count, "exemplar": exemplar}
 
@@ -887,8 +922,7 @@ def _serialize_json_and_commit(path: str, obj):
 
     for _ in range(10):
         try:
-            with open_url(path, "w") as file:
-                file.write(obj.to_json())
+            StoragePath(path).write_text(obj.to_json())
             break
         except FileNotFoundError:
             logger.exception(f"Failed to write {path}")
@@ -934,7 +968,7 @@ def build_cache(
             metadata=metadata,
         )
 
-    ctx = ZephyrContext(
+    ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="32g", disk="16g"),
         max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
@@ -961,7 +995,7 @@ def _build_single_shard_cache(
     options: CacheOptions,
     metadata: CacheMetadata,
 ):
-    shard_path = os.path.join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
+    shard_path = prefix_join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
     existing = _try_load(shard_path, metadata)
     if existing is not None:
         logger.info(f"Found existing shard cache for {shard_name} at {shard_path}. Skipping build.")
@@ -976,12 +1010,12 @@ def _build_single_shard_cache(
             batch.append(example)
             if len(batch) >= options.batch_size:
                 processed = processor(batch)
-                yield from _canonicalize_batch(processed)
+                yield from canonicalize_batch(processed)
                 batch.clear()
             pbar.update(1)
         if batch:
             processed = processor(batch)
-            yield from _canonicalize_batch(processed)
+            yield from canonicalize_batch(processed)
 
     result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
 
@@ -1053,7 +1087,7 @@ def consolidate_shard_caches(
             data_sizes = jax.tree.map(lambda x: x.data_size, store.tree)
         return (data_sizes, ledger)
 
-    probe_ctx = ZephyrContext(
+    probe_ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="5g", cpu=2),
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",
@@ -1088,7 +1122,7 @@ def consolidate_shard_caches(
             )
         )
 
-    ctx = ZephyrContext(
+    ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="10g", disk="16g"),
         max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
@@ -1136,8 +1170,9 @@ def consolidate_shard_cache_ledgers(
         ledger._serialize_and_commit(output_path)
         return ledger
 
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path in shard_cache_paths:
-        _relative_shard_path(output_path, shard_path)
+        layout.relative_shard(shard_path)
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard cache ledgers into {output_path}")
 
@@ -1154,7 +1189,7 @@ def consolidate_shard_cache_ledgers(
                 field_counts = _field_counts_from_store(store)
         return (field_counts, ledger)
 
-    probe_ctx = ZephyrContext(
+    probe_ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="5g", cpu=2),
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",
@@ -1211,8 +1246,9 @@ def _merge_sharded_ledgers(
         layout=CACHE_LAYOUT_SHARDED,
         metadata=metadata,
     )
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path, ledger, field_counts in zip(shard_cache_paths, shard_ledgers, per_shard_field_counts, strict=True):
-        shard_name = _relative_shard_path(output_path, shard_path)
+        shard_name = layout.relative_shard(shard_path)
         if shard_name in final_ledger.shard_rows:
             raise ValueError(f"Multiple shard cache paths resolve to the same ledger shard path: {shard_name}")
 
@@ -1378,27 +1414,6 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
                 raise
 
 
-def _relative_shard_path(output_path: str, shard_path: str) -> str:
-    if "://" in output_path or "://" in shard_path:
-        prefix = output_path.rstrip("/") + "/"
-        if shard_path.startswith(prefix):
-            return shard_path[len(prefix) :]
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-
-    output_abs = os.path.abspath(output_path)
-    shard_abs = os.path.abspath(shard_path)
-    try:
-        common_path = os.path.commonpath([output_abs, shard_abs])
-    except ValueError as exc:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}") from exc
-
-    if shard_abs == output_abs or common_path != output_abs:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-
-    relative_path = os.path.relpath(shard_abs, output_abs)
-    return relative_path
-
-
 def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:
     return _field_counts_from_data_sizes(jax.tree.map(lambda array: array.data_size, store.tree))
 
@@ -1426,19 +1441,6 @@ def _render_path_elem(path_elem) -> str:
 def _sanitize_shard_name(name: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in name)
     return safe or "shard"
-
-
-def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
-    if isinstance(batch, pa.RecordBatch):
-        batch = dict_from_record_batch(batch)
-
-    if isinstance(batch, dict):
-        keys = list(batch.keys())
-        values = list(batch.values())
-        num_rows = len(values[0]) if values else 0
-        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
-    else:
-        return list(batch)
 
 
 def _try_load(path, metadata):

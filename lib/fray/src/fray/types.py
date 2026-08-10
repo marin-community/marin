@@ -9,15 +9,31 @@ ResourceConfig to JobRequest (it's a job-level gang-scheduling concern,
 not a per-task resource requirement).
 """
 
-from __future__ import annotations
-
 import os
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
+import humanfriendly
+
 from fray.device_flops import device_flops as _device_flops
+
+
+def _scale_byte_size(size: str, factor: float) -> str:
+    """Scale a human-readable byte size, preserving compact binary unit suffixes."""
+    if factor == 1.0:
+        return size
+    scaled = humanfriendly.parse_size(size, binary=True) * factor
+    for suffix, unit in (("t", 1024**4), ("g", 1024**3), ("m", 1024**2), ("k", 1024)):
+        if scaled >= unit:
+            value = scaled / unit
+            if abs(value - round(value)) < 1e-9:
+                return f"{round(value)}{suffix}"
+            return f"{value:g}{suffix}"
+    return f"{round(scaled)}B"
+
 
 # ---------------------------------------------------------------------------
 # TPU topology
@@ -151,6 +167,8 @@ TpuType = Literal[
     "v6e-256",
 ]
 
+TpuFamily = Literal["v4", "v5e", "v5p", "v6e"]
+
 GpuType = Literal[
     "A10",
     "A100-40G",
@@ -217,6 +235,22 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
     TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
 ]
 
+_BYTES_PER_GIB = 1024**3
+
+# Per-chip HBM capacities from the Google Cloud TPU specifications:
+# v4: https://cloud.google.com/tpu/docs/v4
+# v5e: https://cloud.google.com/tpu/docs/v5e
+# v5p: https://cloud.google.com/tpu/docs/v5p
+# v6e: https://cloud.google.com/tpu/docs/v6e
+TPU_HBM_BYTES_PER_CHIP: Mapping[str, int] = MappingProxyType(
+    {
+        "v4": 32 * _BYTES_PER_GIB,
+        "v5e": 16 * _BYTES_PER_GIB,
+        "v5p": 95 * _BYTES_PER_GIB,
+        "v6e": 32 * _BYTES_PER_GIB,
+    }
+)
+
 
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
@@ -224,6 +258,63 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
         if config.name == tpu_type:
             return config
     raise ValueError(f"Unknown TPU type: {tpu_type}")
+
+
+@dataclass(frozen=True)
+class TpuHostResources:
+    """Per-VM host CPU/RAM for a TPU family.
+
+    Mirrors the ``tpu_pools[*].resources`` blocks in
+    ``lib/iris/config/marin.yaml`` — the scheduler's source of truth for the
+    physical size of each TPU host VM. Used to size ``with_tpu`` container
+    defaults relative to the host rather than a flat constant.
+    """
+
+    cpu: int
+    ram_gb: int
+
+
+# Per-VM host size by TPU family. Keep in sync with the `resources:` blocks in
+# lib/iris/config/marin.yaml.
+TPU_HOST_RESOURCES: dict[str, TpuHostResources] = {
+    "v4": TpuHostResources(cpu=240, ram_gb=400),
+    "v5e": TpuHostResources(cpu=112, ram_gb=192),
+    "v5p": TpuHostResources(cpu=208, ram_gb=448),
+    "v6e": TpuHostResources(cpu=180, ram_gb=720),
+}
+
+# Fraction of the host VM that `with_tpu` requests by default. Leaving headroom
+# lets the scheduler multiplex CPU-only tasks onto the same node while still
+# giving training enough host RAM for checkpoint serialization (the previous
+# flat 128g default OOM-killed large-model saves on big hosts).
+DEFAULT_TPU_HOST_FRACTION = 0.5
+
+
+def tpu_family(tpu_type: str) -> TpuFamily:
+    """Return the TPU family (e.g. ``"v5e"``, ``"v5p"``) for a TPU type name."""
+    if tpu_type.startswith("v4-"):
+        return "v4"
+    if tpu_type.startswith(("v5litepod-", "v5e-")):
+        return "v5e"
+    if tpu_type.startswith("v5p-"):
+        return "v5p"
+    if tpu_type.startswith("v6e-"):
+        return "v6e"
+    raise ValueError(f"Cannot determine TPU family for type: {tpu_type}")
+
+
+def tpu_hbm_bytes_per_chip(family: str) -> int:
+    """Return the HBM capacity of one TPU chip in bytes."""
+    hbm_bytes = TPU_HBM_BYTES_PER_CHIP.get(family)
+    if hbm_bytes is None:
+        raise ValueError(f"Unknown TPU family {family!r}; expected one of {sorted(TPU_HBM_BYTES_PER_CHIP)}")
+    return hbm_bytes
+
+
+def tpu_hbm_capacity_bytes(tpu_type: str) -> int:
+    """Return the aggregate HBM capacity of a TPU slice in bytes."""
+    topology = get_tpu_topology(tpu_type)
+    return topology.chip_count * tpu_hbm_bytes_per_chip(tpu_family(tpu_type))
 
 
 DeviceKind = Literal["cpu", "gpu", "tpu"]
@@ -311,6 +402,13 @@ class TpuConfig:
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
 
+# Sentinel region value meaning ANY: run anywhere; do NOT inherit the parent job's region.
+# Distinct from ``None`` (UNSET — inherit) and a concrete region list (PINNED). Pass it as the
+# sole element of ``ResourceConfig.regions`` (``regions=[ANY_REGION]``). Not a real region, so
+# it never collides with a GCP region name.
+ANY_REGION = "*"
+
+
 @dataclass
 class ResourceConfig:
     """Resource requirements for a single task/replica.
@@ -325,6 +423,9 @@ class ResourceConfig:
     the backend uses its cluster-configured default. Used for jobs that need
     a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     untrusted child workloads).
+
+    `target_cluster` routes an Iris job to a named peer cluster. Other backends
+    may ignore it.
     """
 
     cpu: float = 1
@@ -332,8 +433,12 @@ class ResourceConfig:
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
+    # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a
+    # region list) restricts to those regions; ANY ([ANY_REGION]) runs anywhere without
+    # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
+    target_cluster: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None
@@ -350,8 +455,41 @@ class ResourceConfig:
             return 100e9
         return self.device_flops(dtype) * self.chip_count()
 
+    def scale(
+        self,
+        factor: float | None = None,
+        /,
+        *,
+        cpu: float | None = None,
+        ram: float | None = None,
+        disk: float | None = None,
+    ) -> "ResourceConfig":
+        """Return a copy with cpu/ram/disk multiplied by the given factors.
+
+        ``rc.scale(2)`` multiplies cpu, ram, and disk by 2; ``rc.scale(0.5)``
+        halves all three. Keyword args ``cpu``, ``ram``, and ``disk`` are
+        multiplicative factors for individual dimensions (e.g. ``cpu=0.5``
+        halves CPU); omitted dimensions keep their current value. ``factor``
+        cannot be combined with keyword factors.
+        """
+        if factor is not None and (cpu is not None or ram is not None or disk is not None):
+            raise ValueError("Pass either a single factor or cpu/ram/disk keyword factors, not both.")
+        if factor is not None:
+            cpu_factor = ram_factor = disk_factor = factor
+        else:
+            cpu_factor = 1.0 if cpu is None else cpu
+            ram_factor = 1.0 if ram is None else ram
+            disk_factor = 1.0 if disk is None else disk
+
+        return replace(
+            self,
+            cpu=self.cpu * cpu_factor,
+            ram=_scale_byte_size(self.ram, ram_factor),
+            disk=_scale_byte_size(self.disk, disk_factor),
+        )
+
     @staticmethod
-    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> "ResourceConfig":
         """Create a resource config for TPU(s).
 
         When ``tpu_type`` is a list, the first entry is canonical (used for
@@ -361,6 +499,11 @@ class ResourceConfig:
         different per-VM chip counts (e.g. ``v6e-4`` + ``v6e-8``) would let
         the scheduler co-locate two partial-VM jobs onto a VM that cannot
         actually be shared.
+
+        ``cpu``/``ram`` default to ``DEFAULT_TPU_HOST_FRACTION`` (50%) of the
+        primary type's per-VM host (see ``TPU_HOST_RESOURCES``), leaving
+        headroom for CPU-task multiplexing while giving training enough host
+        RAM for checkpoint serialization. Pass ``cpu=``/``ram=`` to override.
         """
         if isinstance(tpu_type, str):
             tpu_types = [tpu_type]
@@ -387,18 +530,19 @@ class ResourceConfig:
         topo = get_tpu_topology(primary)
         replicas = slice_count * topo.vm_count
         kwargs = dict(kwargs)
-        kwargs.setdefault("cpu", 32)
-        kwargs.setdefault("ram", "128g")
+        host = TPU_HOST_RESOURCES[tpu_family(primary)]
+        kwargs.setdefault("cpu", max(1, int(host.cpu * DEFAULT_TPU_HOST_FRACTION)))
+        kwargs.setdefault("ram", f"{int(host.ram_gb * DEFAULT_TPU_HOST_FRACTION)}g")
         kwargs.setdefault("disk", "50g")
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> "ResourceConfig":
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu(**kwargs: Any) -> ResourceConfig:
+    def with_cpu(**kwargs: Any) -> "ResourceConfig":
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
@@ -443,6 +587,11 @@ class EnvironmentConfig:
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
         extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
+        setup_scripts: Setup scripts run in order before the command. ``None``
+            builds the default uv-sync script; a list runs verbatim (``[]`` => no
+            setup, image used as-is). Either way iris appends its own runtime-deps
+            script. Build the default and tweak it via ``fray.default_setup_script``.
+        sync_packages: Workspace members the default sync targets (default: all).
     """
 
     workspace: str | None = None
@@ -450,6 +599,8 @@ class EnvironmentConfig:
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
     extras: Sequence[str] = field(default_factory=list)
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.workspace and self.docker_image:
@@ -464,6 +615,8 @@ def create_environment(
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
     extras: Sequence[str] | None = None,
+    setup_scripts: Sequence[str] | None = None,
+    sync_packages: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
     """Create an EnvironmentConfig with sensible defaults.
 
@@ -489,6 +642,8 @@ def create_environment(
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
         extras=list(extras or []),
+        setup_scripts=setup_scripts,
+        sync_packages=list(sync_packages or []),
     )
 
 
@@ -520,11 +675,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Entrypoint:
+    ) -> "Entrypoint":
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
+    def from_binary(command: str, args: Sequence[str]) -> "Entrypoint":
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -543,8 +698,13 @@ class JobRequest:
         resources: Resource requirements per replica
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
+        processes_per_task: GPU processes to run inside each task (default 1). When
+            > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
+            (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        max_task_failures: Cumulative failed task attempts the job tolerates before it
+            fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
     """
@@ -554,8 +714,10 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
     replicas: int | None = None
+    processes_per_task: int = 1
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    max_task_failures: int = 0
     priority: int = 0
 
     def __post_init__(self):
@@ -574,5 +736,5 @@ class JobStatus(StrEnum):
     STOPPED = "stopped"
 
     @staticmethod
-    def finished(status: JobStatus) -> bool:
+    def finished(status: "JobStatus") -> bool:
         return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)

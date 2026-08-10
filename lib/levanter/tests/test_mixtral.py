@@ -1,21 +1,21 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
+import equinox as eqx
 import haliax as hax
 import jax
 import numpy as np
-
-# import equinox as eqx
-# import jax
-# import numpy as np
 import pytest
 import transformers
 from jax import random
 from test_utils import (  # , check_model_works_with_seqlen
     check_load_config,
+    moe_gate_grad_row_norms,
     parameterize_with_configs,
+    single_token_moe_block_grad,
     skip_if_hf_model_not_accessible,
     skip_if_no_torch,
     use_test_mesh,
@@ -25,7 +25,12 @@ from levanter.layers.attention import AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 
 # from levanter.models.loss import next_token_loss
-from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel  # , MixtralDecoderLayer, MixtralSparseMoeBlock
+from levanter.models.mixtral import (  # , MixtralDecoderLayer
+    MixtralConfig,
+    MixtralLMHeadModel,
+    MixtralSparseMoeBlock,
+)
+from levanter.utils.tree_utils import inference_mode
 
 # from jax.sharding import Mesh
 
@@ -58,6 +63,97 @@ def test_mixtral_config():
         assert getattr(new_hf_config, k) == getattr(
             hf_config, k
         ), f"{k} {getattr(new_hf_config, k)} != {getattr(hf_config, k)}"
+
+
+def _tiny_moe_config(dense_router_gradient: bool) -> MixtralConfig:
+    return MixtralConfig(
+        max_seq_len=8,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_heads=4,
+        num_kv_heads=2,
+        n_routed_experts=4,
+        num_experts_per_tok=2,
+        gradient_checkpointing=False,
+        dense_router_gradient=dense_router_gradient,
+    )
+
+
+def test_mixtral_dense_router_gradient_leaves_forward_unchanged():
+    # The DenseMixer flag is a training-only backward-pass change: the forward value must be
+    # bit-identical to the stock sparse forward.
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=_tiny_moe_config(dense_router_gradient=True))
+        x = hax.random.normal(random.PRNGKey(1), (config_off.max_Pos, config_off.Embed))
+
+        @eqx.filter_jit
+        def forward(block, x):
+            out, _ = block(x)
+            return out.array
+
+        out_off = forward(block_off, x)
+        out_on = forward(block_on, x)
+
+    np.testing.assert_array_equal(np.asarray(out_on), np.asarray(out_off))
+
+
+def test_mixtral_dense_router_gradient_reaches_unselected_experts():
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+    config_on = _tiny_moe_config(dense_router_gradient=True)
+    n_unselected = config_off.n_routed_experts - config_off.num_experts_per_tok
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=config_on)
+
+        grad_off = single_token_moe_block_grad(block_off, config_off)
+        grad_on = single_token_moe_block_grad(block_on, config_on)
+
+    rows_off = moe_gate_grad_row_norms(grad_off, config_off)
+    rows_on = moe_gate_grad_row_norms(grad_on, config_on)
+
+    # Sparse forward: exactly `n_unselected` experts get no task-loss router gradient.
+    assert int(np.sum(rows_off < 1e-6)) == n_unselected
+    # Dense router gradient: every expert (including the unselected ones) gets a real gradient.
+    assert np.all(rows_on > 1e-4)
+
+    # The flag changes only the router gradient; the sparse expert-parameter gradients are identical.
+    # This is a mathematical identity (the dense delta's expert outputs are stop_gradient-wrapped),
+    # checked exactly on CPU. It is not asserted on TPU: the flag-on and flag-off blocks compile to
+    # separate graphs, and the bf16 router matmul rounds differently under each graph's fusion, so a
+    # single-token near-tie can put a different expert in the top-k between the two runs -- the
+    # cross-graph gradient comparison is then comparing different routings, not the flag's effect.
+    # (The dense delta contributing no expert-weight gradient is checked on every backend by
+    # test_moe.py::test_dense_router_delta_gradient_reaches_expert_outputs_not_weights.)
+    if jax.default_backend() == "cpu":
+        for projection in ("w1", "w2", "w3"):
+            weight_off = getattr(grad_off.experts, projection).weight.array
+            weight_on = getattr(grad_on.experts, projection).weight.array
+            np.testing.assert_array_equal(np.asarray(weight_on), np.asarray(weight_off))
+
+
+def test_mixtral_dense_router_gradient_disabled_in_inference():
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+    config_on = _tiny_moe_config(dense_router_gradient=True)
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=config_on)
+        block_on_eval = inference_mode(block_on, True)
+
+        grad_off = single_token_moe_block_grad(block_off, config_off)
+        grad_eval = single_token_moe_block_grad(block_on_eval, config_on)
+
+    # inference_mode skips the dense pass, so the router gradient collapses back to the sparse one.
+    np.testing.assert_allclose(
+        moe_gate_grad_row_norms(grad_eval, config_on),
+        moe_gate_grad_row_norms(grad_off, config_off),
+        rtol=1e-5,
+        atol=1e-6,
+    )
 
 
 # @skip_if_no_torch

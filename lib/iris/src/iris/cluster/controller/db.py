@@ -6,19 +6,31 @@
 Hosts the SA ``Engine`` factories, the ``Tx`` wrapper, and the two
 transaction context managers (``write_transaction`` / ``read_snapshot``).
 
-The engine is split into a **write engine** and a **read engine**:
+The engine is split into a **write engine** and two **read engines**:
 
 * The write engine uses pool size 1 so writes are funneled through a
   single connection. Serialization between writers is enforced by an
   external ``threading.RLock`` passed into ``write_transaction``.
-* The read engine uses ``QueuePool(pool_size=2, max_overflow=2)`` with
-  ``PRAGMA query_only = ON`` **pinned at connect time**. Pinning avoids
-  toggling the pragma on every ``read_snapshot`` call. A small pool keeps
-  tail latency low under concurrent reads — SQLite's WAL-index header lock
-  becomes contended once many readers each hold their own connection, so
-  queueing surplus readers at the SA pool (FIFO) beats spinning inside SQLite.
+* The shared read engine uses ``QueuePool(pool_size=4, max_overflow=4)``
+  with ``PRAGMA query_only = ON`` **pinned at connect time** and backs every
+  RPC-handler read (``read_snapshot``). Pinning avoids toggling the pragma on
+  every call. The pool caps in-flight readers: SQLite's WAL admits concurrent
+  readers but each contends on the WAL-index header lock when establishing a
+  snapshot, so queueing surplus readers at the SA pool (FIFO) beats spinning
+  inside SQLite. A total of 8 is the controller benchmark's measured knee — it
+  lets the high-volume fast reads (e.g. ``GetJobState``) bypass the handful of
+  slow ones (``ListJobs``, ``GetSchedulerState``) that would otherwise occupy
+  every connection and head-of-line block the dashboard; widening past 8 only
+  adds WAL-index/GIL contention with no throughput gain.
+* The control read engine is a **dedicated** ``QueuePool(pool_size=2,
+  max_overflow=2)`` used only by the single control-loop thread's per-tick
+  snapshot (``control_read_snapshot``). Isolating it guarantees the
+  schedule/reconcile/autoscale tick never waits behind a slow dashboard read
+  for a connection — the pool-checkout wait visible as ``QueuePool.get`` in
+  controller stacks. Its connections sit idle between ticks (~1 read/s), so
+  they add negligible WAL-index contention.
 
-Both engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
+All engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
 ``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly.
 
 Post-commit hooks registered via ``Tx.register`` fire *under the write
@@ -32,24 +44,34 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 
 import fsspec.core
+from finelog.client.log_client import Table
+from rigging.filesystem import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.schema import auth_metadata, metadata, schema_migrations_table
+from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.schema import metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
 
 
 def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:
-    """Run startup PRAGMAs and ATTACH the auth DB if provided."""
+    """Run startup PRAGMAs and ATTACH the auth DB if provided.
+
+    The attached ``auth`` schema holds no tables: the last one
+    (``controller_secrets``) went away with the move to config-sourced Ed25519
+    signing keys. Write connections still ATTACH it so the ``auth.*``
+    statements in the pre-baseline deltas (``0028``, ``0039``, ``0050``) resolve
+    when they run against a legacy DB.
+    """
     cur = dbapi_conn.cursor()
     try:
         cur.execute("PRAGMA journal_mode = WAL")
@@ -96,12 +118,26 @@ def _make_engine(
     return engine
 
 
-def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
+# Read-pool sizing. See the module docstring for the rationale; the totals are
+# the controller benchmark's measured knee.
+SHARED_READ_POOL_SIZE = 4
+SHARED_READ_MAX_OVERFLOW = 4
+CONTROL_READ_POOL_SIZE = 2
+CONTROL_READ_MAX_OVERFLOW = 2
+
+
+def _make_write_engine(db_path: Path, auth_db_path: Path) -> Engine:
     return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
 
 
-def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
-    return _make_engine(db_path, read_only=True, pool_size=2, max_overflow=2, auth_db_path=auth_db_path)
+def _make_read_engine(
+    db_path: Path,
+    *,
+    pool_size: int = SHARED_READ_POOL_SIZE,
+    max_overflow: int = SHARED_READ_MAX_OVERFLOW,
+) -> Engine:
+    """Build a read engine. Read connections never ATTACH the auth DB."""
+    return _make_engine(db_path, read_only=True, pool_size=pool_size, max_overflow=max_overflow)
 
 
 class Tx:
@@ -115,9 +151,26 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection):
+    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int, task_event_table: Table | None = None):
         self.conn = conn
+        self.task_event_table = task_event_table
         self._hooks: list[Callable[[], None]] = []
+        # The DB commit sequence sampled just BEFORE this cursor's snapshot was
+        # established (``BEGIN``). It is a conservative lower bound on what the
+        # snapshot sees — any commit that ticked ``commit_seq`` after this sample
+        # either lands in the snapshot or not, but is never counted as seen when it
+        # isn't. Lazy-fill guards compare it against a per-key invalidation seq to
+        # reject a fill computed from a pre-invalidation snapshot (the stale set).
+        self.seq = seq
+        # Per-transaction extension slot: a write helper may attach one typed cache
+        # object here to memoize a lookup across calls within one transaction (e.g.
+        # the federation changelog gate resolving a job's requester once per root).
+        # Never persists past the transaction, so a cached value can never go stale.
+        self.memo: dict[str, object] = {}
+        # The owning DB's per-controller cache registry (see ``caches.py``), shared
+        # by every Tx the DB mints. Persists across transactions, so a write sink
+        # holding only this cursor reaches a memo without it being threaded in.
+        self.caches = caches
 
     def execute(self, stmt, params=None) -> CursorResult:
         """Execute a SA Core construct. Returns a ``CursorResult``.
@@ -147,26 +200,41 @@ class Tx:
 
 
 @contextmanager
-def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iterator[Tx]:
+def write_transaction(
+    write_engine: Engine,
+    write_lock: threading.RLock,
+    caches: CacheRegistry,
+    task_event_table: Table | None = None,
+) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
     Acquires ``write_lock``, checks out a connection, emits
     ``BEGIN IMMEDIATE``, yields a ``Tx``, and commits on clean exit.
     Post-commit hooks registered via ``Tx.register`` fire **while the
     lock is still held** so in-memory caches stay consistent with the DB.
+
+    ``caches`` is the owning DB's per-controller cache registry, mirrored onto
+    the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
+    the cursor (see :mod:`iris.cluster.controller.caches`).
     """
     write_lock.acquire()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn)
+        tx = Tx(conn, caches, seq, task_event_table)
         try:
             yield tx
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise
         conn.execute(text("COMMIT"))
+        # Tick the commit sequence under the still-held write lock, before hooks
+        # fire, so an invalidation hook stamps the post-commit seq and a concurrent
+        # reader's guard sees this commit as either fully applied or not at all.
+        caches.tick()
         tx._fire_hooks()
     finally:
         if conn is not None:
@@ -175,19 +243,26 @@ def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iter
 
 
 @contextmanager
-def read_snapshot(read_engine: Engine) -> Iterator[Tx]:
+def read_snapshot(read_engine: Engine, caches: CacheRegistry) -> Iterator[Tx]:
     """Open a read-only snapshot against ``read_engine``.
 
     ``query_only`` is pinned at connect time on the read engine, so this
     path only pays for the BEGIN/ROLLBACK round-trips per call. Yields a
     ``Tx`` over a pooled connection and rolls back on exit so the
     snapshot does not leak into the next checkout from the pool.
+
+    ``caches`` is mirrored onto the yielded ``Tx`` as ``tx.caches`` (see
+    :func:`write_transaction`); a read handler that consults a derived-count memo
+    reaches it there. Post-commit hooks never fire on a read snapshot, so the
+    invalidation path is inert here — only the memo *read* path is used.
     """
     conn = read_engine.connect()
     try:
+        # Sample the commit sequence BEFORE opening the snapshot (conservative).
+        seq = caches.commit_seq
         conn.execute(text("BEGIN"))
         try:
-            yield Tx(conn)
+            yield Tx(conn, caches, seq)
         finally:
             conn.execute(text("ROLLBACK"))
     finally:
@@ -208,15 +283,22 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
+        self._task_event_table: Table | None = None
+        # Per-controller cache registry, mirrored onto every Tx this DB mints as
+        # ``tx.caches``. Built before the engines so no cursor is ever minted
+        # without it. Populated by higher layers (each per-controller memo
+        # registers itself on construction) — the raw layer stays cache-agnostic.
+        self._caches = CacheRegistry()
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
         self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
-        # Read connections must not see auth tables — pass None so auth is not ATTACHed.
-        self._sa_read_engine: Engine = _make_read_engine(self._db_path, None)
-        # Dedicated read engine backed by the auth DB file directly so auth
-        # read functions do not go through the write connection.
-        self._sa_auth_read_engine: Engine = _make_read_engine(self._auth_db_path, None)
+        self._sa_read_engine: Engine = _make_read_engine(self._db_path)
+        # Dedicated read engine for the control-loop tick, isolated from the
+        # shared RPC pool so scheduling never queues behind a slow dashboard read.
+        self._sa_control_read_engine: Engine = _make_read_engine(
+            self._db_path, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
+        )
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
@@ -238,10 +320,18 @@ class ControllerDB:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)
 
+    def attach_task_event_table(self, table: Table) -> None:
+        self._task_event_table = table
+
     @property
     def sa_read_engine(self) -> Engine:
-        """SA Core read engine."""
+        """Shared SA Core read engine (RPC-handler reads)."""
         return self._sa_read_engine
+
+    @property
+    def sa_control_read_engine(self) -> Engine:
+        """Dedicated SA Core read engine for the control-loop tick."""
+        return self._sa_control_read_engine
 
     @property
     def sa_write_engine(self) -> Engine:
@@ -249,8 +339,14 @@ class ControllerDB:
         return self._sa_write_engine
 
     @property
-    def db_dir(self) -> Path:
-        return self._db_dir
+    def caches(self) -> CacheRegistry:
+        """The per-controller cache registry (also reachable via any ``Tx.caches``)."""
+        return self._caches
+
+    @property
+    def commit_seq(self) -> int:
+        """Monotonic write-commit counter (ticked per commit and per DB-file swap)."""
+        return self._caches.commit_seq
 
     @property
     def db_path(self) -> Path:
@@ -300,18 +396,24 @@ class ControllerDB:
     def close(self) -> None:
         self._sa_write_engine.dispose()
         self._sa_read_engine.dispose()
-        self._sa_auth_read_engine.dispose()
+        self._sa_control_read_engine.dispose()
 
     @contextmanager
     def transaction(self) -> Iterator[Tx]:
-        """Open an IMMEDIATE write transaction and yield a ``Tx``.
+        """Open an IMMEDIATE write transaction and yield a cursor.
 
         On successful commit, any hooks registered via ``Tx.register``
         fire while the write lock is still held — keeping in-memory caches
         in sync with the DB without exposing a torn snapshot to concurrent
-        readers.
+        readers. The yielded cursor carries this DB's cache registry as
+        ``tx.caches`` so write sinks reach per-controller memos through it.
         """
-        with write_transaction(self._sa_write_engine, self._lock) as tx:
+        with write_transaction(
+            self._sa_write_engine,
+            self._lock,
+            self._caches,
+            self._task_event_table,
+        ) as tx:
             yield tx
 
     @contextmanager
@@ -322,31 +424,31 @@ class ControllerDB:
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        with read_snapshot(self._sa_read_engine) as tx:
+        with read_snapshot(self._sa_read_engine, self._caches) as tx:
             yield tx
 
     @contextmanager
-    def auth_read_snapshot(self) -> Iterator[Tx]:
-        """Read-only snapshot backed by the auth DB (auth.sqlite3) directly.
+    def control_read_snapshot(self) -> Iterator[Tx]:
+        """Read-only snapshot for the control loop, backed by a dedicated engine.
 
-        Auth tables live in a separate SQLite file. Read connections from
-        ``read_snapshot`` do not ATTACH that file (by design — main-DB readers
-        must not see auth tables). Use this context manager for auth-only
-        read queries so they remain non-blocking while the write lock is free.
+        Identical to :meth:`read_snapshot` but checks out from the control-only
+        pool, so the schedule/reconcile/autoscale tick never queues behind
+        RPC-handler reads for a connection. Use only from control-plane threads
+        (the single control-loop thread, or the scheduling/autoscaler loops on
+        the legacy path).
         """
-        with read_snapshot(self._sa_auth_read_engine) as tx:
+        with read_snapshot(self._sa_control_read_engine, self._caches) as tx:
             yield tx
 
     def apply_migrations(self) -> None:
         """Bring the DB to the current schema, then apply any delta migrations.
 
         The current schema is materialized declaratively from ``schema.py``'s
-        ``metadata`` / ``auth_metadata`` via ``Table.create_all`` — a single
-        ``0001_baseline`` step that runs once per DB. Pre-baseline history
-        (the original ``0001_init`` through the last pre-baseline migration)
-        is no longer carried as files; any prod DB seeded under that scheme
-        already has the schema, and we detect that case and self-heal by
-        recording the baseline marker without recreating anything.
+        ``metadata`` via ``Table.create_all`` — a single ``0001_baseline`` step
+        that runs once per DB. ``migrations/`` carries no
+        pre-baseline files; a prod DB seeded under that scheme already has the
+        schema, and we detect that case and self-heal by recording the baseline
+        marker without recreating anything.
 
         Anything in ``migrations/`` after baseline is a delta — a small Python
         module exposing ``migrate(raw_conn)`` — applied in lexicographic order
@@ -354,6 +456,10 @@ class ControllerDB:
         are skipped (including legacy pre-baseline stems on upgraded prod DBs).
         Deltas must be idempotent under ``IF [NOT] EXISTS`` so a crash mid-run
         is safe to retry.
+
+        A DB created from the baseline is already at the current schema, so its
+        deltas are recorded as applied without running. A delta runs only against
+        a DB created before it.
         """
         baseline_stem = Path(self.BASELINE_MIGRATION).stem
 
@@ -377,19 +483,15 @@ class ControllerDB:
             if not has_user_tables:
                 t0 = time.monotonic()
                 metadata.create_all(self._sa_write_engine)
-                # auth_metadata's Tables don't carry a schema= so create_all
-                # would target the engine's main DB. Open a one-shot engine
-                # pointing at auth.sqlite3 so the tables land there.
-                auth_write = _make_write_engine(self._auth_db_path, None)
-                try:
-                    auth_metadata.create_all(auth_write)
-                finally:
-                    auth_write.dispose()
                 logger.info("Baseline schema created in %.2fs", time.monotonic() - t0)
+                # The baseline schema subsumes every delta's post-state.
+                recorded = [self.BASELINE_MIGRATION, *(path.name for path in self._delta_migration_paths())]
             else:
                 logger.info("Legacy DB detected; recording baseline marker without recreating schema")
-            self._record_migration(self.BASELINE_MIGRATION)
-            applied_stems.add(baseline_stem)
+                # A pre-baseline schema, so the deltas still have work to do.
+                recorded = [self.BASELINE_MIGRATION]
+            self._record_migrations(recorded)
+            applied_stems.update(Path(name).stem for name in recorded)
 
         # Delta migrations.
         raw_conn = self._sa_write_engine.raw_connection()
@@ -430,27 +532,39 @@ class ControllerDB:
             is not None
         )
 
-    def _record_migration(self, name: str) -> None:
-        raw_conn = self._sa_write_engine.raw_connection()
+    @staticmethod
+    def _delta_migration_paths() -> list[Path]:
+        """Every delta migration module, in application order."""
+        migrations_dir = Path(__file__).with_name("migrations")
+        if not migrations_dir.exists():
+            return []
+        return [path for path in sorted(migrations_dir.glob("*.py")) if not path.name.startswith("__")]
+
+    @staticmethod
+    def _insert_migration_rows(raw_conn, names: Sequence[str]) -> None:
+        """Mark ``names`` applied on ``raw_conn`` in one transaction — all or none."""
+        raw_conn.execute("BEGIN IMMEDIATE")
         try:
-            raw_conn.execute(
+            now_ms = Timestamp.now().epoch_ms()
+            raw_conn.executemany(
                 "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                (name, Timestamp.now().epoch_ms()),
+                [(name, now_ms) for name in names],
             )
             raw_conn.commit()
+        except Exception:
+            raw_conn.execute("ROLLBACK")
+            raise
+
+    def _record_migrations(self, names: Sequence[str]) -> None:
+        """Mark ``names`` applied — all or none. Callers must not hold the write connection."""
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            self._insert_migration_rows(raw_conn, names)
         finally:
             raw_conn.close()
 
     def _apply_delta_migrations(self, raw_conn, applied_stems: set[str]) -> None:
-        migrations_dir = Path(__file__).with_name("migrations")
-        if not migrations_dir.exists():
-            return
-
-        pending = [
-            path
-            for path in sorted(migrations_dir.glob("*.py"))
-            if not path.name.startswith("__") and path.stem not in applied_stems
-        ]
+        pending = [path for path in self._delta_migration_paths() if path.stem not in applied_stems]
         if not pending:
             return
 
@@ -474,16 +588,8 @@ class ControllerDB:
                 raw_conn.commit()
                 logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
 
-                raw_conn.execute("BEGIN IMMEDIATE")
-                try:
-                    raw_conn.execute(
-                        "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                        (path.name, Timestamp.now().epoch_ms()),
-                    )
-                    raw_conn.commit()
-                except Exception:
-                    raw_conn.execute("ROLLBACK")
-                    raise
+                # The write pool has a single connection, already checked out here.
+                self._insert_migration_rows(raw_conn, [path.name])
         finally:
             raw_conn.commit()
             raw_conn.execute("PRAGMA synchronous=NORMAL")
@@ -555,6 +661,7 @@ class ControllerDB:
             # Dispose existing SA pools before swapping files.
             self._sa_write_engine.dispose()
             self._sa_read_engine.dispose()
+            self._sa_control_read_engine.dispose()
 
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
@@ -566,8 +673,7 @@ class ControllerDB:
 
             # Download auth DB if present in source
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
-            fs, fs_path = fsspec.core.url_to_fs(auth_source)
-            if fs.exists(fs_path):
+            if StoragePath(auth_source).exists():
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
                 with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
@@ -576,11 +682,16 @@ class ControllerDB:
 
             # Rebuild SA engines against the freshly-installed DB.
             self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
-            # Read connections must not see auth tables — pass None so auth is not ATTACHed.
-            self._sa_read_engine = _make_read_engine(self._db_path, None)
-            self._sa_auth_read_engine = _make_read_engine(self._auth_db_path, None)
+            self._sa_read_engine = _make_read_engine(self._db_path)
+            self._sa_control_read_engine = _make_read_engine(
+                self._db_path, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
+            )
 
         self.apply_migrations()
+        # The DB file was swapped: every open snapshot's seq now predates a file
+        # that shares no history with the new one. Tick so a lazy guard's floor
+        # (set by the reopen ``clear`` hook below) rejects any pre-restore fill.
+        self._caches.tick()
         for hook in self._reopen_hooks:
             hook()
 

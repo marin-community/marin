@@ -43,12 +43,12 @@ jobs:
         run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -64,7 +64,7 @@ jobs:
           chmod 644 ~/.ssh/google_compute_engine.pub
 
       # If you change the iris flags below, also update the matching tier
-      # entry in scripts/datakit/submit_perf_run.py (TIERS["1"]) so the
+      # entry in scripts/ci/submit_perf_run.py (TIERS["1"]) so the
       # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit smoke ferry
         id: submit
@@ -93,17 +93,20 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
       - name: Wait for datakit smoke ferry
+        id: wait
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
             --timeout 7100 \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Read ferry status
         id: ferry_status
+        if: steps.wait.outputs.resource_exhausted != 'true'
         shell: bash -l {0}
         run: |
           PREFIX=$(.venv/bin/python -c "
@@ -116,17 +119,11 @@ jobs:
           echo "marin_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
           echo "Ferry output prefix: $PREFIX"
 
-      # - name: Validate datakit smoke outputs
-      #   shell: bash -l {0}
-      #   env:
-      #     MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
-      #   run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
-
       - name: Capture perf report
-        if: success()
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
         shell: bash -l {0}
         run: |
-          uv run python scripts/datakit/collect_perf_metrics.py \
+          uv run python scripts/ci/collect_perf_metrics.py \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --status "$FERRY_STATUS_PATH" \
@@ -135,8 +132,8 @@ jobs:
             --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
 
       - name: Upload perf report
-        if: success()
-        uses: actions/upload-artifact@v4
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: datakit-tier1-perf-report
           path: perf-report.json
@@ -150,7 +147,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/datakit-smoke-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --provider gcp \
@@ -162,14 +159,15 @@ jobs:
 
       - name: Upload diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: datakit-smoke-diagnostics
           path: datakit-smoke-diagnostics/
           retention-days: 14
           if-no-files-found: ignore
 
-      # The triage-canary skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
+      # lane id must be unique per canary: it flows into the [canary-{lane}] issue
+      # title, so a shared id would collide with another tier's triage dedup.
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
@@ -193,47 +191,12 @@ jobs:
       # https://github.com/marin-community/marin/actions/runs/24498461666.
       - name: Upload Slack message
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slack-message
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-  # Parallel lane: verify every DatakitSource.staged_path resolves to a
-  # non-empty prefix under gs://marin-us-central1. Cheap (metadata only) and
-  # independent of the ferry, so runs alongside datakit-smoke.
-  # datakit-sources-staged:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 30
-  #   concurrency:
-  #     group: datakit-sources-staged
-  #     cancel-in-progress: true
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v5
-  #
-  #     - name: Set up Python 3.12
-  #       uses: actions/setup-python@v6
-  #       with:
-  #         python-version: "3.12"
-  #
-  #     - name: Install uv
-  #       uses: astral-sh/setup-uv@v7
-  #       with:
-  #         enable-cache: true
-  #
-  #     - name: Install dependencies
-  #       run: uv sync --all-packages --extra=cpu --no-default-groups
-  #
-  #     - name: Authenticate to Google Cloud
-  #       uses: google-github-actions/auth@v2
-  #       with:
-  #         credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-  #
-  #     - name: Verify datakit source staging paths
-  #       shell: bash -l {0}
-  #       run: .venv/bin/python scripts/datakit/validate_source_staging.py
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.*.result` reflects the upstream job
@@ -250,7 +213,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: ./.github/actions/notify-slack
+        uses: marin-community/marin-style/actions/notify-slack@main
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

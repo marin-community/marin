@@ -22,27 +22,30 @@ be removed — those subdirectories are the cache. Downstream readers load via
 ``TreeCache.load`` (or ``UrlDatasetSourceConfig``), which transparently
 dispatches on the sharded layout.
 """
-from __future__ import annotations
-
 import dataclasses
 import json
 import logging
-import os
 import time
 
 import numpy as np
-from fray import ResourceConfig
-from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers, write_levanter_cache
+from fray.types import ResourceConfig
+from levanter.store.cache import (
+    CacheLedger,
+    ShardedCacheLayout,
+    consolidate_shard_cache_ledgers,
+    write_levanter_cache,
+)
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import format_shard_path
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr.dataset import Dataset, format_shard_path
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
-from marin.execution.artifact import Artifact
+from marin.datakit.source_key import DatakitArtifactPath
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
+from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ class LevanterSplitStats(BaseModel):
         total_tokens: Total tokens across all documents (``input_ids`` field count).
     """
 
-    path: str
+    path: DatakitArtifactPath
     total_elements: int
     total_tokens: int
 
@@ -80,17 +83,25 @@ class LevanterStoreData(BaseModel):
     """
 
     version: str = "v1"
-    cache_path: str
+    cache_path: DatakitArtifactPath
     splits: dict[str, LevanterSplitStats]
-    source_dirs: list[dict[str, str]]
+    source_dirs: list[dict[str, DatakitArtifactPath]]
     tokenizer: str
 
 
-def _strip_id(record: dict) -> dict:
-    """Drop ``id`` from a record. Levanter ``TreeStore`` is positional, not keyed."""
-    if "id" not in record:
-        return record
-    return {k: v for k, v in record.items() if k != "id"}
+_JOIN_COLUMNS = frozenset({"id", CHUNK_INDEX_FIELD})
+
+
+def _strip_join_columns(record: dict) -> dict:
+    """Drop the join columns from a record. Levanter ``TreeStore`` is positional, not keyed.
+
+    ``chunk_index`` goes with ``id``: it orders the rows of a split document (see
+    :func:`marin.processing.tokenize._core.split_oversized_token_record`) and would
+    otherwise land in the cache as a data field. Dropping it is safe here because
+    this path writes shards positionally and never shuffles, so a split document's
+    rows stay adjacent and its token stream is unchanged.
+    """
+    return {k: v for k, v in record.items() if k not in _JOIN_COLUMNS}
 
 
 def _structural_exemplar(record: dict) -> dict:
@@ -116,12 +127,14 @@ def build_from_datasets(
     output_path: str,
     batch_size: int | None = None,
     skip_existing: bool = True,
+    task_resources: ResourceConfig | None = None,
 ) -> CacheLedger:
     """Write a Levanter cache from a tokenized records dataset.
 
-    The dataset is expected to yield per-doc records shaped like
-    ``{id, input_ids, ...}``. ``id`` is stripped before writing because
-    ``TreeStore`` stores positional concatenated arrays, not keyed rows.
+    The dataset is expected to yield records shaped like
+    ``{id, input_ids, ...}``, with an optional ``chunk_index``. ``id`` and
+    ``chunk_index`` are stripped before writing because ``TreeStore`` stores
+    positional concatenated arrays, not keyed rows.
 
     The dataset's shard structure determines the number of per-shard Levanter
     caches written under ``{output_path}/part-NNNNN-of-MMMMM``. Those shard
@@ -139,13 +152,14 @@ def build_from_datasets(
             default (16384). Lower values reduce peak memory for datasets with
             very large documents.
         skip_existing: Skip writing intermediate shards whose output already exists.
+        task_resources: Resources for each Zephyr task.
 
     Returns:
         The merged sharded ``CacheLedger``.
     """
     pipeline_start = time.monotonic()
 
-    output_pattern = f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}"
+    output_pattern = prefix_join(output_path, "part-{shard:05d}-of-{total:05d}")
     write_kwargs: dict = {"metadata": {}}
     if batch_size is not None:
         write_kwargs["batch_size"] = batch_size
@@ -158,8 +172,7 @@ def build_from_datasets(
         """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
-            fs = url_to_fs(shard_path)[0]
-            if fs.exists(f"{shard_path}/.success"):
+            if StoragePath(prefix_join(shard_path, ".success")).exists():
                 logger.info("Skipping write, output exists: %s", shard_path)
                 yield (shard_path, None)
                 return
@@ -167,10 +180,10 @@ def build_from_datasets(
         exemplar = result["exemplar"]
         yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None)
 
-    temp_shards = dataset.map(_strip_id).map_shard(_write_shard)
+    temp_shards = dataset.map(_strip_join_columns).map_shard(_write_shard)
 
     tokenize_start = time.monotonic()
-    shard_results = ctx.execute(temp_shards).results
+    shard_results = ctx.execute(temp_shards, map_task_resources=task_resources).results
     tokenize_elapsed = time.monotonic() - tokenize_start
 
     shard_paths = [path for path, _ in shard_results]
@@ -205,9 +218,8 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
     """
     total_tokens = ledger.field_counts.get("input_ids", 0)
     stats = {"total_tokens": total_tokens, "total_elements": ledger.total_num_rows}
-    stats_path = os.path.join(output_path, ".stats.json")
-    with open_url(stats_path, "w") as f:
-        json.dump(stats, f)
+    stats_path = prefix_join(output_path, ".stats.json")
+    StoragePath(stats_path).write_text(json.dumps(stats))
     return stats_path, stats
 
 
@@ -270,7 +282,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
             logger.info("No shards for split %s; skipping", split)
             continue
 
-        split_output = os.path.join(config.cache_path, split)
+        split_output = prefix_join(config.cache_path, split)
 
         if _ledger_exists(split_output):
             logger.info("Shard ledger already exists for %s at %s; loading", split, split_output)
@@ -316,7 +328,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a Levanter cache ledger already exists at ``cache_path``."""
-    return fsspec_exists(os.path.join(cache_path, "shard_ledger.json"))
+    return StoragePath(ShardedCacheLayout.parse(cache_path).ledger).exists()
 
 
 def build_levanter_store_step(
@@ -349,7 +361,7 @@ def build_levanter_store_step(
 
     def _fn(output_path: str) -> LevanterStoreData:
         kwargs: dict = {
-            "sources": [Artifact.from_path(s, TokenizedAttrData) for s in tokenize_steps],
+            "sources": [read_artifact(s.output_path, TokenizedAttrData) for s in tokenize_steps],
             "cache_path": output_path,
             "max_workers": max_workers,
             "levanter_batch_size": levanter_batch_size,

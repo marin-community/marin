@@ -11,18 +11,18 @@ lost slice inventory (capacity gaps).
 
 from dataclasses import dataclass, field
 
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    Labels,
-    SliceStatus,
-    WorkerStatus,
-)
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     SliceLifecycleState,
     SliceSnapshot,
     restore_scaling_group,
+)
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    SliceStatus,
+    WorkerStatus,
 )
 from rigging.timing import Duration, Timestamp
 
@@ -47,10 +47,6 @@ class StubWorkerHandle:
         return self._address
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return ""
 
@@ -58,9 +54,6 @@ class StubWorkerHandle:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def run_command(self, command: str, timeout: Duration | None = None, on_line=None):
-        raise NotImplementedError
-
-    def reboot(self) -> None:
         raise NotImplementedError
 
 

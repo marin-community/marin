@@ -9,10 +9,16 @@ import traceback
 from urllib.parse import urlparse
 
 import requests
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import (
+    InferenceModelConfig,
+    VllmCompilationCacheMode,
+    VllmEngineConfig,
+    VllmLauncherType,
+)
+from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_server import VllmEnvironment
 
 
@@ -24,6 +30,7 @@ def run_one_query(
     max_model_len: int | None,
     port: int | None,
     use_completions: bool,
+    compilation_cache_mode: VllmCompilationCacheMode,
 ) -> str:
     parsed = urlparse(model_name_or_path)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -34,15 +41,17 @@ def run_one_query(
         engine_kwargs["max_model_len"] = max_model_len
 
     if is_object_store:
-        model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
     else:
-        model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
 
     env = VllmEnvironment(
         model=model,
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,
+        launcher=vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)),
+        compilation_cache_mode=compilation_cache_mode,
     )
     try:
         with env:
@@ -124,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Optional stable local compilation cache dir (e.g. /tmp/marin-jax-compilation-cache). "
-            "When set, exports JAX_COMPILATION_CACHE_DIR and VLLM_XLA_CACHE_PATH."
+            "When set, disables Marin's managed archive and exports JAX_COMPILATION_CACHE_DIR "
+            "and VLLM_XLA_CACHE_PATH."
         ),
     )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.", help="Prompt to send.")
@@ -154,10 +164,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
+    dependency_groups = ["tpu"]
+    resources = ResourceConfig.with_tpu(args.tpu_type)
+    env_vars: dict[str, str] = {}
+    if args.local_cache_dir is not None:
+        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
+        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        env_vars["JAX_ENABLE_COMPILATION_CACHE"] = "1"
+    compilation_cache_mode = (
+        VllmCompilationCacheMode.CALLER_MANAGED if args.local_cache_dir is not None else VllmCompilationCacheMode.MANAGED
+    )
+
     if args.local:
-        if args.local_cache_dir is not None:
-            os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-            os.environ["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        os.environ.update(env_vars)
 
         for i in range(args.repeat):
             start = time.time()
@@ -168,16 +187,12 @@ def main(argv: list[str] | None = None) -> int:
                 max_model_len=args.max_model_len,
                 port=args.port,
                 use_completions=args.use_completions,
+                compilation_cache_mode=compilation_cache_mode,
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
             print(output)
         return 0
-
-    env_vars: dict[str, str] = {}
-    if args.local_cache_dir is not None:
-        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
 
     def _run() -> None:
         for i in range(args.repeat):
@@ -190,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_model_len=args.max_model_len,
                     port=args.port,
                     use_completions=args.use_completions,
+                    compilation_cache_mode=compilation_cache_mode,
                 )
             except Exception:
                 traceback.print_exc()
@@ -199,15 +215,14 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
 
     client = current_client()
-    resources = ResourceConfig.with_tpu(args.tpu_type)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu", "vllm"],
+            extras=dependency_groups,
             pip_packages=(),
-            env_vars=env_vars or None,
+            env_vars=env_vars,
         ),
     )
     job = client.submit(job_request)

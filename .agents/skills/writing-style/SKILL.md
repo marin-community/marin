@@ -1,6 +1,6 @@
 ---
 name: writing-style
-description: Marin house writing style. Use when drafting or revising Marin-authored prose.
+description: Marin house writing style. Use when drafting or revising Marin-authored prose, including commit messages and GitHub PR, issue, or comment text.
 ---
 
 # Marin House Style
@@ -14,6 +14,7 @@ Start here for any non-trivial Marin-authored text. This file is the common laye
 - Read [tutorials.md](tutorials.md) for learning-oriented documentation that introduces Marin.
 - Read [reference-docs.md](reference-docs.md) for precise usage docs aimed at readers who already know Marin.
 - Read [issues.md](issues.md) for standard OSS issues and experiment issues.
+- Read [pull-requests.md](pull-requests.md) for commit messages and PR titles and bodies.
 - Read [discord.md](discord.md) for Discord summaries and tactical replies.
 - Read [ai-writing-donts.md](ai-writing-donts.md) for the final prose-only review pass that strips generic AI-writing patterns.
 - Apply this file first, then apply the medium-specific file. If a piece spans multiple media, keep the stricter rule.
@@ -31,7 +32,7 @@ Start here for any non-trivial Marin-authored text. This file is the common laye
 - Keep an open door, not a megaphone.
 - Stay practical and hands-on.
 - Aim to be helpful and respectful.
-- Assume a baseline familiarity with ML systems,
+- Assume a baseline familiarity with ML systems.
 - Don’t dilute discussions to accommodate every level of experience. (Different media will be intended for different levels of experience.)
 - Don’t be overly formal; write like a technical peer, not an academic paper or a product blog.
 - Use technical language where it helps, but keep the tone natural and direct.

@@ -1,32 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
+from copy import deepcopy
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
-from iris.cluster.backends.k8s.tasks import (
-    _LABEL_MANAGED,
-    _LABEL_RUNTIME,
-    _RUNTIME_LABEL_VALUE,
-    K8sTaskProvider,
-    PodConfig,
-)
-from iris.cluster.backends.k8s.types import K8sResource
-from iris.cluster.controller.backend import BackendReconcileInput
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
+from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+from iris.test_util import FakeStatsTable
 
-
-class FakeStatsTable:
-    """Records every Table.write call so tests can assert on emitted rows."""
-
-    def __init__(self) -> None:
-        self.writes: list[list[object]] = []
-
-    def write(self, rows) -> None:
-        self.writes.append(list(rows))
+KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
+LABEL_MANAGED = "iris.managed"
+LABEL_RUNTIME = "iris.runtime"
+RUNTIME_LABEL_VALUE = "iris-kubernetes"
+TASK_CONTAINER_NAME = "task"
 
 
 @pytest.fixture
@@ -35,25 +28,18 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
-
-
-@pytest.fixture
 def task_stats_table() -> FakeStatsTable:
     return FakeStatsTable()
 
 
 @pytest.fixture
-def provider(k8s, log_client, task_stats_table):
+def provider(k8s, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        log_client=log_client,
+        pods=pod_config(),
         task_stats_table=task_stats_table,
-        log_poll_interval=1.0,
+        resource_poll_interval=0.05,
+        cluster_scan_interval=0.0,
     )
     yield p
     p.close()
@@ -70,9 +56,11 @@ def kueue_provider(k8s):
 def pod_config(
     namespace: str = "iris",
     default_image: str = "myrepo/iris:latest",
+    local_queue: str = "iris-lq",
     **kwargs,
 ) -> PodConfig:
-    return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
+    # Kueue is mandatory on the K8s backend, so a LocalQueue is always configured.
+    return PodConfig(namespace=namespace, default_image=default_image, local_queue=local_queue, **kwargs)
 
 
 def make_run_req(
@@ -81,11 +69,13 @@ def make_run_req(
     cpu_mc: int = 1000,
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
-    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority: int = job_pb2.PRIORITY_BAND_INHERIT,
+    attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.attempt_uid = attempt_uid
     req.num_tasks = num_tasks
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.environment.env_vars["IRIS_JOB_ID"] = "test-job"
@@ -99,42 +89,149 @@ def make_run_req(
 
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
-    return K8sTaskProvider(
-        kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        local_queue=local_queue,
-        **kwargs,
-    )
+    kwargs.setdefault("cluster_scan_interval", 0.0)
+    return K8sTaskProvider(kubectl=k8s, pods=pod_config(local_queue=local_queue), **kwargs)
 
 
 def make_batch(
     tasks_to_run=None,
     running_tasks=None,
-) -> BackendReconcileInput:
-    return BackendReconcileInput(
+) -> ControlSnapshot:
+    return ControlSnapshot(
+        worker_addresses={},
+        reconcile_rows=[],
+        timeout_rows=[],
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )
 
 
-def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "") -> dict:
+def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
+    """Reconcile a seeded pod through the public Kubernetes provider boundary."""
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    try:
+        provider.sync(make_batch(tasks_to_run=[make_run_req("/job/0")]))
+        applied = k8s.list_json(K8sResource.PODS)[0]
+        observed = deepcopy(pod)
+        observed["kind"] = "Pod"
+        observed_metadata = observed.setdefault("metadata", {})
+        observed_metadata["name"] = applied["metadata"]["name"]
+        observed_metadata["labels"] = {
+            **applied["metadata"]["labels"],
+            **observed_metadata.get("labels", {}),
+        }
+        k8s.seed_resource(K8sResource.PODS, observed_metadata["name"], observed)
+        if workload is not None:
+            workload_name = workload.get("metadata", {}).get("name", "workload")
+            k8s.seed_resource(K8sResource.WORKLOADS, workload_name, deepcopy(workload))
+        updates = provider.sync(make_batch(running_tasks=[entry]))
+        assert len(updates) == 1
+        return updates[0]
+    finally:
+        provider.close()
+
+
+# A Kueue admission message for an over-large GPU request (cpu=160 on 128-vCPU
+# H100 nodes under InfiniBand TAS): the whole pod cannot fit one node, so every
+# node is excluded and the workload never reserves quota. The motivating incident
+# for the status_message / iris.task_event diagnostics.
+KUEUE_UNADMITTED_MSG = (
+    "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
+    'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
+)
+SINGLETON_POD_UID = "pod-uid"
+
+
+def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
+    """A Pending pod blocked on a Kueue scheduling gate (no container has started)."""
+    return {
+        "metadata": {"name": name, "labels": {KUEUE_POD_GROUP_NAME: pod_group}},
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [],
+            "conditions": [
+                {
+                    "type": "PodScheduled",
+                    "status": "False",
+                    "reason": "SchedulingGated",
+                    "message": "Scheduling is blocked due to non-empty scheduling gates",
+                }
+            ],
+        },
+    }
+
+
+def singleton_gated_pod(name: str = "iris-job-0-0", uid: str = SINGLETON_POD_UID) -> dict:
+    """A Kueue-managed singleton Pod, which has no pod-group label."""
+    pod = gated_pod(name=name)
+    pod["metadata"] = {
+        "name": name,
+        "uid": uid,
+        "labels": {"kueue.x-k8s.io/queue-name": "cw-use02a-lq"},
+    }
+    return pod
+
+
+def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -> dict:
+    """A Workload Kueue has evaluated and declined: QuotaReserved=False with a reason."""
+    return {
+        "metadata": {"name": name},
+        "spec": {"queueName": "cw-use02a-lq"},
+        "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending", "message": msg}]},
+    }
+
+
+def singleton_unadmitted_workload(
+    pod_name: str = "iris-job-0-0",
+    pod_uid: str = SINGLETON_POD_UID,
+    msg: str = KUEUE_UNADMITTED_MSG,
+) -> dict:
+    """The auto-generated Workload owned by one Kueue-managed Pod."""
+    workload = unadmitted_workload(name=f"pod-{pod_name}-abcde", msg=msg)
+    workload["metadata"].update(
+        {
+            "labels": {"kueue.x-k8s.io/job-uid": pod_uid},
+            "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod_uid}],
+        }
+    )
+    return workload
+
+
+def unevaluated_workload(name: str = "wl-abc") -> dict:
+    """A Workload Kueue has not yet ruled on — no QuotaReserved condition."""
+    return {"metadata": {"name": name}, "spec": {"queueName": "cw-use02a-lq"}, "status": {}}
+
+
+def imagepull_pod(name: str = "iris-job-0-0") -> dict:
+    """A Pending pod whose task container is stuck in ImagePullBackOff."""
+    return {
+        "metadata": {"name": name},
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [
+                {
+                    "name": TASK_CONTAINER_NAME,
+                    "state": {
+                        "waiting": {"reason": "ImagePullBackOff", "message": 'Back-off pulling image "ghcr.io/nope"'}
+                    },
+                }
+            ],
+        },
+    }
+
+
+def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "", message: str = "") -> dict:
     pod: dict = {
         "metadata": {"name": name},
         "status": {"phase": phase, "containerStatuses": []},
     }
     if exit_code is not None:
-        pod["status"]["containerStatuses"] = [
-            {
-                "state": {
-                    "terminated": {
-                        "exitCode": exit_code,
-                        "reason": reason,
-                    }
-                }
-            }
-        ]
+        terminated: dict = {"exitCode": exit_code, "reason": reason}
+        if message:
+            terminated["message"] = message
+        pod["status"]["containerStatuses"] = [{"state": {"terminated": terminated}}]
     return pod
 
 
@@ -148,8 +245,8 @@ def populate_pod(
 ) -> None:
     """Insert a pod manifest into InMemoryK8sService with correct Iris labels."""
     base_labels = {
-        _LABEL_MANAGED: "true",
-        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        LABEL_MANAGED: "true",
+        LABEL_RUNTIME: RUNTIME_LABEL_VALUE,
     }
     if labels:
         base_labels.update(labels)

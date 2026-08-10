@@ -12,7 +12,7 @@ Each row carries a ``source`` (the task path ``/user/job/.../<index>``), a
 
 This script:
 
-1. Resolves the cluster's finelog deployment (``log_server_config`` in
+1. Resolves the cluster's finelog deployment (``finelog.config`` in
    ``config/<cluster>.yaml``; defaults to the cluster name) and opens a tunnel
    to it, exactly as ``finelog query`` does.
 2. Queries every CPU profile whose ``source`` is the given job or a descendant
@@ -38,8 +38,6 @@ Usage:
     uv run python scripts/job_profile_summary.py <job> -o merged.folded --svg flame.svg
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -53,7 +51,7 @@ from pathlib import Path
 import yaml
 from finelog.client.log_client import LogClient
 from finelog.deploy.config import FinelogConfig, load_finelog_config
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, ProfileType
+from iris.cluster.stats.tables import PROFILE_NAMESPACE, ProfileType
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
@@ -69,7 +67,7 @@ SUBJOB_DETAIL_MIN_SHARE = 0.01
 def finelog_config_for_cluster(cluster: str) -> str:
     """Return the finelog deployment name for an Iris cluster.
 
-    Reads ``log_server_config`` from ``config/<cluster>.yaml`` (the field that
+    Reads ``finelog.config`` from ``config/<cluster>.yaml`` (the field that
     names the cluster's finelog deployment); falls back to the cluster name.
     """
     config_path = CONFIG_DIR / f"{cluster}.yaml"
@@ -77,7 +75,7 @@ def finelog_config_for_cluster(cluster: str) -> str:
         raise FileNotFoundError(f"No cluster config at {config_path}")
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    return cfg.get("log_server_config") or cluster
+    return cfg.get("finelog", {}).get("config") or cluster
 
 
 def tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
@@ -241,7 +239,7 @@ def leaf_of(stack: str) -> str:
 
 
 # A frame is "native" if py-spy couldn't symbolize it (``<addr>``) or it lives in
-# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.11``)
+# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.12``)
 # and ``.py`` frames are kept — they carry meaningful symbols (e.g. gc).
 _NATIVE_LIB_RE = re.compile(r"\.so(\.\d+)*$|\.dylib$")
 
@@ -289,7 +287,7 @@ class Aggregate:
     tasks: set[str]
 
     @classmethod
-    def empty(cls) -> Aggregate:
+    def empty(cls) -> "Aggregate":
         return cls(
             stacks=defaultdict(float),
             leaves=defaultdict(float),
@@ -411,7 +409,7 @@ def library_rollup_rows(agg: Aggregate, top: int) -> list[list[str]]:
 class CallNode:
     label: str
     value: float
-    children: dict[str, CallNode]
+    children: "dict[str, CallNode]"
 
 
 def build_call_tree(stacks: dict[str, float]) -> CallNode:

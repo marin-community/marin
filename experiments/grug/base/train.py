@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 import logging
@@ -35,14 +33,15 @@ from levanter.analysis.backward_flow import (
 )
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.data import AsyncDataset, DataLoader
+from levanter.data.dataset import AsyncDataset
+from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
-from levanter.data.text import GrugLmExample, LmDataConfig
-from levanter.data.text.examples import grug_lm_example_from_named
+from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -50,8 +49,9 @@ from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.base.model import GrugModelConfig, Transformer
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 _BACKWARD_FLOW_METRICS_KEY = "_backward_flow"
@@ -72,6 +72,7 @@ class GrugTrainerConfig:
         default_factory=lambda: BackwardFlowConfig(interval=_BACKWARD_FLOW_DEFAULT_INTERVAL)
     )
     loss_implementation: str | tuple[str, ...] | None = None
+    sharding_dump_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -481,6 +482,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if trainer.initialize_from is not None:
+            state = init_weights_only_from_checkpoint(
+                state,
+                trainer.initialize_from,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+        dump_grug_state_sharding_run_artifact(
+            state,
+            log_dir=trainer.log_dir,
+            run_id=run_id,
+            path_override=config.trainer.sharding_dump_path,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -518,11 +532,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                callbacks.profile(
+                profiler_cfg.build(
                     str(trainer.log_dir / run_id / "profiler"),
-                    profiler_cfg.start_step,
-                    profiler_num_steps,
-                    profiler_cfg.perfetto_link,
+                    run_id=run_id,
+                    num_steps=profiler_num_steps,
                 ),
                 every=1,
             )

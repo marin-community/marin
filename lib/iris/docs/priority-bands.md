@@ -10,7 +10,7 @@ either delays your work or disrupts other people's.
 |---|---|---|
 | `PRODUCTION` | `--priority production` | Always scheduled before lower bands. Can preempt INTERACTIVE/BATCH. Never downgraded by the budget system. |
 | `INTERACTIVE` | default (or `--priority interactive`) | Normal work. Yields to PRODUCTION; preempts BATCH. |
-| `BATCH` | `--priority batch` | Opportunistic. Yields to anything else. Safe to launch in bulk. |
+| `BATCH` | `--priority batch` | Opportunistic. Yields to INTERACTIVE and PRODUCTION. Safe to launch in bulk. |
 
 ## When to use each band
 
@@ -39,6 +39,38 @@ Use for work you are happy to have preempted by anyone else. Equivalent to
 - Anything you want to run *a lot* of without crowding out the cluster
 
 BATCH jobs are the polite default when you don't strictly need a result soon.
+
+## How preemption is enforced
+
+The band a job runs at maps to a Kubernetes PriorityClass
+(`iris-{production,interactive,batch}`, values 1000/10/0) stamped on every pod. How
+that band turns into actual preemption depends on the backend:
+
+- **K8s GPU clusters (CoreWeave).** Every pod is admitted through Kueue. Kueue reads
+  the pod's PriorityClass as the Workload priority and, with the ClusterQueue's
+  `preemption.withinClusterQueue: LowerPriority` policy, evicts lower-priority
+  Workloads to admit a higher-priority one — including when Topology-Aware
+  Scheduling can't otherwise place it on full nodes. This is what lets a
+  higher-priority multi-host gang reclaim capacity from running `batch` gangs.
+  Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
+  not a stray pod out of it.
+- **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
+  pending tasks by band and reclaims slices directly.
+
+A preempted job surfaces as described in [`task-states.md`](task-states.md) and is
+requeued for retry.
+
+On Kubernetes, single-task CPU coordinators have a PodDisruptionBudget whose
+availability policy follows the job's band. PRODUCTION coordinators use
+`minAvailable: 1`, so a voluntary node drain waits for operator action.
+INTERACTIVE and BATCH coordinators use `maxUnavailable: 1`, so a drain may evict
+the singleton pod. Iris records that eviction as `PREEMPTED` and retries it
+within `max_retries_preemption`.
+
+An evicted coordinator loses in-memory and node-local state. INTERACTIVE and
+BATCH coordinators must keep durable progress outside the pod and make repeated
+external writes safe. Use PRODUCTION only when the coordinator must block
+voluntary maintenance; a PDB cannot protect it from a hard node failure.
 
 ## How band selection interacts with budgets
 

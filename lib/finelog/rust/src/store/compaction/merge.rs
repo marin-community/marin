@@ -23,7 +23,10 @@ use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
-use crate::store::segment::ROW_GROUP_SIZE;
+/// Rows per output batch from the k-way merge. This is a batching decision only:
+/// the writer accumulates across batches and cuts row groups at its own
+/// byte-derived stride (see [`crate::store::segment::segment_writer_properties`]).
+const MERGE_CHUNK_ROWS: usize = 16_384;
 
 /// Project `batch` onto `target_schema`, additive-null-filling any target column
 /// absent from the batch.
@@ -188,7 +191,7 @@ pub fn kway_merge(
 
     // (batch_idx, row_idx) pairs in global sort order, partitioned into chunks.
     let mut chunks: Vec<Vec<(usize, usize)>> = Vec::new();
-    let mut current: Vec<(usize, usize)> = Vec::with_capacity(ROW_GROUP_SIZE.min(total));
+    let mut current: Vec<(usize, usize)> = Vec::with_capacity(MERGE_CHUNK_ROWS.min(total));
     while let Some(entry) = heap.pop() {
         let bi = entry.batch_idx;
         let ri = cursors[bi];
@@ -200,9 +203,9 @@ pub fn kway_merge(
                 batch_idx: bi,
             });
         }
-        if current.len() >= ROW_GROUP_SIZE {
+        if current.len() >= MERGE_CHUNK_ROWS {
             chunks.push(std::mem::take(&mut current));
-            current = Vec::with_capacity(ROW_GROUP_SIZE);
+            current = Vec::with_capacity(MERGE_CHUNK_ROWS);
         }
     }
     if !current.is_empty() {
@@ -333,14 +336,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_emits_row_group_aligned_chunks() {
-        // A merge that exceeds 16384 rows must produce 16384-row chunks.
-        let n = ROW_GROUP_SIZE as i64 + 100;
+    fn merge_emits_fixed_size_chunks() {
+        // A merge that exceeds MERGE_CHUNK_ROWS must cut its output into chunks of
+        // that size; the writer's row groups are sized separately, by bytes.
+        let n = MERGE_CHUNK_ROWS as i64 + 100;
         let a = batch((0..n).step_by(2).map(|s| (s, s, "a")).collect());
         let b = batch((1..n).step_by(2).map(|s| (s, s, "b")).collect());
         let merged = kway_merge(&[a, b], &[1, 0]).unwrap();
         assert!(merged.len() >= 2, "large merge splits into chunks");
-        assert_eq!(merged[0].num_rows(), ROW_GROUP_SIZE);
+        assert_eq!(merged[0].num_rows(), MERGE_CHUNK_ROWS);
         let total: usize = merged.iter().map(|m| m.num_rows()).sum();
         assert_eq!(total as i64, n);
         // strictly increasing seq across the whole stream.
@@ -366,6 +370,59 @@ mod tests {
         assert_eq!(note.data_type(), &DataType::Utf8);
         assert_eq!(note.len(), 1);
         assert_eq!(note.null_count(), 1);
+    }
+
+    #[test]
+    fn project_to_schema_handles_native_map_column() {
+        // The full-DataType-equality gate must accept a canonical Map<Utf8,Utf8>
+        // column unchanged (fast path) and null-fill it when an older segment
+        // predates the column — a naming/nullability/sorted drift here would hard
+        // reject at compaction.
+        use crate::store::schema::map_utf8_utf8_type;
+        use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
+
+        let target: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("worker_id", DataType::Utf8, false),
+            Field::new("labels", map_utf8_utf8_type(), true),
+        ]));
+
+        // Older segment without `labels` → null-filled as a typed empty MapArray.
+        let old = batch(vec![(1, 10, "a1")]);
+        let filled = project_to_schema(&old, &target).unwrap();
+        assert_eq!(filled.column(3).data_type(), &map_utf8_utf8_type());
+        assert_eq!(filled.column(3).null_count(), 1);
+
+        // A segment that already carries the canonical Map passes through as-is.
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut mb = MapBuilder::new(Some(names), StringBuilder::new(), StringBuilder::new());
+        mb.keys().append_value("scope");
+        mb.values().append_value("fleet");
+        mb.append(true).unwrap();
+        let labels = mb.finish();
+        let with_labels = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("seq", DataType::Int64, false),
+                Field::new("key", DataType::Int64, false),
+                Field::new("worker_id", DataType::Utf8, false),
+                Field::new("labels", map_utf8_utf8_type(), true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64])),
+                Arc::new(Int64Array::from(vec![10_i64])),
+                Arc::new(StringArray::from(vec!["a1"])),
+                Arc::new(labels),
+            ],
+        )
+        .unwrap();
+        let projected = project_to_schema(&with_labels, &target).unwrap();
+        assert_eq!(projected.column(3).data_type(), &map_utf8_utf8_type());
+        assert_eq!(projected.column(3).null_count(), 0);
     }
 
     #[test]

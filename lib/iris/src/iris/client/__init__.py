@@ -24,7 +24,7 @@ from iris.client.client import (
     iris_ctx_scope,
 )
 from iris.client.resolver import ClusterResolver
-from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
+from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
 
 __all__ = [
     "ClusterResolver",
@@ -41,9 +41,9 @@ __all__ = [
     "Resolver",
     "Task",
     "TaskLogEntry",
-    "WorkerPool",
-    "WorkerPoolConfig",
+    "default_setup_script",
     "get_iris_ctx",
     "iris_ctx",
     "iris_ctx_scope",
+    "iris_runtime_setup_script",
 ]

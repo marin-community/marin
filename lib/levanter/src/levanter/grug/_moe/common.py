@@ -3,7 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Float, Int, Key
 
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -23,17 +23,20 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
+    "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic",
+    "sonic_cute",
 )
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
@@ -80,8 +83,8 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
 
 
 def split_moe_w13_output(
-    w13_out: jax.Array, *, intermediate_dim: int, interleaved: bool
-) -> tuple[jax.Array, jax.Array]:
+    w13_out: Float[Array, "... I2"], *, intermediate_dim: int, interleaved: bool
+) -> tuple[Float[Array, "... I"], Float[Array, "... I"]]:
     expected = 2 * intermediate_dim
     if w13_out.shape[-1] != expected:
         raise ValueError(f"w13 output last dimension must be {expected}, got shape={w13_out.shape}")
@@ -91,19 +94,19 @@ def split_moe_w13_output(
     return gate, up
 
 
-def _init_weight(key: jax.Array, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * jax.random.truncated_normal(key, -3, 3, shape)
 
 
 @named_call
 def _prepare_moe_dispatch(
-    x: Float[Array, "T D"],
+    x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
     *,
     num_experts: int,
 ) -> tuple[
-    Float[Array, "TK D"],
+    Float[Array, "TK H"],
     Float[Array, "TK"],
     Int[Array, "TK"],
     Int[Array, "E"],
@@ -155,3 +158,12 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 def _zero_dropped_assignments() -> Int[Array, ""]:
     return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Count assignments lost to per-chunk static capacity."""
+    total = jnp.zeros((), jnp.int32)
+    for chunk, cap in enumerate(caps):
+        count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total

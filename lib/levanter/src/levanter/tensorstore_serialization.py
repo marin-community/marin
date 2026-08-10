@@ -4,6 +4,8 @@
 # References:
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
+import contextlib
+import functools
 import logging
 import os
 import urllib.parse
@@ -19,6 +21,7 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
+from jax.experimental.array_serialization import tensorstore_impl as ts_impl
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
@@ -26,10 +29,10 @@ from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
-from rigging.filesystem import record_transfer
+from rigging.filesystem import StoragePath, prefix_join, record_transfer
 
 from levanter._debug_logging import flush_debug_output
-from levanter.utils import fsspec_utils, jax_utils
+from levanter.utils import jax_utils
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +56,26 @@ def build_kvstore_spec(path: str) -> dict:
     For S3, tensorstore does not read AWS_ENDPOINT_URL or AWS_DEFAULT_REGION from the
     environment, so we pass them explicitly when set. This is required for S3-compatible
     endpoints like CoreWeave object storage.
+
+    For a custom ``endpoint`` we always use virtual-hosted-style addressing (tensorstore
+    0.1.82+, google/tensorstore#285): omit ``bucket`` and fold it into the endpoint host
+    (``https://<bucket>.<endpoint-host>``). Every S3-compatible store we target (R2, AWS,
+    CoreWeave) supports virtual-hosted style, and CoreWeave *requires* it (it rejects
+    path-style with ``PathStyleRequestNotAllowed``). Without a custom endpoint we leave
+    addressing to tensorstore's native AWS handling.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
-        spec: dict = {"driver": "s3", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
+        bucket = parsed.netloc
+        spec: dict = {"driver": "s3", "path": parsed.path.lstrip("/")}
         endpoint = os.environ.get("AWS_ENDPOINT_URL")
         if endpoint:
-            spec["endpoint"] = endpoint
+            # Virtual-hosted style: bucket becomes a subdomain of the endpoint
+            # host and the ``bucket`` field is omitted (tensorstore #285).
+            scheme, _, host = endpoint.partition("://")
+            spec["endpoint"] = f"{scheme}://{bucket}.{host}"
+        else:
+            spec["bucket"] = bucket
         region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
         if region:
             spec["aws_region"] = region
@@ -79,6 +95,53 @@ def build_kvstore_spec(path: str) -> dict:
         return {"driver": "file", "path": os.path.abspath(path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
+
+
+async def _transfer_shard_to_pageable_host(shard) -> np.ndarray:
+    """Return a detached pageable snapshot safe to retain during an asynchronous commit."""
+    data = shard.data
+    data.copy_to_host_async()
+    # Yield so the remaining shards' copies can be enqueued before this one blocks.
+    await asyncio.sleep(0)
+    # TensorStore may retain this array until the asynchronous commit finishes. It must
+    # not keep an external reference to the JAX buffer that training donates next.
+    return np.array(data, copy=True)
+
+
+@contextlib.contextmanager
+def _serialize_with_bounded_host_memory():
+    """Patch two per-save host-RAM leaks around ``GlobalAsyncCheckpointManager.serialize``.
+
+    JAX serializes every checkpoint through one process-lifetime ``Context`` singleton
+    (``tensorstore_impl._TS_CONTEXT``). Each save writes a distinct OCDBT database (fresh
+    ``step-{N}`` dir → new cache keys), so cache entries — and the staged source buffers they
+    reference — accumulate for the life of the process. A fresh ``Context`` per save (cloned
+    from the JAX spec, so pool sizes and concurrency limits are unchanged) releases the prior
+    save's pool once its commit drains, bounding live host RAM to one save.
+
+    JAX also stages each shard in pinned host memory, which the TPU runtime never returns to
+    the OS (see :func:`_transfer_shard_to_pageable_host`).
+
+    Both patches only need to cover the synchronous part of ``serialize`` — it awaits every
+    copy before returning — so restoring them on exit is safe while the commit continues in
+    the background.
+    """
+    fresh_context = ts.Context(ts_impl._TS_CONTEXT.spec)
+    original_async_serialize = ts_impl.async_serialize
+    original_transfer = ts_impl._transfer_shard_to_host
+
+    @functools.wraps(original_async_serialize)
+    def async_serialize_with_fresh_context(*args, **kwargs):
+        kwargs.setdefault("context", fresh_context)
+        return original_async_serialize(*args, **kwargs)
+
+    ts_impl.async_serialize = async_serialize_with_fresh_context
+    ts_impl._transfer_shard_to_host = _transfer_shard_to_pageable_host
+    try:
+        yield
+    finally:
+        ts_impl.async_serialize = original_async_serialize
+        ts_impl._transfer_shard_to_host = original_transfer
 
 
 def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
@@ -202,7 +265,8 @@ def tree_serialize_leaves_tensorstore(
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
-    manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
+    with _serialize_with_bounded_host_memory():
+        manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
@@ -323,7 +387,7 @@ def _restore_old_ts(
     Returns:
         Tuple of (deserialized_leaves, indices_to_load)
     """
-    paths = [os.path.join(checkpoint_dir, p) for p in paths]
+    paths = [prefix_join(checkpoint_dir, p) for p in paths]
 
     paths_to_load = []
     indices_to_load = []
@@ -335,7 +399,7 @@ def _restore_old_ts(
     for i in real_indices:
         path = paths[i]
 
-        if not fsspec_utils.exists(path):
+        if not StoragePath(path).exists():
             missing_paths.append(path)
             missing_indices.append(i)
             continue
@@ -423,15 +487,15 @@ def tree_deserialize_leaves_tensorstore(
         """Find the checkpoint root by looking for metadata.json"""
         current = path
         while current and current != os.path.dirname(current):
-            metadata_path = os.path.join(current, "metadata.json")
-            if fsspec_utils.exists(metadata_path):
+            metadata_path = prefix_join(current, "metadata.json")
+            if StoragePath(metadata_path).exists():
                 return current
             current = os.path.dirname(current)
         return path  # fallback to original path
 
     checkpoint_root = find_checkpoint_root(checkpoint_dir)
-    ocdbt_manifest_path = os.path.join(checkpoint_root, "manifest.ocdbt")
-    is_ocdbt_checkpoint = fsspec_utils.exists(ocdbt_manifest_path)
+    ocdbt_manifest_path = prefix_join(checkpoint_root, "manifest.ocdbt")
+    is_ocdbt_checkpoint = StoragePath(ocdbt_manifest_path).exists()
 
     if is_ocdbt_checkpoint:
         subpath = os.path.relpath(checkpoint_dir, start=find_checkpoint_root(checkpoint_dir))

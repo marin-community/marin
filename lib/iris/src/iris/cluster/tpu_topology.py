@@ -8,8 +8,6 @@ Leaf module shared by :mod:`iris.cluster.types` and
 either without inducing a top-level import cycle.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 

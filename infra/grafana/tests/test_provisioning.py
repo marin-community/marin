@@ -1,0 +1,486 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests over the provisioning tree: the alerting YAML parses with resolvable
+datasource UIDs and refIds, every rule's query URL answers on the bridge, and
+dashboard datasources exist. These files only otherwise fail inside a deployed
+Grafana, which is the most expensive place to find out."""
+
+import re
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit
+
+import pyarrow as pa
+import yaml
+from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
+from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
+from dashboard_stitch import stitch_all
+from finelog_health import FinelogHealth, FinelogRole
+from fixture_bridge import _finelog
+from github_source import GithubSource
+from k8s_source import K8sFleet
+from server import create_app
+from starlette.testclient import TestClient
+from wandb_source import WandbSource
+
+ROOT = Path(__file__).resolve().parent.parent
+ALERTING = ROOT / "provisioning" / "alerting"
+DASHBOARDS = ROOT / "dashboards"
+
+EXPRESSION_UID = "__expr__"
+VALID_SEVERITIES = {"critical", "warning"}
+
+
+def _stitched_dashboards() -> dict[str, dict]:
+    """Every dashboard as Grafana actually renders it: panelRef markers resolved.
+
+    The checks below assert on the deployed shape, not the templated source —
+    a panel's real datasource/columns/thresholds live in its fragment file once
+    it's been extracted behind a panelRef.
+    """
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
+
+
+def _all_panels(dashboard: dict) -> list[dict]:
+    """Every panel including those nested inside collapsed rows."""
+    return [nested for panel in dashboard["panels"] for nested in (panel, *panel.get("panels", []))]
+
+
+def _panel_sql(dashboard: dict) -> list[str]:
+    """Every SQL string a dashboard sends, panels and template variables alike."""
+    queries = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
+    for variable in dashboard.get("templating", {}).get("list", []):
+        query = variable.get("query")
+        if isinstance(query, dict) and query.get("queryType") == "infinity":
+            queries.append(query["infinityQuery"])
+    return [
+        param["value"]
+        for query in queries
+        for param in query.get("url_options", {}).get("params", [])
+        if param["key"] == "sql"
+    ]
+
+
+def _load(path: Path) -> dict:
+    return yaml.safe_load(path.read_text())
+
+
+def _datasources() -> dict[str, str]:
+    """Provisioned datasource uid -> bridge base path (from its loopback URL)."""
+    uids = {}
+    for path in (ROOT / "provisioning" / "datasources").glob("*.yaml"):
+        for datasource in _load(path)["datasources"]:
+            uids[datasource["uid"]] = urlsplit(datasource["url"]).path
+    return uids
+
+
+def _rules() -> list[dict]:
+    return [rule for group in _load(ALERTING / "rules.yaml")["groups"] for rule in group["rules"]]
+
+
+def test_alert_rules_have_resolvable_datasources_and_refids():
+    datasource_uids = set(_datasources())
+    for rule in _rules():
+        ref_ids = [node["refId"] for node in rule["data"]]
+        assert len(ref_ids) == len(set(ref_ids)), f"{rule['uid']}: duplicate refIds"
+        assert rule["condition"] in ref_ids, f"{rule['uid']}: condition points at a missing refId"
+        for node in rule["data"]:
+            assert node["model"]["refId"] == node["refId"], f"{rule['uid']}: model refId mismatch"
+            uid = node["datasourceUid"]
+            assert uid == EXPRESSION_UID or uid in datasource_uids, f"{rule['uid']}: unknown datasource {uid!r}"
+
+
+def test_every_rule_alerts_on_nodata_and_error():
+    # The alert endpoints return explicit zeros when healthy, so NoData/exec
+    # errors can only mean the pipeline itself broke — which must page too.
+    for rule in _rules():
+        assert rule["noDataState"] == "Alerting", rule["uid"]
+        assert rule["execErrState"] == "Alerting", rule["uid"]
+        assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
+
+
+class _FakeIris:
+    def __init__(self, name: str) -> None:
+        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+
+    def health(self) -> list[dict]:
+        return [{"reachable": True, "up": 1, "latency_ms": 3}]
+
+    def peers(self) -> list[dict]:
+        return [
+            {
+                "peer": "cw-a",
+                "controller_address": "https://iris-cw-a.example",
+                "state": "reachable",
+                "last_contact_age_seconds": 3,
+                "value": 0,
+            }
+        ]
+
+
+class _FakeFinelog:
+    def __init__(self, name: str) -> None:
+        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+
+    def health(self) -> FinelogHealth:
+        return FinelogHealth(
+            cluster=self.target.name,
+            server=f"finelog-{self.target.name}",
+            role=FinelogRole.HUB,
+            responsive=True,
+            ready=1,
+            desired=1,
+            latency_ms=3,
+            error_class="",
+            error="",
+        )
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if '"infra.canary.metrics"' in sql:
+            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
+        return pa.table({})
+
+
+def test_every_rule_query_url_answers_on_the_bridge():
+    """Join each rule's datasource base path with its query URL and GET it for real."""
+    iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
+    finelog_sources = {"marin": _FakeFinelog("marin")}
+    fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
+    client = TestClient(
+        create_app(
+            bridge_config(),
+            finelog_sources,
+            iris_sources,
+            GithubSource(auth=None, timeout=5.0),
+            fleet,
+            WandbSource(timeout=5.0),
+        )
+    )
+    base_paths = _datasources()
+    for rule in _rules():
+        for node in rule["data"]:
+            if node["datasourceUid"] == EXPRESSION_UID:
+                continue
+            model = node["model"]
+            params = {p["key"]: p["value"] for p in model.get("url_options", {}).get("params", [])}
+            url = base_paths[node["datasourceUid"]] + model["url"]
+            response = client.get(url, params=params)
+            assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
+            assert response.json(), f"{rule['uid']}: GET {url} returned no rows"
+
+
+def test_alert_queries_select_exactly_one_numeric_column():
+    # Grafana's table-alert contract: string columns become labels; the single
+    # numeric column is what the threshold expression evaluates.
+    for rule in _rules():
+        for node in rule["data"]:
+            if node["datasourceUid"] == EXPRESSION_UID:
+                continue
+            numeric = [c for c in node["model"]["columns"] if c["type"] == "number"]
+            assert len(numeric) == 1, f"{rule['uid']}: expected exactly one numeric column"
+
+
+def test_policies_reference_provisioned_contact_points():
+    contact_points = {point["name"] for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
+    mute_timings = {timing["name"] for timing in _load(ALERTING / "mute-timings.yaml")["muteTimes"]}
+    for policy in _load(ALERTING / "policies.yaml")["policies"]:
+        assert policy["receiver"] in contact_points
+        for route in policy.get("routes", []):
+            assert route["receiver"] in contact_points
+            assert set(route.get("mute_time_intervals", ())) <= mute_timings
+
+
+def test_warning_alerts_remain_visible_without_notifications():
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+
+    assert routes_by_severity["critical"].get("mute_time_intervals") is None
+    assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
+    (dashboard_only,) = _load(ALERTING / "mute-timings.yaml")["muteTimes"]
+    assert dashboard_only["time_intervals"] == [
+        {
+            "times": [{"start_time": "00:00", "end_time": "24:00"}],
+            "location": "UTC",
+        }
+    ]
+
+
+def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
+    """The bridge posts every Slack alert, not Grafana. For critical alerts that is
+    load-bearing — an incoming webhook never reveals the message ts that Loom needs
+    to route the thread — and routing the fallback the same way keeps one channel,
+    one credential, and one rendering."""
+    points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
+    assert {receiver["type"] for receiver in points["ops-critical"]["receivers"]} == {"email", "webhook"}
+    assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"webhook"}
+    slack_receivers = [r for point in points.values() for r in point["receivers"] if r["type"] == "slack"]
+    assert slack_receivers == [], "a Slack receiver would post a second message Loom cannot route"
+
+    (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
+    assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
+    (fallback,) = points["ops-slack"]["receivers"]
+    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/slack", "httpMethod": "POST"}
+
+
+def test_finelog_health_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-fleet-unhealthy"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
+    assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_node_deadlock_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "k8s-node-kernel-deadlock"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["model"]["url"] == "/alerts/node_deadlocks"
+
+
+def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "zephyr-pipeline-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "warning"
+    assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
+
+
+def test_clusters_dashboard_shows_finelog_fleet_health():
+    (panel,) = [
+        panel
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
+        if any(target.get("url") == "/fleet_health" for target in panel.get("targets", []))
+    ]
+    assert panel["datasource"]["uid"] == "finelog-marin"
+    selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
+    assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
+    (target,) = [
+        target
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
+        for target in panel.get("targets", [])
+        if target.get("url") == "/nodes"
+    ]
+    selectors = {column["selector"] for column in target["columns"]}
+    assert {
+        "cluster",
+        "node",
+        "ready",
+        "unschedulable",
+        "kernel_deadlock",
+        "deadlock_reason",
+        "cordon_reason",
+        "pending_phase",
+    } <= selectors
+
+
+def test_clusters_dashboard_shows_finelog_pods_storage_and_events():
+    targets = [
+        target for panel in _all_panels(_stitched_dashboards()["clusters.json"]) for target in panel.get("targets", [])
+    ]
+
+    assert {("/fleet_health", "backend"), ("/finelog", "backend"), ("/finelog_events", "backend")} <= {
+        (target["url"], target.get("parser")) for target in targets
+    }
+    pod_target = next(target for target in targets if target["url"] == "/finelog")
+    selectors = {column["selector"] for column in pod_target["columns"]}
+    assert {
+        "cluster",
+        "namespace",
+        "pod",
+        "node",
+        "restarts",
+        "cpu_request",
+        "cpu_limit",
+        "memory_request",
+        "memory_limit",
+        "startup_probe",
+        "pvc",
+        "storage_class",
+        "storage_capacity",
+    } <= selectors
+
+
+def test_dashboard_filter_expressions_reference_selected_columns():
+    # Infinity's backend parser applies filterExpression to the frame built from
+    # `columns`, so every field a filter references must also be selected.
+    literals = {"true", "false", "null"}
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            for target in panel.get("targets", []):
+                expression = target.get("filterExpression")
+                if not expression:
+                    continue
+                columns = target.get("columns", [])
+                selected = {c["text"] for c in columns} | {c["selector"] for c in columns}
+                fields = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"'[^']*'", "", expression))) - literals
+                missing = fields - selected
+                assert not missing, f"{name} panel {panel.get('id')}: filter references unselected {missing}"
+
+
+def test_dashboard_datasource_uids_are_provisioned():
+    uids = set(_datasources())
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            uid = (panel.get("datasource") or {}).get("uid")
+            if uid is None or uid.startswith("${"):  # row panels / template variables
+                continue
+            assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
+
+
+def test_status_page_has_each_required_source():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["datasource"]["uid"] == "status"
+    assert {ref_id: target["url"] for ref_id, target in targets.items()} == {
+        "N": "/github/nightlies",
+        "G": "/github/builds",
+        "W": "/iris/marin/workers",
+        "P": "/overview/provisioning",
+        "H": "/finelog/marin/query",
+        "R": "/finelog/marin/query",
+        "T": "/wandb/train-loss",
+        "L": "/wandb/paloma-macro-loss",
+        "M": "/wandb/mfu",
+    }
+
+
+def test_status_page_queries_provisioning_snapshot_and_region_history():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["type"] == "marin-infra-panel"
+    assert panel["options"]["view"] == "status"
+    assert targets["P"]["url"] == "/overview/provisioning"
+    snapshot_columns = {column["selector"] for column in targets["P"]["columns"]}
+    assert {
+        "scope",
+        "ready",
+        "stockout",
+        "error",
+        "preempted",
+        "outcomes",
+        "success_ratio",
+        "pools_placing",
+        "pools_no_ready_outcome",
+    } <= snapshot_columns
+
+    target = targets["R"]
+    columns = {column["selector"]: column for column in target["columns"]}
+    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
+    assert columns["value"]["type"] == "number"
+
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    assert "metric = 'provision_success_ratio'" in sql
+    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
+    assert "regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$')" in sql
+    assert "ELSE json_get(labels, 'zone') END AS series" in sql
+    assert "ready / NULLIF(outcomes, 0)" in sql
+
+
+def test_provisioning_render_fixture_routes_metric_query_to_region_series():
+    dashboard = _stitched_dashboards()["infra.json"]
+    (panel,) = dashboard["panels"]
+    (target,) = [target for target in panel["targets"] if target["refId"] == "R"]
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+
+    rows = _finelog(urlencode({"sql": sql}))
+
+    assert rows
+    assert {row["series"] for row in rows} == {
+        "fleet",
+        "europe-west4",
+        "us-central1",
+        "us-east1",
+        "us-east5",
+        "us-west4",
+    }
+    assert all({"t", "series", "value"} <= row.keys() for row in rows)
+
+
+def test_stat_panels_use_grafana_reduce_options_schema():
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            if panel.get("type") != "stat":
+                continue
+            reduce_options = panel.get("options", {}).get("reduceOptions", {})
+            assert "calc" not in reduce_options, f"{name} panel {panel['id']}: use calcs, not calc"
+            assert reduce_options.get("calcs"), f"{name} panel {panel['id']}: missing reduction"
+
+
+def test_telemetry_queries_bound_their_window_with_foldable_macros():
+    # telemetry_v1 is sorted on timestamp_ms alone, so the boundary has to fold to a
+    # constant for segment pruning to happen at all. `timestamp_ms >= {{from}}` compares
+    # a bigint against a timestamp and turns every panel into a full namespace scan.
+    for name, dashboard in _stitched_dashboards().items():
+        for sql in _panel_sql(dashboard):
+            if '"telemetry_v1"' not in sql:
+                continue
+            assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" in sql, name
+            assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
+            assert "timestamp_ms >= {{from}}" not in sql, name
+
+
+def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
+    # finelog's SQL parser rejects a bare `cluster` identifier anywhere but the first
+    # select-list position -- `SELECT ts AS t, cluster FROM ...` fails to parse. Quoting
+    # it sidesteps the keyword entirely.
+    bare = re.compile(r'(?<![\w"])cluster(?![\w"])')
+    for name, dashboard in _stitched_dashboards().items():
+        for sql in _panel_sql(dashboard):
+            interpolated = re.sub(r"\$\{[^}]*\}", "?", sql)
+            for match in bare.finditer(interpolated):
+                preceding = interpolated[: match.start()].rstrip()
+                assert preceding.endswith(" AS"), f"{name}: unquoted `cluster` in {sql[:160]!r}"
+
+
+def test_every_sql_selector_has_a_matching_variable():
+    # A selector interpolated into SQL but never declared reaches finelog as literal
+    # `${name:sqlstring}` and the panel fails to parse. Shared fragments make this easy
+    # to hit: a dashboard adopting one inherits its filters.
+    for name, dashboard in _stitched_dashboards().items():
+        variables = {variable["name"] for variable in dashboard.get("templating", {}).get("list", [])}
+        for sql in _panel_sql(dashboard):
+            for variable in re.findall(r"\$\{(\w+):sqlstring\}", sql):
+                assert variable in variables, f"{name}: ${variable} used but not declared"
+
+
+def test_dashboard_links_point_at_provisioned_dashboards():
+    # Deleting a dashboard silently strands every nav link that named it.
+    uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}
+    for name, dashboard in _stitched_dashboards().items():
+        for link in dashboard.get("links", []):
+            url = link["url"]
+            if not url.startswith("/d/"):
+                continue
+            assert url.removeprefix("/d/").split("/")[0] in uids, f"{name}: dead link {url}"
+
+
+def test_cluster_variable_lists_every_configured_cluster():
+    # A cluster missing from the dropdown is invisible on every dashboard, so the list
+    # tracks the clusters the bridge actually serves.
+    expected = {cluster.name for cluster in CLUSTERS} | {cluster.name for cluster in K8S_CLUSTERS}
+    for name, dashboard in _stitched_dashboards().items():
+        variables = {v["name"]: v for v in dashboard.get("templating", {}).get("list", [])}
+        if "cluster" not in variables:
+            continue
+        assert set(variables["cluster"]["query"].split(",")) == expected, name
+
+
+def test_cluster_series_keep_one_colour_across_dashboards():
+    # Colour follows the entity, not its rank: a cluster filtered out of one panel must
+    # not repaint the survivors, and the same cluster reads the same on every dashboard.
+    colours: dict[str, str] = {}
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            for override in panel.get("fieldConfig", {}).get("overrides", []):
+                series = override["matcher"].get("options")
+                if series not in {cluster.name for cluster in CLUSTERS} | {c.name for c in K8S_CLUSTERS}:
+                    continue
+                (colour,) = [p["value"]["fixedColor"] for p in override["properties"] if p["id"] == "color"]
+                assert colours.setdefault(series, colour) == colour, f"{name}: {series} changes colour"
+    assert len(colours) >= len(CLUSTERS)

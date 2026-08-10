@@ -92,7 +92,10 @@ class AlwaysRaisingTracker(Tracker):
         self._boom()
 
 
-def test_background_tracker_forwards_calls():
+def test_background_tracker_forwards_calls(tmp_path):
+    artifact = tmp_path / "model.bin"
+    artifact.write_text("weights")
+
     inner = RecordingTracker()
     bt = BackgroundTracker(inner)
     try:
@@ -100,7 +103,7 @@ def test_background_tracker_forwards_calls():
         bt.log({"loss": 1.0}, step=0)
         bt.log({"loss": 0.5}, step=1, commit=True)
         bt.log_summary({"final_loss": 0.5})
-        bt.log_artifact("/tmp/x", name="x", type="model")
+        bt.log_artifact(str(artifact), name="x", type="model")
         assert bt._wait_until_idle(timeout=5)
     finally:
         bt.finish()
@@ -108,8 +111,49 @@ def test_background_tracker_forwards_calls():
     assert inner.hparams == [{"lr": 0.1}]
     assert inner.logs == [({"loss": 1.0}, 0, None), ({"loss": 0.5}, 1, True)]
     assert inner.summary == [{"final_loss": 0.5}]
-    assert inner.artifacts == [("/tmp/x", "x", "model")]
+    # The artifact is forwarded with its name/type preserved. The path is a staged
+    # copy (so the source can be deleted immediately), not the original path.
+    assert len(inner.artifacts) == 1
+    _, art_name, art_type = inner.artifacts[0]
+    assert (art_name, art_type) == ("x", "model")
     assert inner.finished is True
+
+
+def test_background_tracker_stages_artifact_so_source_can_be_deleted(tmp_path):
+    """log_artifact must capture the bytes before the producer deletes the source.
+
+    Regression for the config.yaml FileNotFoundError: log_configuration writes the
+    artifact into a TemporaryDirectory and deletes it as soon as log_artifact
+    returns, so the deferred upload must read a staged copy, not the gone source.
+    A blocking log() pins the worker until after the delete, making the race
+    deterministic.
+    """
+    gate = threading.Event()
+    uploaded: list[str] = []
+
+    class ReadingTracker(RecordingTracker):
+        def log(self, metrics, *, step, commit=None):
+            gate.wait(timeout=5)  # hold the worker until the source is deleted
+
+        def log_artifact(self, artifact_path, *, name=None, type=None):
+            with open(artifact_path) as f:
+                uploaded.append(f.read())
+
+    source = tmp_path / "config.yaml"
+    source.write_text("hello: world\n")
+
+    bt = BackgroundTracker(ReadingTracker())
+    try:
+        bt.log({}, step=0)  # occupy the worker so the artifact stays queued
+        bt.log_artifact(str(source), name="config.yaml", type="config")
+        source.unlink()  # source gone before the worker can read it
+        gate.set()
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        gate.set()
+        bt.finish()
+
+    assert uploaded == ["hello: world\n"]
 
 
 def test_background_tracker_runs_off_caller_thread():

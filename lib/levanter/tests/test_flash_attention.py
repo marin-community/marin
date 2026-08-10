@@ -202,3 +202,61 @@ def test_tpu_flash_attention(soft_cap):
 
         assert hax_out.axes == flash_out.axes
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def test_flash_attention_noconstraint_mask_forward():
+    """`AttentionMask(is_causal=False)` materializes to None (full attention).
+
+    Regression: the inner loop guards `if mask is not None` on the AttentionMask
+    *object* (truthy), then materializes a per-block slice that is None for a
+    constraint-free mask — so `hax.where(None, ...)` raised TypeError. The fix
+    skips the mask op when the slice is None; the result must equal full
+    bidirectional attention.
+    """
+    Key = hax.Axis("Key", 8)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+
+    mask = AttentionMask(is_causal=False)
+    assert mask.materialize(QPos, KPos) is None  # precondition: this is the crashing case
+
+    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Key)) * 0.2
+    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Key)) * 0.2
+    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Key)) * 0.2
+
+    flash_out = flash_attention(QPos, KPos, Key, q, k, v, inference=True, mask=mask, block_size=BLOCK_SIZE)
+    hax_out = hnn.attention.dot_product_attention(KPos, Key, q, k, v)
+
+    assert hax_out.axes == flash_out.axes
+    assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def test_flash_attention_noconstraint_mask_grad():
+    """Backward pass also re-materializes the mask, so the None-slice guard is
+    needed on the backward callsite too. Grad must match full attention."""
+    Key = hax.Axis("Key", 8)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+
+    mask = AttentionMask(is_causal=False)
+    assert mask.materialize(QPos, KPos) is None
+
+    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Key))
+    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Key))
+    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Key))
+
+    @equinox.filter_value_and_grad
+    def d_attn(qkv, fn):
+        q, k, v = qkv
+        x_out = fn(QPos, KPos, Key, q, k, v, mask=mask)
+        return (x_out * x_out).mean().scalar()
+
+    hax_val, (hax_dq, hax_dk, hax_dv) = d_attn((q, k, v), simple_attention_with_dropout)
+    fa_val, (fa_dq, fa_dk, fa_dv) = d_attn(
+        (q, k, v), functools.partial(flash_attention, inference=True, block_size=BLOCK_SIZE)
+    )
+
+    assert_trees_all_close(hax_val, fa_val, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(hax_dq.array, fa_dq.array, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(hax_dk.array, fa_dk.array, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(hax_dv.array, fa_dv.array, atol=1e-3, rtol=1e-3)

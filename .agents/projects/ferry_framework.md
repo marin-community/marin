@@ -134,7 +134,7 @@ Maintain and regularly validate known-good envelopes for each ferry lane.
 
 | Lane | Script | Primary Intent | Baseline Envelope | First Fallback |
 |---|---|---|---|---|
-| canary (TPU) | `experiments/ferries/canary_ferry.py` | Grug MoE health signal via Iris | Grug MoE trial, bs=512, ~476 steps on v5p-8 | reduce per-step pressure (batch/seq) before broader infra changes |
+| canary (TPU) | `experiments/ferries/canary_ferry.py` | Grug MoE health signal via Iris | Grug MoE trial, bs=128, seq 8192, ~238 steps on v5p-8 | reduce per-step pressure (batch/seq) before broader infra changes |
 | canary (GPU) | `experiments/ferries/canary_ferry.py` (`CANARY_ACCELERATOR=gpu`) | MoE compilation smoke test via Iris | Grug MoE trial, bs=32, 50 steps on 8×H100 (CW) | reduce batch size first |
 | daily | `experiments/ferries/daily.py` | higher-scale integration test | Nemo mix, seq 4096, batch 512, ~1e19 FLOPs on `us-central1` | reduce batch size first, then revisit kernel/block-size tuning |
 

@@ -123,24 +123,22 @@ def dict_from_record_batch(b) -> dict:
     return {b.field(i).name: to_hf_batched(b.column(i).to_numpy(zero_copy_only=False)) for i in range(b.num_columns)}
 
 
-def _canonicalize_batch(batch: Union[dict, list[dict]]) -> list[dict]:
+def canonicalize_batch(batch: Union[dict, list[dict], pa.RecordBatch]) -> list[dict]:
+    """Normalize a batch into a list of row dicts suitable for writing to a cache.
+
+    Accepts a column-oriented dict, a PyArrow ``RecordBatch``, or an already
+    row-oriented list of dicts.
+    """
     if isinstance(batch, pa.RecordBatch):
         batch = dict_from_record_batch(batch)
 
     if isinstance(batch, dict):
-        return _to_list_of_dicts(batch)
-    else:
-        return batch
+        keys = list(batch.keys())
+        values = list(batch.values())
+        num_rows = len(values[0]) if values else 0
+        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
 
-
-def _to_list_of_dicts(batch: dict) -> list[dict]:
-    """
-    Convert a batch of dictionaries to a list of dictionaries, suitable for writing to a cache.
-    """
-    keys = list(batch.keys())
-    values = list(batch.values())
-    num_rows = len(values[0])
-    return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
+    return list(batch)
 
 
 class IdentityProcessor(BatchProcessor[T, T]):

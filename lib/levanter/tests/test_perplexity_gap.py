@@ -29,6 +29,7 @@ import levanter.analysis.perplexity_gap as gap_analysis
 import levanter.main.perplexity_gap as perplexity_gap_main
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
+    GapScoringDataset,
     RawTextDocument,
     TokenizedChunk,
     TokenizedDocument,
@@ -43,7 +44,7 @@ from levanter.analysis.perplexity_gap import (
 )
 from levanter.checkpoint import save_checkpoint
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text import DatasetComponent, TextLmDatasetFormat, UrlDatasetSourceConfig
+from levanter.data.text.datasets import UrlDatasetSourceConfig
 from levanter.distributed import DistributedConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig,
@@ -60,7 +61,6 @@ from levanter.main.perplexity_gap import (
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import current_tracker
 from levanter.tracker.tracker import DictTracker
-from levanter.tokenizers import load_tokenizer
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 
@@ -79,23 +79,33 @@ class _MemoryShardSource(ShardedDataSource[dict[str, Any]]):
         return iter(self.records[row:])
 
 
-def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
-    tokenizer = load_tokenizer("gpt2")
+def test_tokenize_text_with_byte_spans_covers_utf8_bytes(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer
     hf_tokenizer = tokenizer.as_hf_tokenizer()
     text = "hello  \nnaive café"
 
     tokenized = tokenize_text_with_byte_spans(tokenizer, hf_tokenizer, text)
 
     spans = [
-        (start, end)
+        (int(start), int(end))
         for start, end in zip(tokenized.byte_starts, tokenized.byte_ends, strict=True)
         if start >= 0 and end > start
     ]
-    assert tokenized.num_bytes == len(text.encode("utf-8"))
+    encoded = text.encode("utf-8")
+    assert tokenized.num_bytes == len(encoded)
     assert spans
     assert spans[0][0] == 0
     assert spans[-1][1] == tokenized.num_bytes
-    assert sum(end - start for start, end in spans) == tokenized.num_bytes
+    # Byte spans must tile the whole document and land on UTF-8 character
+    # boundaries. Tokenizers without the merges to keep a multi-byte character
+    # in a single token fall back to per-byte tokens that share a character
+    # offset, so spans may overlap; coverage of every byte is the invariant.
+    assert all(a <= b for (a, _), (b, _) in zip(spans, spans[1:]))
+    covered = {byte_index for start, end in spans for byte_index in range(start, end)}
+    assert covered == set(range(tokenized.num_bytes))
+    for start, end in spans:
+        assert start == 0 or (encoded[start] & 0xC0) != 0x80
+        assert end == tokenized.num_bytes or (encoded[end] & 0xC0) != 0x80
 
 
 def test_iter_dataset_documents_combines_supervised_input_and_target():
@@ -647,7 +657,7 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
     def fake_iter_raw_text_documents(*args, **kwargs):
         yield document
 
-    monkeypatch.setattr(perplexity_gap_main.levanter, "initialize", lambda config: None)
+    monkeypatch.setattr(perplexity_gap_main.levanter.trainer, "initialize", lambda config: None)
     monkeypatch.setattr(perplexity_gap_main, "_load_model_runner", lambda **kwargs: FakeRunner())
     monkeypatch.setattr(perplexity_gap_main, "iter_raw_text_documents", fake_iter_raw_text_documents)
 
@@ -665,7 +675,7 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
                 model=LlamaConfig(num_layers=1, num_heads=1, num_kv_heads=1, hidden_dim=8, max_seq_len=8),
                 tokenizer="fake-tokenizer",
             ),
-            datasets={"paloma/example": DatasetComponent(format=TextLmDatasetFormat())},
+            datasets={"paloma/example": GapScoringDataset(source=UrlDatasetSourceConfig())},
             trainer=FakeTrainer(),  # type: ignore[arg-type]
             output_path=tmpdir,
             max_eval_length=8,
@@ -887,7 +897,7 @@ def test_batch_chunks_rejects_oversized_chunks():
         list(batch_chunks([chunk], batch_size=1, max_eval_length=3))
 
 
-def test_perplexity_gap_main_same_model_zero_gap():
+def test_perplexity_gap_main_same_model_zero_gap(local_gpt2_tokenizer, local_gpt2_tokenizer_path):
     model_config = LlamaConfig(
         num_layers=2,
         num_heads=2,
@@ -902,19 +912,15 @@ def test_perplexity_gap_main_same_model_zero_gap():
             f.write(json.dumps({"text": "hello  world\n"}) + "\n")
             f.write(json.dumps({"text": "tabs\tand café\n"}) + "\n")
 
-        tokenizer = load_tokenizer("gpt2")
+        tokenizer = local_gpt2_tokenizer
         vocab = haliax.Axis("vocab", len(tokenizer))
         model = LlamaLMHeadModel.init(vocab, model_config, key=jax.random.PRNGKey(0))
         ckpt_path = os.path.join(tmpdir, "ckpt")
         save_checkpoint({"model": model}, 0, ckpt_path)
 
         datasets = {
-            "tiny/raw": DatasetComponent(
-                source=UrlDatasetSourceConfig(
-                    validation_urls=[f"file://{data_path}"],
-                    format=TextLmDatasetFormat(),
-                ),
-                format=TextLmDatasetFormat(),
+            "tiny/raw": GapScoringDataset(
+                source=UrlDatasetSourceConfig(validation_urls=[f"file://{data_path}"]),
             )
         }
 
@@ -923,13 +929,13 @@ def test_perplexity_gap_main_same_model_zero_gap():
                 checkpoint_path=ckpt_path,
                 model=model_config,
                 checkpoint_is_hf=False,
-                tokenizer="gpt2",
+                tokenizer=local_gpt2_tokenizer_path,
             ),
             model_b=GapFinderModelConfig(
                 checkpoint_path=ckpt_path,
                 model=model_config,
                 checkpoint_is_hf=False,
-                tokenizer="gpt2",
+                tokenizer=local_gpt2_tokenizer_path,
             ),
             datasets=datasets,
             trainer=TrainerConfig(

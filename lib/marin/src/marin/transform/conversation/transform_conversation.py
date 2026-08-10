@@ -7,31 +7,38 @@ Transform any HuggingFace dataset to OpenAI messages format.
 Usage Instructions:
 1. Register your adapter in adapters.py
 2. Run the script, filling out the TransformSFTDatasetConfig.
-
-Check out experiments/instruction_datasets.py to see how to run this using the Executor.
 """
 
 import hashlib
 import json
 import logging
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import datasets
 import draccus
 import fsspec
+from fray.types import ResourceConfig
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
-from marin.execution import unwrap_versioned_value
-from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from rigging.filesystem import url_to_fs
-from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
+from marin.utils import load_dataset_with_backoff
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
+from zephyr.writers import write_jsonl_file
 
 from .adapters import TransformAdapter
+
+# One map task streams a whole HF shard (a subset/split slice) row by row. That is memory-bounded per
+# row, but chat shards carry long conversations and the Arrow reader buffers full row groups, so the
+# 1 GiB that ZephyrContext floors an unset ``resources`` to OOM-kills the worker mid-shard. Give each
+# worker headroom; this is a runtime resource only and does not enter the transform's data
+# fingerprint or output path, so bumping it never forks an existing cache.
+_TRANSFORM_WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g")
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
@@ -119,7 +126,7 @@ def _normalize_tool_structures(message: dict) -> dict:
 
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
-    source = unwrap_versioned_value(cfg.source)
+    source = cfg.source
     transformed_row_messages: list[OpenAIChatMessage] | None = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
@@ -130,7 +137,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(messages)
-    metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
+    metadata_columns = cfg.metadata_columns
     metadata_remap = adapter.metadata_remap or {}
     replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
 
@@ -159,7 +166,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         id=row_idx,
         source=source,
         messages=messages,
-        added=datetime.now(timezone.utc).isoformat(),
+        added=datetime.now(UTC).isoformat(),
         created="",  # Not available in the dataset
         metadata=metadata,
         **extra_columns,
@@ -188,12 +195,12 @@ def create_shard_output_directory(output_filename: str) -> str:
         output_path = f"{protocol}://{path_without_suffix}"
     else:
         output_path = str(path_without_suffix)
-    fsspec_mkdirs(output_path)
+    StoragePath(output_path).mkdirs()
     return output_path
 
 
 def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> Sequence[str | None]:
-    configured_subsets = unwrap_versioned_value(cfg.subsets)
+    configured_subsets = cfg.subsets
     if configured_subsets:
         return configured_subsets
 
@@ -208,7 +215,7 @@ def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> Sequence[str | Non
 
 
 def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) -> list[str]:
-    configured_splits = unwrap_versioned_value(cfg.splits)
+    configured_splits = cfg.splits
     if configured_splits:
         return list(configured_splits)
     try:
@@ -222,7 +229,7 @@ def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) ->
 
 
 def _shard_filename(output_path: str, shard_idx: int) -> str:
-    return os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+    return prefix_join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
 def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: str | None) -> dict[str, object]:
@@ -242,13 +249,13 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     return kwargs
 
 
-def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike | str:
+def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
     """Creates a new path with the subset and split names.
     e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-a982374/subset/train'
     """
     if (subset_name == "default") or (subset_name is None):
-        return os.path.join(dir_name, split)
-    return os.path.join(dir_name, subset_name, split)
+        return prefix_join(dir_name, split)
+    return str(StoragePath.parse(dir_name) / subset_name / split)
 
 
 def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
@@ -256,11 +263,11 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
     Yields ShardTask objects for each shard of each subset/split combination.
     """
-    source = unwrap_versioned_value(cfg.source)
+    source = cfg.source
     if not source:
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
-    revision = unwrap_versioned_value(cfg.revision)
-    configured_splits = unwrap_versioned_value(cfg.splits)
+    revision = cfg.revision
+    configured_splits = cfg.splits
 
     # 1. Get available subsets
     subsets = _get_available_subsets(cfg)
@@ -313,14 +320,13 @@ def process_shard_task(task: ShardTask) -> dict:
 
     Loads a specific shard from HuggingFace Hub, transforms records, and writes to output file.
     """
-    adapter = unwrap_versioned_value(task.cfg.adapter).copy()
+    adapter = task.cfg.adapter.copy()
 
     subset_name = task.subset or "default"
     output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
-    fs, _ = url_to_fs(output_filename)
-    if fs.exists(output_filename):
+    if StoragePath(output_filename).exists():
         logger.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
             f"because output exists: {output_filename}"
@@ -372,7 +378,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     Skips processing for shards with existing metrics files.
     """
     # Get max_parallelism from config
-    max_parallelism = unwrap_versioned_value(cfg.max_parallelism)
+    max_parallelism = cfg.max_parallelism
 
     # Configure backend with concurrency limit if specified
     if max_parallelism is not None:
@@ -383,13 +389,13 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     all_tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
 
-    metrics_path = os.path.join(cfg.output_path, "metrics")
+    metrics_path = prefix_join(cfg.output_path, "metrics")
     pipeline = (
         Dataset.from_list(all_tasks)
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-conversation")
+    ctx = ZephyrContext(name="transform-conversation", resources=_TRANSFORM_WORKER_RESOURCES)
     metric_files = ctx.execute(pipeline).results
 
     # Log summary by subset/split

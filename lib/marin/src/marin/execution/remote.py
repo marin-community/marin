@@ -15,8 +15,6 @@ Usage::
     def train(...): ...             # explicit resources
 """
 
-from __future__ import annotations
-
 import dataclasses
 import re
 import uuid
@@ -35,7 +33,7 @@ R = TypeVar("R")
 DEFAULT_JOB_NAME = "remote_job"
 
 
-def _sanitize_job_name(name: str) -> str:
+def sanitize_job_name(name: str) -> str:
     """Ensure job names are compatible with Iris and Docker image tags."""
     sanitized = re.sub(r"[^a-z0-9_.-]+", "-", name.lower())
     sanitized = sanitized.strip("-.")
@@ -57,7 +55,7 @@ class RemoteCallable(Generic[P, R]):
     pip_dependency_groups: list[str] | None = None
     name: str | None = None
 
-    def named(self, name: str) -> RemoteCallable:
+    def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
         if self.name:
             return self
@@ -73,13 +71,14 @@ class RemoteCallable(Generic[P, R]):
             fn_name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
             name = f"{fn_name}-{uuid.uuid4().hex[:8]}"
         c = current_client()
+        dependency_groups = dependency_groups_for_resources(self.resources, self.pip_dependency_groups)
         handle = c.submit(
             JobRequest(
-                name=_sanitize_job_name(name),
+                name=sanitize_job_name(name),
                 entrypoint=Entrypoint.from_callable(lambda: self.fn(*args, **kwargs)),
                 resources=self.resources,
                 environment=create_environment(
-                    extras=dependency_groups_for_resources(self.resources, self.pip_dependency_groups),
+                    extras=dependency_groups,
                     env_vars=self.env_vars,
                 ),
             )

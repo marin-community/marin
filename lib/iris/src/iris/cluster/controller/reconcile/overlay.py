@@ -14,9 +14,9 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.reconcile.effects import (
     AttemptRowDelta,
     ControllerEffects,
-    EndpointDeletion,
     JobRowDelta,
     LogEvent,
+    TaskActionEvent,
     TaskRowDelta,
 )
 from iris.cluster.controller.reconcile.policy import CANCEL_GUARD_STATES
@@ -24,6 +24,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     JobConfigRow,
     JobStateBasis,
     TransitionSnapshot,
+    pick_earliest_task_error,
 )
 from iris.cluster.controller.task_state import ActiveTaskRow
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
@@ -57,14 +58,19 @@ class Overlay:
       the per-field rules (see each method). Reads (:meth:`task_state`,
       :meth:`job_basis`, ...) consult the accumulator, so prospective state and
       the persisted SQL cannot drift.
-    * ``emit_*`` appends a cross-aggregate effect category (endpoint deletions,
-      worker health, structured audit log events). These fire after commit and
-      so are not row deltas.
+    * ``emit_*`` appends a cross-aggregate effect category (worker health,
+      structured audit log events). These fire after commit and so are not row
+      deltas.
     """
 
     def __init__(self, snapshot: TransitionSnapshot) -> None:
         self._snapshot = snapshot
         self._effects = ControllerEffects()
+        # Per-job count of this batch's FAILED attempt deltas, built lazily and
+        # cached for the recompute pass (see job_basis). merge_attempt invalidates
+        # it only when a FAILED attempt is recorded, so the recompute pass's own
+        # kill/cascade attempt writes (never FAILED) never force a rebuild.
+        self._failed_attempt_deltas_by_job: dict[JobName, int] | None = None
 
     # ------------------------------------------------------------------
     # Read accessors
@@ -102,31 +108,50 @@ class Overlay:
                 started_at=basis.started_at,
                 max_task_failures=basis.max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
-        # Single pass: build the accumulator-aware state histogram and the first
-        # non-null error. ``all_tasks_by_job`` is pre-sorted by ``task_index``,
-        # so the first error encountered is the canonical "first task error".
+        # Single pass: build the accumulator-aware state histogram and each
+        # task's effective (state, error, finished_at) for pick_earliest_task_error
+        # to rank afterward.
         counts: dict[int, int] = {}
-        first_error: str | None = None
+        error_candidates: list[tuple[int, int, Timestamp | None, str | None]] = []
         for row in self._snapshot.all_tasks_by_job.get(job_id, ()):
             delta = self._effects.tasks.get(row.task_id)
             state = delta.state if delta is not None else row.state
             counts[state] = counts.get(state, 0) + 1
-            if first_error is None:
-                # The accumulator only carries an error when a delta set a
-                # non-null error; otherwise fall back to the snapshot row.
-                err = delta.error if (delta is not None and delta.error is not None) else row.error
-                if err is not None:
-                    first_error = err
+            # The accumulator only carries a value when a delta set a non-null
+            # one; otherwise fall back to the snapshot row.
+            error = delta.error if (delta is not None and delta.error is not None) else row.error
+            finished_at = delta.finished_at if (delta is not None and delta.finished_at is not None) else row.finished_at
+            error_candidates.append((row.task_index, state, finished_at, error))
+        # Cumulative failure budget: the committed-derived per-job failure count the
+        # loader already summed into ``basis.total_failures``, plus this batch's
+        # not-yet-committed FAILED attempt writes. This equals what the next tick's
+        # loader will derive once these attempts commit — no prospective counter is
+        # carried, symmetric with preemption.
+        total_failures = basis.total_failures + self._failed_attempt_deltas_for_job(job_id)
         return JobStateBasis(
             job_id=basis.job_id,
             state=current_state,
             started_at=basis.started_at,
             max_task_failures=basis.max_task_failures,
             task_state_counts=counts,
-            first_task_error=first_error,
+            total_failures=total_failures,
+            first_task_error=pick_earliest_task_error(error_candidates),
         )
+
+    def _failed_attempt_deltas_for_job(self, job_id: JobName) -> int:
+        """This batch's FAILED attempt-delta count for ``job_id``."""
+        if self._failed_attempt_deltas_by_job is None:
+            tally: dict[JobName, int] = {}
+            for (task_id, _), delta in self._effects.attempts.items():
+                if delta.state == job_pb2.TASK_STATE_FAILED:
+                    parent = task_id.parent
+                    if parent is not None:
+                        tally[parent] = tally.get(parent, 0) + 1
+            self._failed_attempt_deltas_by_job = tally
+        return self._failed_attempt_deltas_by_job.get(job_id, 0)
 
     def task_state(self, task_id: JobName) -> int | None:
         delta = self._effects.tasks.get(task_id)
@@ -176,21 +201,19 @@ class Overlay:
                     state=effective_state,
                     current_attempt_id=row.current_attempt_id,
                     current_worker_id=row.current_worker_id,
-                    failure_count=row.failure_count,
                     preemption_count=row.preemption_count,
                     max_retries_failure=row.max_retries_failure,
                     max_retries_preemption=row.max_retries_preemption,
-                    is_reservation_holder=row.is_reservation_holder,
                     has_coscheduling=row.has_coscheduling,
                 )
             out.append(row)
         return out
 
-    def job_descendants(self, job_id: JobName, *, exclude_holders: bool = False) -> list[JobName]:
+    def job_descendants(self, job_id: JobName) -> list[JobName]:
         desc = self._snapshot.job_descendants.get(job_id)
         if desc is None:
             return []
-        return list(desc.descendants_no_holders if exclude_holders else desc.descendants_full)
+        return list(desc.descendants)
 
     def job_preemption_policy(self, job_id: JobName) -> int:
         """Resolve the effective preemption policy.
@@ -216,9 +239,8 @@ class Overlay:
         """Merge a task delta into the accumulator.
 
         Per-field fold (earlier accumulated ``old`` then newer ``delta``):
-        state last-wins; error/exit_code/failure_count/preemption_count/
-        container_id last-non-null; started_at first-non-null; finished_at
-        last-wins (may clear to None).
+        state last-wins; error/exit_code/container_id/status_message last-non-null;
+        started_at first-non-null; finished_at last-wins (may clear to None).
         """
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
@@ -231,9 +253,8 @@ class Overlay:
             exit_code=_last_non_null(old.exit_code, delta.exit_code),
             started_at=_first(old.started_at, delta.started_at),
             finished_at=delta.finished_at,
-            failure_count=_last_non_null(old.failure_count, delta.failure_count),
-            preemption_count=_last_non_null(old.preemption_count, delta.preemption_count),
             container_id=_last_non_null(old.container_id, delta.container_id),
+            status_message=_last_non_null(old.status_message, delta.status_message),
         )
 
     def merge_attempt(self, delta: AttemptRowDelta) -> None:
@@ -246,17 +267,27 @@ class Overlay:
         key = (delta.task_id, delta.attempt_id)
         old = self._effects.attempts.get(key)
         if old is None:
-            self._effects.attempts[key] = delta
-            return
-        self._effects.attempts[key] = AttemptRowDelta(
-            task_id=delta.task_id,
-            attempt_id=delta.attempt_id,
-            state=_last_non_null(old.state, delta.state),
-            started_at=_first(old.started_at, delta.started_at),
-            finished_at=_first(old.finished_at, delta.finished_at),
-            exit_code=_last_non_null(old.exit_code, delta.exit_code),
-            error=_last_non_null(old.error, delta.error),
-        )
+            merged = delta
+        else:
+            merged = AttemptRowDelta(
+                task_id=delta.task_id,
+                attempt_id=delta.attempt_id,
+                state=_last_non_null(old.state, delta.state),
+                started_at=_first(old.started_at, delta.started_at),
+                finished_at=_first(old.finished_at, delta.finished_at),
+                exit_code=_last_non_null(old.exit_code, delta.exit_code),
+                error=_last_non_null(old.error, delta.error),
+                pod_name=_last_non_null(old.pod_name, delta.pod_name),
+                pod_uid=_last_non_null(old.pod_uid, delta.pod_uid),
+                node_name=_last_non_null(old.node_name, delta.node_name),
+                terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
+            )
+        self._effects.attempts[key] = merged
+        # The job-wide failure budget counts FAILED attempt deltas (job_basis); a
+        # newly-FAILED attempt invalidates the cached per-job tally so the next
+        # job_basis read rebuilds it.
+        if merged.state == job_pb2.TASK_STATE_FAILED:
+            self._failed_attempt_deltas_by_job = None
 
     def merge_job_state(self, delta: JobRowDelta) -> None:
         """Merge a recompute job-state write into the accumulator.
@@ -313,17 +344,13 @@ class Overlay:
     # post-commit categories, kept separate from the row-delta setters.
     # ------------------------------------------------------------------
 
-    def emit_endpoint_deletion(self, task_id: JobName) -> None:
-        self._effects.endpoint_deletions.append(EndpointDeletion(task_id=task_id))
-
     def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)
 
-    def emit_worker_heartbeat(self, worker_ids: Iterable[WorkerId]) -> None:
-        self._effects.health.heartbeat.extend(worker_ids)
+    def emit_task_event(self, event: TaskActionEvent) -> None:
+        if event.attempt_id < 0:
+            return
+        self._effects.task_events.append(event)
 
     def emit_worker_build_failed(self, worker_id: WorkerId) -> None:
         self._effects.health.build_failed.append(worker_id)
-
-    def emit_worker_make_unhealthy(self, worker_id: WorkerId) -> None:
-        self._effects.health.make_unhealthy.append(worker_id)

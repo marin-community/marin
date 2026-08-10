@@ -16,12 +16,11 @@ This keeps the working set in the low millions of rows regardless of how
 many billions of objects the scan produced.
 
 Usage (standalone):
-    uv run scripts/ops/storage/render_report.py [PARQUET_DIR]
+    uv run scripts/ops/storage/render_report.py PARQUET_DIR
 
-The default parquet directory is scripts/ops/storage/purge/objects_parquet/.
+PARQUET_DIR (a local dir or gs:// path) is required; it points at the parquet
+segments written by the scan stage.
 """
-
-from __future__ import annotations
 
 import hashlib
 import re
@@ -34,6 +33,7 @@ import duckdb
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem import StoragePath
 from tqdm import tqdm
 
 from scripts.ops.storage.constants import (
@@ -650,12 +650,12 @@ def snapshot_path(history_dir: str, date_str: str) -> str:
 
 def write_snapshot(rows: list[dict], path: str) -> None:
     table = pa.Table.from_pylist(rows, schema=_SNAPSHOT_SCHEMA)
-    with fsspec.open(path, "wb") as f:
+    with StoragePath(path).open("wb") as f:
         pq.write_table(table, f)
 
 
 def read_snapshot(path: str) -> list[dict]:
-    with fsspec.open(path, "rb") as f:
+    with StoragePath(path).open("rb") as f:
         return pq.read_table(f).to_pylist()
 
 
@@ -665,13 +665,13 @@ def find_latest_snapshot(history_dir: str, *, before_date: str | None = None) ->
     ``before_date`` (YYYY-MM-DD) excludes snapshots on or after that date so a
     run never diffs against itself when re-run on the same day.
     """
-    fs, _ = fsspec.core.url_to_fs(history_dir)
     try:
-        candidates = fs.glob(f"{history_dir.rstrip('/')}/dir_summary-*.parquet")
+        candidates = StoragePath(f"{history_dir.rstrip('/')}/dir_summary-*.parquet").glob()
     except FileNotFoundError:
         return None
     dated: list[tuple[str, str]] = []
-    for path in candidates:
+    for candidate in candidates:
+        path = str(candidate)
         match = _SNAPSHOT_NAME_RE.search(path)
         if not match:
             continue
@@ -682,7 +682,7 @@ def find_latest_snapshot(history_dir: str, *, before_date: str | None = None) ->
     if not dated:
         return None
     date, path = max(dated)
-    return fs.unstrip_protocol(path), date
+    return path, date
 
 
 def compute_changes(current: list[dict], previous: list[dict], *, threshold_bytes: int) -> list[dict]:

@@ -1,293 +1,181 @@
 # First Experiment: Train a Tiny Model on TinyStories
 
-In this tutorial, you will run your first Marin experiment: training a tiny
-language model on the TinyStories dataset.
-Don't get too excited, for this model will not be good;
-our goal is just to run something.
+In this tutorial, you will run your first Marin experiment: training a tiny language model
+on the [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) dataset.
+The goal is not to train a good model — it is to run something from start to finish.
 
-In this tutorial, we will cover the following:
+We assume you have already gone through the [installation](installation.md) tutorial.
 
-1. Creating an experiment script
-2. Creating the steps to train a tiny model on CPU or GPU
-3. Running the experiment
+## What you will do
 
-We assume you've already gone through the [installation](installation.md) tutorial
-to install Marin and set up your environment.
+1. Write a minimal experiment script using Marin's lazy artifact API.
+2. Run it locally on CPU.
+3. Inspect the artifacts it produces.
 
-## Creating an Experiment Script
+## The structure of a Marin experiment
 
-Experiments scripts live in the `experiments` directory. For instance, the script for this tutorial is in
-`experiments/tutorials/train_tiny_model_cpu.py` or `experiments/tutorials/train_tiny_model_gpu.py` if you want to test on a GPU machine.
-
-By convention, experiments are usually named `exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
-But, to follow along with this tutorial, you can name it whatever you want.
-
-To train a model, we need to:
-
-1. Choose a dataset
-2. Tokenize the dataset
-3. Define training configuration
-4. Train the model
-
-Let's do that step by step.
-
-### 1. Choose a Dataset
-
-For this tutorial, we will use the [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) dataset.
-This dataset is a collection of synthetic short stories, each about 100 tokens long.
-
-We'll just reference it by its Hugging Face name:
+A Marin experiment script constructs lazy artifact handles, lowers them to a step graph,
+and hands the graph to `StepRunner`. Nothing runs at import time; all I/O happens in
+`StepRunner.run`.
 
 ```python
-tinystories_hf_id = "roneneldan/TinyStories"
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
+
+def build():
+    ...  # return a lazy artifact handle
+
+if __name__ == "__main__":
+    StepRunner().run([lower(build())])
 ```
 
-### 2. Tokenize the Dataset
+## Step 1: Tokenize the dataset
 
-To tokenize the dataset, we use the `default_tokenize` function from `experiments.defaults`.
-This function takes a dataset and a tokenizer and returns an `ExecutorStep` that produces a tokenized dataset.
-The tokenized dataset is a directory containing one file per shard of the dataset.
+`tokenized` from `marin.experiment.data` returns an `ArtifactStep[TokenizedCache]` handle — a
+lazy reference to a Levanter tokenized cache. The tokenization step runs before training, and
+its output is cached for future runs.
 
 ```python
-from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import versioned
-from experiments.tokenization import default_tokenize
-from experiments.marin_models import marin_tokenizer
+from marin.experiment.data import tokenized
+from experiments.marin_tokenizer import marin_tokenizer
 
-tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
-    dataset=tinystories_hf_id,  # HF dataset id
+tinystories_tokenized = tokenized(
+    name="tokenized/tinystories",
+    source="roneneldan/TinyStories",  # HuggingFace dataset id
     tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),  # keep tutorial fast by tokenizing 1k samples per shard
+    version="2026.06.28",
+    sample_count=1000,  # cap at 1 000 samples per shard to keep the tutorial fast
 )
 ```
 
-An [`ExecutorStep`](../explanations/executor.md#steps) is the basic unit of work in Marin.
-A step defines a piece of work to be done, such as tokenizing a dataset or training a model.
-Each step has a name, a function to execute, and a configuration object.
-The function takes the configuration object and produces some output.
-The output of a step can be used as the input to another step.
+`tinystories_tokenized` is an `ArtifactStep[TokenizedCache]` handle. Constructing it does not download or
+tokenize anything. The actual work happens when `StepRunner` encounters this step in the
+dependency graph.
 
-By convention, we name steps based on what they produce. The `tinystories_tokenized` step produces a tokenized dataset,
-and you can use that step anywhere a path to a tokenized dataset is expected.
+## Step 2: Choose a model configuration
 
-### 3. Define Training Configuration
+```python
+from levanter.models.llama import LlamaConfig
 
-For this tutorial, we will use the `SimpleTrainConfig` class from `experiments.simple_train_config`.
-This class defines basic training configuration that is sufficient for most experiments.
+# A tiny Llama for fast local testing.
+llama_nano = LlamaConfig(
+    max_seq_len=2048,
+    hidden_dim=128,
+    intermediate_dim=512,
+    num_heads=4,
+    num_kv_heads=4,
+    num_layers=2,
+)
+```
 
-!!! info "Training Configuration for Different Accelerators"
-    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through [`ResourceConfig`](../references/resource-config.md) factory methods.
-
-    === "CPU"
-        ```python
-        from fray.cluster import ResourceConfig
-        from experiments.simple_train_config import SimpleTrainConfig
-
-        nano_train_config = SimpleTrainConfig(
-            # Here we define the hardware resources we need.
-            resources=ResourceConfig.with_cpu(),
-            train_batch_size=4,
-            num_train_steps=100,
-            # set hyperparameters
-            learning_rate=6e-4,
-            weight_decay=0.1,
-            # keep eval quick for tutorial
-            max_eval_batches=4,
-        )
-        ```
-
-    === "GPU"
-        ```python
-        from fray.cluster import ResourceConfig
-        from experiments.simple_train_config import SimpleTrainConfig
-
-        nano_train_config = SimpleTrainConfig(
-            # Here we define the hardware resources we need.
-            resources=ResourceConfig.with_gpu("H100", count=1),
-            train_batch_size=32,
-            num_train_steps=100,
-            # set hyperparameters
-            learning_rate=6e-4,
-            weight_decay=0.1,
-        )
-        ```
-
-    === "TPU"
-        ```python
-        from fray.cluster import ResourceConfig
-        from experiments.simple_train_config import SimpleTrainConfig
-
-        nano_train_config = SimpleTrainConfig(
-            # Here we define the hardware resources we need.
-            resources=ResourceConfig.with_tpu("v4-8"),
-            train_batch_size=4,
-            num_train_steps=100,
-            # set hyperparameters
-            learning_rate=6e-4,
-            weight_decay=0.1,
-            # keep eval quick for tutorial
-            max_eval_batches=4,
-        )
-        ```
-
-`ResourceConfig.with_cpu()` is a [resource configuration](../references/resource-config.md) factory that requests CPUs;
-`ResourceConfig.with_gpu()` requests GPUs; and `ResourceConfig.with_tpu()` requests TPUs.
-
-### 4. Train the Model
-
-To train the model, we use the `default_train` function from `experiments.defaults`.
-This function takes a tokenized dataset, a model configuration, and a training configuration and returns (a step that trains) the model.
+The `llama_nano` configuration from `experiments/llama.py` defines a model with the same
+shape, pre-tuned for CPU runs. You can import it directly:
 
 ```python
 from experiments.llama import llama_nano
-from experiments.defaults import default_train
-
-nano_tinystories_model = default_train(
-    name="marin-nano-tinystories",
-    tokenized=tinystories_tokenized,
-    model_config=versioned(llama_nano),
-    train_config=nano_train_config,
-    tags=["llama", "nano", "tinystories", "tutorial"],
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
 ```
 
-Let's break this down:
+## Step 3: Assemble the training run
 
-- `name`: The name of the training run. This is used to form the output path for the `ExecutorStep`.
-- `tokenized`: The tokenized dataset to train on. Here, we're passing the `tinystories_tokenized` step we defined earlier.
-- `model_config`: The model configuration to use. This is a `LmConfig` from [Levanter](https://github.com/stanford-crfm/levanter).
-   We use the `llama_nano` configuration from `experiments.llama`.
-- `train_config`: The training configuration to use, which we just defined.
-- `tags`: Tags to add to the WandB tracker. This is useful for filtering runs in the WandB UI.
-- `eval_harness_tasks`: A list of evaluation harness tasks to run during training. We pass an empty list here because we don't want to run any evals on this tiny model.
-- `use_default_validation`: Whether to use the default validation sets. We pass `False` here because we just want to evaluate on TinyStories' validation set.
-
-### Invoking the Executor
-
-Finally, we need to invoke the executor to run our experiment.
-We do this by calling `executor_main` from `marin.execution.executor`.
-We put this in a `if __name__ == "__main__":`:
+`train_lm` from `marin.experiment.train` takes every experiment decision as an explicit
+argument and returns an `ArtifactStep[LevanterCheckpoint]` handle. It handles the mechanical
+plumbing — the mesh, the checkpointer, the Fray dispatch — while you supply the policy.
 
 ```python
-from marin.execution.executor import executor_main
+from fray.cluster import ResourceConfig
+from levanter.optim import AdamConfig
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
-if __name__ == "__main__":
-    executor_main(
-        steps=[
-            nano_tinystories_model,
-        ]
+BATCH_SIZE = 4
+SEQ_LEN = 2048
+NUM_TRAIN_STEPS = 100
+
+
+def build() -> ArtifactStep[LevanterCheckpoint]:
+    return train_lm(
+        name="checkpoints/marin-nano-tinystories",
+        version="2026.06.28",
+        model=llama_nano,
+        optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
+        datasets={tinystories_tokenized: 1.0},
+        batch_size=BATCH_SIZE,
+        seq_len=SEQ_LEN,
+        num_train_steps=NUM_TRAIN_STEPS,
+        z_loss_weight=None,
+        evals=None,  # skip harness evals for this tiny tutorial run
+        resources=ResourceConfig.with_cpu(),
     )
 ```
 
-This invokes the executor with our training step.
-The executor will automatically run any dependencies of the training step, such as tokenization,
-so we don't need to explicitly list them.
+Key arguments:
 
-## Running the Experiment
+- `name` and `version` form the output path `{prefix}/{name}/{version}`.
+- `datasets` is a dict of `ArtifactStep[TokenizedCache]` handles to weights; `train_lm`
+  assembles the Levanter data mixture and resolves each dataset to its path at run time. Dataset
+  dependencies are inferred automatically — no separate `deps` list is needed.
+- `resources=ResourceConfig.with_cpu()` keeps the run local (no TPU or GPU needed).
 
-To run the experiment locally, we can run the script directly:
+## Step 4: Wire the main block
 
-=== "CPU"
-    ```bash
-    uv run python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
-    ```
+```python
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
 
-=== "GPU"
-    ```bash
-    uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
-    ```
-
-The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
-such as `s3://` or `gs://`.
-Alternatively, you can set the `MARIN_PREFIX` environment variable to achieve the same. For a detailed explanation of both methods and important considerations for choosing your output path, please see [Understanding `MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md).
-
-This will take a few minutes to run. (Marin isn't optimized for low latency and the scheduler can take a while to warm up initially...)
-
-At the end, you should see a message like this:
-
-```
-2025-05-07 23:00:24,099	INFO executor.py:1036 -- Executor run took 263.37s
-2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to local_store/experiments/train_tiny_model_cpu-0b39f4.json
-2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:3000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
+if __name__ == "__main__":
+    StepRunner().run([lower(build())])
 ```
 
+`lower(build())` traverses the dependency graph from `build()` and converts each handle
+into a `StepSpec`. `StepRunner.run` checks the cache for each step and runs any that are
+missing.
 
-
-### Inspecting the Output
-
-You can look at the artifacts logged to the output directory. Typically, for training jobs, most
-interesting logging goes to WandB, which you likely disabled.
-
-```
-$ ls local_store/*
-local_store/checkpoints:
-marin-nano-tinystories-b4157e
-
-local_store/experiments:
-train_tiny_model_cpu-0b39f4.json
-
-local_store/tokenized:
-roneneldan
-```
-
-The `experiments` directory contains the experiment JSON file (which tracks all the steps and their dependencies).
-The `checkpoints` directory contains the trained model.
-The `tokenized` directory contains the tokenized dataset.
-
-### Inspecting the Experiment in the Data Browser
-
-The JSON file contains a record of the experiment, including the steps and dependencies.
-You can browse it using the [data browser](https://github.com/marin-community/data_browser) — see its README for setup instructions. Once running, it should start a browser pointed at [http://localhost:3000](http://localhost:3000).
-
-From there, you can click on the first link to select the prefix directory, then navigate to the experiment JSON file (experiments -> `train_tiny_model_cpu-xxxxxx.json`).
-Then click on "Go to experiment" to see the details of your experiment.
-
-You can see the steps that were run, their dependencies, and their outputs.
-
-If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
-
-## Next Steps
-
-Congratulations! You have trained your first model in Marin.  Choose your next adventure:
-
-- Train a real [1B or 8B parameter language model](train-an-lm.md) using Marin.
-- Learn about the [Executor framework](../explanations/executor.md).
-- Read more about the full [language modeling pipeline](../explanations/lm-pipeline.md), including data processing.
-
-## Troubleshooting
-
-### The job failed, how do I rerun it?
-
-By default, the Marin executor won't rerun steps that failed.
-To force it to rerun a step, you can use the `--force_run_failed true` flag.
-
-=== "CPU"
-    ```bash
-    uv run python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store --force_run_failed true
-    ```
-
-=== "GPU"
-    ```bash
-    uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store --force_run_failed true
-    ```
-
-### I want to rerun the step after it succeeded, how do I do that?
-
-By default, the Marin executor won't rerun steps that succeeded either.
-The easiest way to do this is to remove the output directory for the step.
-For instance, if the step is named `marin-nano-tinystories-b4157e`, you can remove the output directory with:
+## Running the experiment
 
 ```bash
-rm -rf local_store/checkpoints/marin-nano-tinystories-b4157e
+MARIN_PREFIX=local_store uv run python my_experiment.py
 ```
 
-Note, however, that WandB does not like reusing the same run ID, so you may need to change the `name` argument to `default_train` to a new value.
-(If you're using WandB in offline mode, this isn't an issue.)
+`MARIN_PREFIX` sets the root directory for all outputs. It can be a local path or anything
+[fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports (e.g. `gs://`). If
+you already exported `MARIN_PREFIX` in your shell, just run `uv run python my_experiment.py`.
+See [Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md).
 
-### I don't want to use WandB, how do I disable it?
+This takes a few minutes on a CPU. The output ends with something like:
 
-`wandb offline` will disable WandB in your current directory.  Run `wandb online` to re-enable it.
+```
+INFO step_runner.py -- All steps complete.
+```
+
+## Inspecting the artifacts
+
+After the run, your prefix directory contains:
+
+```
+local_store/
+  tokenized/tinystories/2026.06.28/    # the tokenized dataset cache
+  checkpoints/marin-nano-tinystories/2026.06.28/  # the model checkpoint
+```
+
+Each artifact is at a stable, human-readable path determined by its `name` and `version`.
+Rerunning the same script skips steps whose outputs already exist.
+
+### Rerunning a failed step
+
+`StepRunner` skips steps that succeeded. To force a failed step to rerun:
+
+```bash
+MARIN_PREFIX=local_store uv run python my_experiment.py --force_run_failed true
+```
+
+### Rerunning a succeeded step
+
+Remove the artifact directory, then rerun the script. Alternatively, bump the `version`
+in `train_lm` to produce a new artifact at a new path without touching the old one.
+
+## Next steps
+
+- Train a full [1B parameter model](train-an-lm.md) using the DCLM mixture.
+- Learn how lazy artifacts work in [Lazy artifacts](../explanations/lazy-artifacts.md).
+- Read about the full [language modeling pipeline](../explanations/lm-pipeline.md).

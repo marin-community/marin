@@ -28,8 +28,6 @@ finelog's CLI translate their own config schema into a ``TunnelTarget``
 and use this directly; iris's k8s port-forward should migrate here too.
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import os
@@ -206,7 +204,7 @@ def _send(proc: subprocess.Popen, pgid: int | None, sig: int) -> None:
         pass
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def terminate_process_group(proc: subprocess.Popen, *, grace_period: float = 5.0) -> None:
     """Tear ``proc`` down along with every descendant in its session.
 
     ``gcloud compute ssh`` and ``kubectl port-forward`` are wrappers that
@@ -214,14 +212,18 @@ def _terminate(proc: subprocess.Popen) -> None:
     listener. Signaling only the wrapper pid lets the wrapper exit while
     the descendant keeps the local port — and the remote session — alive
     past context exit. Send to the whole process group instead, escalating
-    to ``SIGKILL`` if the group does not exit within five seconds.
+    to ``SIGKILL`` if the group does not exit within ``grace_period`` seconds.
+
+    Args:
+        proc: Session-leading process to terminate.
+        grace_period: Time to allow a graceful shutdown before sending ``SIGKILL``.
     """
     if proc.poll() is not None:
         return
     pgid = _process_group(proc)
     _send(proc, pgid, signal.SIGTERM)
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=grace_period)
         return
     except subprocess.TimeoutExpired:
         pass
@@ -292,7 +294,7 @@ def open_tunnel(
         with proc_lock:
             current = proc_ref[0]
         if current is not None:
-            _terminate(current)
+            terminate_process_group(current)
         raise RuntimeError(f"tunnel {label} did not open local port {local_port} within {timeout:.0f}s")
 
     logger.info("Tunnel ready: 127.0.0.1:%d -> %s", local_port, label)
@@ -330,4 +332,4 @@ def open_tunnel(
         with proc_lock:
             current = proc_ref[0]
         if current is not None:
-            _terminate(current)
+            terminate_process_group(current)

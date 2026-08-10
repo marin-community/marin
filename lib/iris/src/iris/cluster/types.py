@@ -19,16 +19,114 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
-from iris.cluster.constraints import Constraint
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    wants_gpu_extra,
+)
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
+
+
+class AcceleratorType(StrEnum):
+    """Device/accelerator type for scale groups."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
+class CapacityType(StrEnum):
+    """Capacity type for provisioning — controls which cloud API is used."""
+
+    PREEMPTIBLE = "preemptible"
+    ON_DEMAND = "on_demand"
+    RESERVED = "reserved"
+
+
+class GcpSliceMode(StrEnum):
+    """Provisioning mode for GCP slices: a TPU pod or a plain CPU VM."""
+
+    TPU = "tpu"
+    VM = "vm"
+
+
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
+and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
+connection (no config object), so both must agree on this exact literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
+
+
+class WellKnownAttribute(StrEnum):
+    """Canonical attribute keys for constraint-based scheduling."""
+
+    DEVICE_TYPE = "device-type"
+    DEVICE_VARIANT = "device-variant"
+    PREEMPTIBLE = "preemptible"
+    REGION = "region"
+    ZONE = "zone"
+    TPU_NAME = "tpu-name"
+    TPU_WORKER_ID = "tpu-worker-id"
+    TPU_TOPOLOGY = "tpu-topology"
+    TPU_VM_COUNT = "tpu-vm-count"
+    GPU_VARIANT = "gpu-variant"
+    GPU_COUNT = "gpu-count"
+
+
+AUTO_DEVICE_VARIANT = "auto"
+"""Device-variant sentinel meaning "unspecified — let the platform pick a variant".
+
+A resource spec or scale group carrying this variant emits no ``device-variant``
+routing constraint or advertised attribute, so the job matches any variant.
+"""
+
+
+# The reserved cluster name for work this controller owns and runs itself. Every
+# ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
+# ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
+# control plane folds on ``cluster == LOCAL_CLUSTER`` instead of special-casing a
+# local-vs-federated boolean. It is a reserved name — a real cluster id may not be
+# ``"local"`` (enforced in config validation) — so the sentinel and the global
+# cluster-id namespace stay disjoint.
+LOCAL_CLUSTER = "local"
+
+LOCAL_ADMIN_SUBMITTER = "local_admin"
+"""``submitting_user`` for a job admitted without an authenticated email.
+
+A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
+than a person, so its jobs are attributed to this well-known principal. Per-cluster
+federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
+a peer only if that peer's policy names it explicitly."""
+
+
+def is_federated(cluster: str) -> bool:
+    """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.
+
+    Its complement — a locally-owned job — is ``cluster == LOCAL_CLUSTER``; call sites
+    that need the fold predicate compare against ``LOCAL_CLUSTER`` directly.
+    """
+    return cluster != LOCAL_CLUSTER
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,10 +435,9 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
-    failure_count: int
-    preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
     submitted_at_ms: Timestamp
@@ -350,8 +447,6 @@ class PendingTask:
     priority_insertion: int
     job_state: int
     scheduling_deadline_epoch_ms: int | None
-    is_reservation_holder: bool
-    has_reservation: bool
     scheduling_timeout_ms: int | None
     has_coscheduling: bool
     coscheduling_group_by: str | None
@@ -374,16 +469,54 @@ class UserBudgetDefaults:
     max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
+class WorkerUsability(StrEnum):
+    """How the control loop may use a worker, derived from its liveness.
+
+    Consumers project this verdict rather than re-deriving it from the raw
+    ``healthy``/``active``/``consecutive_failures`` fields:
+
+    - scheduling placement targets ``HEALTHY`` only;
+    - the reconcile pass targets ``HEALTHY | DEGRADED`` (it keeps probing a
+      mid-failure worker so it can recover or cross the teardown threshold);
+    - autoscaler idle-spare accounting counts ``HEALTHY`` only, so a ``DEGRADED``
+      idle worker is never reclaimed as free capacity.
+    """
+
+    HEALTHY = "healthy"
+    """Active, healthy, no consecutive failures — a placement target."""
+
+    DEGRADED = "degraded"
+    """Active and healthy but accumulating failures — reconciled, NOT placeable,
+    and NOT counted as idle spare. Torn down by the health threshold path, not
+    by capacity scale-down."""
+
+    DEAD = "dead"
+    """Not active or not healthy — excluded from reconcile, scheduling, and
+    idle tracking."""
+
+
 @dataclass(frozen=True)
 class WorkerStatus:
     """Worker status keyed by worker_id for autoscaler idle tracking."""
 
     worker_id: str
     running_task_ids: frozenset[str]
+    usability: WorkerUsability = WorkerUsability.HEALTHY
 
     @property
     def is_idle(self) -> bool:
         return len(self.running_task_ids) == 0
+
+    @property
+    def is_idle_spare(self) -> bool:
+        """Idle AND schedulable — safe to reclaim via scale-down.
+
+        A ``DEGRADED`` idle worker is not a spare: counting it as reclaimable
+        headroom is exactly what let the autoscaler call an unschedulable slice
+        "idle — eligible for scale-down" while the scheduler was still waiting
+        for that pool.
+        """
+        return self.is_idle and self.usability is WorkerUsability.HEALTHY
 
 
 WorkerStatusMap = dict[str, WorkerStatus]
@@ -407,31 +540,6 @@ class CoschedulingConfig:
     def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
         return job_pb2.CoschedulingConfig(group_by=self.group_by)
-
-
-@dataclass(frozen=True)
-class ReservationEntry:
-    """A single reservation entry describing one worker's worth of resources.
-
-    Used in the high-level client API. Each entry becomes a demand anchor
-    that the autoscaler provisions before the reserving job schedules.
-
-    Example:
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2),
-        ...                  constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")])
-    """
-
-    resources: "ResourceSpec"
-    constraints: list[Constraint] | None = None
-
-    def to_proto(self) -> job_pb2.ReservationEntry:
-        """Convert to protobuf representation."""
-        constraints_proto = [c.to_proto() for c in self.constraints or []]
-        return job_pb2.ReservationEntry(
-            resources=self.resources.to_proto(),
-            constraints=constraints_proto,
-        )
 
 
 def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
@@ -475,7 +583,12 @@ def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
 
     Returns:
         DeviceConfig with the gpu field set.
+
+    Raises:
+        ValueError: if count is not a positive integer.
     """
+    if count < 1:
+        raise ValueError(f"GPU count must be a positive integer, got {count}")
     return job_pb2.DeviceConfig(
         gpu=job_pb2.GpuDevice(
             variant=variant,
@@ -520,6 +633,7 @@ class ResourceSpec:
     """Resource specification for jobs.
 
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
+    Memory is the container limit for anonymous memory and ``/dev/shm`` combined.
     """
 
     cpu: float = 0.0
@@ -527,8 +641,10 @@ class ResourceSpec:
     disk: str | int = 0
     device: job_pb2.DeviceConfig | None = None
 
-    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
-    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
+    # loading, but explicit CPU requests are preserved for quota-constrained
+    # queues and diagnostic runs.
+    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
 
     def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
@@ -577,6 +693,10 @@ _root.addHandler(_handler)
 _root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -599,6 +719,21 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
+      at submission (or forwarded from this process's own env when re-submitting inside
+      a task), so tasks stamp artifacts with the submitter's git identity
+
+    Setup:
+    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
+      scopes that sync to specific workspace members (default: all members).
+    - ``setup_scripts`` set to a list runs those scripts verbatim before the
+      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
+      image is used as-is). Build the default and tweak it via
+      ``iris.cluster.setup_scripts.default_setup_script``.
+
+    Whenever any setup runs (default or custom), iris appends its own
+    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
+    present; it is skipped only for the no-setup (``[]``) case.
 
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
@@ -606,26 +741,57 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format, resolving the user setup scripts.
+
+        ``setup_scripts=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
+        wire carries only this user list.
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            # Launch provenance: a task running from a git-less bundle inherits the
+            # submitter's identity via Provenance.capture(); transitive, since a task
+            # re-submitting captures this same env value.
+            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
+        if wants_gpu_extra(self.extras or ()):
+            default_env_vars.update(
+                {
+                    NCCL_RAS_ENABLE_ENV: "1",
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
+                }
+            )
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if self.setup_scripts is None:
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            extras = list(self.extras or [])
+            setup_scripts = [
+                default_setup_script(
+                    extras=extras,
+                    pip_packages=list(self.pip_packages or []),
+                    python_version=py_version,
+                    packages=list(self.sync_packages or []) or None,
+                )
+            ]
+            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
+            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
+            if wants_gpu_extra(extras):
+                setup_scripts.append(cuda_toolchain_setup_script())
+        else:
+            setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        return job_pb2.EnvironmentConfig(
-            pip_packages=list(self.pip_packages or []),
-            env_vars=merged_env_vars,
-            extras=list(self.extras or []),
-            python_version=py_version,
-        )
+        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
 
 class Namespace(str):
@@ -700,6 +866,14 @@ def is_task_finished(state: int) -> bool:
 
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
+EndpointAccess = controller_pb2.Controller.EndpointAccess
+
+# Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
+# override the controller proxy's per-request upstream timeout for that endpoint —
+# e.g. ``marin-serve`` sizing it to long model generations. In the shared types
+# module so registry client and controller proxy agree on the key with no client
+# dependency on controller code.
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

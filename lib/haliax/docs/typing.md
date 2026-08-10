@@ -65,7 +65,7 @@ assert arr.matches_axes(ht.f32["batch"])  # dtype and axes both match
 ### Why not use `NamedArray` directly in type annotations?
 
 Using `NamedArray` directly in type annotations doesn't work well with
-type checkers like `mypy` or `pyright`. These tools expect types to be
+type checkers like `pyrefly` or `pyright`. These tools expect types to be
 subscripted with other types or forward references (which are strings).
 Using `NamedArray` directly would lead to type errors.
 
@@ -78,7 +78,7 @@ and methods that take or return `NamedArray` objects with specific axes and dtyp
 
 ### Why do I have to specify the `NamedArray` type in the annotation?
 
-I hate this, but it's the only way to get type checkers like `mypy` and `pyright` to understand that the type is
+I hate this, but it's the only way to get type checkers like `pyrefly` and `pyright` to understand that the type is
 a `NamedArray`. Underneath the hood, during type checking, `jaxtyping.Float` (and `haxtyping.Float`) are
 essentially type aliases of [`Annotated`](https://docs.python.org/3/library/typing.html#typing.Annotated)
 with the `NamedArray` type. There's no other way I could find to get type checkers to understand that the type is a

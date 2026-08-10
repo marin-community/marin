@@ -10,8 +10,6 @@ call is recorded so we can compare the REST API behavior against what the old
 gcloud CLI produced.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import urllib.parse
@@ -19,14 +17,14 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
-from iris.cluster.backends.gcp.service import (
+from iris.cluster.platforms.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
     operation_error,
 )
-from iris.cluster.backends.types import QuotaExhaustedError
-from iris.rpc import config_pb2
+from iris.cluster.platforms.types import QuotaExhaustedError
+from iris.cluster.types import CapacityType
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +310,8 @@ def _dump_http_log(log: list[HttpLog]) -> str:
 
 
 def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
+    # wait=True: this test exercises the controller-VM bootstrap path that needs
+    # the instance IP immediately after create.
     vm = svc.vm_create(
         VmCreateRequest(
             name="ctrl-vm",
@@ -320,7 +320,8 @@ def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
             labels={"iris-managed": "true"},
             startup_script="#!/bin/bash\necho hello",
             service_account="sa@test.iam.gserviceaccount.com",
-        )
+        ),
+        wait=True,
     )
 
     assert vm.name == "ctrl-vm", f"Expected ctrl-vm, got {vm.name}\n{_dump_http_log(backend.http_log)}"
@@ -360,7 +361,7 @@ def test_tpu_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"iris-managed": "true", "env": "test"},
             metadata={"startup-script": "#!/bin/bash\necho bootstrap"},
             service_account="worker@test.iam.gserviceaccount.com",
@@ -415,7 +416,7 @@ def test_tpu_create_across_zones(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"managed": "true"},
         )
     )
@@ -425,7 +426,7 @@ def test_tpu_create_across_zones(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_US,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"managed": "true"},
         )
     )
@@ -456,7 +457,7 @@ def test_tpu_metadata_and_network_config(svc: CloudGcpService, backend: GcpFakeB
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+            capacity_type=CapacityType.ON_DEMAND,
             labels={},
             metadata={"startup-script": large_script, "other-key": "other-value"},
             network="projects/test/global/networks/default",

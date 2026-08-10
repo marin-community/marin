@@ -14,7 +14,7 @@ import haliax
 
 from test_utils import use_test_mesh
 
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.optim.skipstep import SkipStepConfig, SkipStepState
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 

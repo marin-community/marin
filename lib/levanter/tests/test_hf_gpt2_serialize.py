@@ -16,6 +16,7 @@ import pytest
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
+from rigging.filesystem import filesystem
 from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
@@ -25,9 +26,9 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from tests.test_utils import use_test_mesh
+from test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
 
@@ -45,13 +46,6 @@ def test_hf_gpt2_roundtrip_fa():
     config = Gpt2Config.from_hf_config(hf_config)
     config = dataclasses.replace(config, use_flash_attention=True, flash_attention_block_size=128)
     _roundtrip_compare_gpt2_checkpoint(TEST_GPT2_MODEL_ID, None, config=config)
-
-
-# TODO: gotta figure out why this regressed
-@pytest.mark.skip
-@skip_if_no_torch
-def test_mistral_gpt2_roundtrip():
-    _roundtrip_compare_gpt2_checkpoint("stanford-crfm/expanse-gpt2-small-x777", "checkpoint-60000")
 
 
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):
@@ -218,7 +212,7 @@ def test_hf_save_to_fs_spec():
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # now copy the model to tmp because loading from memory doesn't work
-            fs: AbstractFileSystem = fsspec.filesystem("memory")
+            fs: AbstractFileSystem = filesystem("memory")
             fs.get("model/", f"{tmpdir}/test", recursive=True)
 
             loaded_model = converter.load_pretrained(Gpt2LMHeadModel, ref=f"{tmpdir}/test")

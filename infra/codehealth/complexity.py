@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = []
 # ///
 
@@ -20,8 +20,6 @@ only bound what we *show* — they are not thresholds the agent must flag, and t
 agent stays free to flag a unit the leads missed or to ignore a flagged one that
 is genuinely cohesive.
 """
-from __future__ import annotations
-
 import ast
 import sys
 from dataclasses import dataclass

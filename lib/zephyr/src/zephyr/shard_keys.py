@@ -3,31 +3,31 @@
 
 """Deterministic hashing and sort-key helpers for Zephyr shard routing."""
 
-from __future__ import annotations
-
-from collections.abc import Callable
-
 import msgspec
 import xxhash
+
+_encoder = msgspec.msgpack.Encoder(order="deterministic")
+
+
+def encode_key(obj: object) -> bytes:
+    """Encode a routing key to its canonical msgpack bytes.
+
+    The same encoding backs both shard routing and the binary sort-key column
+    written by the shuffle, so a key always hashes to the shard whose chunks
+    store it.
+    """
+    return _encoder.encode(obj)
+
+
+def hash_encoded_key(encoded: bytes) -> int:
+    """Hash key bytes produced by :func:`encode_key`.
+
+    Callers that already hold the encoded key use this instead of
+    :func:`deterministic_hash` to avoid encoding it a second time.
+    """
+    return xxhash.xxh3_64_intdigest(encoded)
 
 
 def deterministic_hash(obj: object) -> int:
     """Compute a deterministic hash for an object."""
-    s = msgspec.msgpack.encode(obj, order="deterministic")
-    return xxhash.xxh3_64_intdigest(s)
-
-
-def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
-    """Build a merge/sort key from a grouping key and an optional secondary sort.
-
-    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
-    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
-    group key and then by the secondary key; grouping should still use
-    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
-    and the reduce-side k-way merge so the two stay consistent.
-    """
-    if sort_fn is None:
-        return key_fn
-    # Bind to a non-Optional local so the closure captures a narrowed type.
-    secondary = sort_fn
-    return lambda item: (key_fn(item), secondary(item))
+    return hash_encoded_key(encode_key(obj))

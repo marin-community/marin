@@ -56,17 +56,20 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty, next_token_loss_weight
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
+# The pinned lm-eval fork reads attributes such as `transformers.AutoModelForVision2Seq` (removed in
+# transformers>=5) at import time, raising AttributeError rather than ImportError. Catch both so a
+# broken or absent fork degrades to "lm-eval unavailable" instead of crashing the run.
 try:
     from lm_eval import evaluator
     from lm_eval.api.instance import Instance
     from lm_eval.api.model import TemplateLM
     from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
-except ImportError:
+except (ImportError, AttributeError):
     TemplateLM = object
     Instance = object
     evaluator = object
@@ -80,9 +83,9 @@ from tqdm_loggable.auto import tqdm
 import levanter.config
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.data import batched
+from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
@@ -260,17 +263,16 @@ class _LmEvalHarnessWorker:
             if self.mp is not None:
                 model = self.mp.cast_to_compute(model)
 
-            activations = model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
-            if isinstance(activations, tuple):
-                activations, _ = activations
+            activations, _ = split_activations(
+                model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
+            )
 
             pred_embeddings = activations.astype(jnp.float32)
             pred_lm_head = model.get_lm_head().astype(jnp.float32)
             Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
 
             target_y = hax.roll(packed_example.tokens, -1, Pos)
-            not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-            loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
+            loss_weight = next_token_loss_weight(Pos, packed_example.loss_weight.astype(jnp.float32))
 
             loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
                 pred_embeddings,
@@ -435,7 +437,7 @@ def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
     return eos_token_id
 
 
-# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent
+# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent or broken
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -522,11 +524,6 @@ class LevanterHarnessLM(TemplateLM):
         """Return the end-of-text token ID."""
         return self.tokenizer.eos_token_id
 
-    def set_current_task(self, task_name: str):
-        self._current_task = task_name
-        if self.sample_logging_config.should_log() and task_name not in self.sample_outputs:
-            self.sample_outputs[task_name] = []
-
     def get_sample_outputs(self) -> dict[str, list[dict]]:
         """
         Get all stored sample outputs.
@@ -553,10 +550,6 @@ class LevanterHarnessLM(TemplateLM):
             return bucket
 
         return None
-
-    def _log_profiler_artifact(self):
-        """Log profiler artifact to the tracker."""
-        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
 
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
@@ -586,7 +579,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -594,7 +586,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")
@@ -607,11 +598,10 @@ class LevanterHarnessLM(TemplateLM):
         """
         pad_token_id = _eval_pad_token_id(self.tokenizer)
 
-        current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(request.task_name)
             if bucket is None:
-                break
+                continue
             prompt = request.args[0]
             continuation = request.args[1]
             bucket.append(
@@ -744,7 +734,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
-        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent
+        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent or broken
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -777,7 +767,7 @@ class LevanterHarnessLM(TemplateLM):
     def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
         raise NotImplementedError()
 
-    def generate_until(self, requests) -> List[str]:
+    def generate_until(self, requests: list[Instance]) -> List[str]:
         # Error out on multihost JAX - Engine doesn't support it yet
         if jax.process_count() > 1:
             raise NotImplementedError(
@@ -932,7 +922,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
-                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent
+                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent or broken
                 text = postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
@@ -943,8 +933,7 @@ class LevanterHarnessLM(TemplateLM):
                 logger.info(f"Generation {i} - No tokens available, using empty string")
                 outputs.append(text)
 
-            current_task = getattr(self, "_current_task", "generation_task")
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(requests[i].task_name)
             if bucket is not None:
                 prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
                 bucket.append(
@@ -1398,17 +1387,13 @@ def _actually_run_eval_harness(
         averages = _compute_averages(outputs)
         outputs["averages"] = averages
 
-        # Get the collected sample outputs and add them to the results
+        # Attach each benchmark's own samples to its results entry. Group-level entries in
+        # `results` have no requests of their own, so they have no samples to attach.
         sample_outputs = harness.get_sample_outputs()
-        if config.sample_logging.should_log() and sample_outputs:
-            # Add outputs to each benchmark in results
-            for task_name in outputs.get("results", {}):
-                # Get all sample outputs for this task (since we don't track individual tasks yet)
-                all_samples = []
-                for samples in sample_outputs.values():
-                    all_samples.extend(samples)
-                if all_samples:
-                    outputs["results"][task_name]["outputs"] = all_samples
+        for task_name, task_results in outputs.get("results", {}).items():
+            samples = sample_outputs.get(task_name)
+            if samples:
+                task_results["outputs"] = samples
 
         return outputs
     else:

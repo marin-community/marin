@@ -1,0 +1,66 @@
+{
+  "type": "stat",
+  "title": "K8s APIs unreachable",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "min": 0,
+      "noValue": "0",
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          },
+          {
+            "color": "yellow",
+            "value": 1
+          },
+          {
+            "color": "red",
+            "value": 5
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "sum"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "auto",
+    "orientation": "auto"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/alerts/unreachable",
+      "url_options": {
+        "method": "GET",
+        "params": []
+      },
+      "columns": [
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

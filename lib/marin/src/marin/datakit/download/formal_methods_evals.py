@@ -22,8 +22,6 @@ Supported archive formats: ``tar``, ``tar.gz`` (``.tgz``), ``tar.bz2``, ``tar.xz
 the issue discussion and not supported by this module.
 """
 
-from __future__ import annotations
-
 import fnmatch
 import gzip
 import io
@@ -37,8 +35,9 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import zstandard
-from rigging.filesystem import atomic_rename, open_url
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import StoragePath, atomic_rename, open_url
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
@@ -48,8 +47,6 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +132,7 @@ class DownloadArchiveSliceConfig:
     """Runtime config for :func:`download_archive_slice`."""
 
     source: ArchiveSourceConfig
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
 
@@ -321,8 +318,7 @@ def _fetch_archive_bytes(url: str, timeout_seconds: int) -> bytes:
             response.raise_for_status()
             return response.content
     logger.info("reading archive via fsspec from %s", url)
-    with open_url(url, "rb") as fh:
-        return fh.read()
+    return StoragePath(url).read_bytes()
 
 
 def _write_source_metadata(
@@ -435,7 +431,7 @@ def download_archive_slice(cfg: DownloadArchiveSliceConfig) -> dict[str, Any]:
     """
     cfg.source.validate()
     output_path = str(cfg.output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
     output_file = posixpath.join(output_path, cfg.output_filename)
     pipeline = Dataset.from_list([_ArchiveSliceTask(cfg.source, cfg.http_timeout_seconds)]).flat_map(
         _iter_archive_slice_records

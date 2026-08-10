@@ -231,6 +231,19 @@ def test_zero_duration():
     assert zero.to_seconds() == 0.0
 
 
+def test_duration_coerces_float_inputs_to_int_ms():
+    """from_hours/from_minutes and the constructor coerce float inputs to int ms.
+
+    to_ms() promises an int and protobuf's Duration.milliseconds is int64, so a
+    float-typed hours value (e.g. a CLI --timeout-hours float default) must not
+    leak through as a float.
+    """
+    assert Duration.from_hours(24.0).to_ms() == 86_400_000
+    assert isinstance(Duration.from_hours(24.0).to_ms(), int)
+    assert isinstance(Duration.from_minutes(1.5).to_ms(), int)
+    assert Duration(1.9).to_ms() == 1
+
+
 def test_zero_deadline_expires_immediately():
     """Deadline with zero timeout expires immediately."""
     t0 = Timestamp.from_ms(1_000_000)
@@ -262,6 +275,12 @@ def test_exponential_backoff_does_not_overflow_at_high_attempt_counts():
     backoff._attempt = 100_000
     interval = backoff.next_interval()
     assert interval == 1.0
+
+
+def test_exponential_backoff_factor_one_stays_constant():
+    backoff = ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.0, jitter=0.0)
+
+    assert [backoff.next_interval() for _ in range(3)] == [0.05, 0.05, 0.05]
 
 
 # --- TokenBucket tests ---

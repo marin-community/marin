@@ -43,4 +43,5 @@ message LogEntry {
   int32 attempt_id = 4;
   LogLevel level = 5;
   string key = 6;
+  int64 seq = 7;
 }

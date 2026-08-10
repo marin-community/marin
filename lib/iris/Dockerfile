@@ -12,7 +12,7 @@
 # Build the Vue SPA. Output is consumed by the deps stage at
 # /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
 # (see lib/iris/src/iris/cluster/dashboard_common.py).
-FROM node:22-slim AS dashboard
+FROM --platform=$BUILDPLATFORM node:22-slim AS dashboard
 
 WORKDIR /build/dashboard
 
@@ -22,6 +22,68 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY lib/iris/dashboard/ ./
 RUN npm run build
+
+
+# ── Stage: iris-native-wheel ────────────────────────────────────────
+# Build the PyO3 companion once per target architecture without carrying a Rust
+# toolchain into the controller or worker images.
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.10.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
+
+COPY --from=iris-native-uv /uv /uvx /bin/
+
+WORKDIR /build/iris-native
+
+ARG BUILDARCH
+ARG TARGETARCH
+# Direct Docker builds use release. Iris CLI builds default to fast, which
+# keeps optimized parallel codegen but skips LTO.
+ARG CARGO_PROFILE=release
+
+# Keep rustc native to the builder. The extension uses PyO3's abi3-py312 ABI,
+# so a target-architecture Python interpreter is not needed for cross builds.
+RUN case "${TARGETARCH}" in \
+        amd64) rust_target=x86_64-unknown-linux-gnu; cross_cc=x86_64-linux-gnu-gcc; cross_package=gcc-x86-64-linux-gnu; cross_libc=libc6-dev-amd64-cross ;; \
+        arm64) rust_target=aarch64-unknown-linux-gnu; cross_cc=aarch64-linux-gnu-gcc; cross_package=gcc-aarch64-linux-gnu; cross_libc=libc6-dev-arm64-cross ;; \
+        *) echo "Unsupported Iris native target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    printf '%s\n' "${rust_target}" > /usr/local/lib/iris-rust-target && \
+    rustup target add "${rust_target}" && \
+    if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
+        ln -sf "$(command -v gcc)" "/usr/local/bin/${cross_cc}"; \
+    else \
+        apt-get update && \
+        apt-get install -y --no-install-recommends "${cross_package}" "${cross_libc}" && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+
+# Compile third-party dependencies from manifests before copying Iris source.
+# The target cache is shared by the dependency and wheel builds, while its ID
+# keeps target triples and optimization profiles isolated.
+COPY lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock ./
+COPY lib/iris/rust/pyext/Cargo.toml ./pyext/Cargo.toml
+RUN mkdir -p src pyext/src && \
+    printf 'pub fn placeholder() {}\n' > src/lib.rs && \
+    printf 'pub fn placeholder() {}\n' > pyext/src/lib.rs
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    cargo build --locked --workspace --profile "${CARGO_PROFILE}" --target "${rust_target}"
+
+COPY lib/iris/rust/pyproject.toml lib/iris/rust/iris_native.pyi ./
+COPY lib/iris/rust/src/ ./src/
+COPY lib/iris/rust/pyext/src/ ./pyext/src/
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    find src pyext/src -type f -exec touch {} + && \
+    uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
+        --target "${rust_target}" \
+        --profile "${CARGO_PROFILE}" \
+        --out /wheels
 
 
 # ── Stage: base ──────────────────────────────────────────────────────
@@ -69,27 +131,52 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI. finelog is a native (maturin)
-# package consumed as a pre-built wheel from the index — its wheel bundles the
-# in-process server ext (finelog._native) the controller starts, so it is NOT a
-# workspace member here (slim base has no Rust toolchain). `prerelease =
-# "explicit"` allows a prerelease only when a specifier asks for one (iris's
-# `marin-finelog >= 0.2.0.dev0`). Plain `"allow"` also pulls unrelated
-# prereleases — it grabbed httpx 1.0.dev, which drops `httpx.Limits` and crashes
-# the controller — because this reduced workspace lacks the full lock's httpx<1
-# bound. Copy only metadata first so source changes don't bust the dep cache.
+# Build against the committed root `uv.lock` (`--frozen`) so the image ships the
+# same pinned, tested dependency set as local dev and the rest of CI — no fresh
+# PyPI resolve that can float a transitive (e.g. protobuf) to an untested major.
+# marin-iris's closure is two workspace members built from source — marin-rigging
+# and marin-finelog (the pure-Python finelog client) — plus external/registry
+# deps (the native marin-finelog-server ships as a published wheel). It never
+# pulls the Rust-built members (marin-core, levanter, …), so `--package
+# marin-iris` never asks the toolchain-free slim base to build them.
+# uv must still discover every workspace member to map the lock, so copy each
+# member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
+# The first sync uses `--no-install-workspace` to install just the external deps
+# (cached across source edits); the second builds iris+rigging+finelog from source.
+# Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
+# (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
+# from the lock and never invokes a non-installed member's build backend.
+COPY uv.lock pyproject.toml ./
+COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
+COPY lib/iris/rust/pyproject.toml lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock \
+    lib/iris/rust/iris_native.pyi ./lib/iris/rust/
+COPY lib/iris/rust/pyext/Cargo.toml ./lib/iris/rust/pyext/Cargo.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
-COPY lib/iris/pyproject.toml ./lib/iris/
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv]\nprerelease = "explicit"\n\n[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-iris --no-install-project
+    uv sync --frozen --package marin-iris --no-install-workspace \
+        --no-install-package marin-iris-native
 
-# Now copy full source for rigging and iris, then install.
+# Now copy full source for rigging, finelog, and iris, then install. rigging's
+# wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
+# and finelog's force-includes lib/finelog/config/, so copy both: the editable
+# builds read them.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY config/ ./config/
+COPY lib/finelog/src/ ./lib/finelog/src/
+COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-iris
+    uv sync --frozen --package marin-iris --no-install-package marin-iris-native
+COPY --from=iris-native-wheel /wheels/marin_iris_native-*.whl /tmp/
+RUN uv pip install --no-deps /tmp/marin_iris_native-*.whl \
+    && rm /tmp/marin_iris_native-*.whl
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -102,6 +189,8 @@ RUN mkdir -p /var/cache/iris
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
 
 # ── Stage: docker-cli ────────────────────────────────────────────────
@@ -124,8 +213,10 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
-# Controller-only deps: duckdb, pyarrow, zstandard.
-RUN uv sync --extra controller --inexact
+# Controller-only deps: kubernetes (marin-iris's `controller` extra).
+# --inexact keeps the py-spy/memray installed above from being pruned.
+RUN uv sync --frozen --package marin-iris --extra controller --inexact \
+    --no-install-package marin-iris-native
 
 LABEL org.opencontainers.image.description="Iris controller image"
 
@@ -167,6 +258,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     git \
     build-essential \
+    ffmpeg \
     lldb \
     libibverbs1 \
     ibverbs-providers \
@@ -180,8 +272,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 
-ENV UV_CACHE_DIR=/uv/cache
-ENV CARGO_TARGET_DIR=/root/.cargo/target
+# Cache locations (UV_CACHE_DIR, CARGO_TARGET_DIR, HF_HUB_CACHE) are injected per
+# task by iris.cluster.runtime.env, which owns the matching mounts, so that they
+# cover every task image rather than just this one.
+
 # Only disable bytecode during build to keep image layers clean.
 # At runtime, bytecode compilation is re-enabled so .pyc files accumulate
 # in the persistent uv cache, speeding up repeated imports across pods.
@@ -189,5 +283,27 @@ ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
+
+# Nsight Systems CLI, extracted from NVIDIA's deb (the target binary is
+# self-contained; apt-installing it pulls the whole Qt/GUI chain). Arch-aware:
+# `sbsa` on Grace/aarch64, `x86_64` elsewhere. Kept in sync with the version the
+# reports are opened against. Baked into the one task image so a GPU job can
+# profile with `nsys` already on PATH and iris needs no notion of a GPU image.
+ARG NSYS_VERSION=2026.1.3
+ARG NSYS_BUILD=2026.1.3.425-1
+RUN set -eux; \
+    case "$(uname -m)" in \
+      aarch64) nsys_arch=sbsa;   pkg_arch=arm64 ;; \
+      x86_64)  nsys_arch=x86_64; pkg_arch=amd64 ;; \
+      *) echo "no nsight-systems build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/nsys.deb \
+      "https://developer.download.nvidia.com/compute/cuda/repos/debian12/${nsys_arch}/nsight-systems-${NSYS_VERSION}_${NSYS_BUILD}_${pkg_arch}.deb"; \
+    dpkg-deb -x /tmp/nsys.deb /opt/nsight; \
+    rm -f /tmp/nsys.deb; \
+    ln -s "$(ls /opt/nsight/opt/nvidia/nsight-systems/${NSYS_VERSION}/target-linux-*/nsys | head -1)" /usr/local/bin/nsys; \
+    nsys --version
 
 WORKDIR /app

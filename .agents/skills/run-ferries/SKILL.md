@@ -150,7 +150,8 @@ Recommendation / victory decision: <next action>
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/commit/SKILL.md` for description format.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following
+  `.agents/skills/commit/SKILL.md` for commit, PR text, and monitoring.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -166,7 +167,7 @@ uv run iris --config=lib/iris/config/marin.yaml \
 
 Launch (GPU / CoreWeave):
 ```bash
-uv run iris --config=lib/iris/config/coreweave.yaml \
+uv run iris --cluster=cw-us-east-02a \
   job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
   -e MARIN_PREFIX s3://marin-na/marin \
   -e CANARY_ACCELERATOR gpu \
@@ -177,7 +178,7 @@ If canary fails: triage and identify root cause, only then open a focused PR if 
 
 #### Canary profiling triage
 - The full `profile_summary.json` is in the workflow logs (default params: `--warmup-steps 5`, `--breakdown-mode exclusive_per_track`, `--hot-op-limit 25`). The step summary has pointers to the raw trace artifact and W&B run.
-- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `.agents/skills/profile-training/`.
+- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `.agents/skills/profile-training/SKILL.md`.
 - If the canary failed early, the profile may only cover warmup steps — check `step_time.all_steps.count` before drawing conclusions from steady-state stats.
 - `exclusive_per_track` (the default) can hide device stalls that overlap across tracks. Use `exclusive_global` when investigating stall-heavy profiles.
 
@@ -202,4 +203,4 @@ When promoting: open a follow-up PR updating `experiments/ferries/daily.py` and 
 - `docs/experiments/daily-ferry-log.md`
 - `.agents/skills/babysit-job/SKILL.md`
 - `.agents/projects/ferry_framework.md`
-- `.agents/skills/run-research/`
+- `.agents/skills/run-research/SKILL.md`

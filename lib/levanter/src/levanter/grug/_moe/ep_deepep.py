@@ -34,16 +34,16 @@ class DeepEPLocalAssignments(NamedTuple):
         local_group_sizes: Assignment counts per local expert for `ragged_dot`.
     """
 
-    x_dispatch: Float[Array, "TK D"]
+    x_dispatch: Float[Array, "TK H"]
     assignment_weights: Float[Array, "TK"]
     recv_token_indices: Int[Array, "TK"]
-    local_group_sizes: Int[Array, "EL"]
+    local_group_sizes: Int[Array, "Elocal"]
 
 
 def _pack_deepep_local_assignments(
-    recv_x: Float[Array, "TR D"],
-    recv_topk_idx: Int[Array, "TR K"],
-    recv_topk_weights: Float[Array, "TR K"],
+    recv_x: Float[Array, "Trecv H"],
+    recv_topk_idx: Int[Array, "Trecv K"],
+    recv_topk_weights: Float[Array, "Trecv K"],
     *,
     local_experts: int,
     num_recv_tokens: Int[Array, ""],
@@ -79,13 +79,13 @@ def _pack_deepep_local_assignments(
 
 
 def _collapse_deepep_local_assignments(
-    out_dispatch: Float[Array, "TK D"],
+    out_dispatch: Float[Array, "TK H"],
     assignment_weights: Float[Array, "TK"],
     recv_token_indices: Int[Array, "TK"],
     *,
     recv_capacity: int,
     num_recv_tokens: Int[Array, ""],
-) -> Float[Array, "TR D"]:
+) -> Float[Array, "Trecv H"]:
     with jax.named_scope("deepep_collapse_local_assignments"):
         recv_out = jax.ops.segment_sum(
             out_dispatch * assignment_weights[:, None],
@@ -98,16 +98,16 @@ def _collapse_deepep_local_assignments(
 
 
 def _moe_mlp_ep_deepep_local(
-    x_local: Float[Array, "TL D"],
-    selected_experts_local: Int[Array, "TL K"],
-    combine_weights_local: Float[Array, "TL K"],
-    moe_w13_local: Float[Array, "EL D I2"],
-    moe_w2_local: Float[Array, "EL I D"],
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
     local_experts = moe_w13_local.shape[0]

@@ -12,8 +12,11 @@ datakit reasoning sources.
 
 from typing import Any
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import text_document
@@ -63,10 +66,10 @@ def render_messages(messages: Any) -> str | None:
 def row_to_doc(row: dict) -> list[dict]:
     text = render_messages(row.get("messages"))
     if text is None:
-        counters.increment("numinamath_tir/dropped")
+        counters.pipeline.update_counter("numinamath_tir/dropped", 1)
         return []
 
-    counters.increment("numinamath_tir/kept")
+    counters.pipeline.update_counter("numinamath_tir/kept", 1)
     return [text_document(text, HF_DATASET_ID)]
 
 

@@ -6,7 +6,6 @@
 import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -18,9 +17,11 @@ import jmp
 import numpy as np
 from haliax.partitioning import ResourceMapping, named_jit
 
+from rigging.filesystem import StoragePath, prefix_join
+
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.text import DpoExample
+from levanter.data.text.preference import DpoExample
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
 from levanter.store.cache import CacheLedger, CacheMetadata, SerialCacheWriter, TreeCache
@@ -133,10 +134,6 @@ def logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
     return cast(hax.NamedArray, -nll)
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    return logp_sum(model, example, key=key)
-
-
 def _cached_logp_named(logps: Any, axes: tuple[hax.Axis, ...]) -> hax.NamedArray:
     return hax.named(jnp.reshape(jnp.asarray(logps), tuple(axis.size for axis in axes)), axes)
 
@@ -238,11 +235,11 @@ def reference_eval_cache_path(
     ).hexdigest()[:8]
 
     if cache_dir is None:
-        cache_root = os.path.join(spec.source_cache_path.rsplit("/", 1)[0], "reference_logprobs")
+        cache_root = str(StoragePath.parse(spec.source_cache_path).parent / "reference_logprobs")
     else:
         cache_root = cache_dir
 
-    return os.path.join(cache_root, cache_hash)
+    return prefix_join(cache_root, cache_hash)
 
 
 def load_reference_eval_cache(

@@ -2,13 +2,26 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
-log_server_config: marin-dev
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: marin-dev
+
+finelog:
+  config: marin-dev
 dashboard_url: https://iris-dev.oa.dev
 
 platform:
   label_prefix: marin-dev
   gcp:
     project_id: hai-gcp-models
+    # Same-continent AR pull-through caches; shared with the marin cluster and
+    # provisioned by infra/pulumi from marin.yaml's provisioning.gcp.registries.
+    registry_mirrors:
+      ghcr.io:
+        us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+      docker.io:
+        us: us-docker.pkg.dev/hai-gcp-models/docker-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/docker-mirror
 
 defaults:
   ssh:
@@ -27,6 +40,39 @@ defaults:
 
 storage:
   remote_state_dir: gs://marin-us-central2/iris/marin-dev/state
+
+# Request auth mirrors marin.yaml: external traffic is authenticated by the
+# IAP-signed X-Goog-IAP-JWT-Assertion header (never the GCLB source ranges);
+# trusted_cidrs admits only direct in-VPC peers (workers/tasks; loopback for
+# tunnels). Anything forwarded through the LB carries X-Forwarded-For and never
+# matches a CIDR.
+auth:
+  iap:
+    url: https://iris-dev.oa.dev
+    # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT)
+    # drives `iris login` and the service-account edge token (no programmatic_audiences
+    # entry needed — the edge falls back to the desktop client id).
+    # Audience of IAP's signed assertion: the iris-marin-dev-be backend service.
+    signed_header_audience: /projects/748532799086/global/backendServices/1538373592429329340
+    # IAP's allowlist is the gate; anyone Google admits acts as admin.
+    unprovisioned_role: admin
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # Controller server-identity signing key (Ed25519), resolved from Secret Manager
+  # at startup — provision with `iris cluster init-keys --gcp-secret …`.
+  signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-dev-signing-key/versions/1
+
+# Federation peers this cluster may hand whole jobs to. Same CoreWeave clusters marin
+# federates to: they trust this cluster's public key under the id `marin-dev`, and admit
+# its submitters by their own auth.allowed_submitters.
+peers:
+  cw-rno2a:
+    controller_address: https://iris-cw-rno2a.oa.dev
+  cw-us-east-02a:
+    controller_address: https://iris-cw-us-east-02a.oa.dev
+  cw-us-east-08a:
+    controller_address: https://iris-cw-us-east-08a.oa.dev
+  cw-us-west-04a:
+    controller_address: https://iris-cw-us-west-04a.oa.dev
 
 worker_provider: {}
 
@@ -131,7 +177,7 @@ scale_groups:
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        mode: GCP_SLICE_MODE_VM
+        mode: vm
         machine_type: n2-highmem-2
 
 # ---------------------------------------------------------------------------

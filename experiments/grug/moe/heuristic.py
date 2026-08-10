@@ -1,20 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling AdamH heuristic for MoE ISOFlop sweeps.
+"""Compute-scaling heuristic for MoE — May Recipe (MuonH, 256 experts).
 
-All empirical fits below were measured on runs with seq_len=4096. The formulas
-use tokens_per_batch (= batch_size * seq_len) so they generalize to other
-sequence lengths, though the coefficients are an extrapolation beyond 4096.
+Refit on the May Recipe LR sweep (issue #5951: 17 cells across
+d ∈ {512, 768, 1024, 1280}, MuonH optimizer, R²=0.996), and is the
+current default for compute-optimal cells and ablation comparisons.
+All empirical fits were measured on runs with seq_len=4096; the
+formulas are written in terms of ``tokens_per_batch = batch_size *
+seq_len`` so they generalise to other sequence lengths, though the
+coefficients are an extrapolation beyond 4096.
 
-Formulas (fit on v16 LR sweep, 186 runs, R²=0.995):
-- Adam LR: adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)
-  (with lr_coeff=1.63, lr_tokens_exp=-0.2813, lr_dim_exp=-0.3678)
-- AdamH LR: lr = (13/3) * adam_lr
-- Compute budget convention: C = 3 * flops_per_token(no_lm_head) * tokens
-- Epsilon: epsilon = epsilon_base * sqrt(r0/r), where r = (B*T0)/(B0*T)
-- Beta1: fixed at 0.9062
-- Beta2: beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)
+For the earlier AdamH-tuned heuristic (64 experts), see the pre-rename
+``experiments/grug/moe/heuristic.py`` on main:
+https://github.com/marin-community/marin/blob/8586719b524bf7743ec5034403c7e834505fe73e/experiments/grug/moe/heuristic.py
+
+Formulas:
+- Adam LR: ``adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)``
+  (``lr_coeff = 0.06602``, ``lr_tokens_exp = -0.395``, ``lr_dim_exp = -0.150``)
+- MuonH/AdamH LR: ``lr = (13/3) * adam_lr``
+- Compute budget convention: ``C = 3 * flops_per_token(no_lm_head) * tokens``
+- Epsilon: ``epsilon = epsilon_base * sqrt(r0/r)`` where ``r = (B*T0)/(B0*T)``
+- Beta1: fixed at ``0.9062``
+- Beta2: ``beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)``
 """
 
 import math
@@ -23,9 +31,9 @@ from dataclasses import dataclass
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 
-SEQ_LEN: int = 4096
+SEQ_LEN: int = 8192
 MIN_BATCH_SIZE: int = 32
 DEFAULT_TARGET_STEPS: int = 2**14
 
@@ -77,21 +85,23 @@ def compute_tokens_and_batch(
 
 
 @dataclass(frozen=True)
-class MoeAdamHHeuristic:
-    """Compute-scaling AdamH heuristic for MoE models.
+class MoeHeuristic:
+    """Compute-scaling heuristic for MoE models (May Recipe refit).
 
-    adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
-    adamh_lr = adamh_ratio * adam_lr
-    C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
+    Returns a ``MuonH`` optimizer config via ``build_optimizer_config``.
+
+    ``adam_lr  = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)``
+    ``muonh_lr = muonh_ratio * adam_lr``
+    ``C       = 3 * flops_per_token * tokens``  (flops_per_token excludes lm_head)
     """
 
     # --- LR scaling ---
-    # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)
-    # Original (186 runs, R²=0.995) — used for v16 sweep:
-    lr_coeff: float = 0.025469  # 1.63 / sqrt(4096)
-    lr_tokens_exp: float = -0.2813
-    lr_dim_exp: float = -0.3678
-    adamh_ratio: float = 13 / 3
+    # May Recipe refit (issue #5951; 17 cells across d{512,768,1024,1280},
+    # R^2=0.996):  muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B).
+    lr_coeff: float = 0.06602
+    lr_tokens_exp: float = -0.395
+    lr_dim_exp: float = -0.150
+    muonh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
     epsilon_coeff: float = 9.676e-18
@@ -101,11 +111,9 @@ class MoeAdamHHeuristic:
 
     # --- Fixed hyperparameters ---
     max_grad_norm: float = 1.0
-    z_loss_weight: float = 0.0001
 
     # --- Schedule ---
-    min_lr_ratio: float = 0.0
-    warmup: float = 0.1
+    min_lr_ratio: float = 0.05
     lr_schedule: str = "linear"
     decay: float | None = None
 
@@ -130,9 +138,9 @@ class MoeAdamHHeuristic:
         return min(self.max_learning_rate, adam_lr)
 
     def _compute_learning_rate(self, tokens_per_batch: int, tokens: float, hidden_dim: int) -> float:
-        """adamh_lr = (13/3) * adam_lr"""
+        """muonh_lr = muonh_ratio * adam_lr"""
         adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
-        return min(self.max_learning_rate, self.adamh_ratio * adam_lr)
+        return min(self.max_learning_rate, self.muonh_ratio * adam_lr)
 
     def _compute_epsilon(self, tokens_per_batch: int, tokens: float) -> float:
         """epsilon = epsilon_coeff * sqrt(tokens / tokens_per_batch)"""
@@ -145,21 +153,27 @@ class MoeAdamHHeuristic:
 
     def build_optimizer_config(
         self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
-    ) -> GrugMoeAdamHConfig:
+    ) -> GrugMoeMuonHConfig:
+        """Return a ``GrugMoeMuonHConfig`` with May Recipe 1pct-noclip defaults.
+
+        MuonH optimizer (3 LR groups — muonh / adamh / adam) with
+        ``warmup=0.01`` and ``max_grad_norm=None``. LR / beta / epsilon
+        scaling is the May Recipe refit (see module docstring).
+        """
         tokens_per_batch = batch_size * seq_len
         lr = self._compute_learning_rate(tokens_per_batch, tokens, hidden_dim)
         adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
         epsilon = self._compute_epsilon(tokens_per_batch, tokens)
         beta2 = self._compute_beta2(tokens_per_batch)
-        return GrugMoeAdamHConfig(
+        return GrugMoeMuonHConfig(
             learning_rate=lr,
             adam_lr=adam_lr,
             min_lr_ratio=self.min_lr_ratio,
-            warmup=self.warmup,
+            warmup=0.01,  # 1pct-noclip schedule
             beta1=self.beta1,
             beta2=beta2,
             epsilon=epsilon,
-            max_grad_norm=self.max_grad_norm,
+            max_grad_norm=None,  # no clipping
             lr_schedule=self.lr_schedule,
             decay=self.decay,
         )
@@ -210,38 +224,33 @@ class MoeAdamHHeuristic:
             # Round up to nearest 128 for Pallas TPU MoE kernel compatibility
             intermediate_dim=math.ceil(hidden_size / 2 / 128) * 128,
             shared_expert_intermediate_dim=hidden_size,
-            num_experts=64,
-            num_experts_per_token=4,
             num_layers=num_layers,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             max_seq_len=seq_len,
-            sliding_window=seq_len,
+            sliding_window=2048,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )
-
-
-moe_adamh_heuristic = MoeAdamHHeuristic()
 
 
 def build_from_heuristic(
     *,
     budget: float,
     hidden_dim: int,
-    heuristic: MoeAdamHHeuristic | None = None,
+    heuristic: MoeHeuristic | None = None,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
     seq_len: int = SEQ_LEN,
-) -> tuple[GrugModelConfig, GrugMoeAdamHConfig, int, int]:
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig, int, int]:
     """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
 
-    Uses `MoeAdamHHeuristic` to size the model (from `hidden_dim`) and to set
-    the AdamH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
-    Callers who want manual control should continue passing `GrugModelConfig` /
-    `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
+    Uses ``MoeHeuristic`` to size the model (from ``hidden_dim``) and to set
+    the MuonH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
+    Callers who want manual control should continue passing ``GrugModelConfig`` /
+    ``GrugMoeMuonHConfig`` directly to ``GrugMoeLaunchConfig``.
     """
-    h = heuristic or MoeAdamHHeuristic()
+    h = heuristic or MoeHeuristic()
     model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
     fpt = compute_flops_per_token(model_cfg)
     tokens, batch_size, num_steps = compute_tokens_and_batch(

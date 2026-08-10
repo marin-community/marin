@@ -1,0 +1,4 @@
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6Xa1LKb7+UVK+y5ilST1x3Wyr8DXD1ZryvKEjWbT85ESSQCdtF6ia+pG3pkyAs4Y2Ub2KZ/iXU4Smt/1Oz5uZvprUtOY2fcv83rBZmPVzVjfpymkrQoN7QsrRn3adEGUPIIT7A0NXCeY49Y=
+config:
+  marin-iac:cluster: cw-us-west-04a

@@ -3,9 +3,13 @@
 
 """End-to-end tests for actor server and client."""
 
+import errno
+import socket
+
 import pytest
-from iris.actor import ActorClient, ActorServer
+from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
+from iris.actor.server import ActorServer
 
 
 class Calculator:
@@ -66,3 +70,16 @@ def test_actor_exception_propagation():
             client.divide(1, 0)
     finally:
         server.stop()
+
+
+def test_serve_background_with_unavailable_port_raises():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+
+        server = ActorServer(host="127.0.0.1", port=port)
+        with pytest.raises(OSError) as exc_info:
+            server.serve_background()
+
+    assert exc_info.value.errno == errno.EADDRINUSE

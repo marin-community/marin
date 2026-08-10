@@ -17,6 +17,13 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
+## Infrastructure (Pulumi)
+
+`infra/` hosts several independent Pulumi projects following three distinct
+patterns (infrastructure, application deploys, SaaS resource declarations). Read
+`infra/pulumi.md` before creating or modifying a Pulumi project so new work
+lands in the right pattern.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
@@ -24,6 +31,31 @@ Skills are task-focused playbooks in `.agents/skills/` (also accessible as
 matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
+
+## Handle Requests
+
+If a request comes from Slack or GitHub and appears to be a simple question,
+you may answer it in the originating conversation instead of making a
+repository change. Otherwise, carry the request through the applicable change
+and landing workflow; do not stop after investigation while a safe, in-scope
+fix remains.
+
+## Search Prior Work
+
+Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
+indexed repository documentation could inform a task:
+
+```bash
+uv run infra/echo/cli.py search "how do I deploy Iris"
+uv run infra/echo/cli.py get <domain:id>
+```
+
+Search covers wiki, repository files, pull requests, and issues by default.
+Repeat `--domain` to select a subset; add `--domain discord` only when discussion
+history is relevant. Use `grep` for exact strings in remote activity and `rg`
+for the current checkout, including branch-only or uncommitted files. Echo's
+file results follow the periodically refreshed GitHub head rather than the local
+working tree. See the `consult-echo` skill for the complete workflow.
 
 ## Development
 
@@ -37,13 +69,24 @@ favor of ad-hoc commands.
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
+# Safe local test suite
+uv run pytest
+- Pytest's repository defaults exclude slow, integration, data-integration,
+  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Always run this before opening a PR, and always fix or respond to every
-  finding it reports (see the `commit` skill).
+- Run this once before opening or updating a PR, and fix or respond to every
+  finding it reports (see the `commit` skill). Do not rerun it after small,
+  targeted touch-ups made in response to its findings. Rerun only when the
+  follow-up materially changes the design or scope.
 ```
 
-- Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Do not replace pytest's default marker expression with a partial expression
+  such as `-m "not slow"`; `-m` overrides the whole default and can select live
+  cluster tests. Run excluded markers only when the user or a dedicated task
+  guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
@@ -51,9 +94,27 @@ uv run pyrefly
 ## Communication & Commits
 
 - NEVER SAY "You're absolutely right!"
-- NEVER credit yourself in commits.
+- NEVER credit yourself, in commit messages or in PR/issue bodies. No
+  `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
+  even if a tool default suggests one.
 - When an agent creates a PR or issue, add the `agent-generated` label.
-- Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
+  explicitly approved by the user. This applies to comments only — never put a
+  `🤖` marker in a commit message or a PR/issue body.
+- All agent-authored commit, PR, and issue titles and bodies must follow
+  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
+  exact text that will be published, then apply `ai-writing-donts.md` as a final
+  compression pass. Do not publish raw implementation notes, test narration,
+  prompt-shaped headings, or claims that use emphasis in place of evidence.
+- A PR description is the squash-merge commit message. Keep every fact a future
+  reader needs to understand the behavior and rationale, including measured
+  results and caveats when they affect review. Remove headings, diff narration,
+  and implementation inventories; put extended history in a linked issue,
+  design doc, logbook, or artifact. Follow the `commit` skill
+  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
+- PR monitoring is part of the `commit` skill. After opening or updating a PR,
+  follow its `wait_for.py` loop through an exit condition. Do not substitute
+  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
@@ -111,6 +172,15 @@ uv run pyrefly
 - Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
 - Write docs that stand alone without conversational context.
 
+## Agent Artifacts
+
+- Publish infrastructure incidents and durable debugging investigations to
+  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
+  associated PR or issue. Do not create repository debug-log files.
+- Keep user-facing and reusable product documentation in `docs/`; keep research
+  progress in the relevant task logbook or project artifact. These are distinct
+  from incident records.
+
 ## Deprecation
 
 **NO BACKWARD COMPATIBILITY**: Update all call sites instead. Only add compatibility shims if the user explicitly requests it.
@@ -132,8 +202,14 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
-- Produce detailed plans with code snippets. Ask questions up front instead of guessing.
-- When a request is too large for one pass, capture a plan in `.agents/projects/` before pausing.
+- Planning applies to change-mode work. Produce a detailed plan, with code
+  snippets when they clarify a concrete implementation, for non-trivial
+  changes. Resolve context from the repository and prior work first; ask only
+  when a missing decision would materially change the implementation.
+- In answer mode, investigate and reply directly. Do not manufacture a plan or
+  `.agents/projects/` artifact.
+- When a change request is too large for one pass, capture a plan in
+  `.agents/projects/` before pausing.
 
 ## Code Reuse
 
@@ -148,20 +224,12 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 
 ## Testing
 
-- Always fix tests you broke. Do not relax tolerances or hack around failures.
-- Prefer integration-style tests that validate externally-observable behavior.
-- Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
-- Do not write "slop" tests that assert on incidental strings — the exact text of a log
-  message, or that a constructed command line contains a particular word or flag. These
-  couple the test to copy and to how a command is assembled, not to behavior: they break
-  on a harmless reword or flag-form change while a real regression slips through. They are
-  pure maintenance burden. Assert on the structured output or the effect instead. Assert on
-  a string only when that string *is* the contract (machine-readable output, a wire format,
-  a log line a downstream tool parses) — and then assert on the structured field, not the
-  rendered text.
-- Use pytest fixtures and parameterization to avoid duplication.
-- Prefer top-level `def test_*` with fixtures over test classes.
-- Search for existing test files before creating new ones. Extend existing files first.
-- No mocks unless testing I/O boundaries (network, filesystem). Test against real behavior.
-- No `time.sleep()` in tests — inject `now=time.time()` or mock time instead.
-- Mock at boundaries (e.g., wandb), not internal logger output.
+Read `TESTING.md` before writing or reviewing tests. It is the root testing
+policy for behavior-focused tests, slop-test rejection, mocks/fakes, timing,
+numerical tolerances, and pytest style.
+
+Before touching tests under `lib/*`, also read the nearest module `AGENTS.md`
+and any module `TESTING.md` it references. Module docs define local commands,
+markers, fakes, mocks, optional dependencies, and integration-test boundaries.
+
+Always fix tests you broke. Do not relax tolerances or hack around failures.

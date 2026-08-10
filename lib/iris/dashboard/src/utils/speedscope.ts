@@ -50,7 +50,7 @@ export function openSpeedscopeWindow(): PendingSpeedscope {
   }
   return {
     show(bytes: Uint8Array, title: string) {
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/json' }))
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/json' }))
       const target = `${SPEEDSCOPE_URL}#profileURL=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`
       // Navigate the already-open window (path changes from about:blank, so
       // speedscope loads fresh and reads the hash param on mount). Fall back to

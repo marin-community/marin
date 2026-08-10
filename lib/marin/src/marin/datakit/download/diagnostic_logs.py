@@ -3,29 +3,45 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
-from __future__ import annotations
-
+import gzip
 import hashlib
+import http.client
 import json
 import logging
 import os.path
 import re
 import shutil
+import tarfile
+import time
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
+from typing import IO, NamedTuple
 
 import fsspec
 import requests
-from fray import ResourceConfig
+from fray.types import ResourceConfig
+from fsspec.implementations.local import LocalFileSystem
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import marin_prefix, open_url
-from zephyr import Dataset, ZephyrContext, counters
+from rigging.filesystem import (
+    StoragePath,
+    atomic_rename,
+    marin_prefix,
+    marin_temp_bucket,
+    open_url,
+    prefix_join,
+    url_to_fs,
+)
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -39,14 +55,15 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.datakit.normalize import normalize_step
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
 GHALOGS_RECORD_URL = "https://zenodo.org/records/14796970"
 LOGCHUNKS_RECORD_URL = "https://zenodo.org/records/3632351"
 LOGHUB_REPO_URL = "https://github.com/logpai/loghub"
+GHALOGS_DOWNLOAD_URL = "https://zenodo.org/records/14796970/files/github_run_logs.zip?download=1"
 LOGCHUNKS_DOWNLOAD_URL = "https://zenodo.org/records/3632351/files/LogChunks.zip?download=1"
 LOGHUB_SNAPSHOT_URL = "https://github.com/logpai/loghub/archive/refs/heads/master.zip"
 GHALOGS_ZIP_FILENAME = "github_run_logs.zip"
@@ -64,9 +81,12 @@ GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH = os.path.join(
 )
 
 GHALOGS_TOTAL_BYTES = 143_425_404_506
+# Exact byte length of the published ``github_run_logs.zip`` on Zenodo. Used as
+# the skip-if-staged check; differs from ``GHALOGS_TOTAL_BYTES`` (the manifest's
+# advertised compressed size) because that figure is a rough catalog estimate.
+GHALOGS_ARCHIVE_BYTES = 142_292_965_496
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
-GHALOGS_ROUGH_TOKENS_B = 150.0
 DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
@@ -75,6 +95,53 @@ LONG_TAIL_PPL_EPIC_ISSUE = 5005
 PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _DOWNLOAD_TIMEOUT = 300
+# GHALogs archive is ~142 GB; stream it in large chunks straight to the object
+# store without buffering the whole file locally.
+_GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
+_GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
+_GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
+# The archive is downloaded as independent byte-range shards (zephyr tasks)
+# and assembled server-side. 32 shards (~4.4 GB each) sits inside both concat
+# limits: GCS compose accepts at most 32 source objects per call, and S3
+# UploadPartCopy caps a copied part at 5 GiB.
+_GHALOGS_DOWNLOAD_SHARDS = 32
+# Concurrent connections to Zenodo. Per-connection throughput is throttled and
+# uneven (~1-17 MB/s observed), so parallel shards both add bandwidth and limit
+# the damage of an unlucky slow connection to a single shard.
+_GHALOGS_DOWNLOAD_MAX_WORKERS = 8
+# Lifecycle TTL on the parts prefix: long enough to cover realistic retry
+# windows after a failed staging run, bounded so an abandoned run cannot
+# strand ~142 GB of parts indefinitely.
+_GHALOGS_PARTS_TTL_DAYS = 7
+# A long stream reliably breaks mid-body (server-side idle/connection resets);
+# Zenodo serves the archive with Accept-Ranges: bytes, so each shard resumes
+# from its last written offset instead of restarting from zero. Give up only
+# after this many *consecutive* reconnects that make no forward progress.
+_GHALOGS_MAX_RESUME_STALLS = 8
+_GHALOGS_RESUME_BACKOFF_BASE = 5.0  # seconds; doubles per consecutive stall
+_GHALOGS_RESUME_BACKOFF_CAP = 120.0
+
+# Every non-directory member of the published archive is a gzipped tar of one
+# workflow run's logs; there are no plain-text members.
+_GHALOGS_MEMBER_SUFFIX = ".tar.gz"
+_GHALOGS_JOB_LOG_SUFFIX = ".txt"
+# Separates the run archive from the job log inside it in a record's archive_path.
+_GHALOGS_LOG_PATH_SEPARATOR = "!"
+# Separates a job log from the index of its chunk in a record's archive_path.
+_GHALOGS_CHUNK_PATH_SEPARATOR = "#"
+# A job log longer than this becomes more than one record, split at line
+# boundaries. This bounds work, and is not a content test: sanitization rescans a
+# document one time for each identity that it finds, so an unbounded document
+# turns one worker into a multi-hour straggler. A split divides that quadratic
+# term by the count of chunks, and holds peak memory at one chunk. In a 300-run
+# sample only 0.6% of the job logs are above this size, but they hold 60% of the
+# bytes, thus a split keeps text that a cap would discard.
+_GHALOGS_JOB_LOG_CHUNK_BYTES = 8 * 1024 * 1024
+# Characters that a text log cannot contain: C0 controls other than tab, line
+# feed, carriage return, and ESC, plus DEL and the Unicode replacement
+# character. ESC stays because GitHub Actions logs carry ANSI color sequences.
+_NON_TEXT_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\ufffd]")
+_MAX_NON_TEXT_CHAR_RATIO = 0.01
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -134,6 +201,13 @@ class DiagnosticPartition(StrEnum):
     ISSUE_5093_HOLDOUT = auto()
 
 
+class JobLogDrop(StrEnum):
+    """Why a GHALogs job-log chunk yields no record. The value names its drop counter."""
+
+    NON_TEXT = auto()
+    EMPTY = auto()
+
+
 class DiagnosticLogsArtifact(BaseModel):
     """Strict typed artifact for a materialized diagnostic-log step."""
 
@@ -144,12 +218,12 @@ class ExtractedPartitionedDiagnosticLogs(DiagnosticLogsArtifact):
     """Materialized GHALogs sample with train/dev/test/holdout partitions."""
 
     source_label: str
-    output_dir: str
-    train_file: str
-    dev_file: str
-    test_file: str
-    holdout_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    train_file: DatakitArtifactPath
+    dev_file: DatakitArtifactPath
+    test_file: DatakitArtifactPath
+    holdout_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -159,9 +233,9 @@ class ExtractedDiagnosticLogSlice(DiagnosticLogsArtifact):
     """Materialized single-file diagnostic-log slice."""
 
     source_label: str
-    output_dir: str
-    output_file: str
-    metadata_path: str
+    output_dir: DatakitArtifactPath
+    output_file: DatakitArtifactPath
+    metadata_path: DatakitArtifactPath
     record_count: int
     bytes_written: int
     content_fingerprint: str
@@ -179,10 +253,10 @@ class MaterializedDiagnosticLogParquet(DiagnosticLogsArtifact):
     """Reusable parquet shards for a diagnostic-log corpus or partition."""
 
     source_label: str
-    output_dir: str
-    data_glob: str
+    output_dir: DatakitArtifactPath
+    data_glob: DatakitArtifactPath
     record_count: int
-    counters: dict[str, int]
+    counters: dict[str, int | float]
     content_fingerprint: str
 
 
@@ -230,7 +304,6 @@ SOURCE_INVENTORY: tuple[IngestionSourceManifest, ...] = (
         issue_numbers=(PUBLIC_DIAGNOSTIC_LOGS_ISSUE,),
         sample_caps=SampleCapConfig(max_members=DEFAULT_GHALOGS_MAX_MEMBERS),
         compressed_size_bytes=GHALOGS_TOTAL_BYTES,
-        rough_tokens_b=GHALOGS_ROUGH_TOKENS_B,
         source_metadata={"archive_filename": GHALOGS_ZIP_FILENAME},
     ),
     IngestionSourceManifest(
@@ -341,7 +414,7 @@ class _DocumentIdentityPseudonymizer:
     username_ids: dict[str, str]
 
     @classmethod
-    def from_text(cls, text: str) -> _DocumentIdentityPseudonymizer:
+    def from_text(cls, text: str) -> "_DocumentIdentityPseudonymizer":
         pseudonymizer = cls(identity_ids={}, username_ids={})
         for match in _EMAIL_RE.finditer(text):
             pseudonymizer._register_email(match.group(0))
@@ -419,23 +492,95 @@ def assign_partition(split_key: str) -> DiagnosticPartition:
     return DiagnosticPartition.TRAIN
 
 
-def ghalogs_member_to_record(member_path: str, content: bytes) -> dict[str, str] | None:
-    """Convert one GHALogs zip member into a sanitized diagnostic-log record."""
-    text = content.decode("utf-8", errors="replace").strip()
-    if not text:
-        return None
+def _is_job_log(member: tarfile.TarInfo) -> bool:
+    """Report whether a tar member is a run's top-level job log.
 
-    split_key = f"ghalogs:{member_path}"
-    partition = assign_partition(split_key)
-    row_id = hashlib.sha256(split_key.encode("utf-8")).hexdigest()
+    A run archive holds each job's full log as ``<index>_<job>.txt`` at the top
+    level, and the same text split per step below ``<job>/``. Only the job logs
+    are records, so the run's text is not written two times. Directory entries
+    carry a regular-file type with a trailing slash, thus the name check.
+    """
+    return (
+        member.isfile() and member.size > 0 and "/" not in member.name and member.name.endswith(_GHALOGS_JOB_LOG_SUFFIX)
+    )
 
-    return {
-        "id": row_id,
-        "text": sanitize_diagnostic_log_text(text),
-        "source": "ghalogs",
-        "archive_path": member_path,
-        "partition": partition.value,
-    }
+
+def _decode_log_chunk_text(content: bytes) -> str | JobLogDrop:
+    """Decode job-log chunk bytes into cleaned text, or report why the chunk is not usable.
+
+    Counts the non-text characters from a length difference rather than from
+    matches, so a binary payload costs one pass and not one object for each byte.
+    """
+    text = content.decode("utf-8", errors="replace")
+    cleaned = _NON_TEXT_CHAR_RE.sub("", text)
+    if len(text) - len(cleaned) > _MAX_NON_TEXT_CHAR_RATIO * len(text):
+        return JobLogDrop.NON_TEXT
+    return cleaned.strip() or JobLogDrop.EMPTY
+
+
+def _job_log_chunks(handle: IO[bytes], chunk_bytes: int) -> Iterator[bytes]:
+    """Split a job log into line-aligned chunks of at most ``chunk_bytes`` bytes.
+
+    Reads a line at a time, thus peak memory stays at one chunk rather than the
+    whole log. A line longer than ``chunk_bytes`` becomes a chunk of its own:
+    ``readline`` is bounded, so a log without line breaks cannot exhaust memory.
+    """
+    lines: list[bytes] = []
+    size = 0
+    while line := handle.readline(chunk_bytes):
+        if lines and size + len(line) > chunk_bytes:
+            yield b"".join(lines)
+            lines, size = [], 0
+        lines.append(line)
+        size += len(line)
+    if lines:
+        yield b"".join(lines)
+
+
+def ghalogs_member_to_records(member_path: str, content: bytes) -> Iterator[dict[str, str]]:
+    """Convert one GHALogs ``.tar.gz`` run archive into sanitized job-log records.
+
+    Yields one record for each chunk of each job log of the run (see
+    :func:`_is_job_log`), with ``archive_path`` set to
+    ``<member_path>!<job log>#<chunk index>``. A job log above
+    ``_GHALOGS_JOB_LOG_CHUNK_BYTES`` becomes more than one record instead of
+    being discarded. Each chunk is a document of its own for pseudonymization,
+    so an identity keeps one pseudonym inside a chunk but not across chunks —
+    the contract that already holds across the job logs of one run.
+
+    All records of one run share the run's partition, thus no job log lands away
+    from its sibling logs. Raises ``ValueError`` for a member that is not a run
+    archive.
+    """
+    if not member_path.endswith(_GHALOGS_MEMBER_SUFFIX):
+        raise ValueError(f"Expected a {_GHALOGS_MEMBER_SUFFIX} GHALogs run archive, got {member_path}")
+
+    partition = assign_partition(f"ghalogs:{member_path}")
+    with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Iterate instead of getmembers(): each log is read as the tar iterator
+        # reaches it, so the gzip stream is decompressed one time.
+        for member in run_logs:
+            if not _is_job_log(member):
+                continue
+            log_path = f"{member_path}{_GHALOGS_LOG_PATH_SEPARATOR}{member.name}"
+            handle = run_logs.extractfile(member)
+            assert handle is not None, f"{log_path} is a regular file"
+            for index, chunk in enumerate(_job_log_chunks(handle, _GHALOGS_JOB_LOG_CHUNK_BYTES)):
+                if index == 1:
+                    counters.pipeline.update_counter("ghalogs_materialize/split_job_logs", 1)
+                text = _decode_log_chunk_text(chunk)
+                if isinstance(text, JobLogDrop):
+                    counters.pipeline.update_counter(f"ghalogs_materialize/dropped_{text}", 1)
+                    continue
+
+                chunk_path = f"{log_path}{_GHALOGS_CHUNK_PATH_SEPARATOR}{index}"
+                yield {
+                    "id": hashlib.sha256(f"ghalogs:{chunk_path}".encode()).hexdigest(),
+                    "text": sanitize_diagnostic_log_text(text),
+                    "source": "ghalogs",
+                    "archive_path": chunk_path,
+                    "partition": partition.value,
+                }
 
 
 def logchunks_example_to_record(source_path: str, example_index: int, example: ET.Element) -> dict[str, str] | None:
@@ -482,8 +627,8 @@ def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) ->
     kept_records = 0
     bytes_written = 0
     output_dir = os.path.dirname(output_file)
-    fsspec_mkdirs(output_dir, exist_ok=True)
-    with fsspec.open(output_file, "wt", encoding="utf-8") as writer:
+    StoragePath(output_dir).mkdirs(exist_ok=True)
+    with open_url(output_file, "wt", encoding="utf-8") as writer:
         for record in records:
             kept_records += 1
             payload = json.dumps(record, ensure_ascii=False)
@@ -519,34 +664,33 @@ def _write_source_metadata(
 def _normalize_input_path(path: str) -> str:
     if path.startswith("/") or "://" in path:
         return path
-    return os.path.join(marin_prefix(), path)
+    return prefix_join(marin_prefix(), path)
 
 
 def _path_exists(path: str) -> bool:
-    fs, relative_path = fsspec.core.url_to_fs(path)
-    return fs.exists(relative_path)
+    return StoragePath(path).exists()
 
 
 def _download_to_path(url: str, destination_path: str) -> None:
-    fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
+    StoragePath(os.path.dirname(destination_path)).mkdirs(exist_ok=True)
     logger.info("Downloading %s to %s", url, destination_path)
     with requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT) as response:
         response.raise_for_status()
-        with fsspec.open(destination_path, "wb") as writer:
+        with open_url(destination_path, "wb") as writer:
             for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
                 if chunk:
                     writer.write(chunk)
 
 
 def _stage_logchunks_if_missing(destination_dir: str) -> str:
-    archive_path = os.path.join(destination_dir, LOGCHUNKS_ZIP_FILENAME)
+    archive_path = prefix_join(destination_dir, LOGCHUNKS_ZIP_FILENAME)
     if not _path_exists(archive_path):
         _download_to_path(LOGCHUNKS_DOWNLOAD_URL, archive_path)
     return destination_dir
 
 
 def _stage_loghub_if_missing(destination_dir: str) -> str:
-    loghub_root = os.path.join(destination_dir, LOGHUB_DIRNAME)
+    loghub_root = prefix_join(destination_dir, LOGHUB_DIRNAME)
     if _list_loghub_files(loghub_root, 1):
         return destination_dir
 
@@ -560,16 +704,16 @@ def _stage_loghub_if_missing(destination_dir: str) -> str:
             _, _, relative_path = member.filename.partition("/")
             if not relative_path:
                 continue
-            destination_path = os.path.join(loghub_root, relative_path)
-            fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
-            with archive.open(member, "r") as reader, fsspec.open(destination_path, "wb") as writer:
+            destination_path = prefix_join(loghub_root, relative_path)
+            StoragePath(os.path.dirname(destination_path)).mkdirs(exist_ok=True)
+            with archive.open(member, "r") as reader, open_url(destination_path, "wb") as writer:
                 shutil.copyfileobj(reader, writer)
     return destination_dir
 
 
 def _resolve_ghalogs_archive_path(input_path: str) -> tuple[str, str]:
     normalized_input_path = _normalize_input_path(input_path)
-    archive_path = os.path.join(normalized_input_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
+    archive_path = prefix_join(normalized_input_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
     if not _path_exists(archive_path):
         raise FileNotFoundError(
             "Missing staged GHALogs archive. "
@@ -581,7 +725,7 @@ def _resolve_ghalogs_archive_path(input_path: str) -> tuple[str, str]:
 
 def _resolve_logchunks_input_path(input_path: str | None) -> str:
     normalized_input_path = _normalize_input_path(input_path or LOGCHUNKS_STAGED_PREFIX)
-    archive_path = os.path.join(normalized_input_path, LOGCHUNKS_ZIP_FILENAME)
+    archive_path = prefix_join(normalized_input_path, LOGCHUNKS_ZIP_FILENAME)
     if not _path_exists(archive_path):
         normalized_input_path = _stage_logchunks_if_missing(normalized_input_path)
     return normalized_input_path
@@ -589,7 +733,7 @@ def _resolve_logchunks_input_path(input_path: str | None) -> str:
 
 def _resolve_loghub_input_path(input_path: str | None) -> str:
     normalized_input_path = _normalize_input_path(input_path or LOGHUB_STAGED_PREFIX)
-    loghub_root = os.path.join(normalized_input_path, LOGHUB_DIRNAME)
+    loghub_root = prefix_join(normalized_input_path, LOGHUB_DIRNAME)
     if not _list_loghub_files(loghub_root, 1):
         normalized_input_path = _stage_loghub_if_missing(normalized_input_path)
     return normalized_input_path
@@ -606,26 +750,40 @@ def _list_ghalogs_member_names(archive_path: str) -> list[str]:
             return [name for name in zf.namelist() if not name.endswith("/")]
 
 
+def _validate_ghalogs_run_archive(content: bytes) -> None:
+    """Read one nested run archive completely before any of its records are emitted."""
+    with tarfile.open(fileobj=BytesIO(content), mode="r:gz") as run_logs:
+        # Advancing across every member decompresses the whole gzip stream and
+        # validates each tar header without retaining decompressed member contents.
+        for _member in run_logs:
+            pass
+
+
 def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterator[dict[str, str]]:
-    """Open the archive once, read each assigned member, yield sanitized records.
+    """Open the archive once, read each assigned run archive, yield sanitized records.
 
     Opens the zip a single time per worker (vs once per record). ``zipfile``
     seeks to each member's offset, so the worker only fetches the bytes for
-    members in its batch — not the whole archive.
+    members in its batch — not the whole archive. One member yields one record
+    for each chunk of each job log of that run, thus ``zephyr/records_in``
+    counts runs and ``ghalogs_materialize/kept`` counts job-log chunks.
     """
     with open_url(archive_path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for name in batch:
                 with zf.open(name, "r") as member_file:
                     content = member_file.read()
-                counters.increment("zephyr/records_in")
-                record = ghalogs_member_to_record(name, content)
-                if record is None:
-                    counters.increment("ghalogs_materialize/dropped_empty")
+                counters.pipeline.update_counter("zephyr/records_in", 1)
+                try:
+                    _validate_ghalogs_run_archive(content)
+                except (tarfile.TarError, gzip.BadGzipFile, EOFError, zlib.error) as error:
+                    logger.warning("Skipping malformed GHALogs run archive %s: %s", name, error)
+                    counters.pipeline.update_counter("ghalogs_materialize/dropped_invalid_archive", 1)
                     continue
-                counters.increment("ghalogs_materialize/kept")
-                counters.increment(f"ghalogs_materialize/partition_{record['partition']}")
-                yield record
+                for record in ghalogs_member_to_records(name, content):
+                    counters.pipeline.update_counter("ghalogs_materialize/kept", 1)
+                    counters.pipeline.update_counter(f"ghalogs_materialize/partition_{record['partition']}", 1)
+                    yield record
 
 
 def materialize_ghalogs_to_parquet(
@@ -643,8 +801,8 @@ def materialize_ghalogs_to_parquet(
     so it happens locally in the orchestrator. The resulting member names are
     partitioned into ``num_shards`` batches and shipped to zephyr workers,
     each of which opens the archive once and streams its assigned members
-    via ``zipfile``'s random-access reads — bounding per-worker memory to a
-    single member's content rather than the whole archive.
+    via ``zipfile``'s random-access reads — bounding per-worker memory to one
+    run archive plus one job-log chunk, rather than the whole archive.
     """
     if max_members is not None and max_members <= 0:
         raise ValueError(f"max_members must be positive when set, got {max_members}")
@@ -666,7 +824,7 @@ def materialize_ghalogs_to_parquet(
         .reshard(num_shards)
         .flat_map(lambda batch: _process_ghalogs_member_batch(batch, archive_path))
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             skip_existing=True,
         )
     )
@@ -681,7 +839,7 @@ def materialize_ghalogs_to_parquet(
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
-        data_glob=f"{output_path}/*.parquet",
+        data_glob=prefix_join(output_path, "*.parquet"),
         record_count=counters_dict.get("zephyr/records_out", 0),
         counters=counters_dict,
         content_fingerprint=manifest.fingerprint(),
@@ -689,7 +847,7 @@ def materialize_ghalogs_to_parquet(
 
 
 def _count_partition_record(record: dict[str, str], partition: DiagnosticPartition) -> dict[str, str]:
-    counters.increment(f"ghalogs_partition/{partition.value}_kept")
+    counters.pipeline.update_counter(f"ghalogs_partition/{partition.value}_kept", 1)
     return record
 
 
@@ -712,11 +870,11 @@ def materialize_ghalogs_partition_to_parquet(
     output files.
     """
     pipeline = (
-        Dataset.from_files(f"{input_path}/*.parquet")
+        Dataset.from_files(prefix_join(input_path, "*.parquet"))
         .load_parquet()
         .filter(lambda record: record.get("partition") == partition.value)
         .map(lambda record: _count_partition_record(record, partition))
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
     resources = worker_resources or ResourceConfig(cpu=1, ram="8g", disk="10g")
@@ -729,7 +887,7 @@ def materialize_ghalogs_partition_to_parquet(
     return MaterializedDiagnosticLogParquet(
         source_label=manifest.source_label,
         output_dir=output_path,
-        data_glob=f"{output_path}/*.parquet",
+        data_glob=prefix_join(output_path, "*.parquet"),
         record_count=counters_dict.get("zephyr/records_out", 0),
         counters=counters_dict,
         content_fingerprint=manifest.fingerprint(),
@@ -753,15 +911,15 @@ def extract_ghalogs(
 
     output_file_paths: dict[str, str] = {}
     for partition in DiagnosticPartition:
-        partition_dir = os.path.join(output_path, partition.value)
-        fsspec_mkdirs(partition_dir, exist_ok=True)
-        output_file_paths[partition.value] = os.path.join(partition_dir, "data-00000-of-00001.jsonl")
+        partition_dir = prefix_join(output_path, partition.value)
+        StoragePath(partition_dir).mkdirs(exist_ok=True)
+        output_file_paths[partition.value] = prefix_join(partition_dir, "data-00000-of-00001.jsonl")
 
     logger.info("Extracting at most %d members from %s", max_members, archive_path)
-    with fsspec.open(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
+    with open_url(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
         with ExitStack() as stack:
             writers = {
-                partition.value: stack.enter_context(fsspec.open(path, "wt", encoding="utf-8"))
+                partition.value: stack.enter_context(open_url(path, "wt", encoding="utf-8"))
                 for partition, path in (
                     (partition, output_file_paths[partition.value]) for partition in DiagnosticPartition
                 )
@@ -775,18 +933,16 @@ def extract_ghalogs(
 
                 counters["seen_members"] += 1
                 with archive.open(member, "r") as member_handle:
-                    record = ghalogs_member_to_record(member.filename, member_handle.read())
+                    content = member_handle.read()
 
-                if record is None:
-                    continue
-
-                counters["kept_records"] += 1
-                partition = record["partition"]
-                partition_counts[partition] += 1
-                payload = json.dumps(record, ensure_ascii=False)
-                total_bytes_written += len(payload.encode("utf-8")) + 1
-                writers[partition].write(payload)
-                writers[partition].write("\n")
+                for record in ghalogs_member_to_records(member.filename, content):
+                    counters["kept_records"] += 1
+                    partition = record["partition"]
+                    partition_counts[partition] += 1
+                    payload = json.dumps(record, ensure_ascii=False)
+                    total_bytes_written += len(payload.encode("utf-8")) + 1
+                    writers[partition].write(payload)
+                    writers[partition].write("\n")
 
     manifest = SOURCE_MANIFESTS["ghalogs"]
     metadata_path = _write_source_metadata(
@@ -821,7 +977,7 @@ def extract_ghalogs(
 
 def _iter_logchunks_records(archive_path: str, max_examples: int) -> Iterable[dict[str, str]]:
     seen_examples = 0
-    with fsspec.open(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
+    with open_url(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
         for member in archive.infolist():
             if seen_examples >= max_examples:
                 break
@@ -851,11 +1007,11 @@ def extract_logchunks(
         raise ValueError(f"max_examples must be positive, got {max_examples}")
 
     input_path = _resolve_logchunks_input_path(input_path)
-    archive_path = os.path.join(input_path, LOGCHUNKS_ZIP_FILENAME)
-    output_file = os.path.join(output_path, "eval_only", "logchunks", "data-00000-of-00001.jsonl")
+    archive_path = prefix_join(input_path, LOGCHUNKS_ZIP_FILENAME)
+    output_file = prefix_join(output_path, "eval_only/logchunks/data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_logchunks_records(archive_path, max_examples))
     manifest = SOURCE_MANIFESTS["logchunks"]
-    slice_output_dir = os.path.join(output_path, "eval_only", "logchunks")
+    slice_output_dir = prefix_join(output_path, "eval_only/logchunks")
     metadata_path = _write_source_metadata(
         manifest=manifest,
         input_path=input_path,
@@ -889,7 +1045,7 @@ def _source_path(fs: fsspec.AbstractFileSystem, relative_path: str) -> str:
 
 
 def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
-    fs, relative_root = fsspec.core.url_to_fs(input_path)
+    fs, relative_root = url_to_fs(input_path)
     pattern = os.path.join(relative_root.rstrip("/"), "**", "*_2k.log")
     paths = sorted(fs.glob(pattern, recursive=True))
     return [_source_path(fs, path) for path in paths[:max_files]]
@@ -897,8 +1053,7 @@ def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
 
 def _iter_loghub_records(input_path: str, max_files: int) -> Iterable[dict[str, str]]:
     for log_path in _list_loghub_files(input_path, max_files):
-        with fsspec.open(log_path, "rb") as handle:
-            record = loghub_file_to_record(log_path, handle.read())
+        record = loghub_file_to_record(log_path, StoragePath(log_path).read_bytes())
         if record is not None:
             yield record
 
@@ -914,11 +1069,11 @@ def extract_loghub(
         raise ValueError(f"max_files must be positive, got {max_files}")
 
     input_path = _resolve_loghub_input_path(input_path)
-    loghub_path = os.path.join(input_path, LOGHUB_DIRNAME)
-    output_file = os.path.join(output_path, "eval_only", "loghub", "data-00000-of-00001.jsonl")
+    loghub_path = prefix_join(input_path, LOGHUB_DIRNAME)
+    output_file = prefix_join(output_path, "eval_only/loghub/data-00000-of-00001.jsonl")
     kept_records, bytes_written = _write_jsonl_records(output_file, _iter_loghub_records(loghub_path, max_files))
     manifest = SOURCE_MANIFESTS["loghub"]
-    slice_output_dir = os.path.join(output_path, "eval_only", "loghub")
+    slice_output_dir = prefix_join(output_path, "eval_only/loghub")
     metadata_path = _write_source_metadata(
         manifest=manifest,
         input_path=input_path,
@@ -973,13 +1128,249 @@ def extract_ghalogs_step(
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: extract_ghalogs(source_path, output_path, max_members=max_members),
         hash_attrs={
-            "version": "v4",
+            "version": "v6",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
+        },
+    )
+
+
+class _ShardRange(NamedTuple):
+    """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
+
+    start: int
+    stop: int
+
+
+def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange]:
+    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ranges."""
+    bounds = [total_bytes * i // num_shards for i in range(num_shards + 1)]
+    return [_ShardRange(bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
+
+
+def _ghalogs_parts_prefix(archive_path: str) -> str:
+    """Return the prefix holding the range parts while staging ``archive_path``.
+
+    Parts go to the bucket's ``tmp/ttl=Nd/`` lifecycle prefix so a failed run
+    that is never retried cannot strand ~142 GB of parts; retries within the
+    TTL still reuse completed parts. The prefix must share the archive's bucket
+    (GCS compose cannot cross buckets), so when the temp helper cannot place it
+    there — local paths in tests, buckets outside the marin config — parts fall
+    back to a ``.parts`` sibling of the archive instead.
+    """
+    parsed = StoragePath.parse(archive_path)
+    if parsed.scheme in ("gs", "s3") and parsed.bucket:
+        temp_prefix = marin_temp_bucket(
+            _GHALOGS_PARTS_TTL_DAYS, prefix=f"ghalogs-parts/{parsed.key}", source_prefix=archive_path
+        )
+        if StoragePath.parse(temp_prefix).bucket == parsed.bucket:
+            return temp_prefix
+    return f"{archive_path}.parts"
+
+
+def _ghalogs_part_path(parts_prefix: str, shard: _ShardRange) -> str:
+    # Zero-padded starts keep lexicographic order equal to byte order, and the
+    # explicit range means a part left behind by a different shard layout has a
+    # different name — it can never be mistaken for a completed current part.
+    return prefix_join(parts_prefix, f"part-{shard.start:012d}-{shard.stop:012d}")
+
+
+def _iter_ghalogs_range(shard: _ShardRange) -> Iterator[bytes]:
+    """Yield bytes ``[shard.start, shard.stop)`` of ``GHALOGS_DOWNLOAD_URL``.
+
+    Resumes across mid-stream drops via HTTP Range: on any mid-body failure or
+    early EOF it re-requests ``Range: bytes={start + written}-{stop - 1}`` and
+    keeps yielding from there rather than restarting the range. Raises if the
+    download stalls without progress, if a reply ignores Range, or if the
+    server delivers fewer bytes than the range length (a ranged request past
+    the last byte returns 416).
+    """
+    start, stop = shard
+    length = stop - start
+    session = build_retrying_session()
+    written = 0
+    next_log = _GHALOGS_LOG_EVERY_BYTES
+    stalls = 0
+    while written < length:
+        attempt_start = written
+        headers = {"Range": f"bytes={start + written}-{stop - 1}"}
+        error: Exception | None = None
+        try:
+            with session.get(
+                GHALOGS_DOWNLOAD_URL, stream=True, headers=headers, timeout=_GHALOGS_DOWNLOAD_TIMEOUT
+            ) as response:
+                # A ranged request past the last byte returns 416: the server
+                # has nothing more to send, so the shortfall check below fires.
+                if response.status_code == http.client.REQUESTED_RANGE_NOT_SATISFIABLE:
+                    break
+                response.raise_for_status()
+                # If the server ignored Range (200 instead of 206), the body is
+                # the whole archive from byte 0; appending it would corrupt the
+                # range, so refuse rather than silently double-write.
+                if response.status_code != http.client.PARTIAL_CONTENT:
+                    raise RuntimeError(
+                        f"GHALogs range request for bytes {start + written}-{stop - 1} expected HTTP 206, "
+                        f"got {response.status_code}; server ignored Range — aborting to avoid corruption"
+                    )
+                for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
+                    if not chunk:
+                        continue
+                    yield chunk
+                    written += len(chunk)
+                    if written >= next_log:
+                        logger.info("range %d-%d: %.1f / %.1f GB", start, stop - 1, written / 1e9, length / 1e9)
+                        next_log += _GHALOGS_LOG_EVERY_BYTES
+        except (requests.exceptions.RequestException, http.client.IncompleteRead) as e:
+            error = e
+
+        # Gate on bytes yielded this attempt, not on whether an exception fired:
+        # a clean response that yields zero bytes at the current offset (empty
+        # body, early close) makes no progress either and must route through the
+        # stall budget, or the outer loop would re-request the same offset forever.
+        if written > attempt_start:
+            stalls = 0
+            continue
+        stalls += 1
+        if stalls > _GHALOGS_MAX_RESUME_STALLS:
+            raise RuntimeError(
+                f"GHALogs download stalled at {written}/{length} bytes of range {start}-{stop - 1} after "
+                f"{stalls} consecutive attempts without progress"
+            ) from error
+        backoff = min(_GHALOGS_RESUME_BACKOFF_CAP, _GHALOGS_RESUME_BACKOFF_BASE * 2 ** (stalls - 1))
+        logger.warning(
+            "GHALogs stream made no progress on range %d-%d at %.1f / %.1f GB (stall %d/%d), retrying in %.0fs: %s",
+            start,
+            stop - 1,
+            written / 1e9,
+            length / 1e9,
+            stalls,
+            _GHALOGS_MAX_RESUME_STALLS,
+            backoff,
+            error,
+        )
+        time.sleep(backoff)
+    # Raising here aborts the surrounding write before it publishes, so a short
+    # range never becomes a completed part.
+    if written != length:
+        raise RuntimeError(f"GHALogs range {start}-{stop - 1} size mismatch: got {written}, expected {length}")
+    counters.pipeline.update_counter("ghalogs_stage/bytes_downloaded", written)
+
+
+def _concat_archive_parts(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
+    """Assemble ``target`` from ``parts`` in order.
+
+    ``target`` appears only once fully assembled; the source parts are left in place.
+    """
+    if isinstance(fs, LocalFileSystem):
+        # No server to concatenate on: byte-append, publish with an atomic rename.
+        with atomic_rename(target, fs=fs) as tmp:
+            with fs.open(tmp, "wb") as out:
+                for part in parts:
+                    with fs.open(part, "rb") as src:
+                        shutil.copyfileobj(src, out, _GHALOGS_HTTP_CHUNK_BYTES)
+        return
+    # Server-side concat — S3 UploadPartCopy on R2/CoreWeave, compose on GCS —
+    # which materializes the target atomically on completion.
+    fs.merge(target, parts)
+
+
+def stage_ghalogs_archive(
+    output_path: str,
+    *,
+    num_shards: int = _GHALOGS_DOWNLOAD_SHARDS,
+    max_workers: int = _GHALOGS_DOWNLOAD_MAX_WORKERS,
+    worker_resources: ResourceConfig | None = None,
+) -> None:
+    """Stage the ~142 GB GHALogs Zenodo archive under ``output_path`` (idempotent).
+
+    The archive is downloaded as ``num_shards`` byte-range shards (independent
+    zephyr tasks) and assembled server-side into
+    ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}``, the path
+    :func:`materialize_ghalogs_to_parquet` reads from. A worker/pod death costs
+    at most the shards in flight: re-runs reuse completed parts. Idempotent: a
+    correctly-sized copy is left untouched, and a partial download never
+    becomes the published archive.
+    """
+    # Enforced up front: a shard count the merge cannot handle would otherwise
+    # only fail after the full archive has been downloaded.
+    if not 0 < num_shards <= _GHALOGS_DOWNLOAD_SHARDS:
+        raise ValueError(f"num_shards must be in [1, {_GHALOGS_DOWNLOAD_SHARDS}] (GCS compose cap), got {num_shards}")
+    archive_path = prefix_join(output_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
+    fs, path = url_to_fs(archive_path)
+
+    if fs.exists(path) and fs.size(path) == GHALOGS_ARCHIVE_BYTES:
+        logger.info("GHALogs archive already staged (%d bytes): %s", GHALOGS_ARCHIVE_BYTES, archive_path)
+        return
+
+    # Parts are removed after a successful merge; a failed run leaves them for
+    # the next run to reuse, and the temp prefix's TTL sweeps them if that run
+    # never comes (see _ghalogs_parts_prefix).
+    parts_prefix = _ghalogs_parts_prefix(archive_path)
+    shards = _ghalogs_shard_ranges(GHALOGS_ARCHIVE_BYTES, num_shards)
+    logger.info(
+        "Staging %s -> %s: %d bytes as %d range shards",
+        GHALOGS_DOWNLOAD_URL,
+        archive_path,
+        GHALOGS_ARCHIVE_BYTES,
+        len(shards),
+    )
+    # ``from_list`` puts item i in shard i, so each range is its own zephyr
+    # shard and ``shard_idx`` indexes straight back into ``shards``. The write
+    # stage skips a shard — the range request never starts — when its part
+    # already exists, which is sound because parts publish via atomic rename:
+    # existing implies complete, and short ranges raise before publishing.
+    pipeline = (
+        Dataset.from_list(shards)
+        .flat_map(_iter_ghalogs_range)
+        .write_binary(
+            lambda shard_idx, total_shards: _ghalogs_part_path(parts_prefix, shards[shard_idx]),
+            skip_existing=True,
+        )
+    )
+    resources = worker_resources or ResourceConfig(cpu=1, ram="4g", disk="10g")
+    outcome = ZephyrContext(name="stage-ghalogs", resources=resources, max_workers=max_workers).execute(pipeline)
+    part_paths = sorted(outcome.results)
+    _concat_archive_parts(fs, archive_path, part_paths)
+    fs.invalidate_cache(os.path.dirname(path))  # exists() above may have cached the target as absent
+    total = fs.size(path)
+    if total != GHALOGS_ARCHIVE_BYTES:
+        fs.rm(path)
+        raise RuntimeError(f"GHALogs archive size mismatch after merge: got {total}, expected {GHALOGS_ARCHIVE_BYTES}")
+    fs.rm(parts_prefix, recursive=True)
+    logger.info("Staged GHALogs archive: %d bytes -> %s", total, archive_path)
+
+
+def download_ghalogs_step(
+    *,
+    source_path: str = GHALOGS_STAGED_PREFIX,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that stages the GHALogs Zenodo archive at ``source_path``.
+
+    The step's output path is pinned to ``source_path`` (via
+    ``override_output_path``) so the archive lands exactly where the paired
+    :func:`materialize_ghalogs_step` reads it. Idempotent: the step no-ops once
+    the ~142 GB archive is present.
+    """
+    source = SOURCE_MANIFESTS["ghalogs"]
+    return StepSpec(
+        name="raw/diagnostic_logs/ghalogs_public_archive",
+        output_path_prefix=output_path_prefix,
+        override_output_path=source_path,
+        fn=lambda output_path: stage_ghalogs_archive(output_path),
+        hash_attrs={
+            "version": "v1",
+            "download_url": GHALOGS_DOWNLOAD_URL,
+            "archive_bytes": GHALOGS_ARCHIVE_BYTES,
+            "archive_relative_path": GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "source_content_fingerprint": source.fingerprint(),
         },
     )
 
@@ -989,12 +1380,14 @@ def materialize_ghalogs_step(
     source_path: str = GHALOGS_STAGED_PREFIX,
     max_members: int | None = None,
     num_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    deps: list[StepSpec] | None = None,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes GHALogs into reusable parquet shards."""
     source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name="processed/diagnostic_logs/ghalogs_public_parquet",
+        deps=deps or [],
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: materialize_ghalogs_to_parquet(
             source_path,
@@ -1003,10 +1396,11 @@ def materialize_ghalogs_step(
             num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "2026.07.31",
             "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
+            "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
             "num_shards": num_shards,
             "source_content_fingerprint": source.fingerprint(),
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
@@ -1048,12 +1442,22 @@ def ghalogs_public_normalize_steps(
     max_members: int | None = None,
     num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
     output_path_prefix: str | None = None,
-) -> tuple[StepSpec, StepSpec, StepSpec]:
-    """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
+) -> tuple[StepSpec, StepSpec, StepSpec, StepSpec]:
+    """Return the Datakit ``(download, materialize, train-partition, normalize)`` chain for GHALogs.
+
+    ``download`` streams the Zenodo archive to ``source_path`` and is wired as a
+    dependency of ``materialize`` so the ~142 GB archive is auto-staged before
+    materialization reads it (idempotent — a no-op when already staged).
+    ``materialize`` reads from the download step's resolved ``output_path`` so
+    the two always agree on the archive location, even when ``output_path_prefix``
+    differs from ``marin_prefix()``.
+    """
+    download = download_ghalogs_step(source_path=source_path, output_path_prefix=output_path_prefix)
     materialized = materialize_ghalogs_step(
-        source_path=source_path,
+        source_path=download.output_path,
         max_members=max_members,
         num_shards=num_materialize_shards,
+        deps=[download],
         output_path_prefix=output_path_prefix,
     )
     train_partition = materialize_ghalogs_partition_step(
@@ -1069,7 +1473,7 @@ def ghalogs_public_normalize_steps(
         file_extensions=(".parquet",),
         output_path_prefix=output_path_prefix,
     )
-    return (materialized, train_partition, normalized)
+    return (download, materialized, train_partition, normalized)
 
 
 def extract_logchunks_step(
@@ -1113,79 +1517,6 @@ def extract_loghub_step(
             "source_label": source.source_label,
             "max_files": max_files,
             "source_content_fingerprint": source.fingerprint(),
-            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
-        },
-    )
-
-
-def extract_diagnostic_logs_steps(
-    *,
-    ghalogs_source_path: str,
-    logchunks_source_path: str | None = None,
-    loghub_source_path: str | None = None,
-    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-    output_path_prefix: str | None = None,
-) -> tuple[StepSpec, StepSpec, StepSpec]:
-    """Return one materialization step per public diagnostic-log source."""
-    return (
-        extract_ghalogs_step(
-            source_path=ghalogs_source_path,
-            max_members=max_ghalogs_members,
-            output_path_prefix=output_path_prefix,
-        ),
-        extract_logchunks_step(
-            source_path=logchunks_source_path,
-            max_examples=max_logchunks_examples,
-            output_path_prefix=output_path_prefix,
-        ),
-        extract_loghub_step(
-            source_path=loghub_source_path,
-            max_files=max_loghub_files,
-            output_path_prefix=output_path_prefix,
-        ),
-    )
-
-
-def extract_diagnostic_logs_step(
-    *,
-    ghalogs_source_path: str,
-    logchunks_source_path: str | None = None,
-    loghub_source_path: str | None = None,
-    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """Return a StepSpec that materializes all public diagnostic-log slices together."""
-    return StepSpec(
-        name="processed/diagnostic_logs/public_sample",
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: extract_diagnostic_logs(
-            ghalogs_source_path,
-            output_path,
-            logchunks_input_path=logchunks_source_path,
-            loghub_input_path=loghub_source_path,
-            max_ghalogs_members=max_ghalogs_members,
-            max_logchunks_examples=max_logchunks_examples,
-            max_loghub_files=max_loghub_files,
-        ),
-        hash_attrs={
-            "version": "v4",
-            "sample_only": True,
-            "ghalogs_source_path": ghalogs_source_path,
-            "logchunks_source_path": logchunks_source_path,
-            "loghub_source_path": loghub_source_path,
-            "max_ghalogs_members": max_ghalogs_members,
-            "max_logchunks_examples": max_logchunks_examples,
-            "max_loghub_files": max_loghub_files,
-            "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
-            "source_content_fingerprints": {
-                source.source_label: source.fingerprint()
-                for source in SOURCE_INVENTORY
-                if source.source_label in {"ghalogs", "logchunks", "loghub"}
-            },
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
         },
     )

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "lib/iris/**"
+      - "scripts/ci/iris_monitor.py"
+      - ".github/workflows/iris-smoke-gcp.yaml"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,11 @@ concurrency:
 
 jobs:
   cloud-smoke-test:
-    # Run on: PRs touching lib/iris/**, or manual dispatch
+    # Run on: same-repo PRs touching lib/iris/**, or manual dispatch.
+    # Fork PRs can't read secrets.IRIS_CI_GCP_SA_KEY, so skip them (mirrors iris-smoke-coreweave).
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -56,7 +62,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
@@ -69,12 +75,12 @@ jobs:
         run: cd lib/iris && uv run playwright install --with-deps chromium
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -104,12 +110,13 @@ jobs:
           MARIN_PREFIX: gs://marin-eu-west4
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=config/smoke-gcp.yaml \
+            --config=config/ci-gcp-smoke.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
             --wait-for-workers 1 \
-            --worker-timeout 600 &
+            --worker-timeout 600 \
+            --image-platform linux/amd64 &
           START_PID=$!
           echo "START_PID=$START_PID" >> "$GITHUB_ENV"
           for i in $(seq 1 900); do
@@ -162,11 +169,11 @@ jobs:
           if [ -n "${IRIS_CONTROLLER_URL:-}" ]; then
             ARGS+=(--controller-url "$IRIS_CONTROLLER_URL")
           fi
-          uv run python scripts/workflows/iris_monitor.py "${ARGS[@]}"
+          uv run python scripts/ci/iris_monitor.py "${ARGS[@]}"
 
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iris-cloud-smoke-logs
           path: iris-cloud-logs/
@@ -184,7 +191,7 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=config/smoke-gcp.yaml \
+            --config=config/ci-gcp-smoke.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Remove OS Login SSH key
@@ -196,7 +203,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iris-cloud-smoke-screenshots
           path: iris-cloud-screenshots/
@@ -229,19 +236,19 @@ jobs:
           cache-dependency-glob: "lib/iris/pyproject.toml"
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Tear down cluster (iris stop)
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=config/smoke-gcp.yaml \
+            --config=config/ci-gcp-smoke.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Failsafe GCP resource cleanup

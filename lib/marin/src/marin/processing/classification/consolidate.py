@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Consolidate takes a set of documents with corresponding attributes and writes
-out a subset of the documents based on various filters defined with respect to
-the attributes.  Handles two cases:
+Consolidate takes documents with corresponding flat attribute columns and writes
+out a subset of the documents based on configured filters. Handles two cases:
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
 
@@ -21,14 +20,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
-
-from marin.utils import (
-    fsspec_exists,
-    fsspec_glob,
-    rebase_file_path,
-)
+from fray.types import ResourceConfig
+from rigging.filesystem import StoragePath, rebase_file_path
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):
@@ -60,7 +55,7 @@ class FilterConfig:
     """If True, keep docs that have no attribute entry. If False (default), reject them."""
 
 
-def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
+def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attribute_row: dict) -> dict:
     def _remove_spans(text: str, spans: list[list[int]]) -> str:
         """Return ``text`` with ``spans`` removed.
 
@@ -74,7 +69,7 @@ def _remove_spans_from_doc(doc: dict, filt: FilterConfig, attributes: dict) -> d
 
         return text
 
-    spans = attributes[filt.name]
+    spans = attribute_row[filt.name]
     new_text = _remove_spans(doc["text"], spans)
     return {**doc, "text": new_text}
 
@@ -89,9 +84,9 @@ def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig
         new_extension=new_extension,
         old_extension=f".{filetype}",
     )
-    if fsspec_exists(attr_path):
+    if StoragePath(attr_path).exists():
         return attr_path
-    candidates = fsspec_glob(f"{attr_path}.*")
+    candidates = [str(m) for m in StoragePath(f"{attr_path}.*").glob()]
     if candidates:
         return candidates[0]
     return None
@@ -128,13 +123,12 @@ def _make_filter_combiner(filt: FilterConfig) -> Callable[[dict, dict | None], d
         if right is None:
             return left if filt.keep_if_missing else None
 
-        attrs = right["attributes"]
         if filt.type == FilterType.REMOVE_DOC:
-            return left if not attrs.get(filt.name, False) else None
+            return left if not right.get(filt.name, False) else None
         if filt.type == FilterType.KEEP_DOC:
-            return left if attrs.get(filt.name, False) else None
+            return left if right.get(filt.name, False) else None
         assert filt.type == FilterType.REMOVE_SPANS
-        mutated = _remove_spans_from_doc(left, filt, attrs)
+        mutated = _remove_spans_from_doc(left, filt, right)
         return mutated if mutated.get("text") else None
 
     return combine
@@ -148,7 +142,7 @@ def consolidate(
     filetype: str = "jsonl.gz",
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
-    map_workers_per_actor: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
 ) -> ZephyrExecutionResult:
     """Consolidate documents by applying filters based on attributes.
 
@@ -164,11 +158,12 @@ def consolidate(
         worker_resources: Optional Zephyr worker resource config. Defaults to
             ``ResourceConfig(cpu=2, ram="4g")`` — Zephyr's 1 CPU / 1 GB default
             packs multiple workers per VM and OOMs on heavy-tailed inputs where
-            a single doc can blow past the per-worker share.
+            a single doc can blow past the per-worker share. Required when
+            ``map_task_resources`` is set.
         max_workers: Maximum number of Zephyr workers (defaults to Zephyr's default).
-        map_workers_per_actor: Number of workers per actor for the map stage.
+        map_task_resources: ResourceConfig for map-stage tasks.
     """
-    input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
+    input_paths = sorted(str(m) for m in StoragePath(os.path.join(input_path, f"**/*.{filetype}")).glob())
     if not input_paths:
         raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
     logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} filters")
@@ -180,7 +175,7 @@ def consolidate(
 
     ds = Dataset.from_list(input_paths).load_parquet()
     for filt, attr_paths in filter_attr_paths:
-        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", "attributes"])
+        attrs = Dataset.from_list(attr_paths).load_parquet(columns=["id", filt.name])
         ds = ds.sorted_merge_join(
             attrs,
             left_key=lambda r: r["id"],
@@ -191,12 +186,12 @@ def consolidate(
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    if worker_resources is None:
-        worker_resources = ResourceConfig(cpu=2, ram="4g")
-    ctx_kwargs: dict = {"name": "consolidate-filter", "resources": worker_resources}
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
-    return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))
+    ctx = ZephyrContext(
+        name="consolidate-filter",
+        max_workers=max_workers,
+        resources=worker_resources or ResourceConfig(cpu=2, ram="4g"),
+    )
+    return ctx.execute(
+        ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"),
+        map_task_resources=map_task_resources,
+    )

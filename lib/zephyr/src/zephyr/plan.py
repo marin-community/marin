@@ -8,19 +8,17 @@ They encapsulate execution logic as callables, decoupling the backend from
 knowledge of logical operation types.
 """
 
-from __future__ import annotations
-
 import functools
 import heapq
 import logging
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-from iris.env_resources import TaskResources as _TaskResources
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from zephyr import counters
@@ -46,9 +44,7 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
-from zephyr.shard_keys import composite_sort_key
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
@@ -125,11 +121,13 @@ class Scatter:
 
 @dataclass
 class Reduce:
-    """Merge sorted chunks and reduce per key."""
+    """Merge sorted chunks and reduce per key.
+
+    Sort within each group is encoded into ``_SORT_KEY_COL`` at scatter time
+    """
 
     key_fn: Callable[[Any], Any]
     reducer_fn: Callable[[Any, Iterator], Any]
-    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -151,7 +149,7 @@ class Join:
     """Join two sorted streams."""
 
     fn: Callable[[Iterator, Iterator], Iterator]
-    right_plan: PhysicalPlan | None = None
+    right_plan: "PhysicalPlan | None" = None
 
 
 PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join
@@ -182,21 +180,14 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 
 def _reduce_gen(
-    shard: Any,
+    shard: ScatterReader,
     key_fn: Callable,
     reducer_fn: Callable,
-    sort_fn: Callable | None = None,
-    external_sort_dir: str | None = None,
+    external_sort_dir: str,
 ) -> Iterator:
-    # The reducer contract is ``R | Iterator[R]``: it may return a single
-    # result or a stream of results. Discriminate on the actual return value,
-    # not ``inspect.isgeneratorfunction`` — that only recognises functions
-    # literally defined with ``yield`` and misses reducers that *return* an
-    # iterator (a generator expression, ``map``/``filter``, or a call to
-    # another generator function). Such a reducer would otherwise be emitted
-    # whole as one item and crash the downstream writer.
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        result = reducer_fn(key, items_iter)
+    merged = shard.merge_sorted_chunks(external_sort_dir)
+    for key, grouped in groupby(merged, key=key_fn):
+        result = reducer_fn(key, grouped)
         if isinstance(result, Iterator):
             yield from result
         else:
@@ -473,7 +464,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn, sort_fn=op.sort_fn))
+            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -497,10 +488,46 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
 
         else:
-            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp, TakePerShardOp, WindowOp, SelectOp
+            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
+            # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
 
     return state.finalize()
+
+
+# Number of Parquet footer reads issued at once while splitting input files.
+# Each read is a small, latency-bound GET, so a wide pool keeps planning a
+# corpus of thousands of files from serializing into thousands of round-trips.
+_FOOTER_READ_CONCURRENCY = 32
+
+# Whole-file read: a single span with no explicit row bounds.
+_WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
+
+
+def _row_ranges_per_file(
+    files: list[FileEntry],
+    load_op: LoadFileOp,
+) -> list[list[tuple[int | None, int | None]]]:
+    """Row spans covering each file, in input order.
+
+    Without ``approx_shard_bytes`` every file is one unbounded span and no IO
+    happens. With it, each Parquet file is split at row-group boundaries, which
+    costs one footer read per file; those reads run concurrently. Splits are
+    best-effort: a row group is never divided, so a span can exceed
+    ``approx_shard_bytes`` when a single row group is larger.
+    """
+    approx_shard_bytes = load_op.approx_shard_bytes
+    if approx_shard_bytes is None:
+        return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
+
+    def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and entry.path.endswith(".parquet"))
+        if not is_parquet:
+            return [_WHOLE_FILE_ROW_RANGE]
+        return list(compute_parquet_splits(entry.path, approx_shard_bytes))
+
+    with ThreadPoolExecutor(max_workers=_FOOTER_READ_CONCURRENCY) as pool:
+        return list(pool.map(row_ranges, files))
 
 
 def _compute_file_pushdown(
@@ -547,26 +574,15 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter.
-    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
-    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
-    # so a shard can exceed approx_shard_bytes when a single row group is larger.
+    # Create InputFileSpecs with final columns/filter, one per row span.
     source_items: list[SourceItem] = []
-    for entry in files:
-        path = entry.path
-        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
-        row_ranges: list[tuple[int | None, int | None]]
-        if load_op.approx_shard_bytes is not None and is_parquet:
-            row_ranges = list(compute_parquet_splits(path, load_op.approx_shard_bytes))
-        else:
-            # Whole-file read: a single span with no explicit row bounds.
-            row_ranges = [(None, None)]
+    for entry, row_ranges in zip(files, _row_ranges_per_file(files, load_op), strict=True):
         for row_start, row_end in row_ranges:
             source_items.append(
                 SourceItem(
                     shard_idx=len(source_items),
                     data=InputFileSpec(
-                        path=path,
+                        path=entry.path,
                         format=load_op.format,
                         columns=select_columns,
                         row_start=row_start,
@@ -650,66 +666,6 @@ def make_windows(
 
     if window:
         yield window
-
-
-def _merge_sorted_chunks(
-    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
-) -> Iterator[tuple[object, Iterator]]:
-    """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
-
-    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
-    This function performs a k-way merge across all chunks and groups consecutive
-    items with the same key.
-
-    Args:
-        shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract grouping key from item
-        sort_fn: Optional secondary sort key. When provided, the merge uses
-            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
-
-    Yields:
-        Tuples of (key, iterator_of_items) for each unique key
-    """
-    # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    merge_key = composite_sort_key(key_fn, sort_fn)
-
-    # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterReader can decide using manifest stats (no file opens needed).
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterReader)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
-
-    if use_external:
-        memory_limit = _TaskResources.from_environment().memory_bytes
-        # Per-iterator memory ~= compressed bytes for one chunk held by
-        # cat_file. Use the actual max compressed chunk size from the sidecar.
-        per_iter_bytes = shard.max_compressed_chunk_bytes
-        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
-        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
-        logger.info(
-            "External sort triggered for shard with %d iterators, "
-            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
-            sum(it.chunk_count for it in shard.iterators),
-            fan_in,
-            per_iter_bytes // 1024,
-            write_batch_size,
-            external_sort_dir,
-        )
-        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(
-            shard.get_iterators(),
-            merge_key,
-            external_sort_dir,
-            fan_in=fan_in,
-            write_batch_size=write_batch_size,
-        )
-    else:
-        chunk_iterators = list(shard.get_iterators())
-        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
-    yield from groupby(merged_stream, key=key_fn)
 
 
 def _sorted_merge_join(
@@ -831,10 +787,9 @@ def run_stage(
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             if op.skip_existing:
-                fs = url_to_fs(output_path)[0]
-                if fs.exists(output_path):
+                if StoragePath(output_path).exists():
                     logger.info(f"Skipping write, output exists: {output_path}")
-                    counters.increment("zephyr/partitions_skipped")
+                    counters.pipeline.update_counter(counters.PARTITIONS_SKIPPED, 1)
                     yield output_path
                     return
 
@@ -858,9 +813,7 @@ def run_stage(
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
                 shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(
-                shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
-            )
+            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):

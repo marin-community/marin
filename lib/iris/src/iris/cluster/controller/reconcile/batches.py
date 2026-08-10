@@ -34,6 +34,8 @@ from iris.cluster.controller.reconcile.effects import (
     ControllerEffects,
     JobRowDelta,
     LogEvent,
+    TaskActionEvent,
+    TaskActionReason,
 )
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import (
@@ -46,6 +48,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -77,6 +80,16 @@ def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now
             now_ms,
             stamp_attempt_finished=False,
         )
+        overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+                message=reason,
+                severity=TaskEventSeverity.WARNING,
+            )
+        )
 
 
 def _cascade_to_children(
@@ -84,10 +97,9 @@ def _cascade_to_children(
     job_id: JobName,
     now_ms: int,
     reason: str,
-    exclude_reservation_holders: bool = False,
 ) -> None:
     """Kill descendant jobs (not the job itself) on a parent terminal/preempt."""
-    descendants = overlay.job_descendants(job_id, exclude_holders=exclude_reservation_holders)
+    descendants = overlay.job_descendants(job_id)
     for child_job_id in descendants:
         _kill_non_terminal_tasks(overlay, child_job_id, reason, now_ms)
         overlay.merge_cascade_kill(
@@ -162,7 +174,7 @@ class ReconcileState:
 
     def reconcile(
         self,
-        plan_results: list[tuple[worker.WorkerReconcilePlan, worker.ReconcileResult]],
+        plan_results: list[tuple[worker.WorkerReconcilePlan, worker.WorkerReconcileResult]],
         now: Timestamp,
     ) -> ControllerEffects:
         """Apply many workers' reconcile outcomes against the shared overlay.
@@ -173,14 +185,9 @@ class ReconcileState:
         then recomputes/finalizes every touched job once for the whole batch.
         """
         now_ms = now.epoch_ms()
-        heartbeat_workers = tuple(
-            plan.worker_id
-            for plan, result in plan_results
-            if result.error is None and plan.worker_id in self._snapshot.active_workers
-        )
-        if heartbeat_workers:
-            self.overlay.emit_worker_heartbeat(heartbeat_workers)
-
+        # Liveness (REACHED/UNREACHABLE) is observed by the backend from its own
+        # RPC outcomes and folded by the controller through
+        # ``WorkerHealthTracker.apply``; the kernel only derives build failures.
         for plan, result in plan_results:
             for update in self._reconcile_updates_for_plan(plan, result):
                 self._apply_update(update, now_ms, source=task.TransitionSource.WORKER_RECONCILE)
@@ -223,7 +230,8 @@ class ReconcileState:
                 outcome = self._fail_one_task(task_row, worker_id, error, now_ms)
                 if outcome is not None:
                     self._fan_out(outcome, child_reason="Parent task preempted", now_ms=now_ms)
-            self.overlay.emit_worker_make_unhealthy(worker_id)
+            # No health mutation here: the controller has already decided this
+            # worker is dead and forgets it once removal commits.
             self.overlay.emit_log_event(
                 LogEvent(
                     action="worker_failed",
@@ -287,7 +295,7 @@ class ReconcileState:
         descendants = self._snapshot.job_descendants.get(job_id)
         if descendants is None:
             return self.overlay.effects
-        subtree = [job_id, *descendants.descendants_full]
+        subtree = [job_id, *descendants.descendants]
         now_ms = now.epoch_ms()
         finished_at = Timestamp.from_ms(now_ms)
 
@@ -313,6 +321,41 @@ class ReconcileState:
     # Two-pass contract (shared by every operation)
     # ------------------------------------------------------------------
 
+    def _emit_task_transition_action(
+        self,
+        outcome: task.TransitionOutcome,
+        *,
+        attempt_id: int,
+        message_prefix: str,
+        now_ms: int,
+    ) -> None:
+        """Record a retry or terminal decision for one state-changing outcome."""
+        if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
+            reason = TaskActionReason.RETRY_SCHEDULED
+            message = f"{message_prefix}; controller returned the task to PENDING."
+            severity = TaskEventSeverity.NORMAL
+        elif outcome.new_task_state in TERMINAL_TASK_STATES:
+            reason = TaskActionReason.TERMINATED
+            resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
+            message = f"{message_prefix}; controller resolved the task as {resolved_state}."
+            severity = (
+                TaskEventSeverity.NORMAL
+                if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED
+                else TaskEventSeverity.WARNING
+            )
+        else:
+            return
+        self.overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=outcome.task_id,
+                attempt_id=attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=reason,
+                message=message,
+                severity=severity,
+            )
+        )
+
     def _apply_update(self, update: TaskUpdate, now_ms: int, *, source: task.TransitionSource) -> None:
         """Apply pass for one worker/provider task update.
 
@@ -325,6 +368,14 @@ class ReconcileState:
         outcome = task.apply_one_transition(self.overlay, self._snapshot, update, now_ms, source=source)
         if outcome is None:
             return
+        if outcome.new_task_state != outcome.prior_state:
+            reported_state = job_pb2.TaskState.Name(update.new_state).removeprefix("TASK_STATE_")
+            self._emit_task_transition_action(
+                outcome,
+                attempt_id=update.attempt_id,
+                message_prefix=f"Backend reported {reported_state}",
+                now_ms=now_ms,
+            )
         _cascade_to_peers(self.overlay, outcome, now_ms)
         if outcome.new_task_state != outcome.prior_state:
             self._note(outcome.job_id)
@@ -337,6 +388,14 @@ class ReconcileState:
         unconditional: controller-asserted callers only build an outcome for a
         real transition, so there is no no-op outcome to gate against.
         """
+        task_row = self._snapshot.tasks.get(outcome.task_id)
+        if task_row is not None:
+            self._emit_task_transition_action(
+                outcome,
+                attempt_id=task_row.current_attempt_id,
+                message_prefix=child_reason,
+                now_ms=now_ms,
+            )
         _cascade_to_peers(self.overlay, outcome, now_ms)
         self._note(outcome.job_id)
         self._defer_pending_child_cascade(outcome, child_reason)
@@ -358,7 +417,7 @@ class ReconcileState:
         for job_id, reason in self.pending_child_cascades.items():
             if job_id in cascaded_jobs:
                 continue
-            _cascade_to_children(self.overlay, job_id, now_ms, reason, exclude_reservation_holders=True)
+            _cascade_to_children(self.overlay, job_id, now_ms, reason)
         return cascaded_jobs
 
     def _note(self, job_id: JobName) -> None:
@@ -385,7 +444,7 @@ class ReconcileState:
     def _reconcile_updates_for_plan(
         self,
         plan: worker.WorkerReconcilePlan,
-        result: worker.ReconcileResult,
+        result: worker.WorkerReconcileResult,
     ) -> list[TaskUpdate]:
         """Derive the task updates one worker's reconcile result contributes."""
         worker_id = plan.worker_id
@@ -468,18 +527,12 @@ class ReconcileState:
         if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
             return None
         prior_state = effective_state
-        is_reservation_holder = task_row.is_reservation_holder
-        if is_reservation_holder:
-            new_task_state = job_pb2.TASK_STATE_PENDING
-            preemption_count = task_row.preemption_count
-        else:
-            new_task_state, preemption_count = task.resolve_task_failure_state(
-                prior_state,
-                task_row.preemption_count,
-                task_row.max_retries_preemption,
-                job_pb2.TASK_STATE_WORKER_FAILED,
-            )
-        holder_preemption_count = 0 if is_reservation_holder else preemption_count
+        new_task_state = task.resolve_task_failure_state(
+            prior_state,
+            task_row.preemption_count,
+            task_row.max_retries_preemption,
+            job_pb2.TASK_STATE_WORKER_FAILED,
+        )
         # The worker is gone, so the attempt is truly done: finalize it (stamp
         # finished_at) rather than leaving it for a status update that will never
         # arrive.
@@ -492,7 +545,6 @@ class ReconcileState:
             now_ms,
             stamp_attempt_finished=True,
             attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
-            preemption_count=holder_preemption_count,
         )
         parent_job_id, _ = task_id.require_task()
         return task.TransitionOutcome(
@@ -500,7 +552,7 @@ class ReconcileState:
             job_id=parent_job_id,
             prior_state=prior_state,
             new_task_state=new_task_state,
-            cascade_to_peers=not is_reservation_holder and task_row.has_coscheduling,
+            cascade_to_peers=task_row.has_coscheduling,
         )
 
     # ------------------------------------------------------------------

@@ -9,16 +9,13 @@ on an fsspec filesystem. These helpers locate the shards for a requested
 ``split`` (optionally scoped to a ``subset``) and stream their rows.
 """
 
-from __future__ import annotations
-
 import os
 import posixpath
 from collections.abc import Iterable
 from typing import Any
 
 from datasets import load_dataset
-from marin.utils import fsspec_url
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 
 def _parquet_file_matches_split(path: str, split: str) -> bool:
@@ -57,7 +54,9 @@ def find_split_parquet_files(input_path: str, split: str, subset: str | None) ->
     if not matches:
         raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
 
-    return [fsspec_url(fs, path) for path in sorted(set(matches))]
+    scheme = StoragePath(input_path).scheme
+    prefix = f"{scheme}://" if scheme and scheme != "file" else ""
+    return [f"{prefix}{path}" for path in sorted(set(matches))]
 
 
 def load_hf_split_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:

@@ -29,17 +29,17 @@ import jax
 import jax.numpy as jnp
 from draccus import field
 from fsspec import AbstractFileSystem
-from haliax.jax_utils import is_in_jit, is_jax_array_like
+from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
+
+from rigging.filesystem import StoragePath
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
-from levanter.utils import fsspec_utils
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
@@ -281,15 +281,23 @@ class _CheckpointProgressLogger:
         self._thread.start()
 
     def set_phase(self, phase: str) -> None:
+        now = time.time()
         with self._lock:
+            previous_phase = self.phase
+            previous_phase_elapsed = now - self.phase_started_at
             self.phase = phase
-            self.phase_started_at = time.time()
+            self.phase_started_at = now
+            total_elapsed = now - self.started_at
         self._log(
             logging.INFO,
-            "PHASE: CHECKPOINT step=%d phase=%s path=%s",
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s previous_phase=%s "
+            "previous_phase_elapsed=%.2fs total_elapsed=%.2fs",
             self.step,
             phase,
             self.checkpoint_path,
+            previous_phase,
+            previous_phase_elapsed,
+            total_elapsed,
         )
         self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
 
@@ -363,7 +371,8 @@ class CheckpointDebugConfig:
     enabled: bool = False
     log_interval: float = 60.0
     dump_stacks_after: float | None = None
-    tracemalloc_frames: int = 25
+    tracemalloc_frames: int | None = 25
+    """Python allocation stack depth. None leaves global tracemalloc state unchanged."""
     top_allocations: int = 8
     force_gc_before_serialize: bool = True
     flush_logs: bool = True
@@ -372,7 +381,8 @@ class CheckpointDebugConfig:
         assert self.log_interval > 0, "checkpoint debug log_interval must be positive"
         if self.dump_stacks_after is not None:
             assert self.dump_stacks_after > 0, "checkpoint debug dump_stacks_after must be positive when set"
-        assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
+        if self.tracemalloc_frames is not None:
+            assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
         assert self.top_allocations >= 0, "checkpoint debug top_allocations must be non-negative"
 
     def __post_init__(self) -> None:
@@ -477,7 +487,7 @@ class Checkpointer:
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
         for i in range(1, len(step_policies)):
-            # factor these out so mypy can figure it out
+            # factor these out so pyrefly can figure it out
             prev_until = step_policies[i - 1].until
             until = step_policies[i].until
             if prev_until is None:
@@ -753,7 +763,7 @@ def save_checkpoint(
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
     progress_logger: _CheckpointProgressLogger | None = None
     if checkpoint_debug.enabled:
-        if not tracemalloc.is_tracing():
+        if checkpoint_debug.tracemalloc_frames is not None and not tracemalloc.is_tracing():
             tracemalloc.start(checkpoint_debug.tracemalloc_frames)
         progress_logger = _CheckpointProgressLogger(
             step=step,
@@ -856,7 +866,7 @@ def load_checkpoint(
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
 
-    if not fsspec_utils.exists(checkpoint_path):
+    if not StoragePath(checkpoint_path).exists():
         raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
 
     logger.info(f"Loading checkpoint from {checkpoint_path}")
@@ -1202,7 +1212,7 @@ def is_checkpoint_path(path: str) -> bool:
     Check if a given path is a checkpoint path.
     """
     try:
-        if not fsspec_utils.exists(path):
+        if not StoragePath(path).exists():
             return False
         # Sometimes we have incomplete checkpoints due to preemption or other issues.
         # try to find a metadata file in the path

@@ -10,20 +10,59 @@ per-worker batch of :class:`WorkerTaskUpdates` into reconcile
 ``AttemptObservation`` protos and applies them through that production verb.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.ops.worker import apply_reconcile as apply_reconcile_observations
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.ops.task import apply_dispatch_updates
+from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.controller.worker_health import (
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+)
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import worker_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
+
+
+@dataclass(frozen=True)
+class CursorTransitionReader:
+    """A ``TransitionReader`` backed by an open write transaction.
+
+    Lets the test drivers author effects through the production ``apply_reconcile``
+    / ``apply_dispatch_updates`` path while loading the snapshot from the very
+    transaction they commit into — same ``cur``, same explicit ``now``, no extra
+    ``Timestamp.now()`` and no second connection — so a frozen-clock replay
+    scenario stays byte-identical to the pre-relocation commit-side load.
+    """
+
+    cur: Tx
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        return load_closed_snapshot(
+            self.cur,
+            now=now,
+            seed_worker_ids=seed_worker_ids,
+            observation_uids=observation_uids,
+            seed_task_ids=seed_task_ids,
+            extra_attempt_keys=extra_attempt_keys,
+        )
 
 
 @dataclass(frozen=True)
@@ -35,6 +74,36 @@ class WorkerTaskUpdates:
 
     worker_id: WorkerId
     updates: list[TaskUpdate]
+
+
+def commit_reconcile(
+    cur: Tx,
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
+    *,
+    now: Timestamp,
+) -> ControllerEffects:
+    """Author + commit worker-reconcile effects against a write cursor (test glue).
+
+    The two steps the controller now does apart (backend authors, controller
+    commits), collapsed for tests that drive the kernel directly from a write
+    transaction. Loads from ``cur`` so the snapshot reflects the same transaction
+    the effects commit into.
+    """
+    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    commit_effects(cur, effects)
+    return effects
+
+
+def commit_dispatch_updates(
+    cur: Tx,
+    updates: list[TaskUpdate],
+    *,
+    now: Timestamp,
+) -> ControllerEffects:
+    """Author + commit direct-provider effects against a write cursor (test glue)."""
+    effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
+    commit_effects(cur, effects)
+    return effects
 
 
 def _attempt_uid(cur: Tx, task_id: JobName, attempt_id: int) -> str:
@@ -64,19 +133,17 @@ def apply_task_observations(
     requests: list[WorkerTaskUpdates],
     *,
     health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
     """Land ``requests`` through the production reconcile-observation verb.
 
-    Builds one ``(WorkerReconcilePlan, ReconcileResult)`` pair per worker: the
+    Builds one ``(WorkerReconcilePlan, WorkerReconcileResult)`` pair per worker: the
     plan lists each touched attempt's uid as desired (so the production filter
-    accepts the observation) and the result reports the observed state. An
-    empty ``updates`` list still records a worker heartbeat, matching the old
-    behaviour.
+    accepts the observation) and the result reports the observed state. The
+    kernel-derived build failures ride back on the effects; this helper folds
+    them into ``health`` the way ``Controller._fold_health`` does in production.
     """
-    plans_by_worker: dict[WorkerId, WorkerReconcilePlan] = {}
-    results: list[ReconcileResult] = []
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for req in requests:
         observations: list[worker_pb2.Worker.AttemptObservation] = []
         desired: list[worker_pb2.Worker.DesiredAttempt] = []
@@ -84,10 +151,19 @@ def apply_task_observations(
             uid = _attempt_uid(cur, update.task_id, update.attempt_id)
             observations.append(_observation(uid, update))
             desired.append(worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()))
-        plans_by_worker[req.worker_id] = WorkerReconcilePlan(
+        plan = WorkerReconcilePlan(
             worker_id=req.worker_id,
             request=worker_pb2.Worker.ReconcileRequest(worker_id=str(req.worker_id), desired=desired),
         )
-        results.append(ReconcileResult(worker_id=req.worker_id, observations=observations, error=None))
+        result = WorkerReconcileResult(worker_id=req.worker_id, observations=observations, error=None)
+        plan_results.append((plan, result))
 
-    return apply_reconcile_observations(cur, plans_by_worker, results, health=health, endpoints=endpoints, now=now)
+    # Author the effects through the relocated (backend-side) reconcile glue,
+    # reading from this write transaction, then commit them — the controller now
+    # does these as two separate steps.
+    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    commit_effects(cur, effects)
+    build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
+    if build_events:
+        health.apply(build_events, now_ms=now.epoch_ms())
+    return effects

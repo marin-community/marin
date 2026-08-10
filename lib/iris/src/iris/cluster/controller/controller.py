@@ -6,94 +6,129 @@
 import asyncio
 import atexit
 import enum
+import json
 import logging
+import secrets
 import socket
 import tempfile
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
 import uvicorn
-from finelog.client import LogClient, RemoteLogHandler
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
-from finelog.embedded import require_embedded_server
+from finelog.client import RemoteLogHandler
+from rigging import telemetry
+from rigging.filesystem import prefix_join
+from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
-from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.auth import (
+    CONTROL_PLANE_AUDIENCE,
+    DEFAULT_USER_ROLE,
+    ENDPOINT_TOKEN_SCOPE,
+    FEDERATION_AUDIENCE,
+    NATIVE_PROXY_JWT_CACHE_CAPACITY,
+    NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+    NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+    PROXY_PLANE_AUDIENCE,
+    ControllerAuth,
+    FederationTokenProvider,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
+    native_proxy_auth_policy,
+    request_auth_policy,
+)
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    CapacityInput,
-    PlacementOwner,
-    ScheduleInput,
+    AutoscaleRequest,
+    AutoscaleResult,
+    BackendCapability,
+    BackendRuntime,
+    ReconcileRequest,
+    ReconcileResult,
+    ScheduleRequest,
+    ScheduleResult,
     TaskBackend,
 )
+from iris.cluster.controller.budget import resource_value
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
     upload_checkpoint,
     write_checkpoint,
 )
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
+from iris.cluster.controller.log_stack import LogStack
+from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
+from iris.cluster.controller.native_proxy_metrics import (
+    NativeProxyTelemetry,
+    install_native_proxy_metrics,
+    uninstall_native_proxy_metrics,
+)
 from iris.cluster.controller.ops.task import (
     Assignment,
-    apply_dispatch_updates,
     finalize,
 )
-from iris.cluster.controller.ops.worker import (
-    apply_reconcile,
-)
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.reconcile.worker import (
-    ReconcileInputs,
-    ReconcileRow,
-    WorkerReconcilePlan,
-    build_reconcile_plans,
+from iris.cluster.controller.scheduling.meta_scheduler import (
+    BackendRouting,
+    RoutableJob,
+    build_backend_index,
+    route_jobs_to_backends,
 )
-from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
-    build_scheduling_context,
-    read_reservation_claims,
-    refresh_reservation_claims,
+    RoutingInputs,
+    build_routing_inputs,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.schema import ReservationClaim
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.task_state_stats import TaskStateCollector
+from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
+from iris.cluster.federation.availability import Promotion, QueuedCandidate
+from iris.cluster.federation.manager import (
+    DEFAULT_HEARTBEAT_INTERVAL,
+    DEFAULT_MAX_HANDOFFS_PER_CYCLE,
+    FederationManager,
+)
+from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
+from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
     JobName,
+    PendingTask,
     UserBudgetDefaults,
     WorkerId,
-    WorkerStatus,
-    WorkerStatusMap,
 )
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenVerifier
+from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -105,24 +140,23 @@ logger = logging.getLogger(__name__)
 # every other RPC, including the worker heartbeats that would unblock the
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
-_RPC_HANDLER_THREADS = 1024
+_RPC_HANDLER_THREADS = 64
+_CONTROLLER_KEEPALIVE = 120
+_PRIVATE_CONTROLLER_HOST = "127.0.0.1"
+_SYNCHRONOUS_PHASE_INTERVAL = 0.0
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
     def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
-        try:
-            loop.run_until_complete(server.serve())
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
+        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
+        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
+            runner.get_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
+            )
+            runner.run(server.serve(sockets=sockets))
 
     server.run = run_with_executor
 
@@ -140,6 +174,44 @@ _SCHEDULING_TRACE_INTERVAL = 50
 
 
 @dataclass
+class _TickInputs:
+    """Per-tick inputs the control driver assembles for the due phases.
+
+    The controller reads only its own task-lifecycle state: ``routing`` carries
+    the pending tasks + budgets the meta-scheduler and per-user budget thread off of;
+    ``reconcile_requests`` carries each ``CLUSTER_VIEW`` backend's dispatch drain
+    (worker-daemon backends source their own reconcile snapshot, so they have no
+    entry); ``timeout_rows`` is the global execution-timeout sweep. Workers are
+    read by each backend, never here.
+    """
+
+    routing: RoutingInputs | None = None
+    reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
+    timeout_rows: Sequence[Row] = ()
+    # Federated jobs queued on this parent awaiting a peer with free capacity, in
+    # priority-then-age order. The tick's federation pass assigns them to peers.
+    queued_federation: list[QueuedCandidate] = field(default_factory=list)
+    # Queued federated jobs whose scheduling deadline has elapsed while waiting for a
+    # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
+    # timeout scan never sees them).
+    expired_queued_federation: list[JobName] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SchedulePhaseResult:
+    """One schedule phase's outputs, before any DB write.
+
+    ``results`` is the per-backend placement decision; ``pins`` are the
+    ``(job_id, backend_id)`` routings the meta-scheduler chose this tick; and
+    ``unschedulable`` are the ``(task, reason)`` pairs no backend could take.
+    """
+
+    results: dict[str, ScheduleResult]
+    pins: list[tuple[JobName, str]]
+    unschedulable: list[tuple[PendingTask, str]]
+
+
+@dataclass
 class ControllerConfig:
     """Controller configuration."""
 
@@ -153,23 +225,29 @@ class ControllerConfig:
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
     scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """Minimum scheduling loop interval (used when cluster is active)."""
-
-    scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """Maximum scheduling loop interval (reached via exponential backoff when idle)."""
-
-    heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
-    """How often to send heartbeats to workers."""
+    """Schedule-phase cadence: the control tick runs its schedule phase at most
+    this often (a submit wake still forces an immediate schedule-only mini-tick)."""
 
     autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """How often the controller runs an autoscale cycle (backend ``manage_capacity``).
-    Only used when the backend does not manage its own capacity."""
+    """How often the controller runs an autoscale provisioning cycle
+    (``backend.autoscale``). A capacity-managing backend (k8s) no-ops."""
 
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
-    """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
-    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_tick``
-    against every healthy worker. The Reconcile RPC is the sole channel that
-    dispatches new ASSIGNED rows and observes worker-side state changes."""
+    """Reconcile cadence — the sole reconcile + liveness channel. The control
+    tick runs its reconcile phase every ``poll_interval`` (or sooner when a fresh
+    assignment forces one) against every active worker. The reconcile RPC outcome
+    is the only liveness signal; ``worker_unreachable_grace`` sets how long a
+    worker may stay unreachable before teardown. The Reconcile RPC is also the
+    sole channel that dispatches new ASSIGNED rows and observes worker state."""
+
+    worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
+    """How long a worker may be continuously unreachable (or self-report
+    unhealthy) before it is failed and torn down. Threaded into each worker-daemon
+    backend at construction to size the ``WorkerHealthTracker`` it owns. Realized as
+    wall-clock elapsed since the worker's last successful reconcile, so detection
+    latency is ~grace regardless of the reconcile cadence or how long a failing pass
+    takes. ~50s tolerates brief network blips without reaping a multi-VM slice;
+    tests shorten it for fast deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -179,7 +257,7 @@ class ControllerConfig:
 
     checkpoint_interval: Duration | None = None
     """If set, take a periodic best-effort snapshot this often.
-    Runs in the autoscaler loop thread; does not pause scheduling."""
+    Runs on its own checkpoint thread; does not pause the control tick."""
 
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
@@ -189,6 +267,13 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
+
+    slice_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
+    """Delete orphaned slices (no backing worker row) older than this (default: 1 hour).
+
+    Must comfortably exceed worst-case slice boot + worker-registration lag, so a
+    freshly-created slice whose VMs are still booting is never reaped before its
+    workers register."""
 
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
@@ -208,51 +293,54 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
-    log_service_address: str | None = None
-    """Address of an externally-hosted log server (e.g. http://localhost:10001).
-    When set, the controller connects to the existing server. When None, the
-    Controller starts an in-process native ``finelog._native`` server on a free
-    port (used by tests and local-mode runs). In production this address is
-    sourced from `endpoints["/system/log-server"]` and passed in here by the
-    daemon entrypoint."""
-
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
-    cluster_config.endpoints by the daemon entrypoint. Registered into the
-    controller service's _system_endpoints during start()."""
+    cluster_config.endpoints by the daemon entrypoint. Registered as system
+    endpoints on the EndpointService during start()."""
 
+    cluster_id: str = ""
+    """This cluster's real federation identity (from the cluster config ``name``).
 
-def _log_client_interceptors(config: "ControllerConfig") -> tuple:
-    """Return Connect interceptors for controller-originated LogService RPCs.
+    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
+    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
+    federation parent can relay it back here."""
 
-    When auth is configured, attach the worker JWT as a bearer token so the
-    log server accepts PushLogs/FetchLogs. The worker token is signed with
-    the same key the log server verifies against; no separate admin token
-    is required for controller-initiated pushes.
-    """
-    token = config.auth.worker_token if config.auth and config.auth.worker_token else None
-    if not token:
-        return ()
-    return (AuthTokenInjector(StaticTokenProvider(token)),)
+    dashboard_url: str = ""
+    """This cluster's public origin (cluster config ``dashboard_url``); the local origin
+    a minted capability URL uses when no public parent is configured."""
+
+    federation_public_parent: str = ""
+    """Public origin of the federation parent that fronts this cluster (cluster config
+    ``federation_public_parent``). Set on a child whose own origin is not world-visible:
+    a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
+    which relays it back here."""
+
+    peers: dict[str, PeerConfig] = field(default_factory=dict)
+    """Federation peers (peer id -> declaration). Empty leaves federation inert:
+    no peer connections, no heartbeat, an empty ListPeers view."""
+
+    federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
+    """How often the federation capability heartbeat probes each peer."""
+
+    max_federation_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE
+    """Cap on federation queue promotions to any one peer per control tick. Bounds a
+    burst of over-assignment against a single (possibly stale) availability
+    observation, on top of the reservation ledger."""
 
 
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Runs three background loops:
-    - Scheduling loop: finds task assignments, checks worker timeouts
-    - Provider loop: syncs task state with the execution backend via TaskBackend
-    - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
-
-    Each loop runs on its own thread so blocking operations in one don't
-    stall the others.
+    One driver thread runs the control tick — schedule -> reconcile -> autoscale
+    as phases over a single read snapshot, committed through one end-of-tick write
+    transaction — alongside the prune and checkpoint housekeeping threads.
 
     Example:
         ```python
         config = ControllerConfig(port=8080)
         controller = Controller(
             config=config,
-            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
+            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
         )
         controller.start()
         try:
@@ -264,27 +352,69 @@ class Controller:
 
     Args:
         config: Controller configuration
-        provider: TaskBackend for communicating with the execution backend. When
-            it does not manage its own capacity (``manages_capacity`` is False),
-            the controller drives its ``manage_capacity`` in a background loop.
+        backends: The ``{backend_id: TaskBackend}`` collection the controller
+            drives. Each control-tick phase runs per backend over a snapshot
+            filtered to that backend's workers/tasks; a single-backend mapping
+            keyed :data:`DEFAULT_BACKEND_ID` reproduces the single-backend behavior
+            exactly.
+        backend_configs: Per-backend ``BackendConfig`` map used to route tasks to
+            backends (the meta-scheduler index + allow policies) and to map each
+            worker's scale group to its owning backend. Defaults to one implicit
+            worker-daemon backend per entry in ``backends``.
+        federation_peers: Optional prebuilt peer connections for an embedding
+            that owns transport composition. Production builds peers from config.
     """
 
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskBackend,
+        backends: dict[str, TaskBackend],
+        log_stack: LogStack,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
+        backend_configs: dict[str, BackendConfig] | None = None,
+        federation_peers: Sequence[FederationPeer] | None = None,
     ):
         if not config.remote_state_dir:
             raise ValueError(
                 "remote_state_dir is required. Set via ControllerConfig.remote_state_dir. "
                 "Example: remote_state_dir='gs://my-bucket/iris/state'"
             )
+        if not backends:
+            raise ValueError("Controller requires at least one backend")
 
         self._config = config
         self._stopped = False
-        self._task_backend: TaskBackend = provider
+        self._backends: dict[str, TaskBackend] = dict(backends)
+        # Stable processing order: the per-tick loop and the in-tick user-budget
+        # thread walk backends in this order so the decision is deterministic.
+        self._backend_ids: list[str] = sorted(self._backends)
+        # A cluster backend that owns placement (no Iris scheduler) needs the
+        # reconcile tick to drain pending dispatch (promote PENDING→ASSIGNED) and
+        # ride it on the snapshot; a worker-daemon backend reconciles the
+        # already-scheduled worker-bound rows. Resolved per backend from capability.
+        self._dispatch_backends: set[str] = {
+            bid for bid, backend in self._backends.items() if BackendCapability.CLUSTER_VIEW in backend.capabilities
+        }
+
+        # Routing/partition config. Absent (tests with a bare backend) synthesizes
+        # one attribute-less worker-daemon backend per id: every job routes to it
+        # and every scale group maps to it, so routing/partition is the identity.
+        if backend_configs is None:
+            backend_configs = {bid: BackendConfig(kind="worker_daemon") for bid in self._backends}
+        # The meta-scheduler routes against what each backend advertises, not the
+        # config. Attributes are immutable, so the routing index is built once.
+        self._backend_routing = {
+            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
+        }
+        self._backend_index = build_backend_index(self._backend_routing)
+        # Worker→backend ownership by scale group, used to wire each backend's
+        # worker source and to route a failed worker's teardown to its owner.
+        self._scale_group_to_backend: dict[str, str] = {
+            scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
+        }
+        self._last_unroutable_jobs: dict[str, str] = {}
+
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
             refill_period=Duration.from_minutes(1),
@@ -295,100 +425,155 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._health = WorkerHealthTracker()
-        self._endpoints = EndpointsProjection(self._db)
-        self._worker_attrs = WorkerAttrsProjection(self._db)
-        writes.validate()
-        self._seed_liveness_from_workers()
-        self._db.register_reopen_hook(self._seed_liveness_from_workers)
+        # Projections self-register into ``self._db.caches`` on construction; every
+        # cursor the DB mints reaches them as ``tx.caches[Projection]`` without any
+        # threaded references.
+        EndpointsProjection(self._db)
+        AttemptCountsProjection(self._db)
+        WorkerAttrsProjection(self._db)
+        RunTemplatesProjection(self._db)
+
+        writes.validate(self._db.caches)
 
         self._threads = threads if threads is not None else get_thread_container()
 
-        # --- Log service setup ---
-        # The log server is always accessed via RPC. In production the
-        # controller's main() starts a subprocess; in tests/local mode the
-        # Controller spins up an in-process native finelog server
-        # (finelog._native). After the server is running, all access goes
-        # through RPC clients — no branching on hosting mode.
-        self._log_server: Any = None  # finelog._native.EmbeddedServer when started locally
-
-        if config.log_service_address:
-            self._log_service_address = config.log_service_address
-        else:
-            self._log_service_address = self._start_local_log_server()
-
-        log_client_interceptors = _log_client_interceptors(config)
-        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-
-        # A single log client serves both the controller's own logs and any backend
-        # that collects logs out-of-process.
-        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-
-        # Backends without a worker daemon push per-task resource/profile samples to the
-        # log server directly; daemon-backed backends (RPC) ignore the sink.
-        self._task_backend.set_log_sink(
-            self._log_client,
-            self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-            self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
+        # Federation: remote clusters this controller may delegate whole jobs to.
+        # Inert with no peers configured (build_peers returns nothing, the loops
+        # never start), so a single-cluster deployment is unchanged. The store
+        # gives the manager durable access to this controller's tables. Each peer
+        # connection presents this cluster's federation token (minted from the auth
+        # signing key) so an enforcing peer admits the handoff as a trusted requester.
+        federation_token_provider = (
+            FederationTokenProvider(config.cluster_id, config.auth.jwt_manager)
+            if config.peers and config.auth and config.auth.jwt_manager
+            else None
+        )
+        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
+        peers = (
+            list(federation_peers)
+            if federation_peers is not None
+            else build_peers(config.peers, federation_token_provider=federation_token_provider)
+        )
+        self._federation = FederationManager(
+            peers,
+            threads=self._threads,
+            store=ControllerFederationStore(
+                self._db,
+            ),
+            bundles=self._bundle_store,
+            cluster_id=config.cluster_id,
+            heartbeat_interval=config.federation_heartbeat_interval,
+            max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
 
+        # The log client and its tables are built before the backend and autoscaler
+        # (their finelog handles are constructor args), so the controller only holds
+        # the stack for its own logging and shuts it down at stop().
+        self._log_stack = log_stack
+        self._log_client = log_stack.client
+        self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
-        self._run_template_cache: RunTemplateCache = new_run_template_cache()
+        # Periodic iris.task_state emitter: per-root-job task counts + wait ages
+        # aggregated from the controller DB. Only cluster-view (k8s) controllers
+        # emit it — their rows must ride finelog federation, while a GCP
+        # controller's DB is directly queryable via ExecuteRawQuery. Construction
+        # starts the emitter thread, so it is built in start(), closed in stop().
+        self._task_state_collector: TaskStateCollector | None = None
 
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
+        # Give each worker-daemon backend its own scale-group-scoped view of the DB
+        # so it sources its own workers (the controller never partitions a worker
+        # snapshot). Each such backend constructs and owns its liveness tracker, then
+        # builds its worker source from the runtime it is bound here; the controller
+        # reaches it through the backend, routed by scale group. A placement-owning
+        # backend (k8s) has no workers and reads its dispatch effects through the
+        # transition reader it received at construction.
+        for backend_id, backend in self._backends.items():
+            if BackendCapability.WORKER_DAEMON in backend.capabilities:
+                backend.bind_runtime(self._build_runtime(backend_id))
 
+        # Seed each backend's liveness from its persisted workers so the scheduler
+        # sees them at startup, and reseed after a DB reopen (checkpoint restore).
+        # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
+        self._seed_backend_liveness()
+        self._db.register_reopen_hook(self._seed_backend_liveness)
+
+        self._endpoint_service = EndpointServiceImpl(
+            db=self._db,
+            system_endpoints={},
+        )
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
             log_client=self._log_client,
             db=self._db,
-            health=self._health,
-            endpoints=self._endpoints,
-            worker_attrs=self._worker_attrs,
+            endpoint_service=self._endpoint_service,
             auth=config.auth,
-            system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
+            capability_url_config=CapabilityUrlConfig(
+                cluster_name=config.cluster_id,
+                local_origin=config.dashboard_url,
+                parent_origin=config.federation_public_parent,
+            ),
         )
+        # Forwards a /proxy request for an endpoint that lives on a federated child
+        # to that peer's controller, presenting this cluster's federation bearer.
+        # Present only when this controller has peers and a signing key to mint with.
+        federated_handoff = (
+            FederatedEndpointHandoff(self._federation.peer_controller_address, federation_token_provider.get_token)
+            if federation_token_provider is not None
+            else None
+        )
+
+        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
+            with self._db.read_snapshot() as q:
+                return reads.has_received_job_from_peer(q, peer_id, root_job)
+
+        external_auth_policy = request_auth_policy(config.auth)
+        proxy_decision_secret = secrets.token_urlsafe(32)
+        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
+        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._remote_log_service,
-            host=config.host,
-            port=config.port,
-            auth_verifier=config.auth_verifier,
+            endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
-            auth_optional=config.auth.optional if config.auth else False,
-            finelog_stats_service=self._remote_stats_service,
+            auth_policy=self._auth_policy,
+            reported_auth_policy=external_auth_policy,
+            jwt_manager=config.auth.jwt_manager if config.auth else None,
+            federated_handoff=federated_handoff,
+            federation_owner_check=_federation_owner_check,
+            proxy_decision_secret=proxy_decision_secret,
         )
 
-        # Background loop state. Two wake events drive two threads:
-        #   * ``_scheduling_wake`` — producers that may free capacity (terminal
-        #     heartbeats, attempt finalization). Scheduling tick re-evaluates
-        #     pending tasks.
-        #   * ``_polling_wake`` — producers that change ``tasks.state`` such
-        #     that the per-worker reconcile snapshot differs (new ASSIGNED,
-        #     bulk cancel). Polling tick re-fans-out the next worker batch.
-        #
-        # Most write paths set both: over-waking is cheaper than missing a
-        # capacity-return or a fresh ASSIGNED row.
-        self._scheduling_wake = threading.Event()
-        self._polling_wake = threading.Event()
+        # Wakes the control-tick driver. A submit triggers a schedule-only
+        # mini-tick so submit->assign latency is the schedule time, not gated on
+        # the next reconcile cadence.
+        self._tick_wake = threading.Event()
+        # Set after a tick commits new ASSIGNED rows so the next tick reconciles
+        # immediately (dispatching them) instead of waiting a full poll interval.
+        self._force_reconcile = False
+        # Workers queued off the control loop for teardown on the next tick; see
+        # request_worker_eviction / _drain_pending_evictions.
+        self._pending_evictions: set[WorkerId] = set()
+        self._pending_evictions_lock = threading.Lock()
+        # Task terminal-state overrides queued off the control loop for the next
+        # tick; see request_task_kicks / _drain_pending_kicks.
+        self._pending_kicks: list[PendingKick] = []
+        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
-        self._scheduling_thread: ManagedThread | None = None
-        self._polling_thread: ManagedThread | None = None
-        self._dispatch_thread: ManagedThread | None = None
-        self._autoscaler_thread: ManagedThread | None = None
+        self._native_proxy = None
+        self._native_proxy_metrics: NativeProxyTelemetry | None = None
+        self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
+        self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
-        self._ping_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
 
-        # Throttles the execution-timeout deadline scan in _reconcile_tick.
-        # The reconcile tick runs frequently (poll cadence); the timeout query
+        # Throttles the execution-timeout deadline scan in the reconcile phase.
+        # The reconcile phase runs frequently (poll cadence); the timeout query
         # only needs minute-granularity, so we gate it behind a 60s limiter.
         self._timeout_rate_limiter: RateLimiter = RateLimiter(interval_seconds=60.0)
 
@@ -404,11 +589,6 @@ class Controller:
         # the DB. This is the only ``| None`` attribute on Controller: it is
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
-
-        # Residual demand from the most recent scheduling tick, computed by the
-        # scheduling pass alongside assignments and read by the autoscaler loop.
-        # Empty until the first tick with pending work runs.
-        self._last_residual_demand: list[DemandEntry] = []
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -430,93 +610,114 @@ class Controller:
             self._periodic_checkpoint_limiter.mark_run()
 
     def wake(self) -> None:
-        """Signal both the scheduling and polling loops to run immediately.
+        """Wake the control tick to run a schedule-only mini-tick immediately.
 
-        Called on new job submission. The scheduling tick picks up the new
-        pending tasks, and the polling tick re-fans-out the next worker batch
-        so any ASSIGNED rows the scheduler writes land on the worker without
-        waiting for a full polling rotation.
+        Called on new job submission so the next tick picks up the new pending
+        tasks (and a fresh assignment then forces the following reconcile) instead
+        of waiting a full poll interval.
         """
-        self._scheduling_wake.set()
-        self._polling_wake.set()
+        self._tick_wake.set()
 
-    def _seed_liveness_from_workers(self) -> None:
-        """Mark every persisted worker healthy so the scheduler sees them before they ping back.
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Queue workers for fail-and-teardown on the next control tick.
 
-        Workers that fail to ping within the heartbeat window are timed out
-        by the ping loop. ``find_prunable`` relies on this seed to maintain
-        the invariant that every ``workers`` row has a tracker entry.
+        Called off the control-loop thread (the Register RPC, when a worker claims
+        an address still held by a stale row — a recycled internal IP). The
+        teardown reaps the worker's slice through the autoscaler, which is only
+        safe on the control-loop thread, so the work is deferred to the tick drain.
         """
-        now_ms = Timestamp.now().epoch_ms()
-        with self._db.read_snapshot() as q:
-            worker_ids = reads.all_worker_ids(q)
-        if worker_ids:
-            self._health.heartbeat(worker_ids, now_ms)
+        if not worker_ids:
+            return
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
+        self.wake()
+
+    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
+        """Queue task terminal-state overrides to apply on the next control tick.
+
+        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
+        kicks inside the tick's single write transaction so they cannot race the
+        scheduler's view of task state.
+        """
+        if not kicks:
+            return
+        with self._pending_kicks_lock:
+            self._pending_kicks.extend(kicks)
+        self.wake()
+
+    def _seed_backend_liveness(self) -> None:
+        """Seed each worker-daemon backend's tracker from its own persisted workers.
+
+        Each backend reads its scale-group-scoped workers and heartbeats them into
+        the tracker it owns, so every worker comes up ACTIVE at startup (and again
+        after a DB reopen). Workers that then go unreachable accrue failures through
+        the reconcile fold and are torn down once over threshold.
+        """
+        for backend in self._backends.values():
+            if BackendCapability.WORKER_DAEMON in backend.capabilities:
+                backend.seed_liveness()
+
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
+        """Union of every worker-daemon backend's liveness (the trackers are disjoint).
+
+        The controller's Fleet/exec/capacity readers reach worker liveness through
+        this instead of a single shared tracker; a backend that tracks no Iris
+        workers (k8s) contributes nothing.
+        """
+        merged: dict[WorkerId, WorkerLiveness] = {}
+        for backend in self._backends.values():
+            if backend.health is not None:
+                merged.update(backend.health.all())
+        return merged
+
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
+        """One worker's liveness from its owning backend's tracker, or a default.
+
+        The backends' trackers are disjoint by scale group, so the union resolves
+        the worker to the single tracker that holds it; an untracked worker yields a
+        default (not-healthy) snapshot, matching a direct tracker miss.
+        """
+        return self.all_liveness().get(worker_id, WorkerLiveness())
 
     @property
     def started(self) -> bool:
         """Whether the controller loops have been started."""
         return self._started
 
-    def _start_local_log_server(self) -> str:
-        """Start a bundled in-process log + stats server and return its address.
-
-        Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). Backed by the native
-        ``finelog._native`` server (the same engine the ``finelog-server`` binary
-        runs), storing segments under ``local_state_dir/log-server`` so written
-        logs are queryable: the engine's in-memory mode spawns no maintenance
-        task, so its RAM buffer never flushes to a readable segment — only a
-        disk-backed store serves reads. The server is bound and ready when the
-        constructor returns. For any deployment that needs scale or durability
-        beyond the controller's local disk, run ``finelog-server`` out-of-band
-        and point ``endpoints["/system/log-server"]`` at it.
-        """
-        log_dir = self._config.local_state_dir / "log-server"
-        embedded_server_cls = require_embedded_server()
-        self._log_server = embedded_server_cls(log_dir=str(log_dir), host=self._config.host)
-
-        address = f"http://{self.external_host}:{self._log_server.port}"
-        logger.info("Local log server ready at %s (log_dir=%s)", address, log_dir)
-        return address
-
     def start(self) -> None:
-        """Start the dashboard server and all loop threads uniformly.
+        """Start the dashboard server and the control + housekeeping threads.
 
-        Every backend gets the same thread set; each tick no-ops for the
-        placements it does not serve.
+        Every backend gets the same threads; each phase no-ops where it does not
+        apply. The unified control tick drives schedule -> reconcile -> autoscale;
+        the reconcile phase is the sole reconcile + liveness channel — it
+        reconciles every active worker (worker-daemon backends) or drains + syncs
+        pods (cluster backends), folds the backend's observed health events, and
+        tears down workers that cross the failure threshold.
         """
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-        self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
-        self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
-        self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
+            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
+                self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
-        # proxy_headers / forwarded_allow_ips: production traffic arrives via
-        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
-        # headers, ``scope["server"]`` is the controller's bind address, so
-        # any absolute URL built by Starlette (notably the trailing-slash
-        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
-        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
-        # outside the VPC. Trusting all upstream IPs is safe because the
-        # controller's only ingress is the LB.
+        # The native listener is Uvicorn's only ingress and preserves the load
+        # balancer's forwarded headers. Trust its loopback connection so
+        # Starlette builds externally reachable absolute URLs.
         server_config = uvicorn.Config(
             self._dashboard.app,
-            host=self._config.host,
-            port=self._config.port,
+            host=_PRIVATE_CONTROLLER_HOST,
+            port=0,
             log_level="warning",
             log_config=None,
-            timeout_keep_alive=120,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
             proxy_headers=True,
             forwarded_allow_ips="*",
         )
@@ -524,21 +725,29 @@ class Controller:
         _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
         self._threads.spawn_server(self._server, name="controller-server")
 
-        # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
-        # autoscaler's first tick can create buffer slices whose workers query the
-        # controller for /system/log-server before this dict is populated, returning
-        # an empty result. The slice creation fails, the group enters backoff, and
-        # any task constrained to that group hangs until the backoff expires.
+        # Register cluster endpoints BEFORE spawning the control loop. Otherwise
+        # the autoscale phase's first tick can create buffer slices whose workers
+        # query the controller for /system/log-server before this dict is
+        # populated, returning an empty result. The slice creation fails, the
+        # group enters backoff, and any task constrained to that group hangs until
+        # the backoff expires.
         for name, url in self._config.endpoints.items():
-            self._service._system_endpoints[name] = url
+            self._endpoint_service.register_system_endpoint(name, url)
             logger.info("Registered system endpoint %s -> %s", name, url)
-        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+        self._endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
 
-        if not self._config.dry_run:
-            self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
+        # One driver runs schedule -> reconcile -> autoscale as phases of a single
+        # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint
+        # registration because its first autoscale phase may provision buffer slices
+        # whose workers query /system/log-server. In dry-run it runs the schedule
+        # phase only.
+        self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
             self._checkpoint_thread = self._threads.spawn(self._run_checkpoint_loop, name="checkpoint-loop")
+
+        # Start the federation capability heartbeat (a no-op with no peers).
+        self._federation.start()
 
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
@@ -550,13 +759,97 @@ class Controller:
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
+        assert self._server is not None
+        assert self._server.servers
+        private_port = self._server.servers[0].sockets[0].getsockname()[1]
+        self._native_proxy = NativeProxy(
+            self._config.host,
+            self._config.port,
+            f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
+            self._dashboard.proxy_decision_secret,
+            json.dumps(asdict(self._native_proxy_auth_config())),
+        )
+        telemetry.configure(
+            endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+            service="iris-controller",
+            attributes={"role": "controller"},
+        )
+        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
+        self._replace_native_proxy_registry()
+
+    def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
+        if self._native_proxy is None:
+            return
+        if isinstance(update, ProxyRegistryReset):
+            self._recover_native_proxy_registry()
+            return
+        payload = json.dumps(asdict(update))
+        try:
+            self._native_proxy.update_mappings(payload)
+        except ValueError:
+            logger.exception(
+                "Native proxy rejected endpoint mapping generation %d -> %d; replacing registry",
+                update.base_generation,
+                update.next_generation,
+            )
+            self._recover_native_proxy_registry()
+
+    def _recover_native_proxy_registry(self) -> None:
+        assert self._native_proxy is not None
+        try:
+            self._replace_native_proxy_registry()
+        except ValueError:
+            logger.exception("Native proxy registry replacement failed; pausing native routing")
+            self._native_proxy.pause_registry()
+
+    def _replace_native_proxy_registry(self) -> None:
+        if self._native_proxy is None:
+            return
+        self._native_proxy.pause_registry()
+        snapshot = self._endpoint_service.proxy_registry_snapshot()
+        self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
+
+    def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
+        auth = self._config.auth
+        if auth is None or auth.provider is None:
+            mode = NativeProxyAuthMode.PERMISSIVE
+        elif self._external_auth_allows_anonymous:
+            mode = NativeProxyAuthMode.OPTIONAL
+        else:
+            mode = NativeProxyAuthMode.ENFORCING
+        if auth is not None and auth.jwt_manager is not None:
+            issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        else:
+            issuers, jwks = (), {"keys": []}
+        return NativeProxyAuthConfig(
+            mode=mode,
+            issuers=issuers,
+            jwks=jwks,
+            leeway_seconds=NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+            cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
+            cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+            trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
+            control_audience=CONTROL_PLANE_AUDIENCE,
+            proxy_audience=PROXY_PLANE_AUDIENCE,
+            proxy_scope=ENDPOINT_TOKEN_SCOPE,
+            federation_audience=FEDERATION_AUDIENCE,
+            session_cookie=SESSION_COOKIE,
+            iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
+            iap_issuer=IAP_ISSUER,
+            iap_audience=auth.iap_audience if auth is not None else None,
+            federation_keys=auth.federation_keys if auth is not None else {},
+            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            default_user_role=(
+                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
+            ),
+        )
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
 
         Shutdown ordering:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop scheduling/provider/autoscaler loops so no new work is triggered.
+        2. Stop the control loop so no new work is triggered.
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
@@ -567,45 +860,37 @@ class Controller:
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
             self._atexit_registered = False
-        self._scheduling_wake.set()
-        self._polling_wake.set()
+        self._tick_wake.set()
         join_timeout = Duration.from_seconds(5.0)
-        if self._scheduling_thread:
-            self._scheduling_thread.stop()
-            self._scheduling_thread.join(timeout=join_timeout)
-        if self._polling_thread:
-            self._polling_thread.stop()
-            self._polling_thread.join(timeout=join_timeout)
-        if self._dispatch_thread:
-            self._dispatch_thread.stop()
-            self._dispatch_thread.join(timeout=join_timeout)
-        if self._ping_thread:
-            self._ping_thread.stop()
-            self._ping_thread.join(timeout=join_timeout)
+        if self._control_thread:
+            self._control_thread.stop()
+            self._control_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
-        if self._autoscaler_thread:
-            self._autoscaler_thread.stop()
-            self._autoscaler_thread.join(timeout=join_timeout)
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
+        if self._task_state_collector is not None:
+            self._task_state_collector.close()
+        self._federation.stop()
 
+        if self._native_proxy_metrics is not None and self._native_proxy is not None:
+            uninstall_native_proxy_metrics(self._native_proxy)
+            self._native_proxy_metrics = None
+        if self._native_proxy is not None:
+            self._native_proxy.stop()
         self._threads.stop()
-        # The backend owns the autoscaler now; close() shuts it down (terminates
-        # VMs, stops the platform) and releases the backend's own resources.
-        self._task_backend.close()
+        # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
+        # stops the platform) and releases the backend's own resources.
+        for backend in self._backends.values():
+            backend.close()
 
         # Remove log handler before closing log resources to avoid errors
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_client.close()
-        self._remote_log_service.close()
-        self._remote_stats_service.close()
-        if self._log_server is not None:
-            self._log_server.stop()
+        self._log_stack.close()
         self._db.close()
         self._bundle_store.close()
 
@@ -618,66 +903,6 @@ class Controller:
             logger.info("atexit checkpoint written: %s", path)
         except Exception:
             logger.exception("atexit checkpoint failed")
-
-    def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Scheduling loop with adaptive backoff.
-
-        Backs off from min to max interval when idle (no pending tasks or no
-        assignments possible). Resets to min interval when woken by a producer
-        that may free capacity or by a new job submission.
-
-        Reconciliation runs on the separate polling thread
-        (``_run_polling_loop``) on its own cadence via the Reconcile RPC.
-        Sharing the
-        same write transaction is no longer required: producers write
-        ``tasks.state = ASSIGNED`` and the polling thread reads that state via
-        a snapshot query, so dispatch never crosses a transaction boundary.
-        """
-        backoff = ExponentialBackoff(
-            initial=self._config.scheduler_min_interval.to_seconds(),
-            maximum=self._config.scheduler_max_interval.to_seconds(),
-            factor=2.0,
-            jitter=0.1,
-        )
-        while not stop_event.is_set():
-            interval = backoff.next_interval()
-            woken = self._scheduling_wake.wait(timeout=interval)
-            self._scheduling_wake.clear()
-
-            if stop_event.is_set():
-                break
-
-            if woken:
-                backoff.reset()
-
-            outcome = self._run_scheduling()
-            if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
-                backoff.reset()
-
-    def _run_polling_loop(self, stop_event: threading.Event) -> None:
-        """Per-worker reconcile loop on the configured ``poll_interval`` cadence.
-
-        Each tick:
-          1. Snapshot every healthy active worker.
-          2. Fan out the Reconcile RPC carrying the desired-attempt set per
-             worker (ASSIGNED rows to start, BUILDING/RUNNING rows to keep
-             alive, and stops for everything else).
-          3. Apply observation-driven results in one write txn.
-
-        The polling thread is the sole path that pushes work to a worker.
-        Worker auto-kill is implicit: any attempt absent from the desired
-        set on the next reconcile is killed locally by the worker.
-        """
-        tick_seconds = self._config.poll_interval.to_seconds()
-        while not stop_event.is_set():
-            self._polling_wake.wait(timeout=tick_seconds)
-            self._polling_wake.clear()
-            if stop_event.is_set():
-                break
-            try:
-                self._reconcile_tick()
-            except Exception:
-                logger.exception("Polling reconcile tick failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
@@ -707,31 +932,18 @@ class Controller:
                 try:
                     prune_old_data(
                         self._db,
-                        self._health,
-                        self._endpoints,
-                        self._worker_attrs,
+                        self._backends.values(),
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
+                        slice_retention=self._config.slice_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
                     logger.exception("Data pruning failed")
 
-    def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
-        """Autoscaler loop: runs on its own thread so blocking cloud API calls
-        don't stall scheduling or heartbeats."""
-        limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                self._run_autoscaler_once()
-            except Exception:
-                logger.exception("Autoscaler loop iteration failed")
-
     def _run_checkpoint_loop(self, stop_event: threading.Event) -> None:
         """Periodic checkpoint loop: runs on its own thread so the multi-second
-        backup+upload doesn't stall the autoscaler cadence."""
+        backup+upload doesn't stall the control tick cadence."""
         limiter = self._periodic_checkpoint_limiter
         assert limiter is not None, "checkpoint loop spawned without configured limiter"
         while not stop_event.is_set():
@@ -742,90 +954,569 @@ class Controller:
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 
-    def _run_dispatch_loop(self, stop_event: threading.Event) -> None:
-        """Dispatch loop spawned for all backends; ``_sync_dispatch`` no-ops unless placement is TASK_BACKEND."""
-        limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
+    # =========================================================================
+    # Unified control tick
+    # =========================================================================
+
+    def _run_control_loop(self, stop_event: threading.Event) -> None:
+        """Single driver: schedule -> reconcile -> autoscale as phases of one tick.
+
+        Each iteration builds one read snapshot, runs the phases that are due (or,
+        on a wake, a schedule-only mini-tick), folds backend-observed health, and
+        commits through a single end-of-tick write transaction. Wakes every
+        ``poll_interval`` (the reconcile cadence) or sooner on a submit/wake, so
+        the per-phase cadences match the legacy three-loop structure.
+        """
+        base_interval = self._config.poll_interval.to_seconds()
+        schedule_limiter = RateLimiter(interval_seconds=self._config.scheduler_min_interval.to_seconds())
+        reconcile_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
+        autoscale_limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
         while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
+            woken = self._tick_wake.wait(timeout=base_interval)
+            self._tick_wake.clear()
+            if stop_event.is_set():
                 break
             try:
-                self._sync_dispatch()
+                self._control_tick(
+                    woken=woken,
+                    schedule_limiter=schedule_limiter,
+                    reconcile_limiter=reconcile_limiter,
+                    autoscale_limiter=autoscale_limiter,
+                )
             except Exception:
-                logger.exception("Dispatch sync round failed, will retry next interval")
+                logger.exception("Control tick failed")
 
-    def _sync_dispatch(self) -> None:
-        if self._task_backend.placement is not PlacementOwner.TASK_BACKEND:
-            return
+    def _control_tick(
+        self,
+        *,
+        woken: bool,
+        schedule_limiter: RateLimiter,
+        reconcile_limiter: RateLimiter,
+        autoscale_limiter: RateLimiter,
+        force_timeout_scan: bool = False,
+    ) -> None:
+        """Run one control tick: one read snapshot, due phases per backend, one write txn.
+
+        Phase order is schedule -> reconcile -> autoscale. The controller routes
+        pending tasks to each backend (by ``backend_id``) and threads the per-user
+        budget; each backend sources its own workers and runs its
+        ``schedule``/``reconcile``/``autoscale`` over them, and the per-backend
+        results merge into one end-of-tick write transaction. With a single backend
+        every job routes to it, so behavior matches the single-backend path exactly.
+        A wake runs a schedule-only mini-tick; autoscale always pairs with
+        a fresh schedule so it provisions against this tick's residual demand.
+        Execution-timeout finalization and health-driven teardown stay global.
+        """
+        now = Timestamp.now()
+
+        # Dry-run: the schedule phase computes and logs intended assignments but
+        # writes nothing; reconcile and autoscale are suppressed entirely.
         if self._config.dry_run:
+            self._run_scheduling()
             return
-        max_promotions = self._promotion_bucket.available
-        with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(
-                cur,
-                cache=self._run_template_cache,
-                max_promotions=max_promotions,
+
+        self._drain_pending_evictions()
+        pending_kicks = self._drain_pending_kicks()
+
+        run_autoscale = autoscale_limiter.should_run()
+        run_schedule = woken or run_autoscale or schedule_limiter.should_run()
+        run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
+        self._force_reconcile = False
+        scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
+
+        inputs = self._build_tick_inputs(
+            now=now,
+            run_schedule=run_schedule,
+            run_reconcile=run_reconcile,
+            run_autoscale=run_autoscale,
+            scan_timeouts=scan_timeouts,
+        )
+
+        sched_results: dict[str, ScheduleResult] = {}
+        backend_pins: list[tuple[JobName, str]] = []
+        routing_unschedulable: list[tuple[PendingTask, str]] = []
+        if run_schedule:
+            sched = self._schedule_phase(inputs)
+            sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
+
+        # Federation pass: assign queued federated jobs to peers that have room. A pure
+        # decision over the tick's snapshot + the manager's reservation ledger; the
+        # promotions commit (conditionally) in the same end-of-tick transaction. Runs in
+        # the single scheduling thread right after local scheduling, so every scheduling
+        # decision — local placement and peer selection — flows through one place.
+        federation_promotions: list[Promotion] = []
+        if run_schedule and inputs.queued_federation:
+            federation_promotions = self._federation.plan_federation(inputs.queued_federation)
+
+        recon_results: dict[str, ReconcileResult] = {}
+        timeout_decisions: list[TerminalDecision] = []
+        if run_reconcile:
+            timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
+            for backend_id in self._backend_ids:
+                # Worker-daemon backends source their own placement (empty request);
+                # a cluster-view backend gets its dispatch drain.
+                request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
+                recon_results[backend_id] = self._backends[backend_id].reconcile(request)
+
+        auto_results: dict[str, AutoscaleResult] = {}
+        if run_autoscale:
+            for backend_id in self._backend_ids:
+                residual_demand = sched_results[backend_id].residual_demand if backend_id in sched_results else []
+                auto_results[backend_id] = self._backends[backend_id].autoscale(
+                    AutoscaleRequest(residual_demand=residual_demand)
+                )
+
+        merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
+
+        confirmed_promotions = self._commit_tick(
+            sched_result=merged_sched,
+            sched_results=sched_results,
+            backend_pins=backend_pins,
+            routing_unschedulable=routing_unschedulable,
+            recon_results=recon_results,
+            timeout_decisions=timeout_decisions,
+            pending_kicks=pending_kicks,
+            auto_results=auto_results,
+            federation_promotions=federation_promotions,
+            expired_queued_federation=inputs.expired_queued_federation,
+            now=now,
+        )
+
+        # Charge the reservation ledger only for promotions whose CAS committed, so a
+        # promotion raced by a cancel does not hold phantom peer capacity. The sync
+        # loop delivers each newly-PENDING handle on its next pass.
+        if confirmed_promotions:
+            self._federation.confirm_promotions(confirmed_promotions)
+            logger.info(
+                "Federation: promoted %d queued job(s): %s",
+                len(confirmed_promotions),
+                ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
             )
-        if batch.tasks_to_run:
-            self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        result = self._task_backend.reconcile(batch)
-        with self._db.transaction() as cur:
-            apply_dispatch_updates(
-                cur,
-                result.updates,
-                health=self._health,
-                endpoints=self._endpoints,
-                now=Timestamp.now(),
+
+        # Force the next reconcile so workers are told to stop the kicked attempts
+        # promptly instead of waiting a full reconcile interval.
+        if pending_kicks:
+            self._force_reconcile = True
+            self._tick_wake.set()
+
+        # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
+        # dispatch follow-up for fresh assignments.
+        if merged_sched is not None:
+            self._scheduling_diagnostics = merged_sched.diagnostics
+            self._last_scheduling_context = merged_sched.scheduling_context
+            if merged_sched.assignments:
+                self._force_reconcile = True
+                self._tick_wake.set()
+
+        # Drain each backend's reaped-worker stash (folded during reconcile) AFTER
+        # the reconcile effects are committed, so its teardown reads a fresh snapshot
+        # where the just-finalized terminal attempts are already terminal and skipped.
+        # No worker identity passes through the controller.
+        if run_reconcile:
+            for backend_id in self._backend_ids:
+                self._backends[backend_id].run_teardown()
+
+    def _build_tick_inputs(
+        self,
+        *,
+        now: Timestamp,
+        run_schedule: bool,
+        run_reconcile: bool,
+        run_autoscale: bool,
+        scan_timeouts: bool,
+    ) -> _TickInputs:
+        """Assemble the due phases' controller-owned inputs.
+
+        A placement-owning (``CLUSTER_VIEW``) backend's reconcile request comes
+        from its own dispatch drain (a write), built first. The controller then
+        reads only its own state in one read snapshot — the routing inputs
+        (pending tasks + budgets) for scheduling and the execution-timeout rows;
+        each backend reads its own workers, so nothing here is partitioned.
+        """
+        inputs = _TickInputs()
+
+        # Placement-owning backends each drain their own pending dispatch first.
+        if run_reconcile:
+            for backend_id in self._dispatch_backends:
+                drain = self._drain_dispatch_snapshot(backend_id)
+                inputs.reconcile_requests[backend_id] = ReconcileRequest(
+                    tasks_to_run=drain.tasks_to_run,
+                    running_tasks=drain.running_tasks,
+                )
+
+        # Dedicated control pool: the tick's snapshot must not queue behind a slow
+        # dashboard read for a connection.
+        with self._db.control_read_snapshot() as snap:
+            if run_schedule:
+                inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
+                if self._config.peers:
+                    inputs.queued_federation = build_queued_candidates(snap)
+                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
+            # Execution-timeout finalization is global across worker-daemon and
+            # K8s backends. K8s gangs rely on it because they omit
+            # activeDeadlineSeconds.
+            if run_reconcile and scan_timeouts:
+                inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
+        return inputs
+
+    def _build_runtime(self, backend_id: str) -> BackendRuntime:
+        """Assemble the controller-owned deps a backend builds its worker source from.
+
+        The backend joins this with its own liveness tracker to build a worker source
+        scoped to its scale groups, covering exactly the workers that backend owns.
+        The default backend also owns workers whose scale group is unmapped, matching
+        the scale-group→backend resolution used everywhere else.
+        """
+
+        def owns_scale_group(scale_group: str) -> bool:
+            return self.backend_id_for_scale_group(scale_group) == backend_id
+
+        return BackendRuntime(
+            backend_id=backend_id,
+            db=self._db,
+            owns_scale_group=owns_scale_group,
+            budget_defaults=self._config.user_budget_defaults,
+        )
+
+    def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:
+        """Map each persisted worker to its owning backend via its scale group.
+
+        Used only to route a failed worker's slice teardown to its owning backend;
+        scheduling and reconcile do not partition workers in the controller.
+        """
+        return {
+            wid: self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+            for wid, scale_group in reads.worker_scale_groups(snap).items()
+        }
+
+    def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
+        """Route unpinned jobs, then run each backend's scheduler over its tasks.
+
+        Returns the per-backend ``ScheduleResult``s, the ``(job_id, backend_id)``
+        pins to stamp, and the ``(task, reason)`` pairs the meta-scheduler could
+        not route (finalized UNSCHEDULABLE in the commit). The decisions do no DB
+        writes. The controller groups *pending tasks* by their routed backend and
+        hands each backend its slice; the backend sources its own workers. The
+        global user budget is threaded across backends in ``self._backend_ids``
+        order so two backends cannot double-spend one user's budget in a tick.
+        """
+        routing = inputs.routing
+        if routing is None:
+            return SchedulePhaseResult({}, [], [])
+        self._scheduling_round += 1
+        trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
+
+        pins, routing_unschedulable = self._route_pending(routing)
+        unschedulable_jobs = {task.job_id for task, _ in routing_unschedulable}
+        backend_of_job = self._make_backend_of_job(pins, unschedulable_jobs, routing)
+
+        tasks_by_backend: dict[str, list[PendingTask]] = {backend_id: [] for backend_id in self._backend_ids}
+        for task in routing.pending_task_rows:
+            backend_id = backend_of_job(task.job_id)
+            if backend_id in tasks_by_backend:
+                tasks_by_backend[backend_id].append(task)
+
+        results: dict[str, ScheduleResult] = {}
+        user_spend = dict(routing.user_spend)
+        for backend_id in self._backend_ids:
+            pending = tasks_by_backend[backend_id]
+            if not pending:
+                results[backend_id] = ScheduleResult()
+                continue
+            kept_jobs = {task.job_id for task in pending}
+            result = self._backends[backend_id].schedule(
+                ScheduleRequest(
+                    pending_task_rows=pending,
+                    requested_bands={jid: band for jid, band in routing.requested_bands.items() if jid in kept_jobs},
+                    user_spend=user_spend,
+                    user_budget_limits=routing.user_budget_limits,
+                    user_budget_defaults=routing.user_budget_defaults,
+                    max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
+                    trace=trace,
+                )
             )
-        # Worker-side kills are surfaced through the next K8s pod-diff sync;
-        # no immediate RPC fan-out here.
+            results[backend_id] = result
+            self._accumulate_user_spend(user_spend, result.assignments, routing)
+
+        return SchedulePhaseResult(results, list(pins.items()), routing_unschedulable)
+
+    def _route_pending(self, routing: RoutingInputs) -> tuple[dict[JobName, str], list[tuple[PendingTask, str]]]:
+        """Run the task->backend meta-scheduler over this tick's unpinned jobs.
+
+        Unpinned jobs (``backend_id == ""``) are routed once; pinned jobs keep
+        their backend. Returns the new pins and the per-task UNSCHEDULABLE list for
+        jobs that match no backend.
+        """
+        unpinned: dict[JobName, RoutableJob] = {}
+        rows_by_job: dict[JobName, list[PendingTask]] = {}
+        for task in routing.pending_task_rows:
+            rows_by_job.setdefault(task.job_id, []).append(task)
+            if task.backend_id == "" and task.job_id not in unpinned:
+                unpinned[task.job_id] = RoutableJob(
+                    job_id=task.job_id,
+                    constraints=constraints_from_json(task.constraints_json),
+                )
+        if not unpinned:
+            self._last_unroutable_jobs = {}
+            return {}, []
+        result = route_jobs_to_backends(list(unpinned.values()), self._backend_routing, self._backend_index)
+        routing_unschedulable = [
+            (task, reason) for job_id, reason in result.unschedulable.items() for task in rows_by_job.get(job_id, [])
+        ]
+        self._last_unroutable_jobs = {job_id.to_wire(): reason for job_id, reason in result.unschedulable.items()}
+        return result.pins, routing_unschedulable
+
+    def _make_backend_of_job(
+        self, pins: dict[JobName, str], unschedulable_jobs: set[JobName], routing: RoutingInputs
+    ) -> "Callable[[JobName], str]":
+        """Build the job->backend resolver for grouping this tick's pending tasks.
+
+        A job routed UNSCHEDULABLE this tick maps to ``""`` so no backend adopts it
+        (it is finalized in the commit instead); a job pinned this tick maps to its
+        pin; an already-pinned job to its stored backend_id; anything else to the
+        default backend.
+        """
+        db_backend = {task.job_id: task.backend_id for task in routing.pending_task_rows}
+
+        def resolve(job_id: JobName) -> str:
+            if job_id in unschedulable_jobs:
+                return ""
+            if job_id in pins:
+                return pins[job_id]
+            backend_id = db_backend.get(job_id, "")
+            return backend_id if backend_id else DEFAULT_BACKEND_ID
+
+        return resolve
+
+    def _accumulate_user_spend(
+        self, user_spend: dict[str, int], assignments: list[Assignment], routing: RoutingInputs
+    ) -> None:
+        """Add each non-BATCH assignment's resource value to the in-tick spend tally.
+
+        Excludes BATCH (matching ``compute_user_spend``) so a later backend in this
+        tick sees the budget the earlier ones already committed.
+        """
+        if not assignments:
+            return
+        rows_by_task = {task.task_id: task for task in routing.pending_task_rows}
+        for assignment in assignments:
+            if assignment.priority_band == job_pb2.PRIORITY_BAND_BATCH:
+                continue
+            row = rows_by_task.get(assignment.task_id)
+            if row is None:
+                continue
+            counts = device_counts_from_json(row.res_device_json)
+            value = resource_value(row.res_cpu_millicores, row.res_memory_bytes, counts.gpu + counts.tpu)
+            user_spend[assignment.task_id.user] = user_spend.get(assignment.task_id.user, 0) + value
+
+    def _merge_schedule_results(self, results: dict[str, ScheduleResult]) -> ScheduleResult:
+        """Concatenate the per-backend schedule results into one for the commit.
+
+        List fields concatenate; diagnostics merge. The cached
+        ``scheduling_context`` (dashboard diagnostics) is the representative
+        backend's post-placement context. With one backend this is exactly that
+        backend's result.
+        """
+        assignments: list[Assignment] = []
+        preemptions: list[TerminalDecision] = []
+        unschedulable: list[PendingTask] = []
+        residual_demand = []
+        diagnostics: dict[str, str] = {}
+        scheduling_context: SchedulingContext | None = None
+        for backend_id in self._backend_ids:
+            result = results.get(backend_id)
+            if result is None:
+                continue
+            assignments.extend(result.assignments)
+            preemptions.extend(result.preemptions)
+            unschedulable.extend(result.unschedulable)
+            residual_demand.extend(result.residual_demand)
+            diagnostics.update(result.diagnostics)
+        representative = results.get(DEFAULT_BACKEND_ID) or next(
+            (results[bid] for bid in self._backend_ids if bid in results), None
+        )
+        if representative is not None and representative.scheduling_context is not None:
+            scheduling_context = representative.scheduling_context
+        return ScheduleResult(
+            assignments=assignments,
+            preemptions=preemptions,
+            unschedulable=unschedulable,
+            residual_demand=residual_demand,
+            diagnostics=diagnostics,
+            scheduling_context=scheduling_context,
+        )
+
+    def _commit_tick(
+        self,
+        *,
+        sched_result: ScheduleResult | None,
+        sched_results: dict[str, ScheduleResult],
+        backend_pins: list[tuple[JobName, str]],
+        routing_unschedulable: list[tuple[PendingTask, str]],
+        recon_results: dict[str, ReconcileResult],
+        timeout_decisions: list[TerminalDecision],
+        pending_kicks: list[PendingKick],
+        auto_results: dict[str, AutoscaleResult],
+        federation_promotions: list[Promotion],
+        expired_queued_federation: list[JobName],
+        now: Timestamp,
+    ) -> list[Promotion]:
+        """Apply this tick's merged decisions and authored effects in one write transaction.
+
+        Order within the txn: schedule decisions (incl. backend pins + routing
+        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
+        promotions, each backend's reconcile effects, execution-timeout finalizations,
+        administrative kicks, per-backend autoscaler state. Each backend already authored
+        its own ``effects`` during reconcile; the controller just commits them uniformly.
+        A no-op tick opens no transaction.
+
+        Returns the federation promotions whose conditional CAS actually committed (a
+        concurrent cancel/terminalize between the tick's read and this write drops the
+        rest); the caller charges the reservation ledger for those.
+        """
+        states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
+
+        has_sched = sched_result is not None and bool(
+            sched_result.unschedulable
+            or sched_result.assignments
+            or sched_result.preemptions
+            or backend_pins
+            or routing_unschedulable
+        )
+        has_recon = any(not result.effects.is_empty for result in recon_results.values())
+        if not (
+            has_sched
+            or has_recon
+            or timeout_decisions
+            or pending_kicks
+            or states
+            or federation_promotions
+            or expired_queued_federation
+        ):
+            return []
+
+        confirmed: list[Promotion] = []
+        with self._db.transaction() as cur:
+            if sched_result is not None:
+                self._commit_schedule_decisions(
+                    cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
+                )
+            # Fail queued handoffs past their scheduling deadline before promoting, so a
+            # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
+            for job_id in expired_queued_federation:
+                writes.mark_federated_job_unschedulable(
+                    cur,
+                    job_id,
+                    now_ms=now.epoch_ms(),
+                    error="Scheduling timeout exceeded while queued for a federation peer",
+                )
+            for promotion in federation_promotions:
+                if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
+                    confirmed.append(promotion)
+            for backend_id in self._backend_ids:
+                result = recon_results.get(backend_id)
+                if result is not None and not result.effects.is_empty:
+                    commit_effects(cur, result.effects)
+            if timeout_decisions:
+                finalize(cur, timeout_decisions, now=now)
+            if pending_kicks:
+                # Resolve after the schedule/reconcile writes so the attempt
+                # re-check sees this tick's reassignments.
+                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
+                if kick_decisions:
+                    finalize(cur, kick_decisions, now=now)
+                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
+            for state in states:
+                persist_autoscaler_state(cur, state)
+        return confirmed
+
+    def _commit_schedule_decisions(
+        self,
+        cur: Tx,
+        result: ScheduleResult,
+        results: dict[str, ScheduleResult],
+        now: Timestamp,
+        backend_pins: list[tuple[JobName, str]],
+        routing_unschedulable: list[tuple[PendingTask, str]],
+    ) -> None:
+        """Persist a ``ScheduleResult`` within the caller's write transaction.
+
+        ``result`` is the merged decision; ``results`` is the per-backend split,
+        used to re-check each backend's assignments against the tracker it owns.
+        Backend pins stamp ``backend_id`` on routed jobs+tasks; jobs that match no
+        backend finalize UNSCHEDULABLE; expired/deadline tasks finalize
+        UNSCHEDULABLE; assignments stamp ASSIGNED (carrying the backend-computed
+        priority band); preemption victims finalize PREEMPT.
+        """
+        if backend_pins:
+            writes.stamp_backend(cur, backend_pins)
+        if routing_unschedulable:
+            finalize(
+                cur,
+                [
+                    TerminalDecision(kind=TerminalKind.UNSCHEDULABLE, task_id=task.task_id, reason=reason)
+                    for task, reason in routing_unschedulable
+                ],
+                now=now,
+            )
+        if result.unschedulable:
+            finalize(cur, self._unschedulable_decisions(result.unschedulable), now=now)
+        # Each backend's assignments are re-checked against the liveness tracker that
+        # backend owns. Walking backends in order reproduces the merged ordering.
+        for backend_id in self._backend_ids:
+            backend_result = results.get(backend_id)
+            if backend_result is None or not backend_result.assignments:
+                continue
+            health = self._backends[backend_id].health
+            assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
+            ops.task.assign(cur, backend_result.assignments, health=health)
+        if result.preemptions:
+            finalize(cur, result.preemptions, now=now)
+            logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
 
     def _run_scheduling(self) -> SchedulingOutcome:
-        """Run one scheduling cycle.
+        """Run one self-contained scheduling cycle (its own snapshot + commits).
 
-        The controller owns only the I/O: it refreshes reservation claims and
-        builds the scheduling context in a single DB snapshot (which folds in the
-        running-task band/value the preemption pass may evict), hands the
-        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
-        decision, then commits the returned assignments, preemptions, and
-        unschedulable marks. The backend (IRIS placement) runs the full
-        gates → order → taints → preference → find_assignments → preemption
-        pipeline; BACKEND placement returns an empty result (Kueue schedules).
+        This is the dry-run scheduling path; the live control tick computes its
+        schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
+        transaction instead.
 
-        No lock is needed since only one scheduling thread exists. Every DB
+        The controller reads its own routing inputs (pending tasks + budgets) and
+        hands them to the representative backend, which sources its own workers and
+        returns the pure placement decision; the controller then commits the
+        assignments, preemptions, and unschedulable marks. A worker-daemon backend
+        runs the full gates → order → find_assignments → preemption pipeline; a
+        cluster backend returns an empty result (Kueue schedules).
+
+        No lock is needed since the control driver is single-threaded. Every DB
         access is serialized by ControllerDB._lock with multi-statement
         mutations wrapped in BEGIN IMMEDIATE transactions.
         """
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
-        claims = self._refresh_reservation_claims()
-        ctx = build_scheduling_context(
-            self._db,
-            self._health,
-            self._worker_attrs,
-            self._config.user_budget_defaults,
-            claims,
-        )
+        with self._db.control_read_snapshot() as snap:
+            routing = build_routing_inputs(snap, self._config.user_budget_defaults)
 
         if trace:
             logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers, %d reservation claims",
+                "[TRACE round=%d] Phase 0: %d pending tasks",
                 self._scheduling_round,
-                len(ctx.pending_task_rows),
-                len(ctx.workers),
-                len(claims),
+                len(routing.pending_task_rows),
             )
 
-        if not ctx.pending_task_rows:
+        if not routing.pending_task_rows:
             self._scheduling_diagnostics = {}
-            self._last_scheduling_context = ctx
-            self._last_residual_demand = []
+            self._last_scheduling_context = None
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        result = self._task_backend.schedule(
-            ScheduleInput(
-                context=ctx,
-                claims=claims,
+        result = self._representative_backend.schedule(
+            ScheduleRequest(
+                pending_task_rows=routing.pending_task_rows,
+                requested_bands=routing.requested_bands,
+                user_spend=routing.user_spend,
+                user_budget_limits=routing.user_budget_limits,
+                user_budget_defaults=routing.user_budget_defaults,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -840,8 +1531,7 @@ class Controller:
         self._apply_preemptions(result.preemptions)
 
         self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.post_taint_context
-        self._last_residual_demand = result.residual_demand
+        self._last_scheduling_context = result.scheduling_context
 
         if result.assignments or result.preemptions:
             log_event(
@@ -849,20 +1539,11 @@ class Controller:
                 "scheduler",
                 assignments=len(result.assignments),
                 preempted=len(result.preemptions),
-                pending=len(ctx.pending_task_rows),
-                workers=len(ctx.workers),
+                pending=len(routing.pending_task_rows),
+                workers=len(result.scheduling_context.workers) if result.scheduling_context else 0,
             )
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
-
-    def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Read, clean up, and refresh reservation claims. Returns updated claims."""
-        return refresh_reservation_claims(
-            self._db,
-            self._health,
-            self._worker_attrs,
-            persist=not self._config.dry_run,
-        )
 
     def _commit_assignments(self, assignments: list[Assignment]) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
@@ -872,18 +1553,19 @@ class Controller:
         onto ``tasks.priority_band``. The preemption pass then trusts that
         stamped value instead of recomputing from current spend every tick.
 
-        The polling reconcile thread reads ASSIGNED rows on its next tick
-        (woken via ``_polling_wake``) and fans out the Reconcile RPCs.
+        The next control tick's reconcile phase reads the ASSIGNED rows and fans
+        out the Reconcile RPCs.
         """
         if self._config.dry_run:
             for assignment in assignments:
                 logger.info("[DRY-RUN] Would assign task %s to worker %s", assignment.task_id, assignment.worker_id)
             return
+        # The dry-run scheduling path routes through the representative backend, so
+        # these assignments are all its workers — re-checked against its tracker.
+        health = self._representative_backend.health
+        assert health is not None, "scheduling assignments produced by a backend with no liveness tracker"
         with self._db.transaction() as cur:
-            ops.task.assign(cur, assignments, health=self._health)
-        # Wake the polling thread; every tick reconciles every healthy worker,
-        # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
-        self._polling_wake.set()
+            ops.task.assign(cur, assignments, health=health)
 
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
         """Finalize the backend's PREEMPT decisions.
@@ -898,8 +1580,6 @@ class Controller:
             finalize(
                 cur,
                 preemptions,
-                health=self._health,
-                endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
         logger.info("Preemption pass: %d tasks preempted", len(preemptions))
@@ -928,7 +1608,7 @@ class Controller:
             )
         return decisions
 
-    def _mark_tasks_unschedulable(self, tasks: list[Any]) -> None:
+    def _mark_tasks_unschedulable(self, tasks: list[PendingTask]) -> None:
         """Mark a batch of tasks as unschedulable due to scheduling timeout.
 
         Each entry must be a row from ``reads.pending_tasks_with_jobs``; it carries
@@ -940,6 +1620,19 @@ class Controller:
             for task in tasks:
                 logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
             return
+        with self._db.transaction() as cur:
+            finalize(
+                cur,
+                self._unschedulable_decisions(tasks),
+                now=Timestamp.now(),
+            )
+
+    def _unschedulable_decisions(self, tasks: list[PendingTask]) -> list[TerminalDecision]:
+        """Build UNSCHEDULABLE terminal decisions for scheduling-timeout tasks.
+
+        Each entry is a row from ``reads.pending_tasks_with_jobs`` carrying
+        ``scheduling_timeout_ms``. Logs one warning per task.
+        """
         decisions: list[TerminalDecision] = []
         for task in tasks:
             timeout_ms = task.scheduling_timeout_ms
@@ -952,14 +1645,7 @@ class Controller:
                     reason=f"Scheduling timeout exceeded ({timeout})",
                 )
             )
-        with self._db.transaction() as cur:
-            finalize(
-                cur,
-                decisions,
-                health=self._health,
-                endpoints=self._endpoints,
-                now=Timestamp.now(),
-            )
+        return decisions
 
     @property
     def last_scheduling_context(self) -> "SchedulingContext | None":
@@ -973,225 +1659,89 @@ class Controller:
         return self._last_scheduling_context
 
     # =========================================================================
-    # Worker lifecycle RPC dispatch (Reconcile / Ping)
+    # Worker reconcile pass (snapshot → backend.reconcile → apply + health)
     # =========================================================================
 
-    def _build_run_templates(
-        self, snap: Tx, reconcile_rows: list[ReconcileRow]
-    ) -> dict[JobName, job_pb2.RunTaskRequest]:
-        """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
+    def _drain_dispatch_snapshot(self, backend_id: str) -> reads.ControlSnapshot:
+        """Promote PENDING->ASSIGNED for a placement-owning backend and ride the drain.
 
-        ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
-        cached yet (e.g. reservation holders); those are dropped from the map.
+        The dispatch drain is the single DB write a ``CLUSTER_VIEW`` backend needs
+        before reconcile (the controller owns the write; the backend places tasks
+        itself). It runs in its own write transaction, so a cluster backend's tick
+        commits twice (drain + end-of-tick) rather than once. With multiple
+        backends the drain is scoped to ``backend_id``'s tasks; a lone backend
+        drains every pending task.
         """
-        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
-        for row in reconcile_rows:
-            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
-                continue
-            if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = dispatch.run_request_template(self._run_template_cache, snap, row.job_id)
-        return {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-
-    def _snapshot_reconcile_inputs(self, scan_timeouts: bool) -> tuple[reads.ControlSnapshot, ReconcileInputs]:
-        """Build the per-cycle :class:`ControlSnapshot` and derive reconcile inputs.
-
-        The control snapshot — live worker set, worker-bound attempt rows, and
-        (when ``scan_timeouts``) the execution-timeout rows — is assembled by
-        ``reads.load_control_snapshot`` in one read transaction. The per-job run
-        templates need the same open snapshot, so they are built before it
-        closes. The returned ``ReconcileInputs`` is the backend call shape; the
-        snapshot carries worker addresses, timeout rows, and the health view.
-        """
-        with self._db.read_snapshot() as snap:
-            control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
-            job_specs = self._build_run_templates(snap, control.reconcile_rows)
-
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in control.worker_addresses}
-        for row in control.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        inputs = ReconcileInputs(
-            job_specs=job_specs,
-            worker_ids=list(control.worker_addresses),
-            rows_by_worker=rows_by_worker,
-        )
-        return control, inputs
-
-    def _reconcile_tick(self) -> None:
-        """One polling-tick reconcile pass: snapshot, fan out, apply.
-
-        The execution-timeout deadline scan is folded into this tick (gated by
-        ``_timeout_rate_limiter`` so it fires at most once per minute). When it
-        fires, timeout-driven terminal decisions ride the same write txn as
-        the reconcile results.
-        """
-        if self._config.dry_run:
-            return
-        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
-            return
-
-        now = Timestamp.now()
-        scan_timeouts = self._timeout_rate_limiter.should_run()
-        snapshot, inputs = self._snapshot_reconcile_inputs(scan_timeouts)
-        timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
-        if not inputs.worker_ids and not timeout_decisions:
-            return
-
-        plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
-        if plans:
-            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=snapshot.worker_addresses)
-            results = self._task_backend.reconcile(reconcile_input).worker_results
-        else:
-            results = []
-
-        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
-        for result in results:
-            if result.error is not None:
-                logger.debug("Reconcile failed for worker %s: %s", result.worker_id, result.error)
+        max_promotions = self._promotion_bucket.available
+        backend_filter = None if len(self._backends) == 1 else backend_id
         with self._db.transaction() as cur:
-            if plans:
-                apply_reconcile(
-                    cur,
-                    plan_by_worker,
-                    results,
-                    health=snapshot.health,
-                    endpoints=self._endpoints,
-                    now=now,
-                )
-            if timeout_decisions:
-                finalize(
-                    cur,
-                    timeout_decisions,
-                    health=snapshot.health,
-                    endpoints=self._endpoints,
-                    now=now,
-                )
-
-    def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
-        """Get healthy active workers as (worker_id, address) tuples for ping."""
-        with self._db.read_snapshot() as tx:
-            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
-        return [(w.worker_id, w.address) for w in workers]
-
-    def _run_ping_loop(self, stop_event: threading.Event) -> None:
-        """Fast ping loop for liveness detection and prompt worker termination.
-
-        Sends Ping RPCs to all healthy workers every heartbeat_interval,
-        bumps the WorkerHealthTracker on failures, and immediately terminates
-        workers that cross the ping threshold.
-        """
-        ping_interval_s = self._config.heartbeat_interval.to_seconds()
-        limiter = RateLimiter(interval_seconds=ping_interval_s)
-
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                workers = self._get_active_worker_addresses()
-                results = self._task_backend.ping_workers(workers)
-
-                live_worker_ids: list[WorkerId] = []
-                for result in results:
-                    if result.error is not None:
-                        self._health.ping(result.worker_id, healthy=False)
-                    else:
-                        self._health.ping(result.worker_id, healthy=True)
-                        live_worker_ids.append(result.worker_id)
-
-                if live_worker_ids:
-                    self._health.bump_heartbeat(live_worker_ids, Timestamp.now().epoch_ms())
-
-                unhealthy = self._health.workers_over_threshold()
-                if unhealthy:
-                    logger.warning(
-                        "Ping loop: failing %d workers over ping threshold: %s",
-                        len(unhealthy),
-                        [str(wid) for wid in unhealthy[:10]],
-                    )
-                    removed = self._terminate_workers(
-                        [str(wid) for wid in unhealthy],
-                        reason="worker ping threshold exceeded",
-                        sibling_reason="unhealthy worker failed, slice terminated",
-                    )
-                    self._health.forget_many(removed)
-
-            except Exception:
-                logger.exception("Ping loop iteration failed")
-
-    def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
-        """Fail the given workers, terminate their slice siblings, and kill running tasks.
-
-        Returns the set of worker_ids that were actually removed (primary + siblings),
-        so callers can drop them from in-memory state like the health tracker.
-        """
-        for wid in worker_ids:
-            log_event("worker_failing", wid, trigger=reason)
-        failure_result = ops.worker.fail(
-            self._db,
-            worker_ids=worker_ids,
-            reason=reason,
-            health=self._health,
-            endpoints=self._endpoints,
-            worker_attrs=self._worker_attrs,
-        )
-        removed: list[WorkerId] = []
-        for wid, addr in failure_result.removed_workers:
-            self._task_backend.on_worker_failed(wid, addr)
-            removed.append(wid)
-        failed_result = self._task_backend.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
-        persist_autoscaler_state(self._db, failed_result.state)
-        if failed_result.sibling_worker_ids:
-            for wid in failed_result.sibling_worker_ids:
-                log_event("worker_failing", str(wid), trigger=sibling_reason)
-            sibling_failures = ops.worker.fail(
-                self._db,
-                worker_ids=failed_result.sibling_worker_ids,
-                reason=sibling_reason,
-                health=self._health,
-                endpoints=self._endpoints,
-                worker_attrs=self._worker_attrs,
+            batch = dispatch.drain_for_dispatch(
+                cur,
+                max_promotions=max_promotions,
+                backend_id=backend_filter,
+                defaults=self._config.user_budget_defaults,
             )
-            for wid, addr in sibling_failures.removed_workers:
-                self._task_backend.on_worker_failed(wid, addr)
-                removed.append(wid)
-        # Surviving-slice siblings stop on the next reconcile tick: the
-        # planner drops them from the worker's desired set (or marks them
-        # 'stop'); the failed workers themselves are already gone from the
-        # worker table.
-        return removed
-
-    def _run_autoscaler_once(self) -> None:
-        """Run one autoscale cycle: build the worker-status snapshot, drive the
-        backend's ``manage_capacity`` with the cached residual demand, then
-        persist the returned state.
-
-        Called from the autoscaler loop thread. Demand comes from the scheduling
-        pass via ``_last_residual_demand``. The controller owns every DB read and
-        write; the backend never touches the database.
-        """
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
-            return
-        if self._task_backend.manages_capacity:
-            return
-
-        worker_status_map = self._build_worker_status_map()
-        result = self._task_backend.manage_capacity(
-            CapacityInput(worker_status_map=worker_status_map, demand_entries=self._last_residual_demand)
+        if batch.tasks_to_run:
+            self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
+        return reads.ControlSnapshot(
+            worker_addresses={},
+            reconcile_rows=[],
+            timeout_rows=[],
+            tasks_to_run=batch.tasks_to_run,
+            running_tasks=batch.running_tasks,
         )
-        persist_autoscaler_state(self._db, result.state)
 
-    def _build_worker_status_map(self) -> WorkerStatusMap:
-        """Build a map of worker_id to worker status for autoscaler idle tracking."""
-        result: WorkerStatusMap = {}
-        worker_ids = {wid for wid, l in self._health.all().items() if l.active}
-        with self._db.read_snapshot() as tx:
-            running_by_worker = reads.running_tasks_by_worker(tx, worker_ids)
-        for wid in worker_ids:
-            result[wid] = WorkerStatus(
-                worker_id=wid,
-                running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(wid, set())),
-            )
-        return result
+    def _drain_pending_evictions(self) -> None:
+        """Tear down the workers queued by :meth:`request_worker_eviction`.
+
+        Resolves each evicted worker to its owning backend (by scale group, while
+        the rows still carry it) and hands that backend its share to tear down --
+        the same fail → slice-and-sibling teardown → forget the reconcile fold
+        runs, off the liveness path. The recycled-IP eviction reason is recorded on
+        the failure.
+        """
+        with self._pending_evictions_lock:
+            if not self._pending_evictions:
+                return
+            drained = sorted(self._pending_evictions)
+            self._pending_evictions.clear()
+        with self._db.read_snapshot() as snap:
+            worker_to_backend = self._worker_to_backend_map(snap)
+        reason = "address reused by newly-registered worker (recycled IP)"
+        for backend_id in self._backend_ids:
+            group = [wid for wid in drained if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
+            if group:
+                self._backends[backend_id].teardown(group, reason=reason)
+
+    def _drain_pending_kicks(self) -> list[PendingKick]:
+        """Take the queued administrative kicks for this tick's commit."""
+        with self._pending_kicks_lock:
+            if not self._pending_kicks:
+                return []
+            drained = self._pending_kicks
+            self._pending_kicks = []
+        return drained
+
+    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
+        """Turn queued kicks into terminal decisions, dropping superseded attempts.
+
+        A kick targeting a specific attempt is dropped if that attempt is no longer
+        current (the task retried in the meantime); a kick with no attempt id takes
+        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
+        """
+        decisions: list[TerminalDecision] = []
+        for kick in pending_kicks:
+            if kick.attempt_id is not None:
+                detail = reads.get_task_detail(cur, kick.task_id)
+                if detail is None or detail.current_attempt_id != kick.attempt_id:
+                    logger.info(
+                        "Dropping kick for %s: attempt %d is no longer current",
+                        kick.task_id.to_wire(),
+                        kick.attempt_id,
+                    )
+                    continue
+            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
+        return decisions
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Write a consistent SQLite checkpoint copy.
@@ -1227,6 +1777,25 @@ class Controller:
         """Submit a job to the controller."""
         return self._service.launch_job(request, None)
 
+    def run_control_tick(self) -> None:
+        """Run one complete control cycle synchronously before :meth:`start`.
+
+        This is the deterministic embedding boundary for callers that own the
+        controller lifecycle themselves. It drives scheduling, reconciliation,
+        and autoscaling once without starting background threads. A running
+        controller already owns its control loop, so mixing the two modes is an
+        error.
+        """
+        if self.started:
+            raise RuntimeError("run_control_tick cannot be used after Controller.start")
+        self._control_tick(
+            woken=True,
+            schedule_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            reconcile_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            autoscale_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            force_timeout_scan=True,
+        )
+
     def get_job_status(
         self,
         job_id: str,
@@ -1234,6 +1803,23 @@ class Controller:
         """Get the status of a job."""
         request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
+
+    def list_jobs(
+        self,
+        request: controller_pb2.Controller.ListJobsRequest | None = None,
+    ) -> controller_pb2.Controller.ListJobsResponse:
+        """Return Jobs matching the request query."""
+        return self._service.list_jobs(request or controller_pb2.Controller.ListJobsRequest(), None)
+
+    def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
+        """Return current public Task rows for a Job."""
+        request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
+        return self._service.list_tasks(request, None)
+
+    def get_task_status(self, task_id: str) -> controller_pb2.Controller.GetTaskStatusResponse:
+        """Get one Task and its Attempt history."""
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        return self._service.get_task_status(request, None)
 
     def terminate_job(
         self,
@@ -1243,28 +1829,132 @@ class Controller:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
 
+    def kick_tasks(
+        self,
+        request: controller_pb2.Controller.KickTasksRequest,
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Queue validated administrative state overrides for Tasks."""
+        return self._service.kick_tasks(request, None)
+
+    def register_endpoint(
+        self,
+        request: controller_pb2.Controller.RegisterEndpointRequest,
+    ) -> controller_pb2.Controller.RegisterEndpointResponse:
+        """Register or renew a Task endpoint."""
+        return self._service.endpoint_service.register_endpoint(request, None)
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest | None = None,
+    ) -> controller_pb2.Controller.ListEndpointsResponse:
+        """Return Task endpoints matching the optional query."""
+        return self._service.endpoint_service.list_endpoints(
+            request or controller_pb2.Controller.ListEndpointsRequest(),
+            None,
+        )
+
+    def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
+        """Remove a Task endpoint by ID."""
+        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
+        return self._service.endpoint_service.unregister_endpoint(request, None)
+
+    def set_user_budget(
+        self,
+        request: controller_pb2.Controller.SetUserBudgetRequest,
+    ) -> controller_pb2.Controller.SetUserBudgetResponse:
+        """Set the budget limit and maximum priority band for one user."""
+        return self._service.set_user_budget(request, None)
+
+    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
+        """Return one user's budget configuration and current spend."""
+        request = controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id)
+        return self._service.get_user_budget(request, None)
+
+    def register_worker(
+        self,
+        request: controller_pb2.Controller.RegisterRequest,
+    ) -> controller_pb2.Controller.RegisterResponse:
+        """Register or renew a worker identity and capacity."""
+        return self._service.register(request, None)
+
+    def list_workers(
+        self,
+        request: controller_pb2.Controller.ListWorkersRequest | None = None,
+    ) -> controller_pb2.Controller.ListWorkersResponse:
+        """Return workers matching the optional request filters."""
+        return self._service.list_workers(request or controller_pb2.Controller.ListWorkersRequest(), None)
+
+    def get_worker_status(self, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
+        """Return current health and metadata for one worker."""
+        request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
+        return self._service.get_worker_status(request, None)
+
+    def federation_sync(
+        self,
+        request: controller_pb2.Controller.FederationSyncRequest,
+    ) -> controller_pb2.Controller.FederationSyncResponse:
+        """Apply an authenticated federation delta from a peer."""
+        return self._service.federation_sync(request, None)
+
+    def list_peers(self) -> controller_pb2.Controller.ListPeersResponse:
+        """Return configured federation peers and their current status."""
+        return self._service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
+
     # Properties
 
     @property
+    def _representative_backend(self) -> TaskBackend:
+        """The backend the dry-run path and on-demand service RPCs route through.
+
+        Prefers :data:`DEFAULT_BACKEND_ID`; otherwise the first backend in
+        processing order. With a single backend this is that backend.
+        """
+        return self._backends.get(DEFAULT_BACKEND_ID) or self._backends[self._backend_ids[0]]
+
+    @property
+    def backends(self) -> dict[str, TaskBackend]:
+        """The controller's ``{backend_id: TaskBackend}`` collection."""
+        return self._backends
+
+    @property
+    def federation(self) -> FederationManager:
+        """The federation manager: peer registry, heartbeat, and submit-time router."""
+        return self._federation
+
+    def backend_id_for_scale_group(self, scale_group: str) -> str:
+        """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""
+        return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    @property
+    def scale_group_to_backend(self) -> dict[str, str]:
+        """The ``{scale_group: backend_id}`` routing map."""
+        return self._scale_group_to_backend
+
+    @property
+    def last_unroutable_jobs(self) -> dict[str, str]:
+        """Job wire ids -> reason from the last scheduling tick's routing pass."""
+        return self._last_unroutable_jobs
+
+    @property
     def provider(self) -> TaskBackend:
-        return self._task_backend
+        return self._representative_backend
 
     @property
-    def placement(self) -> PlacementOwner:
-        return self._task_backend.placement
-
-    @property
-    def run_template_cache(self) -> RunTemplateCache:
-        """Per-job RunTaskRequest template cache, shared with the dispatch path."""
-        return self._run_template_cache
+    def capabilities(self) -> frozenset[BackendCapability]:
+        """Union of every backend's capabilities (which dashboard tabs/RPCs apply)."""
+        return frozenset(cap for backend in self._backends.values() for cap in backend.capabilities)
 
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        if self._server and self._server.started:
-            if self._server.servers and self._server.servers[0].sockets:
-                return self._server.servers[0].sockets[0].getsockname()[1]
-        return self._config.port
+        return self._native_proxy.port if self._native_proxy is not None else self._config.port
+
+    @property
+    def native_proxy_stats(self) -> NativeProxyStats | None:
+        """Return native registry and JWT-cache counters, or ``None`` before startup."""
+        if self._native_proxy is None:
+            return None
+        return NativeProxyStats.from_json(self._native_proxy.stats_json)
 
     @property
     def external_host(self) -> str:
@@ -1278,18 +1968,3 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self.external_host}:{self.port}"
-
-    @property
-    def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Current reservation claims, keyed by worker ID."""
-        return read_reservation_claims(self._db)
-
-    @property
-    def autoscaler(self) -> Autoscaler | None:
-        """The Iris autoscaler driving capacity for this backend, if any.
-
-        Read-only handle for dashboard/status RPCs (VM info, feasibility,
-        pending hints). Capacity is driven through ``backend.manage_capacity``,
-        not this handle.
-        """
-        return self._task_backend.autoscaler

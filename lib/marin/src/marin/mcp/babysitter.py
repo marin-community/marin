@@ -5,27 +5,27 @@
 
 import argparse
 import base64
+import os
 import re
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf import json_format
-from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
+from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
+from rigging.credential_store import cluster_name_from_url
+from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
 from rigging.timing import Timestamp
 
 DEFAULT_LOG_LINES = 200
@@ -402,8 +402,8 @@ class IrisBabysitter:
 
     def __init__(self, config: IrisConnectionConfig):
         self.config = config
-        self.token_provider = _token_provider(config.cluster)
-        interceptors = [AuthTokenInjector(self.token_provider)] if self.token_provider else []
+        self.token_provider = _token_provider()
+        interceptors = [BearerTokenInjector(self.token_provider, "authorization")] if self.token_provider else []
         self.controller = ControllerServiceClientSync(
             config.controller_url,
             timeout_ms=config.timeout_ms,
@@ -564,7 +564,7 @@ class IrisBabysitter:
                     "cpu_millicores": int(info.cpu_millicores),
                     "thread_count": int(info.thread_count),
                     "open_fd_count": int(info.open_fd_count),
-                    "git_hash": info.git_hash,
+                    "git_hash": info.provenance.tree_hash,
                 },
                 "logs": [log_entry_to_json(entry) for entry in response.log_entries],
             }
@@ -595,15 +595,6 @@ class IrisBabysitter:
                 "profile_type": profile_type,
             }
         return self.envelope(data)
-
-    def bug_report(self, *, job_id: str, tail: int = 50) -> dict[str, Any]:
-        report = gather_bug_report(
-            self.config.controller_url,
-            JobName.from_wire(job_id),
-            tail=tail,
-            token_provider=self.token_provider,
-        )
-        return self.envelope(asdict(report))
 
     def zephyr_stage_progress(self, *, coord_job_id: str, max_lines: int = DEFAULT_ZEPHYR_LOG_LINES) -> dict[str, Any]:
         log_payload = self.tail_logs(target=coord_job_id, max_lines=max_lines, tail=True)["data"]
@@ -685,13 +676,16 @@ def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]
     return summary
 
 
-def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
-    credential = load_token(cluster, store_path=store_path)
-    if credential is None:
-        credential = load_any_token(store_path=store_path)
-    if credential is None:
-        return None
-    return StaticTokenProvider(credential.token)
+def _token_provider() -> TokenProvider | None:
+    """Explicit Authorization bearer for CI / headless runs, else None.
+
+    The controller mints no user token, so nothing is cached to attach; a caller
+    may inject one (e.g. a worker JWT) via ``$MARIN_CLUSTER_TOKEN``. Otherwise the
+    babysitter relies on transport trust (SSH tunnel / loopback), like any other
+    tokenless client.
+    """
+    override = os.environ.get(MARIN_CLUSTER_TOKEN_ENV)
+    return StaticTokenProvider(override) if override else None
 
 
 def _normalize_state_filter(state: str) -> str:
@@ -800,10 +794,6 @@ def build_server(service: IrisBabysitter, *, host: str = "127.0.0.1", port: int 
             duration_seconds=duration_seconds,
             include_locals=include_locals,
         )
-
-    @server.tool()
-    def iris_bug_report(job_id: str, tail: int = 50) -> dict[str, Any]:
-        return service.bug_report(job_id=job_id, tail=tail)
 
     @server.tool()
     def zephyr_stage_progress(coord_job_id: str, max_lines: int = DEFAULT_ZEPHYR_LOG_LINES) -> dict[str, Any]:

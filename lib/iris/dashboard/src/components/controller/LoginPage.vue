@@ -17,43 +17,13 @@ async function login() {
   error.value = null
   loading.value = true
   try {
-    // Exchange the token for a JWT via Login RPC.
-    // Handles raw identity tokens (static config tokens, GCP access tokens).
-    // If Login is unimplemented, the token is already a JWT — use it directly.
-    let sessionToken = trimmed
-    try {
-      const loginResp = await fetch('/iris.cluster.ControllerService/Login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identity_token: trimmed }),
-      })
-      if (loginResp.ok) {
-        const loginData = await loginResp.json()
-        if (loginData.token) {
-          sessionToken = loginData.token
-        }
-      } else {
-        // Surface auth failures (e.g. invalid token). Only fall through for
-        // "unimplemented" (Login not configured) — token may already be a JWT.
-        const errData = await loginResp.json().catch(() => ({}))
-        const code = errData.code || ''
-        if (code !== 'unimplemented') {
-          throw new Error(errData.message || `Login failed (${loginResp.status})`)
-        }
-      }
-    } catch (loginErr) {
-      // Network errors (Login RPC unreachable) — try token as-is
-      if (loginErr instanceof TypeError) {
-        // fetch network error — ignore and try token directly
-      } else {
-        throw loginErr
-      }
-    }
-
+    // Set the browser session cookie directly from the pasted bearer token (a
+    // service JWT). The controller mints no user token — IAP authenticates users
+    // at the edge — so there is no login exchange here.
     const resp = await fetch('/auth/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: sessionToken }),
+      body: JSON.stringify({ token: trimmed }),
     })
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}))
@@ -106,10 +76,11 @@ async function login() {
         </form>
 
         <p class="mt-6 text-xs text-text-muted leading-relaxed">
-          Get a token with:
+          IAP-fronted clusters authenticate you automatically. Otherwise paste a
+          service JWT, e.g. the session link printed by
           <code class="font-mono bg-surface-raised px-1.5 py-0.5 rounded text-text text-xs">
-            uv run iris --controller-url=CONTROLLER_URL login
-          </code>
+            iris cluster start
+          </code>.
         </p>
       </div>
     </div>

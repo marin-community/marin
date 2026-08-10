@@ -64,6 +64,26 @@ export interface Constraint {
   values?: AttributeValue[]
 }
 
+// -- Cluster coordinate --
+//
+// Mirrors iris.cluster.types: every job/task carries a `cluster` coordinate that
+// is always set — `'local'` for a locally-owned row, a peer id when handed off.
+// `'local'` is a reserved sentinel, not a real cluster id. The helpers tolerate
+// an absent value (contexts without a cluster, e.g. worker/controller logs) as
+// local, so a naive truthiness check never misclassifies a local row.
+
+export const LOCAL_CLUSTER = 'local'
+
+/** True when the row is locally owned (`'local'`, or no cluster in context). */
+export function isLocal(cluster: string | undefined): boolean {
+  return !cluster || cluster === LOCAL_CLUSTER
+}
+
+/** True when the row was handed off to a peer cluster. */
+export function isFederated(cluster: string | undefined): boolean {
+  return !!cluster && cluster !== LOCAL_CLUSTER
+}
+
 // -- Tasks --
 
 export interface TaskAttempt {
@@ -76,6 +96,15 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
+  // Bounded terminal cause, set only on a failed attempt.
+  terminalReason?: string
+}
+
+/** Why a failed attempt ended, empty when it did not fail. `terminalReason`
+ *  wins because an init-container failure sends `error` as an empty string,
+ *  which `??` would keep. */
+export function attemptFailureReason(attempt: TaskAttempt): string {
+  return attempt.terminalReason || attempt.error || ''
 }
 
 export interface TaskStatus {
@@ -96,8 +125,20 @@ export interface TaskStatus {
   currentAttemptId?: number
   attempts?: TaskAttempt[]
   pendingReason?: string
+  // Human-readable status for a task waiting to run (e.g. the Kueue admission
+  // detail explaining why a BUILDING/pending k8s task has not been placed).
+  statusMessage?: string
   canBeScheduled?: boolean
   containerId?: string
+  // No per-task failure/preemption count fields — derive them from `attempts`;
+  // job-level totals live on JobStatus.
+  backendId?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned task, a peer
+  // id when handed off to that peer cluster (backendId then empty).
+  cluster?: string
+  // Task submission time on the owning cluster. Absent (not epoch 0) for a
+  // mirrored federated task the peer has not yet reported a real submit time for.
+  submittedAt?: ProtoTimestamp
 }
 
 // -- Jobs --
@@ -124,6 +165,15 @@ export interface JobStatus {
   pendingReason?: string
   hasChildren?: boolean
   parentJobId?: string
+  backendId?: string
+  // Cluster coordinate: always set — `'local'` for a locally-owned job, a peer
+  // id when handed off to that peer cluster.
+  cluster?: string
+  // Handoff lifecycle for a federated job (gate on `cluster` first — a local job
+  // and an old message both read as PEER_STATUS_NONE). One of PEER_STATUS_NONE |
+  // PEER_STATUS_PENDING_SCHEDULING | PEER_STATUS_ASSIGNED | PEER_STATUS_SYNCED |
+  // PEER_STATUS_REJECTED. This is the job's handoff state, not peer health.
+  peerStatus?: string
 }
 
 export interface JobQuery {
@@ -137,6 +187,9 @@ export interface JobQuery {
   limit?: number
   // Anchored prefix match against the full wire job_id (e.g. "/alice/").
   jobIdPrefix?: string
+  backendId?: string
+  // Filter to jobs in one cluster (`'local'` or a peer id). Unset = all clusters.
+  cluster?: string
 }
 
 // -- Controller RPC Responses --
@@ -182,11 +235,18 @@ export interface LaunchJobRequest {
   replicas?: number
   priorityBand?: string
   submitArgv?: string[]
+  // Job aborts once more than this many tasks fail terminally (default 0).
+  maxTaskFailures?: number
+  // Per-task retry budget on failure (default 0) and on preemption.
+  maxRetriesFailure?: number
+  maxRetriesPreemption?: number
 }
 
 export interface GetTaskStatusResponse {
   task: TaskStatus
   jobResources?: ResourceSpecProto
+  /** Likely root-cause log lines distilled from a failed task's logs. */
+  rootCauseHighlights?: string[]
 }
 
 export interface ListTasksResponse {
@@ -194,6 +254,14 @@ export interface ListTasksResponse {
 }
 
 // -- Workers --
+
+export interface Provenance {
+  treeHash?: string
+  baseCommit?: string
+  dirty?: boolean
+  branch?: string
+  builtBy?: string
+}
 
 export interface WorkerMetadata {
   hostname?: string
@@ -213,7 +281,7 @@ export interface WorkerMetadata {
   gceZone?: string
   attributes?: Record<string, AttributeValue>
   vmAddress?: string
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface WorkerHealthStatus {
@@ -225,6 +293,8 @@ export interface WorkerHealthStatus {
   address?: string
   metadata?: WorkerMetadata
   statusMessage?: string
+  backendId?: string
+  scaleGroup?: string
 }
 
 export interface WorkerQuery {
@@ -233,6 +303,7 @@ export interface WorkerQuery {
   sortDirection?: string
   offset?: number
   limit?: number
+  backendId?: string
 }
 
 export interface ListWorkersResponse {
@@ -286,6 +357,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -309,16 +382,22 @@ export interface SliceInfo {
    * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
-}
-
-export interface ScaleGroupConfig {
-  quotaPool?: string
-  allocationTier?: number
+  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
+  degradedSlotCount?: number
+  /**
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
+   */
+  capacityStatus?: string
 }
 
 export interface ScaleGroupStatus {
   name: string
-  config?: ScaleGroupConfig
+  backendId?: string
+  deviceType?: string
+  deviceVariant?: string
+  quotaPool?: string
+  allocationTier?: number
   currentDemand?: number
   peakDemand?: number
   backoffUntil?: ProtoTimestamp
@@ -411,6 +490,26 @@ export interface NodePoolStatus {
   quota: string
 }
 
+/**
+ * One physical Kubernetes node. Identity, liveness, and allocatable capacity
+ * come from the kubectl node sync. int64 fields serialize as strings.
+ */
+export interface NodeStatus {
+  name: string
+  ready?: boolean
+  schedulable?: boolean
+  statusSummary?: string
+  instanceType?: string
+  region?: string
+  gpuCount?: number
+  gpuModel?: string
+  cpuMillicores?: string
+  memoryBytes?: string
+  diskBytes?: string
+  runningPods?: number
+  created?: string
+}
+
 export interface GetKubernetesClusterStatusResponse {
   namespace?: string
   totalNodes?: number
@@ -420,6 +519,7 @@ export interface GetKubernetesClusterStatusResponse {
   podStatuses?: KubernetesPodStatus[]
   providerVersion?: string
   nodePools?: NodePoolStatus[]
+  nodes?: NodeStatus[]
 }
 
 // -- Users --
@@ -428,6 +528,8 @@ export interface UserSummary {
   user: string
   taskStateCounts?: Record<string, number>
   jobStateCounts?: Record<string, number>
+  // Config-derived role from the controller's in-memory RolePolicy.
+  role?: string
 }
 
 export interface ListUsersResponse {
@@ -443,6 +545,8 @@ export interface LogEntry {
   attemptId?: number
   level?: string
   key?: string
+  /** Store row id, ascending in write order. int64, so proto JSON sends a string. */
+  seq?: string
 }
 
 export interface FetchLogsResponse {
@@ -464,7 +568,7 @@ export interface ProcessInfo {
   openFdCount?: number
   memoryTotalBytes?: string
   cpuCount?: number
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface GetProcessStatusResponse {
@@ -485,23 +589,6 @@ export interface GetCurrentUserResponse {
   displayName?: string
 }
 
-// -- API Keys --
-
-export interface ApiKeyInfo {
-  keyId: string
-  keyPrefix: string
-  userId: string
-  name: string
-  createdAtMs: string
-  lastUsedAtMs: string
-  expiresAtMs: string
-  revoked: boolean
-}
-
-export interface ListApiKeysResponse {
-  keys: ApiKeyInfo[]
-}
-
 // -- Scheduler State --
 
 /** Aggregated pending-task count keyed by (band, user, job). */
@@ -510,6 +597,7 @@ export interface PendingTaskBucket {
   userId: string
   jobId: string
   count: number
+  backendId?: string
 }
 
 /** Aggregated running-task count keyed by (band, user, worker, job). */
@@ -519,6 +607,7 @@ export interface RunningTaskBucket {
   workerId: string
   jobId: string
   count: number
+  backendId?: string
 }
 
 export interface SchedulerUserBudget {
@@ -538,37 +627,93 @@ export interface GetSchedulerStateResponse {
   runningBuckets: RunningTaskBucket[]
 }
 
-// -- RPC Statistics (iris.stats.StatsService) --
+// -- Multi-backend --
 
-export interface RpcMethodStats {
-  method: string
-  count?: string
-  errorCount?: string
-  totalDurationMs?: number
-  maxDurationMs?: number
-  p50Ms?: number
-  p95Ms?: number
-  p99Ms?: number
-  bucketUpperBoundsMs?: string[]
-  bucketCounts?: string[]
-  lastCall?: ProtoTimestamp
+/** Lightweight backend descriptor from /auth/config `backends` array. */
+export interface BackendInfo {
+  id: string
+  name: string
+  capabilities: string[]
 }
 
-export interface RpcCallSample {
-  method: string
-  timestamp?: ProtoTimestamp
-  durationMs?: number
-  peer?: string
-  userAgent?: string
-  caller?: string
-  errorCode?: string
-  errorMessage?: string
-  requestPreview?: string
+/** Worker-daemon fleet detail: the backend's autoscaler view plus DB-derived health counts. */
+export interface WorkerFleetDetail {
+  autoscaler?: AutoscalerStatus
+  healthyWorkerCount?: number
+  totalWorkerCount?: number
 }
 
-export interface GetRpcStatsResponse {
-  methods?: RpcMethodStats[]
-  slowSamples?: RpcCallSample[]
-  discoverySamples?: RpcCallSample[]
-  collectorStartedAt?: ProtoTimestamp
+/** Backend-authored expanded status; exactly one variant is set per the backend's capability. */
+export interface BackendStatus {
+  kubernetes?: GetKubernetesClusterStatusResponse
+  worker?: WorkerFleetDetail
+}
+
+/** Free vs. total consumable capacity per resource token (lowercased
+ *  device-variant → chips). map<string,int64> values JSON-encode as strings. */
+export interface ResourceAvailability {
+  version?: number
+  /** When the serving cluster computed the amounts, ms since epoch. int64 → string. */
+  observationEpochMs?: string
+  /** Free chips per variant, e.g. { h100: "24" }. */
+  amounts?: Record<string, string>
+  /** Total chips per variant over the same capacity; absent on a peer that
+   *  predates the field. */
+  totalAmounts?: Record<string, string>
+}
+
+/** Per-backend summary returned by the ListBackends RPC. */
+export interface BackendSummary {
+  backendId: string
+  name: string
+  kind: string
+  capabilities: string[]
+  /** Map of attribute key → list of string values. */
+  advertisedAttributes: Record<string, { values: string[] }>
+  scaleGroups: string[]
+  workerCount: number
+  pendingTaskCount: number
+  runningTaskCount: number
+  hasAutoscaler: boolean
+  /** availability_status string → pool count. */
+  capacityHealth: Record<string, number>
+  /** Expanded per-backend status rendered in the Backends tab detail panel. */
+  detail?: BackendStatus
+  /** Free/total capacity metric; unset when the backend does not supply it. */
+  availability?: ResourceAvailability
+}
+
+export interface UnroutableJob {
+  jobId: string
+  reason: string
+}
+
+export interface ListBackendsResponse {
+  backends: BackendSummary[]
+  unroutableJobCount: number
+  unroutableSample: UnroutableJob[]
+}
+
+// -- Federation peers --
+
+/** A federation peer returned by the ListPeers RPC: a remote Iris controller
+ *  this cluster may hand whole jobs to, plus its forwarded backend topology. */
+export interface PeerSummary {
+  peerId: string
+  // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
+  // absent on the wire when empty — hence optional here.
+  controllerAddress?: string
+  /** Last capability heartbeat succeeded. */
+  reachable?: boolean
+  /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
+  lastContactMs?: string
+  activeFederatedJobs?: number
+  /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
+  aggregateSpendMicros?: string
+  /** The peer's own backends, forwarded from its ListBackends. */
+  backends?: BackendSummary[]
+}
+
+export interface ListPeersResponse {
+  peers: PeerSummary[]
 }

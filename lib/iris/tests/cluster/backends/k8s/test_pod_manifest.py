@@ -4,40 +4,222 @@
 """Tests for pod manifest building: naming, env vars, volumes, constraints, init containers."""
 
 import json
+from collections.abc import Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 
 import pytest
 from iris.cluster.backends.k8s.tasks import (
-    _INFRASTRUCTURE_FAILURE_REASONS,
-    _KUEUE_POD_GROUP_NAME,
-    _KUEUE_POD_GROUP_POD_INDEX,
-    _KUEUE_POD_GROUP_TOTAL,
-    _KUEUE_PREFERRED_TOPOLOGY,
-    _KUEUE_PRIORITY_CLASS,
-    _KUEUE_QUEUE_NAME,
-    _KUEUE_REQUIRED_TOPOLOGY,
-    _LABEL_JOB_ID,
-    _LABEL_TASK_HASH,
-    _build_init_container_spec,
-    _build_pdb_manifest,
-    _build_pod_manifest,
-    _build_task_script,
-    _build_volumes_and_mounts,
-    _constraints_to_node_selector,
-    _is_coordinator_task,
-    _is_infrastructure_failure,
-    _job_id_from_task,
-    _pod_group_name,
-    _pod_name,
-    _sanitize_label_value,
-    _task_hash,
-    _task_update_from_pod,
+    K8sTaskProvider,
+    PodConfig,
 )
-from iris.cluster.backends.k8s.types import parse_k8s_quantity
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    NVL72_GPUS_PER_NODE,
+    RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
+    KueueTopologyBinding,
+    TopologyMode,
+)
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
+from iris.cluster.runtime.env import STANDARD_MOUNTS
+from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
-from .conftest import add_eq_constraint, common_env_from_req, make_pod, make_run_req, pod_config
+from .conftest import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
+
+INFRASTRUCTURE_FAILURE_REASONS = ("DeadlineExceeded", "Evicted", "Preempting")
+KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
+KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
+KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
+KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
+KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
+KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
+KUEUE_SLICE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-slice-required-topology"
+KUEUE_SLICE_SIZE = "kueue.x-k8s.io/podset-slice-size"
+LABEL_JOB_ID = "iris.job_id"
+LABEL_TASK_HASH = "iris.task_hash"
+LABEL_TASK_ID = "iris.task_id"
+
+# These are Kubernetes wire keys, not Iris implementation symbols. Keep the
+# established test names while sourcing them from the external manifest contract.
+_INFRASTRUCTURE_FAILURE_REASONS = INFRASTRUCTURE_FAILURE_REASONS
+_KUEUE_POD_GROUP_NAME = KUEUE_POD_GROUP_NAME
+_KUEUE_POD_GROUP_POD_INDEX = KUEUE_POD_GROUP_POD_INDEX
+_KUEUE_POD_GROUP_TOTAL = KUEUE_POD_GROUP_TOTAL
+_KUEUE_PREFERRED_TOPOLOGY = KUEUE_PREFERRED_TOPOLOGY
+_KUEUE_PRIORITY_CLASS = KUEUE_PRIORITY_CLASS
+_KUEUE_QUEUE_NAME = KUEUE_QUEUE_NAME
+_KUEUE_REQUIRED_TOPOLOGY = KUEUE_REQUIRED_TOPOLOGY
+_KUEUE_SLICE_REQUIRED_TOPOLOGY = KUEUE_SLICE_REQUIRED_TOPOLOGY
+_KUEUE_SLICE_SIZE = KUEUE_SLICE_SIZE
+_LABEL_JOB_ID = LABEL_JOB_ID
+_LABEL_TASK_HASH = LABEL_TASK_HASH
+
+
+def _dispatch(
+    request: job_pb2.RunTaskRequest,
+    config: PodConfig,
+) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
+    """Dispatch one request through the provider and snapshot its K8s effects."""
+    k8s = InMemoryK8sService(namespace=config.namespace)
+    provider = K8sTaskProvider(kubectl=k8s, pods=config, cluster_scan_interval=0.0)
+    try:
+        updates = provider.sync(make_batch(tasks_to_run=[request]))
+        resources = {
+            resource: deepcopy(k8s.list_json(resource))
+            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS)
+        }
+    finally:
+        provider.close()
+    return updates, resources
+
+
+def _build_pod_manifest(request: job_pb2.RunTaskRequest, config: PodConfig) -> dict:
+    updates, resources = _dispatch(request, config)
+    if updates:
+        raise ValueError(updates[0].error)
+    pods = resources[K8sResource.PODS]
+    assert len(pods) == 1
+    return pods[0]
+
+
+def _rejected_dispatch(request: job_pb2.RunTaskRequest, config: PodConfig) -> TaskUpdate:
+    updates, resources = _dispatch(request, config)
+    assert resources[K8sResource.PODS] == []
+    assert len(updates) == 1
+    assert updates[0].new_state == job_pb2.TASK_STATE_FAILED
+    return updates[0]
+
+
+def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
+    request = make_run_req(task_id.to_wire(), attempt_id=attempt_id, attempt_uid=attempt_uid)
+    return _build_pod_manifest(request, pod_config())["metadata"]["name"]
+
+
+def _task_hash(task_id: str) -> str:
+    if not task_id.startswith("/"):
+        task_id = f"/{task_id}/0"
+    manifest = _build_pod_manifest(make_run_req(task_id), pod_config())
+    return manifest["metadata"]["labels"][LABEL_TASK_HASH]
+
+
+def _sanitize_label_value(value: str) -> str:
+    manifest = _build_pod_manifest(make_run_req(f"/{value}/0"), pod_config())
+    return manifest["metadata"]["labels"][LABEL_JOB_ID]
+
+
+def _task_update_from_pod(
+    entry: RunningTaskEntry,
+    pod: dict,
+    workload: dict | None = None,
+) -> TaskUpdate:
+    """Observe a K8s pod through the provider's public reconciliation boundary."""
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    try:
+        request = make_run_req(
+            entry.task_id.to_wire(),
+            attempt_id=entry.attempt_id,
+            attempt_uid=entry.attempt_uid,
+        )
+        provider.sync(make_batch(tasks_to_run=[request]))
+        applied = k8s.list_json(K8sResource.PODS)[0]
+        observed = deepcopy(pod)
+        observed["kind"] = "Pod"
+        observed["metadata"] = {**applied["metadata"], **observed.get("metadata", {})}
+        observed["metadata"]["name"] = applied["metadata"]["name"]
+        k8s.seed_resource(K8sResource.PODS, applied["metadata"]["name"], observed)
+        if workload is not None:
+            name = workload.get("metadata", {}).get("name", "workload")
+            k8s.seed_resource(K8sResource.WORKLOADS, name, deepcopy(workload))
+        updates = provider.sync(make_batch(running_tasks=[entry]))
+        assert len(updates) == 1
+        return updates[0]
+    finally:
+        provider.close()
+
+
+def _pod_failure_state(pod: dict) -> int:
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    return _task_update_from_pod(entry, pod).new_state
+
+
+def _constraints_to_node_selector(constraints: Sequence[job_pb2.Constraint]) -> dict[str, str]:
+    request = make_run_req("/job/0")
+    request.constraints.extend(constraints)
+    return _build_pod_manifest(request, pod_config())["spec"].get("nodeSelector", {})
+
+
+def _job_id_from_task(task_id: JobName) -> str:
+    manifest = _build_pod_manifest(make_run_req(task_id.to_wire()), pod_config())
+    return manifest["metadata"]["labels"][LABEL_JOB_ID]
+
+
+def _build_volumes_and_mounts(cache_dir: str, has_accelerator: bool) -> tuple[list[dict], list[dict]]:
+    request = make_run_req("/job/0")
+    if has_accelerator:
+        request.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=1))
+    manifest = _build_pod_manifest(request, pod_config(cache_dir=cache_dir))
+    return manifest["spec"]["volumes"], manifest["spec"]["containers"][0]["volumeMounts"]
+
+
+def _security_context(profile: int, has_tpu: bool) -> dict:
+    request = make_run_req("/job/0")
+    request.container_profile = profile
+    if has_tpu:
+        request.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+    return _build_pod_manifest(request, pod_config())["spec"]["containers"][0]["securityContext"]
+
+
+def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
+    return _build_pod_manifest(request, pod_config())["spec"]["containers"][0]["command"][2]
+
+
+@dataclass(frozen=True)
+class _InitContainerSpec:
+    containers: list[dict]
+    workdir_volumes: list[dict]
+    configmap_name: str | None
+
+
+def _build_init_container_spec(
+    request: job_pb2.RunTaskRequest,
+    _pod_name_hint: str,
+    default_image: str,
+    controller_address: str | None,
+) -> _InitContainerSpec:
+    manifest = _build_pod_manifest(
+        request,
+        pod_config(default_image=default_image, controller_address=controller_address),
+    )
+    workdir_volumes = [volume for volume in manifest["spec"]["volumes"] if volume["name"] == "workdir-files"]
+    configmap_name = workdir_volumes[0]["configMap"]["name"] if workdir_volumes else None
+    stage_workdir = [
+        container for container in manifest["spec"].get("initContainers", []) if container["name"] == "stage-workdir"
+    ]
+    return _InitContainerSpec(stage_workdir, workdir_volumes, configmap_name)
+
+
+def _is_coordinator_task(request: job_pb2.RunTaskRequest) -> bool:
+    _updates, resources = _dispatch(request, pod_config())
+    return bool(resources[K8sResource.PDBS])
+
+
+def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
+    request = make_run_req(
+        task_id.to_wire(),
+        attempt_id=attempt_id,
+        num_tasks=2,
+        coscheduling_group_by="leafgroup",
+    )
+    manifest = _build_pod_manifest(request, pod_config())
+    return manifest["metadata"]["labels"][KUEUE_POD_GROUP_NAME]
+
 
 # ---------------------------------------------------------------------------
 # Pod naming
@@ -112,6 +294,22 @@ def test_build_pod_manifest_fields():
     assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
+def test_build_pod_manifest_defaults_image_when_no_override():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config(default_image="myrepo/iris:latest"))
+    assert manifest["spec"]["containers"][0]["image"] == "myrepo/iris:latest"
+
+
+def test_build_pod_manifest_honors_task_image_override():
+    """RunTaskRequest.task_image overrides the task container image. The init
+    container keeps default_image (see _build_init_container_spec) since it runs
+    iris's own bundle_fetch tooling."""
+    req = make_run_req("/test-job/0")
+    req.task_image = "myrepo/custom:v9"
+    manifest = _build_pod_manifest(req, pod_config(default_image="myrepo/iris:latest"))
+    assert manifest["spec"]["containers"][0]["image"] == "myrepo/custom:v9"
+
+
 def test_build_pod_manifest_env_vars():
     req = make_run_req("/test-job/0")
     req.environment.env_vars["MY_VAR"] = "hello"
@@ -124,6 +322,29 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_BIND_HOST" in env_names
     assert "IRIS_WORKDIR" in env_names
     assert "IRIS_ADVERTISE_HOST" in env_names
+
+
+def test_build_pod_manifest_env_secret_adds_envfrom():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config(env_secret_name="iris-task-env"))
+    container = manifest["spec"]["containers"][0]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+
+
+def test_build_pod_manifest_no_env_secret_omits_envfrom():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+    assert "envFrom" not in manifest["spec"]["containers"][0]
+
+
+def test_build_pod_manifest_task_container_falls_back_to_logs_on_error():
+    """The task container captures its tail log output into terminated.message
+    on a non-zero exit, instead of leaving operators with a bare "Error" reason
+    and no clue what actually happened."""
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+    container = manifest["spec"]["containers"][0]
+    assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
 def test_build_pod_manifest_gpu():
@@ -157,6 +378,23 @@ def test_build_pod_manifest_task_hash_label():
     assert labels[_LABEL_TASK_HASH] == _task_hash("/test-job/0")
     assert len(labels[_LABEL_TASK_HASH]) <= 63
     assert labels[_LABEL_TASK_HASH].isalnum()
+
+
+def test_pod_name_embeds_attempt_uid():
+    """The uid is part of the pod name, so two incarnations of the same
+    (task, attempt) get distinct names and never collide on create. An empty uid
+    keeps the pre-uid name for back-compat."""
+    task = JobName.from_wire("/test-job/0")
+    with_old = _pod_name(task, 0, "olduid0000000000")
+    with_new = _pod_name(task, 0, "newuid1111111111")
+    assert with_old != with_new
+    assert with_old.endswith("-olduid0000000000")
+    assert _pod_name(task, 0, "") == _pod_name(task, 0)
+
+
+def test_build_pod_manifest_pod_name_carries_uid():
+    manifest = _build_pod_manifest(make_run_req("/test-job/0", attempt_uid="abcd1234abcd1234"), pod_config())
+    assert manifest["metadata"]["name"] == _pod_name(JobName.from_wire("/test-job/0"), 0, "abcd1234abcd1234")
 
 
 def test_task_hash_distinct_for_sanitization_collisions():
@@ -225,13 +463,83 @@ def test_task_update_application_error_is_failed():
     assert update.exit_code == 1
 
 
-def test_is_infrastructure_failure_with_pod_level_reason():
-    """Pod-level eviction (no container statuses) is detected as infrastructure failure."""
+def test_task_update_error_prefers_termination_message_over_bare_reason():
+    """With terminationMessagePolicy: FallbackToLogsOnError, the kubelet fills in
+    ``message`` with the container's tail log output on a non-zero exit. This is
+    the real payoff of that manifest field: _extract_error already prefers a
+    non-empty message over the generic "Error" reason, so the actual crash
+    (traceback, fatal-error banner, ...) reaches the task/job error instead."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod(
+        "iris-job-0-0",
+        "Failed",
+        exit_code=1,
+        reason="Error",
+        message="RuntimeError: CUDA error: an illegal memory access was encountered",
+    )
+    update = _task_update_from_pod(entry, pod)
+    assert update.error == "RuntimeError: CUDA error: an illegal memory access was encountered"
+
+
+def test_pod_level_eviction_reason_is_worker_failed():
     pod: dict = {
         "metadata": {"name": "test"},
         "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": []},
     }
-    assert _is_infrastructure_failure(pod)
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict:
+    pod["status"].setdefault("conditions", []).append({"type": type_, "status": status, "reason": reason})
+    return pod
+
+
+@pytest.mark.parametrize("reason", ["PreemptionByScheduler", "TerminationByKubelet", "EvictionByEvictionAPI"])
+def test_task_update_disruption_target_is_preempted(reason):
+    """A preemption SIGKILLed after grace surfaces as reason='Error' exit 137 — not in
+    the reason whitelist — but the control plane's DisruptionTarget condition marks it
+    as a disruption, so it must be PREEMPTED (preemption budget), not FAILED."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    _add_condition(pod, "DisruptionTarget", "True", reason)
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert update.exit_code == 137
+
+
+def test_task_update_kueue_termination_target_is_preempted():
+    """Kueue preemption uses TerminationTarget rather than Kubernetes'
+    DisruptionTarget; preserve that authoritative cause instead of charging a
+    SIGKILL-shaped exit as an application failure."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    message = "Preempted to accommodate an interactive workload due to ClusterQueue prioritization"
+    _add_condition(pod, "TerminationTarget", "True", "WorkloadEvictedDueToPreempted")
+    pod["status"]["conditions"][-1]["message"] = message
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert update.exit_code == 137
+    assert update.terminal_reason is not None
+    assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
+
+
+def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
+    """A self-inflicted cgroup OOM carries no DisruptionTarget condition, so it stays a
+    FAILED (misconfigured job) even though it also exits 137 — the condition, not the
+    exit code, is what distinguishes preemption from OOM guilt."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+
+
+def test_disruption_target_condition_status_false_is_not_infrastructure():
+    """A DisruptionTarget condition with status != 'True' does not mark a disruption."""
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
+    _add_condition(pod, "DisruptionTarget", "False", "")
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -303,12 +611,15 @@ def test_constraints_unknown_key_ignored():
     assert "nodeSelector" not in manifest["spec"]
 
 
-def test_constraints_non_eq_op_raises():
-    c = job_pb2.Constraint(key="pool", op=job_pb2.CONSTRAINT_OP_NE)
-    c.value.string_value = "h100-8x"
+def test_constraints_non_eq_op_rejects_dispatch():
+    request = make_run_req("/job/0")
+    constraint = request.constraints.add(key="pool", op=job_pb2.CONSTRAINT_OP_NE)
+    constraint.value.string_value = "h100-8x"
 
-    with pytest.raises(ValueError, match=r"Unsupported constraint op.*pool.*CONSTRAINT_OP_EQ"):
-        _constraints_to_node_selector([c])
+    update = _rejected_dispatch(request, pod_config())
+    assert "Unsupported constraint" in update.error
+    assert "pool" in update.error
+    assert "CONSTRAINT_OP_EQ" in update.error
 
 
 def test_constraints_to_node_selector_function_directly():
@@ -435,61 +746,93 @@ def test_zero_timeout_no_deadline():
 # ---------------------------------------------------------------------------
 
 
-def test_build_pod_manifest_includes_standard_volumes():
-    """Pod manifest includes all 5 standard volumes plus dshm (6 total)."""
+def test_pod_manifest_volumes_and_mounts_are_consistent():
+    """No dangling mounts and no orphaned volumes.
+
+    A mount naming an undeclared volume is rejected by the API server outright.
+    An orphan is quieter and worse: the volume exists but reaches no container,
+    so whatever it backs silently falls through to the container layer.
+    """
     req = make_run_req("/test-job/0", attempt_id=1)
-    manifest = _build_pod_manifest(req, pod_config())
-
+    req.bundle_id = "bundle-abc"
+    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
     spec = manifest["spec"]
-    container = spec["containers"][0]
 
-    volume_names = {v["name"] for v in spec["volumes"]}
-    mount_names = {m["name"] for m in container["volumeMounts"]}
-    expected_names = {"workdir", "tmpfs", "uv-cache", "cargo-registry", "cargo-target", "dshm"}
-    assert volume_names == expected_names
-    assert mount_names == expected_names
+    declared = {v["name"] for v in spec["volumes"]}
+    mounted = {m["name"] for c in spec["containers"] + spec.get("initContainers", []) for m in c.get("volumeMounts", [])}
 
-    mount_paths = {m["mountPath"] for m in container["volumeMounts"]}
-    assert "/app" in mount_paths
-    assert "/tmp" in mount_paths
-    assert "/uv/cache" in mount_paths
-    assert "/dev/shm" in mount_paths
-
-    assert container["workingDir"] == "/app"
+    assert mounted - declared == set(), "volumeMount names a volume the pod does not declare"
+    assert declared - mounted == set(), "volume reaches no container"
 
 
-def test_build_pod_manifest_shm_size_limit_with_gpu():
-    """dshm volume gets sizeLimit=100Gi when GPU resources are requested."""
+def test_task_container_does_not_mount_the_log_shipper_host_path():
+    """varlogpods stays the sidecar's.
+
+    It is a hostPath onto the node's pod log directory; mounting it into the task
+    would hand every task a read of every other pod's logs on that node.
+    """
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+
+    assert "varlogpods" in {v["name"] for v in manifest["spec"]["volumes"]}
+    assert "varlogpods" not in {m["name"] for m in manifest["spec"]["containers"][0]["volumeMounts"]}
+
+
+def test_cache_env_points_at_mounted_cache_volumes():
+    """Every cache env var names a path the pod actually mounts.
+
+    The pod spec carries these rather than the task image, so that a task
+    bringing its own image writes to the shared cache volumes too.
+    """
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+    container = manifest["spec"]["containers"][0]
+
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    host_backed = {v["name"] for v in manifest["spec"]["volumes"] if "hostPath" in v}
+    cache_mounts = [m["mountPath"] for m in container["volumeMounts"] if m["name"] in host_backed]
+
+    # Each var must resolve inside a node-persistent cache mount. A var pointing
+    # anywhere else lands on the container layer and re-downloads every task.
+    for var in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "HF_HUB_CACHE", "CARGO_HOME", "CARGO_TARGET_DIR"):
+        value = env[var]
+        assert any(
+            value == mount or value.startswith(f"{mount}/") for mount in cache_mounts
+        ), f"{var}={value} is not under a cache mount ({cache_mounts}); it would land on the container layer"
+
+    # HF_HOME carries the submitter's HF_TOKEN, so it must NOT be redirected onto
+    # a node-shared cache directory that every other task on the node can read.
+    assert "HF_HOME" not in env
+
+
+@pytest.mark.parametrize("device", ["gpu", "tpu", None])
+def test_shm_limit_matches_memory_request(device):
     req = make_run_req("/test-job/0")
-    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    elif device == "tpu":
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
     assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["medium"] == "Memory"
-    assert dshm_volumes[0]["emptyDir"]["sizeLimit"] == "100Gi"
+    empty_dir = dshm_volumes[0]["emptyDir"]
+
+    # Memory-backed: /dev/shm on disk would silently gut collective throughput.
+    assert empty_dir["medium"] == "Memory"
+    assert parse_k8s_quantity(empty_dir["sizeLimit"]) == req.resources.memory_bytes
 
 
-def test_build_pod_manifest_shm_no_size_limit_without_gpu():
-    """dshm volume has no sizeLimit when no GPU is requested."""
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_accelerator_shm_keeps_fallback_without_memory_request(device):
     req = make_run_req("/test-job/0")
+    req.resources.memory_bytes = 0
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    else:
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+
     manifest = _build_pod_manifest(req, pod_config())
-
-    dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
-    assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["medium"] == "Memory"
-    assert "sizeLimit" not in dshm_volumes[0]["emptyDir"]
-
-
-def test_build_pod_manifest_shm_size_limit_with_tpu():
-    """dshm volume gets sizeLimit=100Gi when TPU resources are requested."""
-    req = make_run_req("/test-job/0")
-    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
-    manifest = _build_pod_manifest(req, pod_config())
-
-    dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
-    assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["sizeLimit"] == "100Gi"
+    dshm_volume = next(volume for volume in manifest["spec"]["volumes"] if volume["name"] == "dshm")
+    assert parse_k8s_quantity(dshm_volume["emptyDir"]["sizeLimit"]) == 100 * 1024**3
 
 
 def test_tpu_adds_sys_resource_capability():
@@ -503,14 +846,26 @@ def test_tpu_adds_sys_resource_capability():
     assert "SYS_RESOURCE" in caps
 
 
-def test_build_volumes_and_mounts_cache_uses_host_path():
-    """Cache volumes use hostPath with DirectoryOrCreate under the given cache_dir."""
+def test_cache_mounts_are_host_backed_and_the_rest_are_not():
+    """Only CACHE mounts get a hostPath, and they land under cache_dir.
+
+    hostPath is what makes a cache outlive its pod; an emptyDir here would be
+    deleted with the pod and re-downloaded by the next task.
+    """
     volumes, _mounts = _build_volumes_and_mounts("/my-cache", has_accelerator=False)
-    cache_volumes = [v for v in volumes if "hostPath" in v]
-    assert len(cache_volumes) == 3
-    for v in cache_volumes:
-        assert v["hostPath"]["path"].startswith("/my-cache/")
-        assert v["hostPath"]["type"] == "DirectoryOrCreate"
+    by_name = {v["name"]: v for v in volumes}
+
+    for mount in STANDARD_MOUNTS:
+        volume = by_name[mount.name]
+        if mount.kind is MountKind.CACHE:
+            assert volume["hostPath"]["path"].startswith("/my-cache/")
+            assert volume["hostPath"]["type"] == "DirectoryOrCreate"
+        else:
+            assert "emptyDir" in volume
+
+    # Distinct host dirs, or two caches would collide on the node.
+    host_paths = [v["hostPath"]["path"] for v in volumes if "hostPath" in v]
+    assert len(host_paths) == len(set(host_paths))
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +879,72 @@ def test_sys_ptrace_capability():
     manifest = _build_pod_manifest(req, pod_config())
     container = manifest["spec"]["containers"][0]
     assert "SYS_PTRACE" in container["securityContext"]["capabilities"]["add"]
+
+
+# ---------------------------------------------------------------------------
+# Container security profiles
+# ---------------------------------------------------------------------------
+
+
+def test_default_profile_matches_baseline():
+    """UNSPECIFIED resolves to DEFAULT: today's SYS_PTRACE-only context."""
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, has_tpu=False)
+    assert ctx == {"capabilities": {"add": ["SYS_PTRACE"]}}
+
+
+def test_restricted_profile_drops_all_caps():
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=False)
+    assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}
+    assert ctx["allowPrivilegeEscalation"] is False
+    assert ctx["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert "privileged" not in ctx
+
+
+def test_restricted_profile_omits_tpu_cap():
+    """RESTRICTED must not leak the SYS_RESOURCE device cap, even on TPU."""
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=True)
+    assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}
+
+
+def test_privileged_profile_sets_privileged():
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_PRIVILEGED, has_tpu=False)
+    assert ctx["privileged"] is True
+    assert ctx["allowPrivilegeEscalation"] is True
+    assert "SYS_PTRACE" in ctx["capabilities"]["add"]
+
+
+def test_docker_access_rejected_on_k8s():
+    """DOCKER_ACCESS has no host docker socket on k8s nodes; fail fast."""
+    request = make_run_req("/job/0")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+    update = _rejected_dispatch(request, pod_config())
+    assert "DOCKER_ACCESS is not supported" in update.error
+
+
+def test_privileged_profile_applied_to_pod_manifest():
+    """A PRIVILEGED RunTaskRequest produces a privileged container securityContext."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["containers"][0]["securityContext"]["privileged"] is True
+
+
+def test_docker_access_pod_manifest_raises():
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+    update = _rejected_dispatch(req, pod_config())
+    assert "DOCKER_ACCESS is not supported" in update.error
+
+
+def test_gvisor_profile_sets_runtime_class_and_benign_context():
+    """GVISOR sets the pod runtimeClassName and a non-privileged securityContext."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_GVISOR
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["runtimeClassName"] == "gvisor"
+    ctx = manifest["spec"]["containers"][0]["securityContext"]
+    assert "privileged" not in ctx
+    assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
 
 
 # ---------------------------------------------------------------------------
@@ -579,16 +1000,14 @@ def test_iris_env_vars_injected():
     manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0:0"
     assert env_by_name["IRIS_NUM_TASKS"]["value"] == "4"
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
     assert env_by_name["IRIS_CONTROLLER_URL"]["value"] == "http://ctrl:8080"
+    # Tasks must listen on all interfaces: a peer or the controller reaching the
+    # pod by IP cannot reach a loopback bind.
     assert env_by_name["IRIS_BIND_HOST"]["value"] == "0.0.0.0"
-    assert env_by_name["IRIS_WORKDIR"]["value"] == "/app"
-    assert env_by_name["IRIS_PYTHON"]["value"] == "python"
-    assert env_by_name["UV_PYTHON_INSTALL_DIR"]["value"] == "/uv/cache/python"
-    assert env_by_name["CARGO_TARGET_DIR"]["value"] == "/root/.cargo/target"
 
 
 def test_advertise_host_uses_downward_api():
@@ -600,6 +1019,13 @@ def test_advertise_host_uses_downward_api():
     adv = env_by_name["IRIS_ADVERTISE_HOST"]
     assert "valueFrom" in adv
     assert adv["valueFrom"]["fieldRef"]["fieldPath"] == "status.podIP"
+
+
+def test_node_name_uses_downward_api():
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+
+    env_by_name = {entry["name"]: entry for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env_by_name["IRIS_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
 
 
 def test_device_env_vars_tpu():
@@ -621,21 +1047,20 @@ def test_iris_env_overrides_user_env():
     manifest = _build_pod_manifest(req, pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
-    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0"
+    assert env_by_name["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
-def test_task_script_includes_setup_commands():
-    """Setup commands appear in the task script before the run command."""
+def test_task_script_runs_each_setup_command_before_exec():
+    """Each setup command runs as its own step, before the run command."""
     req = make_run_req("/test-job/0")
     req.entrypoint.setup_commands.extend(["pip install foo", "export BAR=1"])
     script = _build_task_script(req)
     lines = script.split("\n")
-    assert "set -e" in lines
-    assert "pip install foo" in lines
-    assert "export BAR=1" in lines
-    setup_idx = lines.index("pip install foo")
+    # render_setup_steps materializes each command to its own file and runs it.
+    step_runs = [i for i, l in enumerate(lines) if l.startswith("bash /tmp/iris-setup-step-")]
     exec_idx = next(i for i, l in enumerate(lines) if l.startswith("exec "))
-    assert setup_idx < exec_idx
+    assert len(step_runs) == 2
+    assert max(step_runs) < exec_idx
 
 
 def test_task_script_exec_run_command():
@@ -670,11 +1095,11 @@ def test_build_common_iris_env_includes_attempt_suffix_on_retry():
     assert env["IRIS_TASK_ID"] == "/test-job/0:3"
 
 
-def test_build_common_iris_env_no_attempt_suffix_for_first_attempt():
-    """IRIS_TASK_ID has no suffix when attempt_id is 0."""
+def test_build_common_iris_env_includes_attempt_suffix_for_first_attempt():
+    """IRIS_TASK_ID carries the :0 suffix on the first attempt, matching retries."""
     req = make_run_req("/test-job/0", attempt_id=0)
     env = common_env_from_req(req, controller_address=None)
-    assert env["IRIS_TASK_ID"] == "/test-job/0"
+    assert env["IRIS_TASK_ID"] == "/test-job/0:0"
 
 
 # ---------------------------------------------------------------------------
@@ -687,23 +1112,38 @@ def test_init_container_created_when_bundle_id_present():
     req = make_run_req("/my-job/task-0")
     req.bundle_id = "bundle-abc"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-my-job-task-0-abcd1234-0",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     assert ic["name"] == "stage-workdir"
     assert ic["image"] == "myrepo/iris:latest"
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_BUNDLE_ID"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
-    assert env_by_name["IRIS_WORKDIR"] == "/app"
-    assert configmap_name is None
-    assert extra_volumes == []
+    assert spec.configmap_name is None
+    assert spec.workdir_volumes == []
+
+
+def test_init_container_records_its_log_tail_on_failure():
+    """_init_container_failure reports the terminated message, which the default File
+    policy never populates — so a stage-workdir crash surfaced with no cause at all."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    spec = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert spec.containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
 def test_no_init_container_when_no_bundle_or_files():
@@ -711,16 +1151,16 @@ def test_no_init_container_when_no_bundle_or_files():
     req = make_run_req("/my-job/task-0")
     req.bundle_id = ""
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert init_containers == []
-    assert extra_volumes == []
-    assert configmap_name is None
+    assert spec.containers == []
+    assert spec.workdir_volumes == []
+    assert spec.configmap_name is None
 
 
 def test_init_container_for_workdir_files():
@@ -729,20 +1169,21 @@ def test_init_container_for_workdir_files():
     req.entrypoint.workdir_files["config.yaml"] = b"key: value"
     req.entrypoint.workdir_files["sub/data.txt"] = b"hello"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         None,
     )
 
-    assert len(init_containers) == 1
-    assert configmap_name == "iris-pod-name-wf"
-    assert len(extra_volumes) == 1
-    assert extra_volumes[0]["name"] == "workdir-files"
-    assert extra_volumes[0]["configMap"]["name"] == configmap_name
+    assert len(spec.containers) == 1
+    assert spec.configmap_name is not None
+    assert spec.configmap_name.endswith("-wf")
+    assert len(spec.workdir_volumes) == 1
+    assert spec.workdir_volumes[0]["name"] == "workdir-files"
+    assert spec.workdir_volumes[0]["configMap"]["name"] == spec.configmap_name
 
-    ic = init_containers[0]
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_WORKDIR_FILES_SRC"] == "/iris/staged-workdir-files"
 
@@ -757,20 +1198,20 @@ def test_init_container_bundle_and_workdir_files():
     req.bundle_id = "bundle-xyz"
     req.entrypoint.workdir_files["run.sh"] = b"#!/bin/bash"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert "IRIS_BUNDLE_ID" in env_by_name
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
-    assert configmap_name is not None
-    assert len(extra_volumes) == 1
+    assert spec.configmap_name is not None
+    assert len(spec.workdir_volumes) == 1
 
 
 def test_init_container_for_workdir_file_refs():
@@ -778,22 +1219,22 @@ def test_init_container_for_workdir_file_refs():
     req = make_run_req("/my-job/task-0")
     req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
 
     refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
     assert refs == {"_callable.pkl": "abcd1234" * 8}
-    assert configmap_name is None
+    assert spec.configmap_name is None
 
 
 def test_no_init_container_for_blob_refs_without_controller():
@@ -801,15 +1242,15 @@ def test_no_init_container_for_blob_refs_without_controller():
     req = make_run_req("/my-job/task-0")
     req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         None,
     )
 
-    assert init_containers == []
-    assert configmap_name is None
+    assert spec.containers == []
+    assert spec.configmap_name is None
 
 
 def test_init_container_workdir_files_and_blob_refs():
@@ -818,19 +1259,19 @@ def test_init_container_workdir_files_and_blob_refs():
     req.entrypoint.workdir_files["small.txt"] = b"tiny"
     req.entrypoint.workdir_file_refs["big.pkl"] = "deadbeef" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
-    assert configmap_name is not None
+    assert spec.configmap_name is not None
 
 
 # ---------------------------------------------------------------------------
@@ -868,9 +1309,12 @@ def test_is_not_coordinator_with_gpu():
 
 def test_build_pdb_manifest_selector_and_cleanup_labels():
     """PDB selector targets task hash; labels include task hash for label-based cleanup."""
-    pdb = _build_pdb_manifest("iris-coord-0-abcd1234-0", "iris", "deadbeef12345678")
-    assert pdb["spec"]["selector"]["matchLabels"][_LABEL_TASK_HASH] == "deadbeef12345678"
-    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == "deadbeef12345678"
+    request = make_run_req("/coord-job/0", num_tasks=1)
+    _updates, resources = _dispatch(request, pod_config())
+    pdb = resources[K8sResource.PDBS][0]
+    pod_hash = resources[K8sResource.PODS][0]["metadata"]["labels"][_LABEL_TASK_HASH]
+    assert pdb["spec"]["selector"]["matchLabels"][_LABEL_TASK_HASH] == pod_hash
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == pod_hash
 
 
 # ---------------------------------------------------------------------------
@@ -880,7 +1324,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 
 def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
-        priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        priority = job_pb2.PRIORITY_BAND_INHERIT
     return make_run_req(
         task_id,
         attempt_id=attempt_id,
@@ -932,10 +1376,121 @@ def test_kueue_priority_class_stamped_from_config():
 def test_kueue_required_topology_for_nvlink_domain():
     """group_by=nvlink.domain -> required (hard) NVLink-domain topology."""
     manifest = _build_pod_manifest(
-        _cosched_req("/job/task/0", group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
+        _cosched_req("/job/task/0", num_tasks=8, group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_kueue_required_nvlink_gang_rejects_above_schedulable_slice():
+    """A hard nvlink.domain gang larger than a rack's guaranteed-schedulable slice can hang
+    whenever the rack is short a node, so it must fail fast (the guard for a programmatic or
+    stale client; the CLI routes 17+ NVL72 replicas to the sliced level, never to a hard gang
+    this large)."""
+    update = _rejected_dispatch(
+        _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES + 1, group_by="nvlink.domain"),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert "guaranteed-schedulable rack slice" in update.error
+
+
+def test_kueue_required_nvlink_gang_allows_schedulable_slice():
+    """A hard nvlink.domain gang of exactly the guaranteed-schedulable rack slice
+    (SCHEDULABLE_RACK_NODES nodes) is the largest hard single-domain gang and is valid."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES, group_by="nvlink.domain"),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+
+
+def test_kueue_preferred_nvlink_gang_packs_multi_rack():
+    """A multi-rack GB200 gang uses the SOFT nvlink.domain.preferred level: it binds the
+    nvlink.domain label as a PREFERRED (not required) topology, so Kueue packs the replicas
+    into as few whole NVLink domains as possible instead of demanding one (impossible) domain.
+    It is admitted for a gang larger than one rack rather than rejected."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain.preferred"),
+        pod_config(local_queue="iris-lq"),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+
+
+def _sliced_req(
+    task_id: str, num_tasks: int, *, gpu_count: int = NVL72_GPUS_PER_NODE, group_by: str = "nvlink.domain.sliced"
+):
+    """A coscheduled request on the sliced level with a GB200 GPU device (node-saturating by default)."""
+    req = _cosched_req(task_id, num_tasks=num_tasks, group_by=group_by)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="GB200", count=gpu_count))
+    return req
+
+
+@pytest.mark.parametrize("num_tasks,slice_size", [(24, 12), (32, 16), (48, 16), (20, 10), (64, 16)])
+def test_kueue_sliced_nvlink_gang_stamps_balanced_slice_size(num_tasks, slice_size):
+    """A multi-rack GB200 gang on the sliced level binds podset-slice-required-topology to
+    nvlink.domain with a podset-slice-size that spreads it evenly over the fewest racks (24->12,
+    32->16, 48->16), pairs a soft coarse leafgroup preference, and stamps the per-pod index that
+    makes slice membership rank-contiguous. It carries neither the whole-podset required nor a
+    preferred nvlink.domain request."""
+    manifest = _build_pod_manifest(_sliced_req("/job/task/0", num_tasks=num_tasks), pod_config(local_queue="iris-lq"))
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_SLICE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert annotations[_KUEUE_SLICE_SIZE] == str(slice_size)
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "backend.coreweave.cloud/leafgroup"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+    assert manifest["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "0"
+
+
+def test_kueue_sliced_gang_rejects_uneven_split():
+    """A sliced gang that cannot split into equal per-rack slices (17 over ceil(17/16)=2 racks)
+    can't place as a balanced layout, so it is rejected at build time."""
+    update = _rejected_dispatch(
+        _sliced_req("/job/task/0", num_tasks=17),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert "do not divide evenly" in update.error
+
+
+def test_kueue_sliced_gang_rejects_slice_too_small():
+    """A gang whose balanced slices would each be <= half a rack (18 -> two 9-node slices) lets
+    two slices share one rack, breaking one slice per rack, so it is rejected."""
+    update = _rejected_dispatch(
+        _sliced_req("/job/task/0", num_tasks=18),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert "must exceed half a rack" in update.error
+
+
+def test_kueue_sliced_gang_requires_node_saturating_pods():
+    """The one-slice-per-rack guarantee holds only if each pod fills a whole node; a sub-node
+    GB200 pod would let two slices share a rack, so the sliced level rejects it."""
+    update = _rejected_dispatch(
+        _sliced_req("/job/task/0", num_tasks=32, gpu_count=1),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert "node-saturating" in update.error
+
+
+def test_kueue_sliced_gang_without_coarse_preferred_omits_preferred_annotation():
+    """A sliced binding whose coarse_preferred_label is unset stamps only the slice request, no
+    whole-podset preferred topology."""
+    manifest = _build_pod_manifest(
+        _sliced_req("/job/task/0", num_tasks=32),
+        pod_config(
+            local_queue="iris-lq",
+            kueue_topologies={
+                "nvlink.domain.sliced": KueueTopologyBinding(
+                    "ds.coreweave.com/nvlink.domain", TopologyMode.SLICE_REQUIRED
+                )
+            },
+        ),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_SLICE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert annotations[_KUEUE_SLICE_SIZE] == "16"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
@@ -950,8 +1505,11 @@ def test_kueue_preferred_topology_for_leafgroup():
 def test_kueue_unmapped_group_by_raises():
     """An unmapped group_by is a misconfiguration: fail fast rather than gang without a
     topology annotation. group_by must name a topology level the cluster provisioned."""
-    with pytest.raises(ValueError, match="no topology mapping"):
-        _build_pod_manifest(_cosched_req("/job/task/0", group_by="rack"), pod_config(local_queue="iris-lq"))
+    update = _rejected_dispatch(
+        _cosched_req("/job/task/0", group_by="rack"),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert "no topology mapping" in update.error
 
 
 def test_kueue_siblings_share_pod_group_name():
@@ -975,24 +1533,19 @@ def test_pod_group_name_is_valid_label_value():
     assert len(name) <= 63
 
 
-def test_coscheduled_without_local_queue_raises():
-    """A coscheduled job dispatched to a cluster with no LocalQueue is a
-    misconfiguration: Kueue gang admission is required, with no fallback."""
-    req = _cosched_req("/job/task/0", num_tasks=4, group_by="leafgroup")
-    with pytest.raises(ValueError, match="requires Kueue gang admission"):
-        _build_pod_manifest(req, pod_config(local_queue=""))
-
-
-def test_kueue_drops_active_deadline_seconds():
-    """Kueue-gated pods omit activeDeadlineSeconds (gated wait would burn the deadline)."""
+def test_kueue_gang_drops_active_deadline_seconds():
+    """A gang omits activeDeadlineSeconds: k8s counts it from creation, so a gang waiting
+    SchedulingGated for the autoscaler could burn the deadline before it runs."""
     req = _cosched_req("/job/task/0")
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
-def test_non_coscheduled_keeps_active_deadline_seconds():
-    """A non-coscheduled job (not Kueue-gated) keeps the activeDeadlineSeconds budget."""
+def test_non_coscheduled_pod_keeps_active_deadline_seconds():
+    """A non-coscheduled pod keeps activeDeadlineSeconds even though it routes through Kueue:
+    single pods admit quickly, and on a K8s-only cluster this is their only timeout
+    enforcement (the controller's execution-timeout scan runs only for worker-daemon backends)."""
     req = make_run_req("/job/task/0", num_tasks=4)
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
@@ -1007,19 +1560,60 @@ def test_kueue_gang_uses_topology_not_affinity():
     assert _KUEUE_PREFERRED_TOPOLOGY in manifest["metadata"]["annotations"]
 
 
-def test_non_coscheduled_pod_has_no_kueue_labels():
-    """A non-coscheduled pod never carries Kueue labels even with a LocalQueue configured."""
+def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
+    """Every pod routes through Kueue when a LocalQueue is set: a non-coscheduled pod
+    carries the queue-name label but none of the gang-only pod-group metadata."""
     manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue="iris-lq"))
-    assert _KUEUE_POD_GROUP_NAME not in manifest["metadata"]["labels"]
-    assert "annotations" not in manifest["metadata"]
+    labels = manifest["metadata"]["labels"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert _KUEUE_POD_GROUP_POD_INDEX not in labels
+    assert _KUEUE_POD_GROUP_TOTAL not in manifest["metadata"]["annotations"]
+
+
+def test_single_pod_gpu_job_routed_through_kueue():
+    """A single-pod GPU job (not coscheduled) routes through Kueue so its GPU capacity is
+    accounted and preemptible: queue-name label and no gang pod-group metadata, but a soft
+    finest-level topology request so the topology-aware cw-tas flavor will admit it (a GPU
+    workload with no topology request is rejected by TAS)."""
+    req = make_run_req("/gpu-job/task/0", num_tasks=1)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+    labels = manifest["metadata"]["labels"]
+    annotations = manifest["metadata"]["annotations"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "kubernetes.io/hostname"
+    assert _KUEUE_POD_GROUP_TOTAL not in annotations
+
+
+def test_single_pod_cpu_job_uses_unconstrained_topology():
+    """CPU work uses TAS so Kueue can reclaim its accelerator-node capacity."""
+    manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
+    assert manifest["metadata"]["annotations"]["kueue.x-k8s.io/podset-unconstrained-topology"] == "true"
+    assert "nodeSelector" not in manifest["spec"]
 
 
 def test_kueue_topologies_override_config():
     """A configured topologies mapping overrides the CoreWeave defaults for a group_by."""
     manifest = _build_pod_manifest(
         _cosched_req("/job/task/0", group_by="leafgroup"),
-        pod_config(local_queue="iris-lq", kueue_topologies={"leafgroup": ("rack.example.com/pod", True)}),
+        pod_config(
+            local_queue="iris-lq",
+            kueue_topologies={"leafgroup": KueueTopologyBinding("rack.example.com/pod", TopologyMode.REQUIRED)},
+        ),
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_pod_manifest_floors_an_unset_band_at_interactive():
+    """An unset band takes the interactive class, not the cluster default.
+
+    Dispatch always stamps a real band, so this is the floor for a request built outside
+    that path — without it an unset field would leave the pod unranked against its peers.
+    """
+    req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["priorityClassName"] == "iris-interactive"

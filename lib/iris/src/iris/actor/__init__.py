@@ -3,31 +3,9 @@
 
 """Actor system for distributed RPC.
 
-For ClusterResolver (namespace-aware controller-based resolution),
-see iris.client.resolver.
+Import concrete types from their defining modules: ``ActorServer``/``ActorId``
+from ``iris.actor.server``, ``ActorClient`` from ``iris.actor.client``,
+``ActorPool`` from ``iris.actor.pool``, and the resolver types from
+``iris.actor.resolver``. Keeping concrete implementations in their defining
+modules also avoids import cycles through ``iris.client``.
 """
-
-from iris.actor.client import ActorClient
-from iris.actor.pool import ActorPool, BroadcastFuture, CallResult
-from iris.actor.resolver import (
-    FixedResolver,
-    ProxyResolver,
-    ResolvedEndpoint,
-    Resolver,
-    ResolveResult,
-)
-from iris.actor.server import ActorId, ActorServer
-
-__all__ = [
-    "ActorClient",
-    "ActorId",
-    "ActorPool",
-    "ActorServer",
-    "BroadcastFuture",
-    "CallResult",
-    "FixedResolver",
-    "ProxyResolver",
-    "ResolveResult",
-    "ResolvedEndpoint",
-    "Resolver",
-]

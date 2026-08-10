@@ -22,8 +22,11 @@ Only the ``CREATIVECOMMONS`` shards are wired up; the ``PUBLICDOMAIN`` shard
 can be added later if needed.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_jsonl
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -39,7 +42,7 @@ def svgfind_row_to_doc(row: dict) -> list[dict]:
     title = row.get("title") or ""
     svg = row.get("svg_content") or ""
     if not title or not svg:
-        counters.increment("svgfind/cc/dropped")
+        counters.pipeline.update_counter("svgfind/cc/dropped", 1)
         return []
 
     tags = ", ".join(row.get("tags") or [])
@@ -52,7 +55,7 @@ def svgfind_row_to_doc(row: dict) -> list[dict]:
         f"{svg}"
     )
 
-    counters.increment("svgfind/cc/kept")
+    counters.pipeline.update_counter("svgfind/cc/kept", 1)
     return [
         {
             "id": row["id"],

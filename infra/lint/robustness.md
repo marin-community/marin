@@ -138,3 +138,67 @@ except AttributeError:
     if isinstance(payload, dict):   # guard belongs above the .get call
         ...
 ```
+
+## Storage paths
+
+### `ml-naive-path-join` — Ad hoc string join or slash surgery on a storage path
+
+**Why it's bad:** Object-store keys are not normalized: `gs://b/x//y` and
+`gs://b/x/y` are *different keys*, so a writer and reader that join differently
+silently split the namespace (#6904, #6838). `os.path.join` on a URL,
+`f"{prefix}/{path}"`, and `path.rstrip("/")`-before-join each re-solve the same
+problem locally and drift. Join through `rigging.filesystem.prefix_join` (one
+join) or `StoragePath` (parse once, `/` to join, `relative_to` for containment).
+
+**When allowed:** Purely local filesystem paths that can never carry a URL
+scheme (use `os.path`/`pathlib` there); appending a suffix to a known
+directory-free basename; metric/logging label composition that is not a
+storage key.
+
+**Bad example:**
+```python
+ledger = os.path.join(cache_path, "shard_ledger.json")     # cache_path may be gs://…
+record = f"{output_path}/.artifact.json"                   # doubles the slash on a trailing-/ prefix
+shard = path[len(output_path.rstrip("/")) + 1 :]           # string-prefix containment; use relative_to
+```
+
+### `ml-raw-fsspec-io` — Raw fsspec handle for I/O that a `StoragePath` verb covers
+
+**Why it's bad:** `fsspec.open`, `fsspec.core.url_to_fs`, and `fsspec.filesystem`
+bypass the guarded factory in `rigging.filesystem`, so the read never charges the
+cross-region transfer budget, `mirror://` is not resolved, and S3/R2 filesystems
+build without the finite timeouts that stop a dead socket from wedging a shard
+(#6487). Code that never imports the guarded factory also misses Marin's zero-expiry
+GCS/S3 listing-cache default. Each `fs, path = url_to_fs(url); fs.<op>(path)` also
+re-derives the protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
+`isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `expand_glob`, `mkdirs`, `rm`,
+`rmtree`, `rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
+`download_to`/`upload_from` — so a path opens, lists, and stats through one type.
+(`glob` matches patterns and drops non-matches; `expand_glob` resolves a shard spec,
+keeping an explicitly named literal even when it is absent.)
+
+**When allowed:** Byte-range reads (`fs.cat_file(path, start, end)`); bulk detail
+listing (`fs.ls(path, detail=True)` for a browser/report); an `fs` built with a
+cache-control or backend kwarg the verbs cannot forward — `use_listings_cache=False`
+for a polled read that must defeat the listing cache, `block_size`/`cache_type` that
+must reach the file opener rather than the S3 constructor, or a passthrough like
+`revision=`/`recursive=` on `glob`/`find`/`info`; handing a live `fs` to a library that
+needs the handle (pyarrow, a streaming writer); and the guarded
+`rigging.filesystem.url_to_fs`/`open_url`/`filesystem` and `atomic_rename` themselves,
+which are the intended low-level seam.
+
+**Bad example:**
+```python
+fs, path = url_to_fs(output_dir); fs.makedirs(path, exist_ok=True)   # StoragePath(output_dir).mkdirs()
+with fsspec.open(summary_path, "w") as f: json.dump(summary, f)      # StoragePath(summary_path).write_text(json.dumps(summary))
+paths = [p for p in fs.ls(prefix) if p.endswith(".parquet")]         # ...StoragePath(prefix).ls() if str(p).endswith(".parquet")
+fs.get(remote, local, recursive=True)                               # StoragePath(remote).download_to(local, recursive=True)
+```
+
+**Good example:**
+```python
+StoragePath(output_dir).mkdirs()
+StoragePath(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True))
+parquet = [p for p in StoragePath(prefix).ls() if str(p).endswith(".parquet")]
+StoragePath(remote).download_to(local, recursive=True)
+```

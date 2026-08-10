@@ -11,39 +11,52 @@ Kueue chart, so this script renders that configuration and installs it.
 
 Two variants share one code path (``--variant``):
 
-  * ``coreweave`` — the CoreWeave ``cks-kueue`` helm chart (wraps upstream kueue),
-    which TEMPLATES its CRDs and renders Topology CRs from ``topologies:`` values.
-    Because the CRDs are templated (not in the chart's ``crds/`` dir), a first
-    install needs a two-phase bootstrap (CRDs first, then the Topology CRs).
+  * ``coreweave`` — the CoreWeave ``cks-kueue`` helm chart (wraps upstream kueue).
   * ``upstream`` — the upstream OCI helm chart
     (``oci://registry.k8s.io/kueue/charts/kueue``), used for kind / generic
-    clusters. CRDs ship in the chart, TAS is enabled via ``controllerManager``
-    feature gates, and the Topology CRs are applied with kubectl after install.
-    The smoke harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
+    clusters. TAS is enabled via ``controllerManager`` feature gates. The smoke
+    harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
+
+Neither variant uses cks-kueue's ``topologies:`` values templating: the chart
+(1.3.0) renders Topology CRs at ``kueue.x-k8s.io/v1alpha1`` while the CRD it
+itself installs serves only v1beta1+, so any helm pass carrying ``topologies``
+fails with 'no matches for kind "Topology"'. Instead both variants apply the
+Topology CRs with kubectl after install, at the apiVersion the installed CRD
+actually serves.
 
 Both variants:
   1. Install the operator into ``kueue-system`` (``helm upgrade --install``).
   2. Enable the plain-Pod integration via the controller-manager ``Configuration``
      (``integrations.frameworks: ["batch/job","pod"]``). ``manageJobsWithoutQueueName``
      stays false, so Kueue only gates pods carrying ``kueue.x-k8s.io/queue-name``
-     (the ones Iris stamps); every other pod passes through untouched — this is a
-     broad, whole-cluster install with the chart-default webhook namespace
-     selector (all namespaces except kube-system/kueue-system).
+     (the ones Iris stamps). The *admission webhooks* are opt-in scoped via the
+     top-level ``managedJobsNamespaceSelector`` (which both charts render into
+     every webhook's ``namespaceSelector``) to only ``--pod-namespace`` (default
+     ``iris``) — NOT the chart default (every namespace except
+     kube-system/kueue-system), which fail-closed-intercepts CNI/system pods on a
+     shared cluster and deadlocks node delivery. See build_controller_manager_config.
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
      the podset-topology annotations (``backend.coreweave.cloud/leafgroup``,
      ``ds.coreweave.com/nvlink.domain``).
-  4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavor
-     (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes) +
-     ClusterQueue (the quota). The namespaced LocalQueue is NOT created here: Iris
-     reconciles its own (``{label_prefix}-lq``) at controller start
-     (``K8sControllerProvider.ensure_kueue_queues``), binding it to this
-     ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
+  4. (``--with-queues``) Create the cluster-scoped, admin-owned ``cw-tas``
+     ResourceFlavor + ClusterQueue. The flavor selects ``iris.kueue=true`` and every
+     Iris Pod requests TAS, so lower-priority CPU reservations are reclaimable during
+     GPU topology fit. The ClusterQueue enables priority preemption within the queue
+     (``preemption.withinClusterQueue: LowerPriority``). Quota stays non-binding, so
+     the pressure signal is TAS, not quota. The namespaced LocalQueue is NOT created here:
+     Iris reconciles its own (``{label_prefix}-lq``) at controller start
+     (``K8sControllerProvider.ensure_kueue_queues``), binding it to this ClusterQueue
+     via ``kubernetes_provider.kueue.cluster_queue``.
+
+NB on Kueue version: TAS-aware preemption is version-sensitive. On too-old a Kueue
+a ClusterQueue that combines a topology-bound flavor with a ``preemption`` stanza
+can be marked Inactive, which breaks all gang admission. Validate on the target
+version (kind smoke first) before applying to a shared cluster.
 
 NB on the topology levels / flavor node-labels: to Kueue these are just node-label
-*keys* and a node selector — nothing CoreWeave-specific. The ``upstream`` variant
-reuses the identical CoreWeave level names and flavor labels; on a synthetic
-cluster (kind) the caller must stamp those labels onto the nodes first (the smoke
-harness does this), so TAS sees the kind nodes as one IB fabric.
+*keys* and a node selector. The ``upstream`` variant reuses the CoreWeave level
+names and ``iris.kueue`` selector; on a synthetic cluster (kind) the caller must
+stamp those labels onto the nodes first.
 
 SAFE BY DEFAULT: prints the rendered helm values + the would-be queue manifests,
 then stops. Pass ``--apply`` to mutate the cluster. The coreweave variant touches
@@ -59,21 +72,35 @@ Why this exists / what the CoreWeave docs leave out:
   block this script injects via the chart's ``managerConfig``.
 """
 
+import json
 import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 
 import click
 import yaml
-from iris.cluster.backends.k8s.coreweave_topology import (
-    CW_FLAVOR_INFINIBAND,
-    CW_LABEL_FABRIC,
-    CW_LABEL_FLAVOR,
-    CW_LABEL_LEAFGROUP,
-    CW_LABEL_NVLINK_DOMAIN,
-    CW_LABEL_SUPERPOD,
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    CW_CHART,
+    CW_REPO_NAME,
+    CW_REPO_URL,
+    DEFAULT_POD_NAMESPACES,
+    INFINIBAND_TOPOLOGY_NAME,
+    MULTINODE_TOPOLOGY_NAME,
+    OPERATOR_NS,
+    RELEASE_DEFAULT,
+    TOPOLOGIES,
+    TOPOLOGY_CRD,
+    VARIANT_COREWEAVE,
+    VARIANT_UPSTREAM,
+    build_cks_values,
+    build_cluster_queue,
+    build_resource_flavor,
+    build_topology_cr,
+    build_upstream_values,
 )
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
 
 # Right after a fresh install Kueue's internal cert manager has not yet populated
 # the webhook caBundle, so admission/conversion webhook calls fail transiently
@@ -82,214 +109,11 @@ from iris.cluster.backends.k8s.coreweave_topology import (
 _WEBHOOK_WARMUP_RETRIES = 6
 _WEBHOOK_WARMUP_DELAY = 5.0
 
-# --------------------------------------------------------------------------
-# Variants
-# --------------------------------------------------------------------------
-VARIANT_COREWEAVE = "coreweave"
-VARIANT_UPSTREAM = "upstream"
-
-# CoreWeave cks-kueue chart (wraps upstream kueue as a subchart).
-CW_REPO_NAME = "coreweave"
-CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
-CW_CHART = f"{CW_REPO_NAME}/cks-kueue"
-
-# Upstream Kueue OCI helm chart (kind / generic clusters).
+# Upstream Kueue OCI helm chart (kind / generic clusters). Pinned >= 0.13 for the PodSet-slice
+# TAS feature (multi-rack GB200 nvlink.domain.sliced placement); 0.18 also carries the
+# IsTAS()-recognition fix for slice-only pod groups (upstream #10282, patched in 0.16/0.17).
 UPSTREAM_CHART = "oci://registry.k8s.io/kueue/charts/kueue"
-UPSTREAM_DEFAULT_VERSION = "0.11.0"
-
-RELEASE_DEFAULT = "kueue"
-OPERATOR_NS = "kueue-system"
-
-# Standard k8s per-node label, the finest topology level.
-_K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
-
-# Topology CRs. Iris's preferred "leafgroup" topology rides on
-# backend.coreweave.cloud/leafgroup and the required "nvlink.domain" topology on
-# ds.coreweave.com/nvlink.domain — both are levels here, so TAS can satisfy the
-# podset-topology annotations Iris stamps. Label keys come from coreweave_topology
-# so the provider, this script, and the kind smoke share one source.
-INFINIBAND_LEVELS = [
-    CW_LABEL_FABRIC,
-    CW_LABEL_SUPERPOD,
-    CW_LABEL_LEAFGROUP,
-    _K8S_HOSTNAME_LABEL,
-]
-MULTINODE_NVLINK_IB_LEVELS = [
-    CW_LABEL_FABRIC,
-    CW_LABEL_SUPERPOD,
-    CW_LABEL_LEAFGROUP,
-    CW_LABEL_NVLINK_DOMAIN,
-    _K8S_HOSTNAME_LABEL,
-]
-INFINIBAND_TOPOLOGY_NAME = "infiniband"
-MULTINODE_TOPOLOGY_NAME = "multinode-nvlink-ib"
-TOPOLOGIES = {
-    INFINIBAND_TOPOLOGY_NAME: INFINIBAND_LEVELS,
-    MULTINODE_TOPOLOGY_NAME: MULTINODE_NVLINK_IB_LEVELS,
-}
-
-TOPOLOGY_CRD = "topologies.kueue.x-k8s.io"
-RESOURCE_FLAVOR_NAME = "cw-ib"
-# Node selector for the cw-ib ResourceFlavor. Kueue requires a topology-aware
-# flavor (spec.topologyName set) to carry at least one nodeLabel; CoreWeave stamps
-# backend.coreweave.cloud/flavor=infiniband on every IB-fabric node, which is
-# exactly the capacity this flavor represents. On kind the smoke harness stamps
-# the same label on its worker nodes.
-RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
-
-# Resources the ClusterQueue covers when --with-queues is set. A Kueue
-# ClusterQueue can only admit a workload if *every* resource the pods request is
-# covered here AND has a nominalQuota; an uncovered resource leaves the workload
-# stuck at QuotaReserved=False (pods SchedulingGated) forever. Iris IB-GPU pods
-# request cpu/memory/nvidia.com/gpu plus ephemeral-storage (from the disk request)
-# and rdma/ib (the InfiniBand devices), so all five must be covered.
-#
-# Iris does NOT use Kueue for capacity enforcement: gang admission + TAS gate on
-# real nodes, and the Iris autoscaler bounds capacity via scale-group max_slices.
-# Kueue is only the gang-admission + topology-placement mechanism here. So every
-# resource's nominalQuota is a sentinel large enough never to bind — Kueue never
-# rejects on quota, and the real capacity authority stays the scheduler/autoscaler.
-NON_BINDING_QUOTA = {
-    "cpu": "1000000000",  # cores
-    "memory": "1Pi",
-    "ephemeral-storage": "1Pi",
-    "nvidia.com/gpu": "1000000000",
-    "rdma/ib": "1000000000",
-}
-COVERED_RESOURCES = list(NON_BINDING_QUOTA)
-
-
-# --------------------------------------------------------------------------
-# Pure builders (return plain dicts; no I/O).
-# --------------------------------------------------------------------------
-def build_controller_manager_config() -> dict:
-    """Return the kueue ``Configuration`` (controller-manager config) as a dict.
-
-    Serialized to YAML and embedded as the chart's ``controllerManagerConfigYaml``
-    value. Enables the "pod" framework (gang admission for plain pods) alongside
-    "batch/job" cluster-wide. ``manageJobsWithoutQueueName`` stays false so Kueue
-    only gates pods carrying ``kueue.x-k8s.io/queue-name`` (the ones Iris stamps);
-    every other pod passes through, so no podOptions.namespaceSelector is needed.
-    internalCertManagement is enabled so Kueue self-signs its webhook certs (no
-    cert-manager dependency); the names match both charts' webhook service/secret.
-    """
-    return {
-        "apiVersion": "config.kueue.x-k8s.io/v1beta1",
-        "kind": "Configuration",
-        "health": {"healthProbeBindAddress": ":8081"},
-        "metrics": {"bindAddress": ":8080"},
-        "webhook": {"port": 9443},
-        "manageJobsWithoutQueueName": False,
-        "internalCertManagement": {
-            "enable": True,
-            "webhookServiceName": "kueue-webhook-service",
-            "webhookSecretName": "kueue-webhook-server-cert",
-        },
-        "integrations": {
-            "frameworks": ["batch/job", "pod"],
-        },
-    }
-
-
-def build_cks_values() -> dict:
-    """Return the ``cks-kueue`` (CoreWeave) helm values: managerConfig + topologies.
-
-    cks-kueue nests the upstream kueue subchart under ``kueue:`` and renders
-    Topology CRs from a top-level ``topologies:`` list.
-
-    NB: the chart already enables ``--feature-gates=TopologyAwareScheduling=true``
-    by default (its ``controllerManager.featureGates`` value is a *list*), so we
-    deliberately do NOT set ``featureGates`` — overriding it (especially as a map)
-    breaks the chart's ``kueue.featureGates`` template.
-    """
-    config_yaml = yaml.safe_dump(build_controller_manager_config(), default_flow_style=False, sort_keys=False)
-    return {
-        "kueue": {
-            "enableKueueViz": False,
-            "managerConfig": {"controllerManagerConfigYaml": config_yaml},
-        },
-        "topologies": [{"name": name, "levels": levels} for name, levels in TOPOLOGIES.items()],
-    }
-
-
-def build_upstream_values() -> dict:
-    """Return the upstream Kueue OCI-chart helm values.
-
-    The upstream chart puts ``managerConfig`` at the top level and takes feature
-    gates as a *list* under ``controllerManager.featureGates``. TopologyAwareScheduling
-    is NOT on by default upstream, so we enable it here. The chart ships CRDs in
-    ``crds/`` (installed by helm before templates), so no bootstrap pass is needed;
-    the Topology CRs are applied with kubectl after the operator is up.
-    """
-    config_yaml = yaml.safe_dump(build_controller_manager_config(), default_flow_style=False, sort_keys=False)
-    return {
-        "enableKueueViz": False,
-        "controllerManager": {
-            "featureGates": [{"name": "TopologyAwareScheduling", "enabled": True}],
-        },
-        "managerConfig": {"controllerManagerConfigYaml": config_yaml},
-    }
-
-
-def build_topology_cr(name: str, levels: list[str], api_version: str) -> dict:
-    """Return a Topology CR dict (for the upstream variant's kubectl-applied CRs)."""
-    return {
-        "apiVersion": api_version,
-        "kind": "Topology",
-        "metadata": {"name": name},
-        "spec": {"levels": [{"nodeLabel": label} for label in levels]},
-    }
-
-
-def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict:
-    """Return the cluster-scoped ResourceFlavor tied to the named Kueue Topology.
-
-    Defaults to the InfiniBand topology (fabric/superpod/leafgroup) — the only
-    levels real H100 IB nodes carry. Pass ``multinode-nvlink-ib`` to also expose
-    the nvlink.domain level (the kind smoke does this to mock a GB200 layout and
-    exercise the hard/required nvlink.domain placement).
-    """
-    return {
-        "apiVersion": "kueue.x-k8s.io/v1beta1",
-        "kind": "ResourceFlavor",
-        "metadata": {"name": RESOURCE_FLAVOR_NAME},
-        "spec": {
-            # nodeLabels select the nodes this flavor represents (the IB fabric).
-            # Required by Kueue whenever topologyName is set.
-            "nodeLabels": RESOURCE_FLAVOR_NODE_LABELS,
-            # Tie the flavor to the Topology so podset-topology annotations resolve.
-            "topologyName": topology_name,
-        },
-    }
-
-
-def build_cluster_queue(name: str) -> dict:
-    """Return the cluster-scoped, admin-owned ClusterQueue.
-
-    Covers every resource Iris IB-GPU pods request (COVERED_RESOURCES) with a
-    non-binding nominalQuota (NON_BINDING_QUOTA). Kueue does gang admission +
-    topology placement here, not capacity enforcement, so the quota is set never
-    to bind; real capacity is gated by TAS (real nodes) and the Iris autoscaler.
-    """
-    return {
-        "apiVersion": "kueue.x-k8s.io/v1beta1",
-        "kind": "ClusterQueue",
-        "metadata": {"name": name},
-        "spec": {
-            "namespaceSelector": {},
-            "resourceGroups": [
-                {
-                    "coveredResources": COVERED_RESOURCES,
-                    "flavors": [
-                        {
-                            "name": RESOURCE_FLAVOR_NAME,
-                            "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],
-                        }
-                    ],
-                }
-            ],
-        },
-    }
+UPSTREAM_DEFAULT_VERSION = "0.18.0"
 
 
 # --------------------------------------------------------------------------
@@ -327,16 +151,6 @@ def write_values_file(values: dict) -> str:
     with os.fdopen(fd, "w") as handle:
         yaml.safe_dump(values, handle, default_flow_style=False, sort_keys=False)
     return path
-
-
-def crd_exists(crd: str, kc_flags: list[str]) -> bool:
-    """Return True if the named CRD is present on the cluster."""
-    result = run(
-        ["kubectl", *kc_flags, "get", "crd", crd],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0
 
 
 def topology_api_version(kc_flags: list[str]) -> str:
@@ -412,6 +226,7 @@ def run_install(
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
     flavor_topology: str = INFINIBAND_TOPOLOGY_NAME,
+    pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     apply: bool = False,
 ) -> None:
     """Install + configure Kueue for the given ``variant`` (coreweave | upstream).
@@ -419,20 +234,29 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
+    ``--with-queues`` provisions one ``cw-tas`` ResourceFlavor for all nodes.
+    ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
+    namespace) — never widen this to system namespaces on a shared cluster.
     """
     if variant not in (VARIANT_COREWEAVE, VARIANT_UPSTREAM):
         raise ValueError(f"unknown variant {variant!r} (expected {VARIANT_COREWEAVE!r} or {VARIANT_UPSTREAM!r})")
 
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
-    queue_docs = [build_resource_flavor(flavor_topology), build_cluster_queue(cluster_queue)] if with_queues else []
+    if with_queues:
+        queue_docs = [
+            build_resource_flavor(flavor_topology),
+            build_cluster_queue(cluster_queue),
+        ]
+    else:
+        queue_docs = []
 
     if variant == VARIANT_COREWEAVE:
-        values = build_cks_values()
+        values = build_cks_values(pod_namespaces)
         chart = CW_CHART
         version = chart_version
     else:
-        values = build_upstream_values()
+        values = build_upstream_values(pod_namespaces)
         chart = UPSTREAM_CHART
         version = chart_version or UPSTREAM_DEFAULT_VERSION
 
@@ -469,7 +293,7 @@ def run_install(
         fg="green",
         bold=True,
     )
-    click.echo("  kubernetes_provider:\n    kueue:\n" f"      cluster_queue: {cluster_queue}")
+    click.echo(f"  kubernetes_provider:\n    kueue:\n      cluster_queue: {cluster_queue}")
 
 
 def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str], version_args: list[str]) -> None:
@@ -487,6 +311,39 @@ def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str],
             values_file,
             *version_args,
             *hflags,
+        ],
+        check=True,
+    )
+
+
+def _pin_manager_priority(kflags: list[str]) -> None:
+    """Pin kueue-controller-manager to the iris-system PriorityClass.
+
+    The manager serves Kueue's admission webhook — a hard dependency of every pod
+    CREATE in the Iris namespace. The helm charts leave it at priority 0, below
+    every Iris user job (iris-interactive=10), so a user pod can legally preempt
+    it; when it dies the webhook loses its endpoint and all pod admission fails
+    clusterwide until it reschedules. Pinning it to iris-system (10000, above
+    iris-production) makes it non-preemptible.
+
+    Applied out of band because neither chart variant exposes a priorityClassName
+    value. Helm 3's 3-way merge preserves fields it never set, so this survives
+    later `helm upgrade`s; install_kueue also re-applies it on every run.
+    """
+    click.secho("==> Pinning kueue-controller-manager to the iris-system PriorityClass", fg="blue", bold=True)
+    kubectl_apply_docs([iris_priority_class_manifest(IRIS_PRIORITY_CLASS_SYSTEM)], kflags)
+    patch = json.dumps({"spec": {"template": {"spec": {"priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM}}}})
+    run(
+        [
+            "kubectl",
+            *kflags,
+            "-n",
+            OPERATOR_NS,
+            "patch",
+            "deploy/kueue-controller-manager",
+            "--type=strategic",
+            "-p",
+            patch,
         ],
         check=True,
     )
@@ -514,50 +371,26 @@ def _apply(
 ) -> None:
     """Install/upgrade Kueue, then ensure the Topology CRs exist.
 
-    One flow for both charts; the only difference is data (whether the values
-    carry a ``topologies`` key), not control flow:
-
-      * cks-kueue (coreweave) TEMPLATES its CRDs and renders the Topology CRs from
-        the ``topologies:`` value. On a fresh cluster you cannot create the
-        Topology CRD and a Topology CR in one ``helm install`` (helm maps every
-        manifest against live discovery first, and the CRD does not exist yet), so
-        when ``topologies`` is in the values and the CRD is absent, do a BOOTSTRAP
-        pass with no topologies (CRDs get created cleanly), wait for the CRD to be
-        Established, then the full pass.
-      * the upstream OCI chart ships its CRDs in ``crds/`` and carries no
-        ``topologies`` value, so it installs in one pass; the Topology CRs are
-        applied with kubectl afterwards (reading the served apiVersion off the
-        installed CRD).
-
-    Re-runs on an already-installed cluster collapse to a single idempotent pass.
+    One helm pass installs the operator + CRDs for both charts (cks-kueue templates
+    its CRDs, the upstream chart ships them in ``crds/`` — either way the CRDs land
+    before any Topology CR is needed). The Topology CRs are then kubectl-applied at
+    the apiVersion the installed CRD actually serves; see the module docstring for
+    why the cks chart cannot template them itself. Idempotent on re-runs.
     """
-    chart_templates_topologies = "topologies" in values
-    full_file = write_values_file(values)
-
-    if chart_templates_topologies and not crd_exists(TOPOLOGY_CRD, kflags):
-        bootstrap = {k: v for k, v in values.items() if k != "topologies"}
-        click.secho(
-            f"==> Topology CRD absent — BOOTSTRAP pass to create CRDs (release '{release}', no topologies)",
-            fg="blue",
-            bold=True,
-        )
-        _helm_upgrade(chart, release, write_values_file(bootstrap), hflags, version_args)
-        click.secho(f"==> Waiting for {TOPOLOGY_CRD} to be Established", fg="blue", bold=True)
-        run(
-            ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
-            check=True,
-        )
-
     click.secho(f"==> Installing/upgrading {chart} as '{release}' in {OPERATOR_NS}", fg="blue", bold=True)
-    _helm_upgrade(chart, release, full_file, hflags, version_args)
+    _helm_upgrade(chart, release, write_values_file(values), hflags, version_args)
+    click.secho(f"==> Waiting for {TOPOLOGY_CRD} to be Established", fg="blue", bold=True)
+    run(
+        ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
+        check=True,
+    )
+    _pin_manager_priority(kflags)
     _wait_controller(kflags)
 
-    # Charts that don't template the Topology CRs (upstream) get them via kubectl.
-    if not chart_templates_topologies:
-        api_version = topology_api_version(kflags)
-        click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
-        topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
-        kubectl_apply_docs(topology_docs, kflags)
+    api_version = topology_api_version(kflags)
+    click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
+    topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
+    kubectl_apply_docs(topology_docs, kflags)
 
     click.secho("==> Topologies on the cluster:", fg="blue", bold=True)
     kubectl_get_topologies(kflags)
@@ -575,7 +408,11 @@ def _apply(
 )
 @click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config).")
 @click.option("--context", default=None, help="kube context to target.")
-@click.option("--chart-version", default=None, help="Pin the chart version (upstream default: 0.11.0; cw: latest).")
+@click.option(
+    "--chart-version",
+    default=None,
+    help=f"Pin the chart version (upstream default: {UPSTREAM_DEFAULT_VERSION}; cw: latest).",
+)
 @click.option("--release", default=RELEASE_DEFAULT, help="helm release name (default: kueue).")
 @click.option(
     "--with-queues/--no-with-queues",
@@ -587,7 +424,15 @@ def _apply(
     "--flavor-topology",
     type=click.Choice([INFINIBAND_TOPOLOGY_NAME, MULTINODE_TOPOLOGY_NAME]),
     default=INFINIBAND_TOPOLOGY_NAME,
-    help="Topology the cw-ib ResourceFlavor binds (default: infiniband; multinode-nvlink-ib exposes nvlink.domain).",
+    help="Topology the cw-tas ResourceFlavor binds (default: infiniband; multinode-nvlink-ib exposes nvlink.domain).",
+)
+@click.option(
+    "--pod-namespace",
+    "pod_namespaces",
+    multiple=True,
+    default=DEFAULT_POD_NAMESPACES,
+    show_default=True,
+    help="Namespace(s) the plain-Pod webhook is scoped to (where Iris submits gang pods). Repeatable.",
 )
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
 def main(
@@ -599,6 +444,7 @@ def main(
     with_queues: bool,
     cluster_queue: str,
     flavor_topology: str,
+    pod_namespaces: tuple[str, ...],
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
@@ -611,6 +457,7 @@ def main(
         with_queues=with_queues,
         cluster_queue=cluster_queue,
         flavor_topology=flavor_topology,
+        pod_namespaces=pod_namespaces,
         apply=apply,
     )
 

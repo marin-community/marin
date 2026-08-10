@@ -9,8 +9,6 @@ work (``ShardTask``), its result (``TaskResult``), the strategy that executes it
 disk (pickle chunks for map stages, scattered shuffle files for reduce stages).
 """
 
-from __future__ import annotations
-
 import itertools
 import logging
 import pickle
@@ -20,16 +18,16 @@ from typing import Protocol
 
 import cloudpickle
 import humanfriendly
+from fray.types import ResourceConfig
 from rigging.filesystem import open_url, unique_temp_path
 
 from zephyr.plan import PhysicalOp, Scatter, Shard
 from zephyr.shuffle import ListShard, _write_scatter
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
+from zephyr.worker_context import CounterEntry
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
-ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
 
 
 class ZephyrWorkerError(RuntimeError):
@@ -76,7 +74,7 @@ class PickleDiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
+    def write(cls, path: str, data: list) -> "PickleDiskChunk":
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on
@@ -157,26 +155,24 @@ class StageThroughput:
 
 
 def _stage_throughput(
-    counters: Mapping[str, int],
-    stage_name: str,
+    counters: Mapping[str, int | float],
     elapsed: float,
 ) -> StageThroughput | None:
-    """Return throughput stats for *stage_name*, or ``None`` if uninstrumented.
+    """Return throughput stats from *counters*, or ``None`` if uninstrumented.
 
-    Returns ``None`` when neither the item nor the byte counter has been
-    recorded for this stage. Map-only stages and stages still in run_stage
-    setup never populate these counters; ``None`` distinguishes that case
-    from a real zero count so callers can suppress misleading "0 items"
-    status lines.
+    Returns ``None`` when neither the item nor the byte counter is present.
+    Map-only stages and stages still in run_stage setup never populate these
+    counters; ``None`` distinguishes that case from a real zero count so
+    callers can suppress misleading "0 items" status lines.
+
+    Callers are responsible for passing stage-filtered counters when needed.
     """
-    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-    if item_key not in counters and byte_key not in counters:
+    if ZEPHYR_STAGE_ITEM_COUNT_KEY not in counters and ZEPHYR_STAGE_BYTES_PROCESSED_KEY not in counters:
         return None
-    items = counters.get(item_key, 0)
-    bytes_processed = counters.get(byte_key, 0)
-    item_rate = items / elapsed if elapsed > 0 else 0.0
-    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+    items = int(counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0))
+    bytes_processed = int(counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0))
+    item_rate = per_second(items, elapsed)
+    byte_rate = per_second(bytes_processed, elapsed)
     return StageThroughput(
         items=items,
         bytes_processed=bytes_processed,
@@ -240,7 +236,7 @@ def _write_stage_output(
         full_gen = itertools.chain([first_item], stage_gen)
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}/scatter/"
         shard = _write_scatter(
             full_gen,
             source_shard,
@@ -259,6 +255,30 @@ def _write_stage_output(
 
 
 @dataclass
+class ZephyrTaskResources:
+    """CPU and memory budget for a single task or worker resource pool."""
+
+    cpu: float
+    memory: int
+
+    def __add__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
+
+    def __sub__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu - other.cpu, memory=self.memory - other.memory)
+
+    def can_fit(self, cost: "ZephyrTaskResources") -> bool:
+        return self.cpu >= cost.cpu and (cost.memory == 0 or self.memory >= cost.memory)
+
+    @classmethod
+    def from_resource_config(cls, config: ResourceConfig) -> "ZephyrTaskResources":
+        return cls(
+            cpu=config.cpu,
+            memory=int(humanfriendly.parse_size(config.ram, binary=True)),
+        )
+
+
+@dataclass
 class ShardTask:
     """Describes a unit of work for a worker: one shard through one stage."""
 
@@ -266,6 +286,7 @@ class ShardTask:
     total_shards: int
     shard: Shard
     operations: list[PhysicalOp]
+    cost: ZephyrTaskResources
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
 
@@ -278,5 +299,5 @@ class StageRunner(Protocol):
         task: ShardTask,
         chunk_prefix: str,
         execution_id: str,
-    ) -> tuple[TaskResult, dict[str, int]]: ...
-    def live_counters(self) -> dict[str, int]: ...
+    ) -> tuple[TaskResult, dict[str, CounterEntry]]: ...
+    def live_counters(self) -> dict[str, CounterEntry]: ...

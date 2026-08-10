@@ -3,77 +3,276 @@
 
 """Tests for k8s manifest rendering in `finelog.deploy._k8s`."""
 
-from __future__ import annotations
+import base64
+import json
+import subprocess
+from dataclasses import replace
 
+import click
 import pytest
-from finelog.deploy._k8s import _K8S_MANIFEST_DIR, _MANIFESTS, _render_manifest
-from finelog.deploy.config import Deployment, FinelogConfig, K8sDeployment
+import yaml
+from finelog.deploy._k8s import (
+    _K8S_MANIFEST_DIR,
+    _MANIFESTS,
+    _build_env_secret_manifest,
+    _env_secret_name,
+    _probe_transition_patch,
+    _render_manifest,
+    _verify_ingest_ready,
+    k8s_down,
+)
+from finelog.deploy.bootstrap import HEALTH_OK
+from finelog.deploy.config import (
+    Deployment,
+    FinelogConfig,
+    ForwardingConfig,
+    K8sDeployment,
+)
+from rigging.secrets import SecretResolutionError
 
 
-@pytest.fixture
-def cfg() -> FinelogConfig:
+def _s3_cfg(**k8s_overrides) -> FinelogConfig:
+    k8s = {
+        "namespace": "iris",
+        "object_storage_endpoint": "https://acct.r2.cloudflarestorage.com",
+    }
+    k8s.update(k8s_overrides)
     return FinelogConfig(
-        name="finelog",
-        port=20001,
-        image="ghcr.io/example/finelog:dev",
-        remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(
-            gcp=None,
-            k8s=K8sDeployment(namespace="iris", storage_class="pd-ssd", storage_gb=42),
-        ),
+        name="finelog-cw",
+        port=10001,
+        image="img",
+        remote_log_dir="s3://bucket/finelog/cw",
+        deployment=Deployment(gcp=None, k8s=K8sDeployment(**k8s)),
     )
 
 
-@pytest.mark.parametrize("manifest_name", _MANIFESTS)
-def test_render_manifest_does_not_raise(cfg: FinelogConfig, manifest_name: str) -> None:
-    """Each manifest must render without `render_template` raising on unused vars."""
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
-    assert "{{" not in rendered, f"unsubstituted placeholder in {manifest_name}: {rendered}"
+def test_k8s_deployment_rejects_priority_class_name_without_value() -> None:
+    """Name and value are meaningless apart — deploy up needs the value to create
+    the class, so half a config must fail at construction, not at apply time."""
+    with pytest.raises(ValueError, match="must be set together"):
+        K8sDeployment(namespace="iris", priority_class_name="iris-system")
 
 
-def test_render_pvc_includes_storage_settings(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "01-pvc.yaml.tmpl", cfg)
-    assert "finelog-cache" in rendered
-    assert "namespace: iris" in rendered
-    assert "storageClassName: pd-ssd" in rendered
-    assert "storage: 42Gi" in rendered
+def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
+    cfg = _s3_cfg()
+    manifest = json.loads(_build_env_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    # The R2->AWS name mapping + injected region are the actual logic the Rust
+    # server's from_env() depends on; the rest of the manifest is boilerplate.
+    assert data == {
+        "AWS_ACCESS_KEY_ID": "AKID",
+        "AWS_SECRET_ACCESS_KEY": "SEKRIT",
+        "AWS_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com",
+        "AWS_REGION": "auto",
+        "AWS_DEFAULT_REGION": "auto",
+    }
 
 
-def test_render_deployment_threads_port_to_env_and_probes(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
-    assert "image: ghcr.io/example/finelog:dev" in rendered
-    assert "containerPort: 20001" in rendered
-    # Probes and env both reference the configured port — required for non-default ports.
-    assert "port: 20001" in rendered
-    assert "name: FINELOG_PORT" in rendered
-    assert 'value: "20001"' in rendered
-    assert 'value: "gs://bucket/logs"' in rendered
-
-
-def test_render_service_uses_configured_port(cfg: FinelogConfig) -> None:
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "03-service.yaml.tmpl", cfg)
-    assert "port: 20001" in rendered
-    assert "targetPort: 20001" in rendered
-
-
-def test_render_pvc_omits_storage_class_when_unset() -> None:
+def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
     cfg = FinelogConfig(
         name="finelog",
         port=10001,
         image="img",
-        remote_log_dir="",
-        deployment=Deployment(
-            gcp=None,
-            k8s=K8sDeployment(namespace="default", storage_class=None, storage_gb=10),
-        ),
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(gcp=None, k8s=K8sDeployment(namespace="iris")),
     )
-    rendered = _render_manifest(_K8S_MANIFEST_DIR / "01-pvc.yaml.tmpl", cfg)
-    assert "storageClassName" in rendered  # appears in the comment fallback
-    assert "<cluster default>" in rendered
+    assert _build_env_secret_manifest(cfg) is None
 
 
-def test_manifest_dir_exists() -> None:
-    """Guard against the parents[3] path math drifting if the package is moved."""
-    assert _K8S_MANIFEST_DIR.is_dir(), _K8S_MANIFEST_DIR
-    for name in _MANIFESTS:
-        assert (_K8S_MANIFEST_DIR / name).is_file(), name
+def test_env_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
+    with pytest.raises(click.ClickException, match="object_storage_endpoint"):
+        _build_env_secret_manifest(_s3_cfg(object_storage_endpoint=None))
+
+
+def test_env_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("R2_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_KEY_SECRET", raising=False)
+    with pytest.raises(click.ClickException, match="R2_KEY_ID"):
+        _build_env_secret_manifest(_s3_cfg())
+
+
+_FORWARDING = ForwardingConfig(
+    target="https://finelog.oa.dev",
+    cluster="cw-rno2a",
+    signing_key=("env:TEST_FINELOG_SIGNING_KEY",),
+)
+
+
+def _forwarding_cfg() -> FinelogConfig:
+    return FinelogConfig(
+        name="finelog-cw",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        forwarding=_FORWARDING,
+    )
+
+
+def test_forwarding_signing_key_never_leaves_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The private key reaches the pod through the Secret and through nothing else.
+
+    A rendered manifest is plaintext — `kubectl get deployment -o yaml` echoes it back to
+    anyone with read access on the namespace — so a key that lands there is a key that
+    leaks.
+    """
+    key_pem = "-----BEGIN PRIVATE KEY-----\nSEKRIT\n-----END PRIVATE KEY-----"
+    monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", key_pem)
+    cfg = _forwarding_cfg()
+
+    manifest = json.loads(_build_env_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    assert data == {"FINELOG_SIGNING_KEY": key_pem}
+
+    for manifest_name in _MANIFESTS:
+        assert "SEKRIT" not in _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
+
+
+def test_deployment_probes_the_http_health_endpoint() -> None:
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["readinessProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "initialDelaySeconds": 5,
+        "periodSeconds": 10,
+        "timeoutSeconds": 15,
+        "failureThreshold": 3,
+    }
+    assert container["livenessProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "initialDelaySeconds": 15,
+        "periodSeconds": 30,
+        "timeoutSeconds": 15,
+        "failureThreshold": 3,
+    }
+    assert container["startupProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "periodSeconds": 10,
+        "timeoutSeconds": 15,
+        "failureThreshold": 30,
+    }
+
+
+def test_k8s_deployment_reserves_burst_capacity_by_default() -> None:
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["resources"] == {
+        "requests": {"cpu": "2", "memory": "16Gi"},
+        "limits": {"cpu": "8", "memory": "32Gi"},
+    }
+
+
+def test_probe_transition_replaces_complete_probe() -> None:
+    live = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "finelog",
+                            "livenessProbe": {"tcpSocket": {"port": 10001}, "timeoutSeconds": 5},
+                            "readinessProbe": {"tcpSocket": {"port": 10001}, "timeoutSeconds": 5},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    desired = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+
+    assert _probe_transition_patch(live, desired) == [
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/livenessProbe",
+            "value": desired["spec"]["template"]["spec"]["containers"][0]["livenessProbe"],
+        },
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/readinessProbe",
+            "value": desired["spec"]["template"]["spec"]["containers"][0]["readinessProbe"],
+        },
+    ]
+
+
+def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forwarding server with an s3:// archive needs both, in the one Secret."""
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "R2SEKRIT")
+    monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", "PRIVKEY")
+    cfg = replace(_s3_cfg(), forwarding=_FORWARDING)
+    manifest = json.loads(_build_env_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    assert data["AWS_ACCESS_KEY_ID"] == "AKID"
+    assert data["FINELOG_SIGNING_KEY"] == "PRIVKEY"
+
+
+def test_env_secret_fails_when_the_signing_key_source_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unresolvable key fails the deploy. Starting a server that can never
+    authenticate to its hub looks exactly like a quiet cluster."""
+    monkeypatch.delenv("TEST_FINELOG_SIGNING_KEY", raising=False)
+    with pytest.raises(SecretResolutionError):
+        _build_env_secret_manifest(_forwarding_cfg())
+
+
+def _kubectl_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture the argv of every kubectl invocation instead of running it."""
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def _deleted_resources(calls: list[list[str]]) -> set[str]:
+    """The `kind/name` resources named across every `kubectl delete` in `calls`."""
+    return {arg for argv in calls if "delete" in argv for arg in argv if "/" in arg}
+
+
+def test_teardown_deletes_the_secret_and_retains_only_the_cache_pvc(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The env Secret carries the forwarding private key. Leaving it behind after a
+    # teardown strands key material in a namespace with nothing left to use it.
+    calls = _kubectl_argv(monkeypatch)
+    cfg = _forwarding_cfg()
+
+    k8s_down(cfg, yes=False)
+
+    assert _deleted_resources(calls) == {
+        f"deployment/{cfg.name}",
+        f"service/{cfg.name}",
+        f"secret/{_env_secret_name(cfg)}",
+    }
+
+
+def _health_body(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Answer every kubectl invocation with `body` on stdout."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=body, stderr=""),
+    )
+
+
+def test_rollout_fails_when_the_new_pod_serves_but_cannot_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `kubectl rollout status` only proves /health answered 200. Reading the body
+    # is what catches a pod that serves and rejects every write.
+    _health_body(monkeypatch, "degraded: telemetry_v1: registration failed: column type mismatch")
+
+    with pytest.raises(click.ClickException, match="serving but not ingesting"):
+        _verify_ingest_ready(_forwarding_cfg())
+
+
+def test_rollout_accepts_a_pod_reporting_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_body(monkeypatch, f"{HEALTH_OK}\n")
+
+    _verify_ingest_ready(_forwarding_cfg())

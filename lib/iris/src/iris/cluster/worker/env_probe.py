@@ -18,10 +18,12 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.platforms.types import probe_outbound_ip
+from iris.cluster.provenance import provenance_from_env, provenance_to_proto
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import config_pb2, job_pb2
+from iris.cluster.types import AcceleratorType, CapacityType
+from iris.rpc import job_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -229,9 +231,9 @@ def _get_disk_bytes() -> int:
 
 def _build_worker_attributes(
     *,
-    accelerator_type: int,
+    accelerator_type: AcceleratorType | None,
     accelerator_variant: str,
-    capacity_type: int,
+    capacity_type: CapacityType | None,
     tpu_name: str,
     tpu_worker_id: str,
     device: job_pb2.DeviceConfig,
@@ -260,7 +262,7 @@ def _build_worker_attributes(
     if accelerator_variant:
         attributes[WellKnownAttribute.DEVICE_VARIANT] = job_pb2.AttributeValue(string_value=accelerator_variant.lower())
 
-    is_preemptible = capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    is_preemptible = capacity_type == CapacityType.PREEMPTIBLE
     attributes[WellKnownAttribute.PREEMPTIBLE] = job_pb2.AttributeValue(string_value=str(is_preemptible).lower())
 
     # TPU multi-host identity from GCP metadata probes
@@ -271,7 +273,7 @@ def _build_worker_attributes(
         )
 
     # TPU topology attributes derived from variant
-    if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and accelerator_variant:
+    if accelerator_type == AcceleratorType.TPU and accelerator_variant:
         attributes[WellKnownAttribute.TPU_TOPOLOGY] = job_pb2.AttributeValue(string_value=accelerator_variant)
         try:
             topo = get_tpu_topology(accelerator_variant)
@@ -309,6 +311,7 @@ class HardwareProbe:
     tpu_worker_id: str
     tpu_chips_per_host_bounds: str
     gce_instance_name: str = ""
+    gce_instance_uid: str = ""
 
 
 def _probe_gce_instance_name() -> str:
@@ -316,6 +319,13 @@ def _probe_gce_instance_name() -> str:
     if not _is_gcp_vm():
         return ""
     return _get_gcp_metadata("name") or ""
+
+
+def _probe_gce_instance_uid() -> str:
+    """Read the immutable GCE instance ID. Empty string if not on GCP."""
+    if not _is_gcp_vm():
+        return ""
+    return _get_gcp_metadata("id") or ""
 
 
 def construct_worker_id(slice_id: str, worker_index: int) -> str:
@@ -354,6 +364,7 @@ def probe_hardware() -> HardwareProbe:
     tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
     gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
     gce_instance_name = _probe_gce_instance_name()
+    gce_instance_uid = _probe_gce_instance_uid()
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
@@ -369,15 +380,16 @@ def probe_hardware() -> HardwareProbe:
         tpu_worker_id=tpu_worker_id,
         tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
         gce_instance_name=gce_instance_name,
+        gce_instance_uid=gce_instance_uid,
     )
 
 
 def build_worker_metadata(
     hardware: HardwareProbe,
-    accelerator_type: int = 0,
+    accelerator_type: AcceleratorType | None = None,
     accelerator_variant: str = "",
     gpu_count_override: int = 0,
-    capacity_type: int = 0,
+    capacity_type: CapacityType | None = None,
     worker_attributes: dict[str, str] | None = None,
     cpu_millicores: int = 0,
 ) -> job_pb2.WorkerMetadata:
@@ -400,7 +412,7 @@ def build_worker_metadata(
 
     device = job_pb2.DeviceConfig()
 
-    if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU or hardware.tpu_type:
+    if accelerator_type == AcceleratorType.TPU or hardware.tpu_type:
         tpu_type = hardware.tpu_type
         tpu_chip_count = 0
         if tpu_type:
@@ -414,12 +426,12 @@ def build_worker_metadata(
         gpu_count = 0
         gpu_name = ""
         gpu_memory_mb = 0
-    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU or hardware.gpu_count > 0:
+    elif accelerator_type == AcceleratorType.GPU or hardware.gpu_count > 0:
         gpu_count = gpu_count_override or hardware.gpu_count
         gpu_name = accelerator_variant or hardware.gpu_name or "auto"
         gpu_memory_mb = hardware.gpu_memory_mb
         device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name, count=gpu_count))
-    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU:
+    elif accelerator_type == AcceleratorType.CPU:
         device.cpu.CopyFrom(job_pb2.CpuDevice(variant=accelerator_variant or "cpu"))
         gpu_count = 0
         gpu_name = ""
@@ -440,6 +452,7 @@ def build_worker_metadata(
         extra_attributes=extra_attributes,
     )
 
+    provenance = provenance_from_env()
     return job_pb2.WorkerMetadata(
         hostname=hardware.hostname,
         ip_address=hardware.ip_address,
@@ -456,7 +469,7 @@ def build_worker_metadata(
         device=device,
         attributes=attributes,
         gce_instance_name=hardware.gce_instance_name,
-        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
+        provenance=provenance_to_proto(provenance),
     )
 
 

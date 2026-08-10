@@ -26,7 +26,7 @@ def main() -> None:
         log_jaxprs=False,
         log_xla_hlo=False,
     )
-    levanter.initialize(trainer)
+    levanter.trainer.initialize(trainer)
 
     spec = _resolved_model_spec(
         GapFinderModelConfig(

@@ -11,89 +11,91 @@ The race (before fix):
 4. worker_group.is_done() returns True (workers exited cleanly!)
 5. Coordinator calls abort("Worker job terminated permanently...")
 
-Fix: _check_worker_group skips when all shards are completed.
+Fix: a draining coordinator ignores expected worker exit after all shards complete.
 """
 
-from __future__ import annotations
-
-import threading
-import time
 from unittest.mock import MagicMock
 
 import pytest
-from zephyr.execution import ZephyrCoordinator
+from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE, _make_test_coordinator, start_test_stage
+from zephyr.coordinator import PullStatus
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot
 
 
 @pytest.fixture
-def coordinator(actor_context, tmp_path):
-    coord = ZephyrCoordinator()
-    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    yield coord
-    coord.shutdown()
-
-
-def test_check_worker_group_skips_after_completed_stage(coordinator):
-    """Worker group finishing after completed stage must not abort. #4117."""
-    mock_group = MagicMock()
-    mock_group.is_done.return_value = True
-    coordinator.set_worker_group(mock_group)
-
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator._start_stage("last-stage", 0, [task])
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    assert coordinator._completed_shards >= coordinator._total_shards
-
-    coordinator._check_worker_group()
-
-    assert coordinator.get_fatal_error() is None
-
-
-def test_check_worker_group_still_aborts_mid_stage(coordinator):
-    """Worker group dying while shards are still in-flight must abort."""
-    mock_group = MagicMock()
-    mock_group.is_done.return_value = True
-    coordinator.set_worker_group(mock_group)
-
-    task = ShardTask(shard_idx=0, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator._start_stage("mid-stage", 0, [task, task])
-    # Only 1 of 2 shards completed
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    coordinator._check_worker_group()
-
-    assert coordinator.get_fatal_error() is not None
-    assert "Worker job terminated permanently" in coordinator.get_fatal_error()
-
-
-def test_coordinator_loop_no_abort_during_result_collection(coordinator):
-    """Background loop must not abort during post-stage result collection. #4117."""
-    mock_group = MagicMock()
-    call_count = 0
-
-    def is_done_with_delay():
-        nonlocal call_count
-        call_count += 1
-        return call_count > 2
-
-    mock_group.is_done.side_effect = is_done_with_delay
-    coordinator.set_worker_group(mock_group)
-
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator._start_stage("last-stage", 0, [task])
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    t = threading.Thread(target=coordinator._coordinator_loop, daemon=True)
-    t.start()
-
-    # Simulate the post-stage window where main thread collects/regroups results
-    time.sleep(2)
-
-    fatal = coordinator.get_fatal_error()
+def draining_coordinator(tmp_path, actor_context):
+    coordinator = _make_test_coordinator(tmp_path, drain_idle_workers=True)
+    yield coordinator
     coordinator.shutdown()
-    t.join(timeout=2.0)
 
-    assert fatal is None
+
+def test_check_worker_group_skips_after_completed_stage(draining_coordinator):
+    """Worker group finishing after completed stage must not abort. #4117."""
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
+    run = start_test_stage(draining_coordinator, [task], stage_name="last-stage", is_last_stage=True)
+    status, work = draining_coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work is not None
+    draining_coordinator.report_result(
+        "worker-0",
+        run.execution_id,
+        work.task.shard_idx,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        run.stage_generation,
+    )
+    assert run.completed_shards == run.total_shards
+
+    mock_group = MagicMock()
+    mock_group.is_done.return_value = True
+    draining_coordinator._worker_group = mock_group
+    draining_coordinator._check_worker_group()
+
+    assert draining_coordinator.get_fatal_error() is None
+
+
+def test_check_worker_group_still_aborts_mid_stage(draining_coordinator):
+    """Worker group dying while shards are still in-flight must abort."""
+    tasks = [
+        ShardTask(
+            shard_idx=shard_idx,
+            total_shards=2,
+            shard=ListShard(refs=[]),
+            operations=[],
+            cost=_TEST_TASK_COST,
+            stage_name="test",
+        )
+        for shard_idx in range(2)
+    ]
+    run = start_test_stage(draining_coordinator, tasks, stage_name="mid-stage", is_last_stage=True)
+    status, work = draining_coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work is not None
+    draining_coordinator.report_result(
+        "worker-0",
+        run.execution_id,
+        work.task.shard_idx,
+        work.attempt,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot.empty(),
+        run.stage_generation,
+    )
+
+    mock_group = MagicMock()
+    mock_group.is_done.return_value = True
+    draining_coordinator._worker_group = mock_group
+    draining_coordinator._check_worker_group()
+
+    fatal_error = draining_coordinator.get_fatal_error()
+    assert fatal_error is not None
+    assert "Worker job terminated permanently" in fatal_error

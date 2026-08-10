@@ -1,37 +1,59 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller-side reconcile-input builder for TASK_BACKEND placement.
+"""Controller-side dispatch drain for cluster backends that own placement.
 
-The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for
-IRIS_CONTROLLER placement): this reads and writes the DB inside a controller
-transaction to produce the :class:`BackendReconcileInput` a TASK_BACKEND
-(Kueue today) reconciles against. It promotes PENDING tasks, builds per-job
-``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
-snapshots the running set. Because it owns DB I/O it lives controller-side, not
-in the DB-less backend.
+The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for a
+worker-daemon backend): this reads and writes the DB inside a controller
+transaction to produce the :class:`DispatchBatch` a cluster backend (Kueue
+today) reconciles against. It promotes PENDING tasks, builds per-attempt
+``RunTaskRequest``s, and snapshots the running set. Because it owns DB I/O it
+lives controller-side, not in the DB-less backend; the controller rides its
+output on the reconcile ``ControlSnapshot``.
 """
+
+from collections import defaultdict
+from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.backend import BackendReconcileInput
-from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
+from iris.cluster.controller.budget import (
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+)
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
     PendingDispatchRow,
     TaskScope,
     pending_dispatch_row,
 )
-from iris.cluster.controller.run_template import RunTemplateCache
-from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
+from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
 
-DISPATCH_PROMOTION_RATE = 128
+
+@dataclass(frozen=True)
+class DispatchBatch:
+    """The dispatch drain a cluster backend's reconcile tick consumes.
+
+    Rides on :class:`~iris.cluster.controller.reads.ControlSnapshot` as
+    ``tasks_to_run`` / ``running_tasks``: tasks the controller promoted to
+    ASSIGNED this tick plus the active null-worker roster to poll.
+    """
+
+    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+
+
+DISPATCH_PROMOTION_RATE = 512
 """Token bucket capacity for task promotion (pods per minute).
 
 The direct provider relies on the Kubernetes scheduler (and the cloud
@@ -40,97 +62,16 @@ scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
 
 
-def _build_run_request_fields(
-    *,
-    num_tasks: int,
-    entrypoint_json: str,
-    environment_json: str,
-    bundle_id: str,
-    resources: job_pb2.ResourceSpecProto,
-    ports_json: list,
-    constraints_json: str | None,
-    task_image: str,
-    task_id: str = "",
-    attempt_id: int = 0,
-    priority: int = 0,
-) -> job_pb2.RunTaskRequest:
-    """Build a RunTaskRequest carrying the per-job fields shared by the template
-    and per-attempt construction paths.
-
-    The template path leaves ``task_id``/``attempt_id``/``priority`` at their
-    proto defaults; the per-attempt path stamps them. proto_from_json returns
-    shared cached instances — set via constructor kwarg so RunTaskRequest
-    copies them; callers then mutate the copy's workdir_files (never the cached
-    source).
-    """
-    return job_pb2.RunTaskRequest(
-        num_tasks=num_tasks,
-        entrypoint=proto_from_json(entrypoint_json, job_pb2.RuntimeEntrypoint),
-        environment=proto_from_json(environment_json, job_pb2.EnvironmentConfig),
-        bundle_id=bundle_id,
-        resources=resources,
-        ports=ports_json,
-        constraints=[c.to_proto() for c in constraints_from_json(constraints_json)],
-        task_image=task_image,
-        task_id=task_id,
-        attempt_id=attempt_id,
-        priority=priority,
-    )
-
-
-def run_request_template(
-    cache: RunTemplateCache,
-    snap: Tx,
-    job_id: JobName,
-) -> job_pb2.RunTaskRequest | None:
-    """Return a cached per-job ``RunTaskRequest`` template.
-
-    Per-attempt fields (``task_id``, ``attempt_id``) are stamped onto a
-    copy at fan-out time. Returns ``None`` for jobs that have no
-    worker-bound dispatch (e.g. reservation holders, missing rows).
-    """
-    wire = job_id.to_wire()
-    cached = cache.get(wire)
-    if cached is not None:
-        return cached
-
-    job = reads.get_job_detail(snap, job_id)
-    if job is None or job.is_reservation_holder:
-        return None
-
-    resources = resource_spec_from_scalars(
-        job.res_cpu_millicores,
-        job.res_memory_bytes,
-        job.res_disk_bytes,
-        job.res_device_json,
-    )
-    template = _build_run_request_fields(
-        num_tasks=job.num_tasks,
-        entrypoint_json=job.entrypoint_json,
-        environment_json=job.environment_json,
-        bundle_id=job.bundle_id,
-        resources=resources,
-        ports_json=job.ports_json,
-        constraints_json=job.constraints_json,
-        task_image=job.task_image,
-    )
-    for filename, data in reads.get_workdir_files(snap, job_id).items():
-        template.entrypoint.workdir_files[filename] = data
-    # cache.put interns: it returns the already-cached instance for this key if
-    # one exists, otherwise the template we just built. Callers must use the
-    # returned value, not ``template``, to share a single canonical instance.
-    return cache.put(wire, template)
-
-
 def build_run_request(
     cur: Tx,
     row: PendingDispatchRow,
     attempt_id: int,
 ) -> job_pb2.RunTaskRequest:
     """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-    run_req = _build_run_request_fields(
+    run_req = build_run_request_fields(
         num_tasks=row.num_tasks,
         entrypoint_json=row.entrypoint_json,
+        workdir_files=reads.get_workdir_files(cur, row.job_id),
         environment_json=row.environment_json,
         bundle_id=row.bundle_id,
         resources=row.resources,
@@ -141,56 +82,188 @@ def build_run_request(
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
+        container_profile=row.container_profile,
     )
-    # Load inline workdir files from the job_workdir_files table.
-    for filename, data in reads.get_workdir_files(cur, row.job_id).items():
-        run_req.entrypoint.workdir_files[filename] = data
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:
         run_req.timeout.milliseconds = row.timeout_ms
     # Coscheduling drives Kueue gang admission on the direct path.
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
+    # Stamp the attempt's uid so the K8s backend can label the pod with it and
+    # tell this attempt's own pod apart from a stale pod a previous job left at
+    # the same (task_hash, attempt_id) name. Visible in this tx for both paths:
+    # promote inserted the attempt row above, redrive reads the current one.
+    uid = reads.attempt_uid_for(cur, row.task_id, attempt_id)
+    if uid is not None:
+        run_req.attempt_uid = uid
     return run_req
 
 
-def _dispatch_query(
-    cur: Tx,
-    *predicates,
-    order_by_job_id: bool = False,
-    limit: int | None = None,
-) -> list[PendingDispatchRow]:
-    """Fetch :class:`PendingDispatchRow`s for the direct-provider drain.
+def _dispatch_query(cur: Tx, *predicates) -> list[PendingDispatchRow]:
+    """Fetch full :class:`PendingDispatchRow`s (with the runtime config blobs).
 
-    All drain queries select ``PENDING_DISPATCH_COLS`` over the
-    tasks⋈jobs⋈job_config join and exclude reservation holders; callers
-    supply the distinct state / coscheduling predicates plus optional
-    ordering and limit.
+    Used for the ASSIGNED-redrive set and, keyed by the already-chosen task ids,
+    for the PENDING rows the rate cap actually promotes. Ranking runs first on
+    :func:`_ranking_rows`, which omits the heavy JSON columns.
     """
-    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+    dispatch_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
+        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
+    )
+    stmt = select(*PENDING_DISPATCH_COLS).select_from(dispatch_join).where(*predicates)
+    return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
+
+
+class _PriorityKey(NamedTuple):
+    """Within-band ordering key, mirroring the worker-daemon sort (``reads._PENDING_TASKS_STMT``).
+
+    Compared field-by-field in this declared order, ascending — the earliest
+    ancestor and submission win. A ``NamedTuple`` so ``min``/``sorted`` treat it
+    as the plain tuple the comparison needs while each field stays named.
+    """
+
+    neg_depth: int
+    root_submitted_ms: int
+    submitted_ms: int
+    insertion: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RankRow:
+    """Promotion-candidate fields needed only to order and cap the drain.
+
+    Deliberately excludes the ``PENDING_DISPATCH_COLS`` runtime blobs so a capped
+    cycle ranks every pending task cheaply and loads the full row for just the
+    winners.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    num_tasks: int
+    has_coscheduling: bool
+    sort_key: _PriorityKey
+
+
+def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
+    """Fetch lightweight :class:`_RankRow`s (no runtime blobs) for the given predicates."""
+    rank_join = local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
     stmt = (
-        select(*PENDING_DISPATCH_COLS)
-        .select_from(dispatch_join)
-        .where(
-            jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            *predicates,
+        select(
+            local_tasks.c.task_id,
+            local_tasks.c.job_id,
+            jobs_table.c.num_tasks,
+            job_config_table.c.has_coscheduling,
+            local_tasks.c.priority_neg_depth,
+            local_tasks.c.priority_root_submitted_ms,
+            local_tasks.c.submitted_at_ms,
+            local_tasks.c.priority_insertion,
         )
+        .select_from(rank_join)
+        .where(*predicates)
     )
-    if order_by_job_id:
-        stmt = stmt.order_by(tasks_table.c.job_id)
-    if limit is not None:
-        stmt = stmt.limit(limit)
-    return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
+    return [
+        _RankRow(
+            task_id=r.task_id,
+            job_id=r.job_id,
+            num_tasks=int(r.num_tasks),
+            has_coscheduling=bool(r.has_coscheduling),
+            sort_key=_PriorityKey(
+                neg_depth=int(r.priority_neg_depth),
+                root_submitted_ms=int(r.priority_root_submitted_ms),
+                submitted_ms=int(r.submitted_at_ms.epoch_ms()),
+                insertion=int(r.priority_insertion),
+            ),
+        )
+        for r in cur.execute(stmt).all()
+    ]
+
+
+def _build_promotion_units(candidates: list[_RankRow]) -> list[list[_RankRow]]:
+    """Group PENDING candidates into atomic promotion units.
+
+    Non-coscheduled tasks are singleton units. Coscheduled tasks are grouped by
+    job into gangs; a gang becomes a unit only once every sibling is PENDING
+    together (``len == num_tasks``), keeping siblings on one attempt_id so Kueue
+    never waits on pods Iris deferred. A partially-assembled gang is dropped this
+    cycle and reconsidered next.
+    """
+    units: list[list[_RankRow]] = []
+    gangs: dict[JobName, list[_RankRow]] = {}
+    for row in candidates:
+        if row.has_coscheduling:
+            gangs.setdefault(row.job_id, []).append(row)
+        else:
+            units.append([row])
+    for gang in gangs.values():
+        if len(gang) == gang[0].num_tasks:
+            units.append(gang)
+    return units
+
+
+def _rank_promotion_units(
+    units: list[list[_RankRow]],
+    effective_bands: dict[JobName, int],
+    user_spend: dict[str, int],
+) -> list[list[_RankRow]]:
+    """Order promotion units by effective band, then per-user fairness.
+
+    Buckets by the job's effective band (ascending: PRODUCTION first); within a
+    band, sorts by the hierarchy/submission key and round-robins across users by
+    ascending spend. A gang is one atomic unit, so it takes a single round-robin
+    turn rather than one per task.
+    """
+    by_band: dict[int, list[list[_RankRow]]] = defaultdict(list)
+    for unit in units:
+        by_band[effective_bands[unit[0].job_id]].append(unit)
+    ranked: list[list[_RankRow]] = []
+    for band in sorted(by_band):
+        band_units = sorted(by_band[band], key=lambda unit: min(row.sort_key for row in unit))
+        user_units = [UserTask(user_id=unit[0].task_id.user, task=unit) for unit in band_units]
+        ranked.extend(interleave_by_user(user_units, user_spend))
+    return ranked
+
+
+def _select_within_cap(
+    ranked: list[list[_RankRow]],
+    effective_bands: dict[JobName, int],
+    max_promotions: int,
+) -> list[list[_RankRow]]:
+    """Take units from the ranked list up to the ``max_promotions`` cap.
+
+    A unit fits when it is no larger than the remaining budget. An oversized gang
+    (larger than the cap itself) is promoted whole, since a partial pod group
+    would leave Kueue waiting forever. A gang that fits the cap but not the
+    remaining budget defers whole and records its band as a barrier: later units
+    in the same band may still fill the budget, but nothing from a worse band may
+    promote ahead of the deferred better-band gang — reaching such a unit ends the
+    cycle. This bounds waste to same-band fill while keeping cross-band priority.
+    """
+    selected: list[list[_RankRow]] = []
+    promoted = 0
+    barrier_band: int | None = None
+    for unit in ranked:
+        if promoted >= max_promotions:
+            break
+        band = effective_bands[unit[0].job_id]
+        if barrier_band is not None and band > barrier_band:
+            break
+        if len(unit) <= max_promotions - promoted or len(unit) > max_promotions:
+            selected.append(unit)
+            promoted += len(unit)
+        elif barrier_band is None:
+            barrier_band = band
+    return selected
 
 
 def drain_for_dispatch(
     cur: Tx,
     *,
-    cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
-) -> BackendReconcileInput:
+    backend_id: str | None = None,
+    defaults: UserBudgetDefaults | None = None,
+) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
     Builds RunTaskRequest for two row classes:
@@ -211,74 +284,62 @@ def drain_for_dispatch(
     ``tasks.state`` directly to terminal, and the K8s provider's pod
     diff against the desired set deletes the corresponding pod on the
     next sync.
+
+    Candidates are ranked by *effective* band — the ancestor-resolved requested
+    band after :func:`compute_effective_band` demotes over-budget users to
+    BATCH — before the ``max_promotions`` rate cap applies, so a capped cycle
+    never exposes a lower-band pod ahead of a higher-band one. The effective
+    band is stamped on ``tasks.priority_band`` and drives the Kueue
+    WorkloadPriorityClass; a redrive reuses that fixed band even if spend or
+    budget configuration later changes.
     """
+    defaults = defaults or UserBudgetDefaults()
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
+
+    # In a multi-backend cluster, scope the drain to this backend's tasks; a
+    # single backend (``backend_id is None``) drains every pending task.
+    backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
 
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
     redrive_rows = _dispatch_query(
         cur,
-        tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
-        tasks_table.c.current_worker_id.is_(None),
+        local_tasks.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
+        local_tasks.c.current_worker_id.is_(None),
+        *backend_pred,
     )
 
-    def _promote(row: PendingDispatchRow) -> None:
-        attempt_id = row.current_attempt_id + 1
-        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms)
-        tasks_to_run.append(build_run_request(cur, row, attempt_id))
-
-    promoted_count = 0
+    effective_bands: dict[JobName, int] = {}
+    promote_units: list[list[_RankRow]] = []
     if max_promotions > 0:
-        # Coscheduled gangs are promoted all-or-none in a single cycle.
-        # Kueue only admits a pod group once it has observed every
-        # ``pod-group-total-count`` pod, so a gang split across drain
-        # cycles — or one larger than the per-cycle cap — would deadlock
-        # waiting for pods Iris never created. Fetch the full coscheduled
-        # PENDING set (no SQL limit) and promote each gang only once all
-        # its tasks are PENDING together; this also keeps every sibling on
-        # the same attempt_id, which is the pod-group generation key (see
-        # _pod_group_name). Non-coscheduled rows keep the flat,
-        # budget-bounded first-fit behavior.
-        cosched_pending = _dispatch_query(
-            cur,
-            tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
-            job_config_table.c.has_coscheduling == True,  # noqa: E712
-            order_by_job_id=True,
-        )
-        gangs: dict[JobName, list[PendingDispatchRow]] = {}
-        for row in cosched_pending:
-            gangs.setdefault(row.job_id, []).append(row)
-        for gang in gangs.values():
-            num_tasks = gang[0].num_tasks
-            if len(gang) != num_tasks:
-                # Gang not fully assembled yet (siblings still in flight,
-                # e.g. mid-bounce); a later cycle promotes it whole once
-                # they converge to PENDING.
-                continue
-            remaining = max_promotions - promoted_count
-            if len(gang) > remaining and len(gang) <= max_promotions:
-                # Gang fits within the per-cycle cap but not this cycle's
-                # remaining budget — defer to a later cycle. (Oversized
-                # gangs, larger than the cap itself, fall through and are
-                # promoted whole to avoid a permanent deadlock.)
-                continue
-            for row in gang:
-                _promote(row)
-            promoted_count += len(gang)
+        candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING), *backend_pred)
+        if candidates:
+            job_ids = {row.job_id for row in candidates}
+            resolved_bands = reads.get_priority_bands(cur, job_ids)
+            user_spend = compute_user_spend(cur)
+            user_budget_limits = reads.get_all_user_budget_limits(cur)
+            effective_bands = {
+                job_id: compute_effective_band(
+                    resolved_bands[job_id], job_id.user, user_spend, user_budget_limits, defaults
+                )
+                for job_id in job_ids
+            }
+            units = _rank_promotion_units(_build_promotion_units(candidates), effective_bands, user_spend)
+            promote_units = _select_within_cap(units, effective_bands, max_promotions)
 
-        # Non-coscheduled first-fit, bounded by the remaining budget.
-        remaining = max_promotions - promoted_count
-        if remaining > 0:
-            noncosched_pending = _dispatch_query(
-                cur,
-                tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
-                job_config_table.c.has_coscheduling == False,  # noqa: E712
-                limit=remaining,
-            )
-            for row in noncosched_pending:
-                _promote(row)
+    # Load the runtime blobs for only the promoted rows, then stamp the effective
+    # band and build a request per row, keeping the ranked order.
+    promote_ids = [row.task_id for unit in promote_units for row in unit]
+    if promote_ids:
+        heavy = {row.task_id: row for row in _dispatch_query(cur, local_tasks.c.task_id.in_(promote_ids))}
+        for task_id in promote_ids:
+            band = effective_bands[heavy[task_id].job_id]
+            row = replace(heavy[task_id], priority_band=band)
+            attempt_id = row.current_attempt_id + 1
+            writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms, priority_band=band)
+            tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     # Redrive: pods for these rows may not exist yet (crash between
     # assign-commit and apply, or apply errored last cycle). `kubectl
@@ -296,17 +357,21 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
+        backend_id=backend_id,
     )
+    # The K8s provider rebuilds each pod name from (task_id, attempt_id, uid), so
+    # poll must carry the current attempt's uid to target the right incarnation.
+    uids = reads.attempt_uids_for(cur, [(row.task_id, row.current_attempt_id) for row in running_rows])
     running_tasks = [
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
-            coscheduled=row.has_coscheduling,
+            attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows
     ]
 
-    return BackendReconcileInput(
+    return DispatchBatch(
         tasks_to_run=tasks_to_run,
         running_tasks=running_tasks,
     )

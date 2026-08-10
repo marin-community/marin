@@ -183,10 +183,11 @@ trainer:
 ```
 
 Alternatively, JAX's compilation cache directory can be set using the `JAX_COMPILATION_CACHE_DIR` environment variable.
-This method is particularly useful for workflows involving `launch.py` on TPUs, as environment variables can be specified in the `.levanter.yaml` configuration file used by `launch.py`.
+This method is particularly useful for workflows involving `launch.py` on TPUs, as environment variables can be specified in the `~/.config/marin/config.yaml` configuration file used by `launch.py`.
+Checkout-local `.levanter.yaml` files are also read and override matching values from `~/.config/marin/config.yaml`.
 For more details on using `launch.py`, see the [Using launch.py](../Getting-Started-TPU-VM.md#using-launchpy) section in the TPU VM guide.
 
-Example `.levanter.yaml` snippet:
+Example `~/.config/marin/config.yaml` snippet:
 ```yaml
 env:
   JAX_COMPILATION_CACHE_DIR: "gs://your-compile-cache-bucket/path"

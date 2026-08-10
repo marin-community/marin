@@ -6,7 +6,10 @@ This tutorial walks through setting up a Google Cloud Storage (GCS) bucket that 
 ## When You Need This
 
 - Running local GPU or TPU experiments that write checkpoints to `gs://...` paths.
-- Launching TPU/GPU jobs on the shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster, where every worker streams artifacts to a shared prefix.
+- Launching TPU jobs on the shared
+  [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+  cluster. CoreWeave GPU jobs use the object storage described in [Training on
+  Cloud GPUs](cloud-gpu.md).
 - Hosting tokenized datasets or compilation caches that multiple jobs should reuse.
 
 If you only run experiments locally with `local_store/` you can skip this, but migrating to GCS early prevents churn later.
@@ -71,7 +74,7 @@ Clearing the policy ensures that once a training job deletes temporary files the
 
 For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each `marin-{region}` bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
 
-Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `lib/rigging/src/rigging/filesystem.py` (`ALLOWED_TTL_DAYS`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
 
 To re-apply lifecycle rules and confirm soft-delete is disabled across every regional `marin-*` bucket (idempotent; merges with any unrelated rules already present):
 
@@ -126,7 +129,21 @@ trainer:
     base_path: "$BUCKET/your-run"
 ```
 
-Commit these defaults in `.levanter.yaml` or `.envrc` so every launch script uses the same location.
+For `iris job run`, put personal launch values in the gitignored `.marin.yaml`
+at the checkout root:
+
+```yaml
+env:
+  MARIN_PREFIX: "gs://your-bucket"
+  WANDB_PROJECT: marin
+  WANDB_ENTITY: your-entity
+```
+
+The Iris CLI loads this `env` section when run from that directory. Direct SDK
+submissions and commands run from another directory do not load it. A GCS
+`MARIN_PREFIX` in this file also overrides the CoreWeave storage default. Omit
+it from checkouts that submit CoreWeave jobs, or set it only on the GCP job that
+needs it.
 
 ## Ongoing Hygiene Checklist
 

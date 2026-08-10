@@ -34,7 +34,7 @@ from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
-from haliax.jax_utils import is_jax_array_like
+from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
@@ -44,19 +44,19 @@ from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidati
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
+from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
-from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
+from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
@@ -185,10 +185,22 @@ def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer)
 def _embed_chat_template_in_tokenizer_config(
     tokenizer: PreTrainedTokenizerBase,
     local_path: str,
+    chat_template: str | None = None,
 ) -> None:
-    chat_template = getattr(tokenizer, "chat_template", None)
-    if chat_template is None:
+    """Embed the chat template (the explicit ``chat_template`` argument if given, else the
+    tokenizer's own) in the ``chat_template`` field of ``tokenizer_config.json``. The
+    ``chat_template.jinja`` file that newer ``transformers.save_pretrained`` writes is updated to
+    match when present, and created when an override is given. No-op when no template is set.
+    """
+    template = chat_template if chat_template is not None else getattr(tokenizer, "chat_template", None)
+    if template is None:
         return
+
+    # Write chat_template.jinja when overriding; otherwise only refresh an existing file.
+    jinja_path = os.path.join(local_path, "chat_template.jinja")
+    if chat_template is not None or os.path.exists(jinja_path):
+        with open(jinja_path, "w") as f:
+            f.write(template)
 
     config_path = os.path.join(local_path, "tokenizer_config.json")
     if not os.path.exists(config_path):
@@ -198,10 +210,10 @@ def _embed_chat_template_in_tokenizer_config(
     with open(config_path) as f:
         tokenizer_config = json.load(f)
 
-    if tokenizer_config.get("chat_template") == chat_template:
+    if tokenizer_config.get("chat_template") == template:
         return
 
-    tokenizer_config["chat_template"] = chat_template
+    tokenizer_config["chat_template"] = template
     with open(config_path, "w") as f:
         json.dump(tokenizer_config, f)
 
@@ -209,10 +221,15 @@ def _embed_chat_template_in_tokenizer_config(
 def _save_tokenizer_pretrained(
     tokenizer: PreTrainedTokenizerBase | MarinTokenizer,
     local_path: str,
+    chat_template: str | None = None,
 ) -> None:
     hf_tokenizer = _coerce_to_hf_tokenizer(tokenizer)
+    if chat_template is not None:
+        # Set before save_pretrained so it writes this template to tokenizer_config.json
+        # and chat_template.jinja.
+        hf_tokenizer.chat_template = chat_template
     hf_tokenizer.save_pretrained(local_path)
-    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path)
+    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path, chat_template=chat_template)
 
 
 @dataclass(frozen=True)
@@ -286,10 +303,6 @@ class ModelWithHfSerializationMixin(Generic[MConfig]):
     @abc.abstractmethod
     def init(cls, Vocab: Axis, config: MConfig, *, key: PRNGKeyArray) -> "ModelWithHfSerializationMixin":
         pass
-
-
-class ASRWithHfSerializationMixin(ASRMixin, ModelWithHfSerializationMixin[MConfig]):
-    pass
 
 
 class LmWithHfSerializationMixin(LmHeadModel, ModelWithHfSerializationMixin[MConfig]):
@@ -425,10 +438,23 @@ def _to_state_dict_with_dtype(
             else:
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
-    # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
-    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    # This is the shared Levanter HF export path, not a GrugMoE-specific hook.
+    # Deshard before writing; reshard handles explicit meshes moving partitioned arrays to replicated leaves.
+    state_dict = jax.tree.map(lambda value: jax.sharding.reshard(value, PartitionSpec()), state_dict)
 
     return state_dict
+
+
+def _gather_to_host_numpy(array) -> np.ndarray:
+    """Gather a (possibly globally-sharded) array to a full, host-local numpy array.
+
+    On a multi-host run a parameter's shards live on devices that are not all local to
+    this process, so ``np.asarray`` raises ``RuntimeError: Fetching value for jax.Array
+    that spans non-addressable ... devices``. ``process_allgather`` is a collective — every
+    process must call it in lockstep — that returns the complete array as a host-local
+    numpy array on every process, which the safetensors writer requires.
+    """
+    return np.asarray(multihost_utils.process_allgather(array, tiled=True))
 
 
 @dataclass_with_default_init(frozen=True)
@@ -500,6 +526,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
+        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
+        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
+        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
+        # inside `_infer_config_class` needs those imports to have already run.
+        LmConfig.get_known_choices()
         config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
         tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
@@ -512,7 +543,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 # requires max_seq_len; at runtime every registered choice is a concrete config
                 # that supplies a default, so the no-arg construction is safe.
                 instance = v()  # pyrefly: ignore[missing-argument]
-                if instance.hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
+                # Building a candidate converter loads that model's default reference tokenizer, and
+                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
+                # access. A candidate whose converter cannot even be built is not the target model, so
+                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
+                try:
+                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
+                except Exception:
+                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
+                    continue
+                if candidate_hf_config_name == config_class.__name__:
                     LevConfigClass = v
                     break
         else:
@@ -589,6 +629,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
 
+    def warn_if_tokenizer_mismatch(self, tokenizer) -> None:
+        """Log a warning if ``tokenizer`` appears to differ from this converter's tokenizer.
+
+        Used before initializing from an HF checkpoint so that a mismatched vocab is surfaced
+        rather than silently producing garbage. Tokenizers without a ``vocab`` attribute are skipped.
+        """
+        if hasattr(tokenizer, "vocab") and tokenizer.vocab != self.tokenizer.vocab:
+            logger.warning("The tokenizers appear to be different. You may want to check this.")
+
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
             config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
@@ -622,7 +671,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
         if tokenizer is None:
             if ref is None:
-                raise ValueError("Must provide either tokenizer or reference_checkpoint")
+                return None
             tokenizer = ref
 
         if isinstance(tokenizer, (str, RepoRef)):
@@ -670,6 +719,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     @cached_property
     def Vocab(self) -> Axis:
+        if self.tokenizer is None:
+            raise ValueError("Cannot infer vocabulary size without a tokenizer")
         return Axis("vocab", len(self.tokenizer))
 
     def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
@@ -928,6 +979,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         """Determine whether reference code should be bundled with the checkpoint."""
         #  the way we determine this is if the config class is in the HF package or not
         if save_reference_code is None:
+            if self.reference_checkpoint is None:
+                return False
             return not self.HfConfigClass.__module__.startswith("transformers.")
 
         return save_reference_code
@@ -999,6 +1052,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
+        chat_template: Optional[str] = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1018,6 +1072,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+        (written to both tokenizer_config.json and chat_template.jinja)
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
@@ -1127,7 +1183,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     subset_arg = subset_keys
 
                 shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                shard_numpy = {k: np.asarray(v) for k, v in shard_weights.items()}
+                # Gather each parameter across processes: on multi-host, shards span
+                # non-addressable devices, so a bare np.asarray would raise.
+                shard_numpy = {k: _gather_to_host_numpy(v) for k, v in shard_weights.items()}
                 bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
                 logger.info(
                     "Saving shard %s (%s, %.2f%% of model)",
@@ -1164,7 +1222,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                _save_tokenizer_pretrained(self.tokenizer, local_path)
+                _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")
@@ -1275,6 +1333,7 @@ def save_hf_checkpoint_callback(
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    chat_template: Optional[str] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1284,6 +1343,8 @@ def save_hf_checkpoint_callback(
     :param base_path: the base path to save the checkpoint to. `/step-<step>` will be appended to this. base_path
     may be a GCS bucket path, in which case the checkpoint will be uploaded to GCS after being written to a tmp
     :param upload_to_hf:
+    :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+    (written to both tokenizer_config.json and chat_template.jinja)
     :param hf_upload_kwargs:
     :return:
     """
@@ -1303,6 +1364,7 @@ def save_hf_checkpoint_callback(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=generation_config,
+            chat_template=chat_template,
             **my_upload_kwargs,
         )
 
@@ -1354,11 +1416,17 @@ def _is_retryable_hf_exception(exc: Exception) -> bool:
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return _hf_hub_retry(
-            lambda: AutoTokenizer.from_pretrained(
-                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return cast(
+            HfTokenizer,
+            _hf_hub_retry(
+                lambda: AutoTokenizer.from_pretrained(
+                    model_name_or_path,
+                    revision=revision,
+                    cache_dir=local_cache_dir,
+                    trust_remote_code=trust_remote_code,
+                ),
+                action=f"load tokenizer {model_name_or_path!r}",
             ),
-            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 
@@ -1578,17 +1646,14 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = url_to_fs(repo_id)
-                remote_path = os.path.join(path, filename)
-                # local_path = os.path.join(tmpdir, filename)
+                remote_path = StoragePath(repo_id) / filename
                 local_path = os.path.join(
                     cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
                 )
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not fs.exists(remote_path):
+                if not fetch_file_atomic(str(remote_path), local_path):
                     raise EntryNotFoundError(f"File {remote_path} not found")
-
-                fs.get(remote_path, local_path)
                 return local_path
 
             # Fallback to the original implementation

@@ -50,7 +50,6 @@
 ### Related design docs
 
 - `.agents/projects/20260302_iris_reservation_design.md` — reservations are demand pre-provisioning; orthogonal to region pinning.
-- `.agents/projects/iris-log-store-gcs-fallback.md` — unrelated.
 
 ### Related issues
 

@@ -17,12 +17,13 @@ Zephyr ``group_by``) rather than as a list field on a single row (a
 per-row ``flat_map``).
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_file
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_file
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -49,10 +50,10 @@ def stitch_pages(item_id: str, pages: Iterator[dict]) -> Iterator[dict]:
     """
     texts = [str(p["text"]) for p in pages if p.get("text")]
     if not texts:
-        counters.increment("biodiversity/dropped_items")
+        counters.pipeline.update_counter("biodiversity/dropped_items", 1)
         return
-    counters.increment("biodiversity/kept_items")
-    counters.increment("biodiversity/pages_stitched", len(texts))
+    counters.pipeline.update_counter("biodiversity/kept_items", 1)
+    counters.pipeline.update_counter("biodiversity/pages_stitched", len(texts))
     yield {
         "text": PAGE_SEPARATOR.join(texts),
         "source": SOURCE_NAME,

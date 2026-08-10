@@ -54,6 +54,21 @@ def test_collect_includes_generated_proto_files(workspace):
     assert "src/iris/rpc/controller_connect.py" in rel
 
 
+def test_collect_adds_caller_extra_includes(workspace):
+    # a gitignored build dir the caller needs at runtime (e.g. a bundled frontend dist)
+    build = workspace / "build"
+    build.mkdir()
+    (build / "app.js").write_text("// built")
+
+    with _mock_git_files(workspace, "pyproject.toml"):
+        without = {str(f.relative_to(workspace)) for f in collect_workspace_files(workspace)}
+        with_hook = {
+            str(f.relative_to(workspace)) for f in collect_workspace_files(workspace, extra_includes=["build/**/*"])
+        }
+    assert "build/app.js" not in without  # gitignored → not bundled by default
+    assert "build/app.js" in with_hook  # caller opts it back in
+
+
 def test_collect_respects_extra_exclude(workspace):
     (workspace / "data").mkdir()
     (workspace / "data" / "big.csv").write_text("1,2,3")

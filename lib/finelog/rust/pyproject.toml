@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "marin-finelog-server"
+version = "0.2.0"
+description = "Native finelog server: in-process (PyO3) embedding of the Rust log store + log service."
+requires-python = ">=3.12"
+
+[tool.maturin]
+# The cdylib crate is pyext/ (a thin PyO3 shim over the `finelog` server lib in
+# this cargo workspace). The module is TOP-LEVEL `finelog_server`, not nested
+# under `finelog.`: marin-finelog is pure Python and often installed editable,
+# and an editable src/finelog on sys.path would shadow a nested
+# `finelog/_native.so` in site-packages.
+manifest-path = "pyext/Cargo.toml"
+module-name = "finelog_server"
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# Rebuild the extension when the Rust sources change, not just pyproject.toml —
+# this is what makes the rust_mode.py dev path source track live edits.
+cache-keys = [
+    "pyproject.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "src/**/*.rs",
+    "proto/**",
+    "pyext/Cargo.toml",
+    "pyext/src/**/*.rs",
+    "finelog_server.pyi",
+]

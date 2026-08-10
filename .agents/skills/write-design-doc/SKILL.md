@@ -1,6 +1,6 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design doc, open a PR, and ping Discord for review.
+description: Produce a 1-page design proposal for an explicit design task or a design-level change identified by another change workflow. Do not use to answer or evaluate an idea inline.
 ---
 
 # Skill: Design Doc Workflow
@@ -21,21 +21,42 @@ The template lives at `.agents/projects/design-template.md`. New docs go to a sl
 
 ## When to use this skill
 
+This is a change-mode design workflow. Use it only when the user explicitly
+asks for a design doc/one-pager/proposal, or when another change-mode playbook
+such as `fix-issue` identifies a design-level change and invokes this skill.
+Follow the calling playbook's delivery target: `fix-issue` embeds the proposal
+in its issue comment, while a standalone design task uses the repository files
+and publishing steps below. Do **not** use this skill for questions,
+walkthroughs, informal architecture reviews, or requests to assess whether an
+idea is reasonable. Investigate those requests and answer inline; start a
+standalone design workflow only after an explicit follow-up asks to publish a
+design.
+
 - A task will likely take more than a day, or is load-bearing for other work.
 - A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
 - A change introduces a new service, package, or persistent data shape.
 
-If none apply, just open the PR — don't manufacture a design doc for a 50-line bug fix.
+If the explicit design request meets none of these criteria, confirm that a
+design artifact is actually wanted. For an ordinary small change, use the
+normal implementation workflow instead of manufacturing a design doc.
 
 ---
 
 # Workflow
 
-Seven phases. Confirm with the user at natural decision points (after Research, Draft, Spec, before Publish), but don't ask permission when the next step is obvious.
+The standalone workflow has seven phases. A calling change-mode playbook may
+reuse the design guidance while overriding persistence and publication, as
+`fix-issue` does for a single issue comment. Confirm with the user at natural
+decision points (after Research, Draft, Spec, before Publish), but don't ask
+permission when the next step is obvious.
 
 ## 1. Frame
 
-The user starts the skill with a framing paragraph stating what they want and why. If they didn't, query them — or infer it from rich prior conversation context. A one-sentence "fix the foo thing" is *not* enough; push back and ask for the why.
+The user starts the skill with a framing paragraph stating what they want and
+why. If they did not, infer it from rich conversation, repository, or prior-work
+context when safe. Ask only when the missing rationale would materially change
+the design; a question is not a reason to turn an answer-mode request into this
+workflow.
 
 **You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>/`") and proceed — only stop if it collides with an existing directory, then propose a disambiguator.
 
@@ -43,18 +64,18 @@ Once you have a framing paragraph, proceed directly to research. Don't batch a l
 
 ## 2. Research
 
-Spawn an `Explore` subagent (do not search yourself — keep the digest out of main context). Brief it with the framing paragraph and ask for:
+Use the `background-research` skill in design-doc mode. Prefer an isolated
+Explore subagent when available so the detailed digest stays out of main
+context. Use `low` or `medium` effort by default.
 
-- Relevant files with line numbers (the doc must reference real code).
-- Related designs in `.agents/projects/` — read them, note overlap.
-- Related GitHub issues/PRs via `gh` if the user named any, plus a quick `gh issue list --search` on the topic.
-- Existing utilities or abstractions the proposal might reuse (per `AGENTS.md` "Code Reuse").
+The research output must cover in-repo findings, prior-art shape when relevant,
+what surprised you, and what remains unclear. Ask whether the framing should
+shift before drafting.
 
-**For proposals that reinvent a category of system** (logger, stats store, queue, scheduler, KV, service-discovery layer, workflow engine, etc.), also do a **prior-art pass via web search** — in parallel with the in-repo Explore. Spawn a `general-purpose` agent (has WebSearch/WebFetch) with a focused brief: *what is the established shape of this kind of system, 2–4 representative implementations (OSS or well-known), and what design choices do they converge or disagree on?* Cap to ~5 results, ask for a bulleted digest under 200 words. The point is to surface obvious patterns we'd reinvent badly and give reviewers reference points — not a literature review. Skip for in-repo refactors, internal API tweaks, or anything where the category is novel to the world.
-
-Return a bulleted digest combining both passes: *"in-repo findings, prior-art shape, what surprised me, what's still unclear."* Ask whether the framing should shift before drafting.
-
-**Persist the research.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to `.agents/projects/<slug>/research.md`. The design doc gets a short `## Background` section (3–5 sentences) linking to `research.md`.
+**Persist the research.** Save the full digest (in-repo findings with file:line
+refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to
+`.agents/projects/<slug>/research.md`. The design doc gets a short
+`## Background` section (3-5 sentences) linking to `research.md`.
 
 ## 3. Interrogate
 
@@ -109,7 +130,17 @@ Show the user a brief summary: what you incorporated (design vs spec), what you'
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Use one
+   commit to add `.agents/projects/<slug>/design.md`, `research.md`, and
+   `spec.md`. Use an imperative PR title such as `[Design] Add finelog
+   persistence`. State the proposed behavior and motivation in the PR body,
+   then link all three files with absolute branch-rooted URLs
+   (relative paths 404 from PR descriptions; see "Linking conventions"). Do not
+   add a stock discussion footer; the design's Open Questions section identifies
+   requested feedback. Follow
+   `.agents/skills/writing-style/pull-requests.md` and
+   `.agents/skills/writing-style/ai-writing-donts.md`. Labels `design` and
+   `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression). Send it; no need to confirm exact text unless asked.
 

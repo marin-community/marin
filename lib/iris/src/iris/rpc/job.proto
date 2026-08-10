@@ -29,53 +29,6 @@ import "time.proto";
 message Empty {}
 
 // --- Authentication ---
-message LoginRequest {
-  string identity_token = 1;
-}
-message LoginResponse {
-  string token = 1;
-  string key_id = 2;
-  string user_id = 3;
-}
-
-message GetAuthInfoRequest {}
-message GetAuthInfoResponse {
-  string provider = 1;        // "gcp" or "static" or "" (no auth)
-  string gcp_project_id = 2;  // set when provider == "gcp"
-}
-
-message CreateApiKeyRequest {
-  string user_id = 1;
-  string name = 2;
-  int64 ttl_ms = 3;
-}
-message CreateApiKeyResponse {
-  string key_id = 1;
-  string token = 2;
-  string key_prefix = 3;
-}
-
-message RevokeApiKeyRequest {
-  string key_id = 1;
-}
-
-message ListApiKeysRequest {
-  string user_id = 1;
-}
-message ApiKeyInfo {
-  string key_id = 1;
-  string key_prefix = 2;
-  string user_id = 3;
-  string name = 4;
-  int64 created_at_ms = 5;
-  int64 last_used_at_ms = 6;
-  int64 expires_at_ms = 7;
-  bool revoked = 8;
-}
-message ListApiKeysResponse {
-  repeated ApiKeyInfo keys = 1;
-}
-
 message GetCurrentUserRequest {}
 message GetCurrentUserResponse {
   string user_id = 1;
@@ -143,6 +96,17 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
+// Build provenance of an image: the content-addressed tree hash (the dedup key)
+// plus the human context needed to read it. Baked into images at build time via
+// IRIS_PROVENANCE and surfaced for version display.
+message Provenance {
+  string tree_hash = 1;    // Working-tree tree hash baked in at build time; the dedup key
+  string base_commit = 2;  // Short HEAD commit the tree was built from
+  bool dirty = 3;          // Working tree had uncommitted changes at build time
+  string branch = 4;       // Branch at build time ("" if detached HEAD)
+  string built_by = 5;     // OS user that ran the build ("" if unknown)
+}
+
 // --- Process Status ---
 // Shared by both ControllerService and WorkerService.
 // Returns local process info (host, resource usage) and recent process logs.
@@ -158,9 +122,11 @@ message ProcessInfo {
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
-  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
   reserved 7;                    // Formerly process cpu_percent; use cpu_millicores instead.
+  reserved 12;                   // Formerly git_hash; use provenance.tree_hash instead.
+  reserved git_hash;
   int32 cpu_millicores = 13;     // Process CPU usage over the sample window
+  Provenance provenance = 14;    // Build provenance (tree hash, branch, base commit, builder)
 }
 
 message GetProcessStatusRequest {
@@ -249,6 +215,34 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
+  reserved 23;                        // was: failure_count — derived from attempts (see iris.cluster.controller.attempt_counts)
+
+  // Literal owning backend id: DEFAULT_BACKEND_ID ("default") on single-backend
+  // clusters, the routed id once pinned, empty ONLY while a job is genuinely
+  // unrouted. Never an overloaded sentinel; the UI hides the column via multiBackend.
+  string backend_id = 24;
+
+  // Owning cluster, always set and orthogonal to backend_id: "local" == owned
+  // and run by this controller (backend_id then set), "<peer>" == handed off to
+  // that peer cluster (backend_id then "").
+  string cluster = 25;
+
+  reserved 26;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
+
+  // Task submission time on the owning cluster. For a mirrored federated task
+  // this is the peer's real submit time, so a not-yet-started task does not
+  // render as epoch 0.
+  iris.time.Timestamp submitted_at = 27;
+
+  reserved 28;  // was: preemption_count — derived from attempts (see iris.cluster.controller.attempt_counts)
+
+  // Backend status one-liner for a waiting/building task: the current human-readable
+  // reason it is not yet running (e.g. the Kubernetes pod's container-waiting reason
+  // or the Kueue admission verdict for a SchedulingGated pod). Empty once the task is
+  // running or when the backend has nothing to say. Distinct from pending_reason,
+  // which is scheduler/autoscaler diagnostics for a PENDING task. Persisted on the
+  // task row so it survives to the dashboard and mirrors across federation.
+  string status_message = 29;
 }
 
 // Record of a single task execution attempt
@@ -264,6 +258,17 @@ message TaskAttempt {
   // Controller-minted 16-hex-char routing key for this attempt. Surfaced to
   // operators (dashboard) for traceability.
   string attempt_uid = 9;
+
+  // Backend object identity, persisted when the pod is observed so a past attempt
+  // can be described after its pod is gone. Empty for pre-persistence rows and for
+  // the RPC-worker backend (which identifies an attempt by worker_id).
+  string pod_name = 10;
+  string pod_uid = 11;   // Kubernetes object UID — the stable identity a reused name is not.
+  string node_name = 12;
+  // Bounded terminal-cause string for a failed attempt, preferring an
+  // init-container failure (e.g. a stage-workdir bundle fetch 404) over the task
+  // container's own reason. Empty unless the attempt failed.
+  string terminal_reason = 13;
 }
 
 message ResourceUsage {
@@ -275,7 +280,7 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
-// Host-level resource snapshot collected by the worker during each Ping.
+// Host-level resource snapshot collected by the worker during each Reconcile.
 message WorkerResourceSnapshot {
   iris.time.Timestamp timestamp = 1;
   // Host CPU utilization as percentage (0-100 averaged across cores)
@@ -300,6 +305,29 @@ message BuildMetrics {
   iris.time.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
+}
+
+// Lifecycle of a job's handoff to a peer cluster, tracked separately from
+// JobState so the pre-registration window — before the peer has accepted or
+// reported anything — is a first-class, honest signal rather than a blank,
+// partly-fabricated JobStatus. Derived on read from federated_jobs.handoff_state
+// and whether the peer's task set has been mirrored back yet; NOT persisted.
+//
+// This describes the *handoff* of this job, not the peer's *health*: a stuck
+// PENDING_SCHEDULING plus an unreachable peer (PeerSummary.reachable) is the
+// signal that a handoff cannot be delivered.
+//
+// A local job is PEER_STATUS_NONE (== 0), which is also how an old message
+// missing this field decodes — so consumers must gate on `cluster` (is it
+// federated at all?) before trusting a NONE. For a terminal job this is the
+// last posture observed (e.g. a handoff cancelled before delivery stays
+// PENDING_SCHEDULING).
+enum PeerStatus {
+  PEER_STATUS_NONE = 0;                // local job (cluster == "local")
+  PEER_STATUS_PENDING_SCHEDULING = 1;  // handed off; peer has not yet acked LaunchJob
+  PEER_STATUS_ASSIGNED = 2;            // peer acked; awaiting the first FederationSync
+  PEER_STATUS_SYNCED = 3;              // peer's task set mirrored back at least once
+  PEER_STATUS_REJECTED = 4;            // peer rejected the handoff (id collision); job terminal
 }
 
 message JobStatus {
@@ -350,27 +378,22 @@ message JobStatus {
   // Parent job id, if this job was launched as a child of another job.
   // Empty for root jobs.
   string parent_job_id = 33;
-}
 
-// ============================================================================
-// RESERVATION
-// ============================================================================
+  // Literal owning backend id. See TaskStatus.backend_id.
+  string backend_id = 34;
 
-// A single reservation entry describing one worker's worth of resources.
-// Duplicate entries to reserve multiple workers of the same type.
-message ReservationEntry {
-  // Resource spec for one worker.
-  ResourceSpecProto resources = 1;
+  // Owning cluster, always set. See TaskStatus.cluster.
+  string cluster = 35;
 
-  // Constraints for routing (region, zone, preemptible, etc.).
-  repeated Constraint constraints = 2;
-}
+  reserved 36;  // retired federated remote-id field (job ids are cluster-invariant; no rebasing)
 
-// Reservation configuration attached to a job. The autoscaler pre-provisions
-// capacity and the reserving job is held pending until all entries are fulfilled.
-message ReservationConfig {
-  // Resource entries to reserve. Each entry = one worker.
-  repeated ReservationEntry entries = 1;
+  // Handoff lifecycle for a federated job; PEER_STATUS_NONE for a local one. See PeerStatus.
+  PeerStatus peer_status = 37;
+
+  // The authenticated principal that submitted this job (an email, or
+  // "local_admin"), distinct from the friendly owner in the job name. Empty for
+  // pre-federation rows. Drives per-cluster federation authorization.
+  string submitting_user = 38;
 }
 
 // ============================================================================
@@ -421,11 +444,15 @@ message ResourceSpecProto {
 
 // Job environment configuration
 message EnvironmentConfig {
-  repeated string pip_packages = 1;  // Additional pip packages to install
   map<string, string> env_vars = 2;  // Environment variables to set
-  repeated string extras = 3;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
-  string python_version = 4;         // Client Python version (e.g., "3.11") for task container base image
-  string dockerfile = 5;             // Pre-generated Dockerfile content (generated by client, used by worker)
+  // Resolved setup scripts the worker runs in order before the command. The
+  // client builds this list (default project sync, or caller-provided); empty
+  // means no setup. Child jobs inherit it to reproduce the parent's environment.
+  repeated string setup_scripts = 6;
+
+  // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
+  // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.
+  reserved 1, 3, 4, 5;
 }
 
 // ============================================================================
@@ -556,9 +583,13 @@ message WorkerMetadata {
 
   reserved 41;  // was vm_address, removed
 
-  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
-  // Allows the controller to surface per-worker version info for debugging.
-  string git_hash = 42;
+  reserved 42;  // was git_hash; use provenance.tree_hash instead
+  reserved git_hash;
+
+  // Build provenance baked into the worker image (tree hash + branch + base
+  // commit + builder). The controller keys version display and
+  // skip-already-current-workers on ``provenance.tree_hash``.
+  Provenance provenance = 43;
 }
 
 enum JobPreemptionPolicy {
@@ -574,11 +605,35 @@ enum ExistingJobPolicy {
   EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
+// A client that does not care about the band leaves it INHERIT. LaunchJob resolves
+// INHERIT to the parent's band, or INTERACTIVE for a root, and stores the result;
+// nothing behind that entry point sees INHERIT, so the scheduler, budget, and
+// dispatch paths only ever compare real bands.
 enum PriorityBand {
-  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_INHERIT = 0;      // resolved at LaunchJob: parent's band, else INTERACTIVE
   PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
   PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
   PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
+}
+
+// Named container security posture. Selects a bundle of container/pod security
+// settings instead of exposing individual docker/k8s knobs. The two elevated
+// profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent and require admin
+// authorization at submission (see service.LaunchJob); RESTRICTED and DEFAULT are
+// unprivileged and need none. DOCKER_ACCESS and PRIVILEGED are distinct
+// capabilities — neither implies the other.
+enum ContainerProfile {
+  CONTAINER_PROFILE_UNSPECIFIED = 0;    // resolves to DEFAULT
+  CONTAINER_PROFILE_RESTRICTED = 1;     // hardened: drop ALL caps, no-new-privileges, default seccomp
+  CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
+  CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
+  CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
+  // Runs the whole container under the gVisor runtime (docker --runtime=runsc /
+  // k8s runtimeClassName=gvisor). In-container root gets the docker default cap
+  // set (setuid/apt work) while the intercepted guest kernel isolates the host,
+  // so it is NOT elevated — safe to grant without admin. Requires runsc installed
+  // on the worker/node; incompatible with TPU/GPU passthrough.
+  CONTAINER_PROFILE_GVISOR = 5;
 }
 
 // ============================================================================
@@ -619,6 +674,14 @@ message RunTaskRequest {
   CoschedulingConfig coscheduling = 13;
 
   // Effective priority band for the owning job, used to select the Kueue
-  // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
+  // WorkloadPriorityClass on the K8s direct path. Always a real band — the
+  // controller stamps it from the resolved value it stored, never INHERIT.
   PriorityBand priority = 14;
+
+  // Container security profile for the owning job. Stamped by the controller
+  // from the persisted (and authorized) job row; the worker trusts this value
+  // and applies the matching docker/pod security settings. UNSPECIFIED =>
+  // DEFAULT. Never set directly by a client — clients request a profile via
+  // LaunchJobRequest.container_profile, which the controller authorizes.
+  ContainerProfile container_profile = 15;
 }

@@ -7,7 +7,7 @@ name = "marin-root"
 version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # workspaces
     "marin-iris",
@@ -15,22 +15,31 @@ dependencies = [
     "marin-haliax",
     "marin-levanter",
     "marin-core",
-    "marin-rigging",
+    # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
+    # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
+    # cloud credentials and reads the key from a projected Secret instead.
+    "marin-rigging[secrets]",
     "marin-zephyr",
+    # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
+    # workspace member (editable source) so deploy/CLI fixes land without a wheel
+    # republish. Its native companion marin-finelog-server (the in-process
+    # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
+    # member: it ships as a pre-built wheel and reaches us transitively via
+    # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
+    # marin-finelog-server to a local source build.
+    "marin-finelog",
+    # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
+    # a workspace member so service fixes land without a wheel republish.
+    "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
-    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
-    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
-    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
-    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
-    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
-    # any earlier dev of the same Z; bump the floor to whichever is newest.
-    # Published by .github/workflows/dupekit-release-wheels.yaml.
-    "marin-dupekit >= 0.1.2.dev202606060824",
-    # finelog carries an in-process server ext (finelog._native) the controller
-    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
-    "marin-finelog >= 0.2.9",
+    # marin-dupekit is the pure-Python text-dedup surface, a workspace member
+    # (editable source). Its native companion marin-dupekit-native (the Rust
+    # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
+    # member: it ships as a pre-built platform wheel and reaches us transitively
+    # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
+    # marin-dupekit-native to a local source build.
+    "marin-dupekit",
 ]
 
 [tool.uv]
@@ -39,7 +48,8 @@ fork-strategy = "fewest"
 # names one, so our intentional pre-releases resolve while everything else stays
 # on its latest stable release. (A global "allow" would instead promote any
 # transitive dependency's newest beta/rc into the lock.) Opted in: the
-# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
+# omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
 # (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
 prerelease = "explicit"
@@ -84,8 +94,9 @@ override-dependencies = [
     "tornado>=6.5.5",
 ]
 conflicts = [
-    # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
-    # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
+    # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
+    # of non-GPU cross-package splits while allowing the TPU stack to resolve
+    # together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -93,10 +104,6 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
-    ],
-    [
-        { package = "marin-levanter", extra = "gpu" },
-        { package = "marin-core", extra = "vllm" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -113,33 +120,44 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
-# marin-finelog is intentionally NOT a member: it is a native (maturin) package
-# consumed as a pre-built platform wheel (see [project] dependencies and the
-# RUST-DEV SOURCES block below), mirroring marin-dupekit.
 members = [
     "lib/iris",
     "lib/fray",
+    "lib/finelog",
+    "lib/dupekit",
+    "lib/ducky",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/finestore",
+    "infra/pulumi",
 ]
+# Native maturin packages are excluded from uv workspace discovery because each
+# owns its own build backend and package metadata. The path sources below build
+# them from this checkout for development; published packages resolve their
+# companion wheels from PyPI.
+#   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
+#   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
+#   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
+marin-finelog = { workspace = true }
+marin-dupekit = { workspace = true }
+marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# NOTE: harbor is a pinned git dependency (not a workspace member).
-# harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -151,7 +169,7 @@ explicit = true
 
 [tool.black]
 line-length = 121
-target-version = ["py310"]
+target-version = ["py312"]
 preview = true
 
 # Note :: Grow more strict over time!
@@ -163,13 +181,14 @@ extend-exclude = """
 
 [tool.ruff]
 line-length = 121
-target-version = "py310"
+target-version = "py312"
 
 # Note :: Grow more strict over time!
-# Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
-# is CI infrastructure and stays under ruff.
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
+# `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
+# and stay under ruff.
 extend-exclude = ["scripts/"]
-extend-include = ["scripts/workflows/**/*.py"]
+extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
 # A,B,E,F,I,NPY,RUF,UP,W are the established families. The individually-listed
@@ -195,7 +214,9 @@ select = [
     # two rules are mirrored there via extend-select so they apply repo-wide.
     "TID252", "ICN001",
 ]
-ignore = ["F722", "B008", "UP015", "A005", "E741"]
+# Keep UP046/UP047 ignored for now: migrating generics to PEP 695 syntax is
+# out of scope for the Python 3.12 floor bump.
+ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -205,21 +226,21 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
+# The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
+# those lines hurts readability far more than the length limit helps.
+"experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
-known-third-party = ["wandb"]
+# "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
+# config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
+# as first-party and reorder it, so pin it to the third-party group it already sits in.
+known-third-party = ["wandb", "config"]
 
-
-[tool.mypy]
-python_version = "3.10"
-
-# Note: Grow more strict over time!
-ignore_missing_imports = true
-exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
+python-version = "3.12"
 # Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
 # Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
 # the entire project when running from those paths.
@@ -231,9 +252,13 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/iris/scripts/**/*.py",
+    "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
-    "scripts/workflows",
+    "lib/finestore/src/**/*.py",
+    "scripts/ci",
+    "scripts/cost_manager",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
@@ -245,8 +270,13 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
+    "lib/ducky/src",
+    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
+    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
+    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -269,8 +299,12 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
-    "harbor",
-    "harbor.*",
+    # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
+    "google.cloud.secretmanager",
+    "google.cloud.secretmanager.*",
+    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cutlass",
+    "cutlass.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",
@@ -281,14 +315,12 @@ ignore-missing-imports = [
     "librosa.*",
     "lm_eval",
     "lm_eval.*",
-    "math_verify",
-    "math_verify.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
-    "pylatexenc",
-    "pylatexenc.*",
+    "quack",
+    "quack.*",
     "resiliparse",
     "resiliparse.*",
     "sympy",
@@ -303,8 +335,6 @@ ignore-missing-imports = [
     "trackio.*",
     "triton",
     "triton.*",
-    "verifiers",
-    "verifiers.*",
     "vllm",
     "vllm.*",
     "xprof",
@@ -314,19 +344,13 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/canary/**",
-    "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcs-reorganization/**",
     "scripts/gpu_eval/**",
     "scripts/iris/**",
-    "scripts/migrations/**",
     "scripts/ops/**",
     "scripts/pm/**",
-    "scripts/ray/**",
     "scripts/speedrun/**",
-    "scripts/storage/**",
     "scripts/training/**",
     "scripts/*.py",
     "tests/**",
@@ -376,6 +400,13 @@ matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
 [tool.pyrefly.sub_config.errors]
 unknown-name = false
 
+# Turn bad-argument-type ON for these controller-driving scripts (it is off
+# repo-wide) so a wrong-type call into the controller API fails type-checking.
+[[tool.pyrefly.sub_config]]
+matches = "lib/iris/scripts/**"
+[tool.pyrefly.sub_config.errors]
+bad-argument-type = true
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -392,16 +423,23 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
-    "requires_cluster: mark tests that need a running iris cluster",
+    "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "requires_cluster: mark Iris tests that start or connect to a cluster",
+    "docker: mark tests that require a Docker daemon",
+    "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
+pythonpath = ["."]
 
-# Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, Docker, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
-# requires_cluster tests need a running iris cluster (local or remote).
-# All are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster'"
+# cluster and requires_cluster tests submit jobs or start cluster infrastructure;
+# Docker tests require a local daemon;
+# manual tests are run by hand (e.g. live TPU smokes in a custom container).
+# All but manual are run from dedicated CI workflows. Tests that need a TPU carry
+# @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
+# the Iris markers also apply when lib/iris test paths are passed from the root.
+addopts = "--session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

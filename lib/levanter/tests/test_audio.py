@@ -6,7 +6,6 @@ import tempfile
 import pytest
 from datasets import load_dataset
 
-from levanter.data.sharded_datasource import AudioTextUrlDataSource
 from levanter.tokenizers import load_tokenizer
 from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
 from transformers import AutoProcessor
@@ -54,24 +53,6 @@ def test_hf_audio_loading_source():
         audio, sample, text = next(audio_iterator)
 
 
-@pytest.mark.skip("Audio cache pipeline is flaky in this test environment.")
-@skip_if_no_soundlibs
-@skip_if_hf_model_not_accessible("openai/whisper-tiny")
-@pytest.mark.asyncio
-async def test_hf_audio_cache_pipeline():
-    # Use the Real Librispeech Valudation. Testing one doesn't support streaming.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ac = AudioIODatasetConfig(
-            cache_dir=str(tmpdir), id="WillHeld/test_librispeech_parquet", text_key="text", max_length=1024
-        )
-        validation = ac.validation_set()
-        for i in range(10):
-            t = (await validation.get_batch([i]))[0]
-            assert t["input_features"].shape == (80, 3000), t["input_features"].shape
-            assert t["input_ids"].shape == (1024,), t["input_ids"].shape
-            assert t["attention_mask"].shape == (1024,), t["attention_mask"].shape
-
-
 @skip_if_no_soundlibs
 @skip_if_hf_model_not_accessible("openai/whisper-tiny")
 def test_hf_audio_serial_cache():
@@ -105,9 +86,3 @@ def test_metadata_works():
     batch_processor = BatchAudioProcessor(processor, tokenizer)
     # test this doesn't throw
     assert len(batch_processor.metadata)
-
-
-@pytest.mark.skip("File is gone")
-@skip_if_no_soundlibs
-def test_resolve_audio_pointer():
-    AudioTextUrlDataSource.resolve_audio_pointer("https://ccrma.stanford.edu/~jos/mp3/trumpet.mp3", 16_000)

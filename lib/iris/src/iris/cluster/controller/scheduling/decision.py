@@ -8,10 +8,9 @@ Pure scheduling-layer helpers: they consume only ``scheduling.policy`` /
 carry no edge back to the controller's ops/reconcile/schema layer.
 """
 
-from __future__ import annotations
-
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
+    PreemptionPlan,
     SchedulingOrder,
     run_preemption_pass,
 )
@@ -31,8 +30,9 @@ def apply_preemptions(
     all_assignments: list[tuple[JobName, WorkerId]],
     running_for_preemption: list[RunningTaskInfo],
     context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
-    """Decide which running tasks to evict for higher-priority unscheduled work."""
+) -> PreemptionPlan:
+    """Decide which running tasks to evict for higher-priority unscheduled work,
+    and bind each preemptor to the worker(s) its victims free."""
     assigned_ids = {task_id for task_id, _ in all_assignments}
     unscheduled = [
         PreemptionCandidate(
@@ -44,7 +44,7 @@ def apply_preemptions(
         if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
     ]
     if not unscheduled:
-        return []
+        return PreemptionPlan(evictions=[], placements=[])
     return run_preemption_pass(unscheduled, running_for_preemption, context)
 
 

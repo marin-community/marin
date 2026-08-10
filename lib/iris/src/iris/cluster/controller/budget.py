@@ -11,11 +11,12 @@ from typing import Generic, TypeVar
 
 from rigging.timing import Timestamp
 
+from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.types import UserBudgetDefaults
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +75,9 @@ def compute_effective_band(
     PRODUCTION tasks are never downgraded. Users without a ``user_budgets``
     row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
 
-    Defense-in-depth: a leaked UNSPECIFIED (0) is normalized to INTERACTIVE
-    so it cannot sort ahead of PRODUCTION under ``ORDER BY priority_band
-    ASC``. Callers should resolve UNSPECIFIED upstream (parent inheritance,
-    then INTERACTIVE default) — see ``reads.jobs.get_priority_bands``.
+    ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
+    :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
-    if task_band == job_pb2.PRIORITY_BAND_UNSPECIFIED:
-        task_band = job_pb2.PRIORITY_BAND_INTERACTIVE
     if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
@@ -137,7 +134,7 @@ _VALID_TIER_BANDS = frozenset(
 
 def reconcile_user_budget_tiers(
     db: ControllerDB,
-    tiers: Iterable[config_pb2.UserBudgetTier],
+    tiers: Iterable[UserBudgetTier],
     now: Timestamp,
 ) -> int:
     """Upsert per-user budgets from cluster config into the user_budgets table.
@@ -168,7 +165,6 @@ def reconcile_user_budget_tiers(
             for user_id in tier.user_ids:
                 if not user_id:
                     raise ValueError("UserBudgetTier.user_ids contains an empty entry")
-                writes.ensure_user(_tx, user_id, now)
                 writes.set_user_budget(_tx, user_id, tier.budget_limit, tier.max_band, now)
                 count += 1
     if count:

@@ -1,27 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Projection registry: write-through caches owning specific tables.
+"""Projection package: in-memory materialized views over controller DB tables.
 
-Each projection instance registers itself in :data:`PROJECTIONS` at
-construction. The ``@writes_to`` invariant — that no Projection-owned
-table may be mutated from outside its owning Projection — is enforced at
-controller startup by :func:`iris.cluster.controller.writes.validate`.
-
-Re-exporting the entity submodules at import time ensures that every
-projection instance is materialized before the check runs. Without this,
-the check would silently pass on a half-loaded registry.
+Each :class:`~iris.cluster.controller.projections.base.Projection` subclass
+self-registers into ``db.caches`` at construction and is reached from any
+cursor or the DB handle by concrete type — no module-global registry, no
+threaded references.
 """
-
-from typing import Any
-
-# Module-level registry of every projection instance. Typed as ``Any`` because
-# the projections themselves are defined in submodules that import from here;
-# referring to the concrete classes would create an import cycle.
-PROJECTIONS: list[Any] = []
-
-
-# Re-export entity modules so importing ``iris.cluster.controller.projections``
-# materializes every Projection class (and its registry entry). The startup
-# check relies on PROJECTIONS being fully populated.
-from iris.cluster.controller.projections import endpoints, worker_attrs

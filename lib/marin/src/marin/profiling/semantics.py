@@ -3,8 +3,6 @@
 
 """Semantic helpers for profile op grouping and shape-signature extraction."""
 
-from __future__ import annotations
-
 import math
 import re
 from collections.abc import Iterable

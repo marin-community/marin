@@ -17,6 +17,7 @@ class ColumnType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COLUMN_TYPE_TIMESTAMP_MS: _ClassVar[ColumnType]
     COLUMN_TYPE_BYTES: _ClassVar[ColumnType]
     COLUMN_TYPE_INT32: _ClassVar[ColumnType]
+    COLUMN_TYPE_MAP: _ClassVar[ColumnType]
 COLUMN_TYPE_UNKNOWN: ColumnType
 COLUMN_TYPE_STRING: ColumnType
 COLUMN_TYPE_INT64: ColumnType
@@ -25,24 +26,65 @@ COLUMN_TYPE_BOOL: ColumnType
 COLUMN_TYPE_TIMESTAMP_MS: ColumnType
 COLUMN_TYPE_BYTES: ColumnType
 COLUMN_TYPE_INT32: ColumnType
+COLUMN_TYPE_MAP: ColumnType
+
+class ColumnIndex(_message.Message):
+    __slots__ = ("trigram", "exact_values", "value_counts")
+    TRIGRAM_FIELD_NUMBER: _ClassVar[int]
+    EXACT_VALUES_FIELD_NUMBER: _ClassVar[int]
+    VALUE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+    trigram: bool
+    exact_values: _containers.RepeatedScalarFieldContainer[str]
+    value_counts: bool
+    def __init__(self, trigram: _Optional[bool] = ..., exact_values: _Optional[_Iterable[str]] = ..., value_counts: _Optional[bool] = ...) -> None: ...
 
 class Column(_message.Message):
-    __slots__ = ("name", "type", "nullable")
+    __slots__ = ("name", "type", "nullable", "index")
     NAME_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     NULLABLE_FIELD_NUMBER: _ClassVar[int]
+    INDEX_FIELD_NUMBER: _ClassVar[int]
     name: str
     type: ColumnType
     nullable: bool
-    def __init__(self, name: _Optional[str] = ..., type: _Optional[_Union[ColumnType, str]] = ..., nullable: _Optional[bool] = ...) -> None: ...
+    index: ColumnIndex
+    def __init__(self, name: _Optional[str] = ..., type: _Optional[_Union[ColumnType, str]] = ..., nullable: _Optional[bool] = ..., index: _Optional[_Union[ColumnIndex, _Mapping]] = ...) -> None: ...
+
+class CoveringProjection(_message.Message):
+    __slots__ = ("name", "predicate_column", "predicate_values", "columns")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    PREDICATE_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    PREDICATE_VALUES_FIELD_NUMBER: _ClassVar[int]
+    COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    predicate_column: str
+    predicate_values: _containers.RepeatedScalarFieldContainer[str]
+    columns: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, name: _Optional[str] = ..., predicate_column: _Optional[str] = ..., predicate_values: _Optional[_Iterable[str]] = ..., columns: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class GroupedExtrema(_message.Message):
+    __slots__ = ("filter_column", "group_json_column", "group_json_key", "extrema_column")
+    FILTER_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    GROUP_JSON_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    GROUP_JSON_KEY_FIELD_NUMBER: _ClassVar[int]
+    EXTREMA_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    filter_column: str
+    group_json_column: str
+    group_json_key: str
+    extrema_column: str
+    def __init__(self, filter_column: _Optional[str] = ..., group_json_column: _Optional[str] = ..., group_json_key: _Optional[str] = ..., extrema_column: _Optional[str] = ...) -> None: ...
 
 class Schema(_message.Message):
-    __slots__ = ("columns", "key_column")
+    __slots__ = ("columns", "key_column", "projections", "grouped_extrema")
     COLUMNS_FIELD_NUMBER: _ClassVar[int]
     KEY_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
+    GROUPED_EXTREMA_FIELD_NUMBER: _ClassVar[int]
     columns: _containers.RepeatedCompositeFieldContainer[Column]
     key_column: str
-    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ...) -> None: ...
+    projections: _containers.RepeatedCompositeFieldContainer[CoveringProjection]
+    grouped_extrema: _containers.RepeatedCompositeFieldContainer[GroupedExtrema]
+    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ..., grouped_extrema: _Optional[_Iterable[_Union[GroupedExtrema, _Mapping]]] = ...) -> None: ...
 
 class StoragePolicy(_message.Message):
     __slots__ = ("max_segments", "max_bytes", "max_age_seconds")

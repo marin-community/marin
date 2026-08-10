@@ -26,10 +26,14 @@ import jax.random as jrandom
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from openai.types import Completion, CompletionUsage
-from openai.types.chat import ChatCompletion
+from fastapi.responses import StreamingResponse
+from openai.types import Completion, CompletionUsage, Model
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
 from openai.types.chat.chat_completion import ChoiceLogprobs
+from openai.types.chat.chat_completion_chunk import Choice as ChatCompletionChunkChoice
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
@@ -55,6 +59,9 @@ from levanter.trainer import TrainerConfig
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_MODEL_NAME = "levanter"
+
+
 @dataclass
 class InferenceServerConfig:
     """Configuration for OpenAI-compatible inference server."""
@@ -64,6 +71,9 @@ class InferenceServerConfig:
 
     # Inference service/memory layout configuration
     service: InferenceEngineConfig = field(default_factory=lambda: InferenceEngineConfig(4096))
+
+    model_name: str = DEFAULT_MODEL_NAME
+    """Model id this server advertises from ``/v1/models``."""
 
     # Default generation parameters for API
     temperature: float = 0.7
@@ -417,6 +427,59 @@ def _health_check() -> dict:
     return {"status": "healthy", "service": "levanter-inference"}
 
 
+def _sse_event(payload: str) -> str:
+    return f"data: {payload}\n\n"
+
+
+def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Iterator[str]:
+    """Render a finished chat completion as an OpenAI server-sent-event stream.
+
+    The engine returns each generation whole, so a choice is delivered as one content chunk
+    followed by a chunk carrying its finish reason: the events are well-formed but not
+    incremental, and a client sees the whole completion in the first delta it receives.
+    """
+    for choice in completion.choices:
+        logprobs = (
+            ChunkChoiceLogprobs(content=choice.logprobs.content, refusal=choice.logprobs.refusal)
+            if choice.logprobs is not None
+            else None
+        )
+        content = ChatCompletionChunkChoice(
+            index=choice.index,
+            delta=ChoiceDelta(role="assistant", content=choice.message.content),
+            logprobs=logprobs,
+        )
+        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
+        for chunk_choice in (content, finish):
+            chunk = ChatCompletionChunk(
+                id=completion.id,
+                object="chat.completion.chunk",
+                created=completion.created,
+                model=completion.model,
+                choices=[chunk_choice],
+            )
+            yield _sse_event(chunk.model_dump_json())
+    yield _sse_event("[DONE]")
+
+
+def _completion_events(completion: Completion) -> collections.abc.Iterator[str]:
+    """Render a finished text completion as an OpenAI server-sent-event stream.
+
+    The streaming and non-streaming completion payloads share a shape, so each choice rides
+    its own event. As with chat, the events are well-formed but not incremental.
+    """
+    for choice in completion.choices:
+        chunk = Completion(
+            id=completion.id,
+            object="text_completion",
+            created=completion.created,
+            model=completion.model,
+            choices=[choice],
+        )
+        yield _sse_event(chunk.model_dump_json())
+    yield _sse_event("[DONE]")
+
+
 def _decoded_token_pieces(tokenizer: MarinTokenizer, token_ids: List[int]) -> List[str]:
     return [tokenizer.decode([token_id], skip_special_tokens=False) for token_id in token_ids]
 
@@ -596,16 +659,23 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
 
 def _compute_tokens(messages: list[ChatMessage], tokenizer: MarinTokenizer) -> List[int]:
-    try:
-        dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
-        result = tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
-        assert isinstance(result, list)
-        return result
-    except Exception as e:
-        # Fallback: simple concatenation if template fails
-        logger.warning(f"Chat template failed, using fallback: {e}", exc_info=True)
-        prompt_text = "\n".join([f"{msg.role}: {msg.content}" for msg in messages])
-        return tokenizer.encode(prompt_text, add_special_tokens=True)
+    """Encode a conversation with the tokenizer's chat template.
+
+    A model with no chat template cannot represent a conversation, so a chat request against one
+    is rejected rather than rendered into some invented format the model never saw. Base and
+    midtrained checkpoints are served through ``/v1/completions`` instead.
+    """
+    if tokenizer.chat_template is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This model has no chat template; use /v1/completions, or serve it with a chat template.",
+        )
+    dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
+    # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
+    # BatchEncoding here, which is the shape the rest of this module cannot use.
+    result = tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True, return_dict=False)
+    assert isinstance(result, list)
+    return result
 
 
 async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> TokensResponse:
@@ -618,6 +688,8 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
 
         return TokensResponse(results=results)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error in tokenization.", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -699,6 +771,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
         return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in chat completion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -751,19 +825,33 @@ class InferenceServer:
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
         app = FastAPI(title="Levanter Inference Service", version="1.0.0")
+        model_name = inference_context.config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
         async def health_check():
             return _health_check()
 
+        @app.get("/v1/models")
+        async def list_models() -> dict:
+            model = Model(id=model_name, object="model", created=int(time.time()), owned_by="levanter")
+            return {"object": "list", "data": [model.model_dump(mode="json")]}
+
+        # A streaming request returns a StreamingResponse, which FastAPI passes through
+        # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
-        async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletion:
-            return await _create_chat_completion(inference_context, request)
+        async def create_chat_completion(request: ChatCompletionRequest):
+            completion = await _create_chat_completion(inference_context, request)
+            if not request.stream:
+                return completion
+            return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
 
         @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest) -> Completion:
-            return await _create_completion(inference_context, request)
+        async def create_completion(request: CompletionRequest):
+            completion = await _create_completion(inference_context, request)
+            if not request.stream:
+                return completion
+            return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
 
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:

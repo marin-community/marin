@@ -27,8 +27,8 @@ jobs:
           filters: |
             relevant:
               - 'experiments/grug/**'
-              - 'scripts/grug_dir_diff.py'
-              - 'scripts/grug_variant_diff_ci.py'
+              - 'scripts/ci/grug_dir_diff.py'
+              - 'scripts/ci/grug_variant_diff_ci.py'
               - '.github/workflows/ops-grug-variant-diff.yaml'
 
   grug-variant-diff:
@@ -46,11 +46,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Generate variant diff reports
         run: |
-          python -m scripts.grug_variant_diff_ci \
+          python -m scripts.ci.grug_variant_diff_ci \
             --base-sha "${{ github.event.pull_request.base.sha }}" \
             --head-sha "${{ github.event.pull_request.head.sha }}" \
             --output-dir grug-diff-report \
@@ -76,7 +76,7 @@ jobs:
       - name: Upload report artifact
         id: artifact
         if: steps.manifest.outputs.has_reports == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grug-variant-diff-pr-${{ github.event.pull_request.number }}
           path: grug-diff-report
@@ -85,7 +85,7 @@ jobs:
       - name: Publish rendered report to gh-pages
         id: publish
         if: steps.manifest.outputs.has_reports == 'true' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e  # v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453  # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: grug-diff-report
@@ -94,7 +94,7 @@ jobs:
 
       - name: Post PR comment with report links
         if: "!cancelled() && github.event.pull_request.head.repo.full_name == github.repository"
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
           PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/grug-diffs/pr-${{ github.event.pull_request.number }}

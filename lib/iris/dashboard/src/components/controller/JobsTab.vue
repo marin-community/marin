@@ -6,7 +6,7 @@ import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { SEGMENT_COLORS, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
-import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
+import { LOCAL_CLUSTER, type JobStatus, type JobQuery, type ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -14,12 +14,15 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 import UsersOverview from '@/components/controller/UsersOverview.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
+import { useBackends } from '@/composables/useBackends'
 
 // Tailwind's `sm` breakpoint is 640px. Below that we render mobile cards;
 // at/above we render the desktop table. Switched via v-if so only one
 // variant is in the DOM at a time (otherwise duplicate text trips Playwright
 // locator's `.first` matcher in CI).
 const isMobile = useMediaQuery('(max-width: 639px)')
+
+const { multiBackend, currentBackend, currentCluster, ensurePeers } = useBackends()
 
 const PAGE_SIZE = 50
 
@@ -66,7 +69,14 @@ function queryStr(v: LocationQueryValue | LocationQueryValue[] | undefined): str
 
 const selectedUser = computed(() => queryStr(route.query.user))
 const showAll = computed(() => queryStr(route.query.all) === '1')
-const inJobList = computed(() => !!selectedUser.value || showAll.value)
+const backendId = computed(() => currentBackend(route))
+const clusterId = computed(() => currentCluster(route))
+// Scoping to one backend or one peer cluster drills straight into the
+// (server-side filtered) job list: the cross-fleet UsersOverview is an
+// all-targets aggregate with no such filter, so it stays the landing view.
+const inJobList = computed(
+  () => !!selectedUser.value || showAll.value || !!backendId.value || !!clusterId.value,
+)
 
 function parseSort(v: string): SortField {
   return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
@@ -97,6 +107,10 @@ const JOB_STATES: JobState[] = [
 // names of the form `/<user>/<job>`, so the prefix is `/<user>/`.
 const jobIdPrefix = computed(() => (selectedUser.value ? `/${selectedUser.value}/` : undefined))
 
+// Show the Backend column only in "All backends" mode (no scope selected) and
+// only when the controller has more than one backend.
+const showBackendColumn = computed(() => multiBackend.value && !backendId.value)
+
 const {
   data: listResponse,
   loading,
@@ -112,6 +126,8 @@ const {
     nameFilter: nameFilter.value || undefined,
     stateFilter: stateFilter.value || undefined,
     jobIdPrefix: jobIdPrefix.value,
+    backendId: backendId.value || undefined,
+    cluster: clusterId.value || undefined,
   } satisfies JobQuery,
 }))
 
@@ -173,10 +189,13 @@ async function fetchAll() {
 }
 
 onMounted(fetchAll)
+// Load the peer roster so `?cluster=` validation and the Cluster column's
+// filter target resolve; inert (no roster) on a single-cluster deployment.
+onMounted(ensurePeers)
 useAutoRefresh(fetchAll, DEFAULT_REFRESH_MS)
 
 // Re-fetch from scratch whenever the scope or any query knob changes.
-watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll], () => {
+watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll, backendId, clusterId], () => {
   childJobsByParent.value = new Map()
   expandedJobs.value = new Set()
   saveExpandedJobs()
@@ -185,7 +204,7 @@ watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll]
 
 // A different owner (or the all-jobs view) is a different result set — start at
 // the first page so a stale offset can't land out of range.
-watch([stateFilter, selectedUser, showAll], () => {
+watch([stateFilter, selectedUser, showAll, backendId, clusterId], () => {
   page.value = 0
 })
 
@@ -450,7 +469,7 @@ function sortIndicator(field: SortField): string {
         </button>
         <span v-else class="w-4 shrink-0" />
         <RouterLink
-          :to="'/job/' + encodeURIComponent(node.job.jobId)"
+          :to="{ path: '/job/' + encodeURIComponent(node.job.jobId), query: route.query }"
           class="text-accent hover:underline font-mono text-[13px] flex-1 min-w-0 break-anywhere"
         >
           {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
@@ -459,6 +478,12 @@ function sortIndicator(field: SortField): string {
       <!-- Row 2: state + counters -->
       <div class="mt-1.5 pl-5 flex items-center gap-2 flex-wrap">
         <StatusBadge :status="node.job.state" size="sm" />
+        <span
+          class="inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-text-secondary"
+          :title="'Cluster: ' + (node.job.cluster ?? LOCAL_CLUSTER)"
+        >
+          {{ node.job.cluster ?? LOCAL_CLUSTER }}
+        </span>
         <span class="text-xs text-text-muted font-mono">
           {{ jobDuration(node.job) }}
           <span v-if="(node.job.failureCount ?? 0) > 0" class="text-status-danger">
@@ -519,6 +544,21 @@ function sortIndicator(field: SortField): string {
               </span>
             </span>
           </th>
+          <th
+            v-if="showBackendColumn"
+            scope="col"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+          >
+            Backend
+          </th>
+          <!-- Cluster: every job carries a coordinate (`'local'` by default), so
+               each row is tagged; a single-cluster deployment reads all `local`. -->
+          <th
+            scope="col"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+          >
+            Cluster
+          </th>
           <th scope="col" class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Tasks
           </th>
@@ -550,7 +590,7 @@ function sortIndicator(field: SortField): string {
               </button>
               <span v-else class="w-4 shrink-0" />
               <RouterLink
-                :to="'/job/' + encodeURIComponent(node.job.jobId)"
+                :to="{ path: '/job/' + encodeURIComponent(node.job.jobId), query: route.query }"
                 class="text-accent hover:underline font-mono break-anywhere"
               >
                 {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
@@ -579,6 +619,7 @@ function sortIndicator(field: SortField): string {
           </td>
 
           <!-- Date -->
+
           <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] text-text-secondary font-mono">
             {{ jobDuration(node.job) }}
           </td>
@@ -599,6 +640,32 @@ function sortIndicator(field: SortField): string {
           <!-- Preemptions -->
           <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] text-right tabular-nums">
             {{ node.job.preemptionCount ?? 0 }}
+          </td>
+
+          <!-- Backend (multi-backend All mode only) -->
+          <td
+            v-if="showBackendColumn"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]"
+          >
+            <button
+              v-if="node.job.backendId"
+              class="text-accent hover:underline font-mono text-xs"
+              @click="router.replace({ query: { ...route.query, backend: node.job.backendId, cluster: undefined } })"
+            >
+              {{ node.job.backendId }}
+            </button>
+            <span v-else class="text-text-muted">—</span>
+          </td>
+
+          <!-- Cluster: the row's coordinate (`'local'` or a peer id); clicking
+               filters the list to that cluster. -->
+          <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
+            <button
+              class="text-accent hover:underline font-mono text-xs"
+              @click="router.replace({ query: { ...route.query, cluster: node.job.cluster ?? LOCAL_CLUSTER, backend: undefined } })"
+            >
+              {{ node.job.cluster ?? LOCAL_CLUSTER }}
+            </button>
           </td>
 
           <!-- Tasks progress bar -->

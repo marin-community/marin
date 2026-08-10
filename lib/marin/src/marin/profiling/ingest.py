@@ -3,21 +3,27 @@
 
 """Ingest JAX profile artifacts into a normalized profile summary."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import wandb
 from google.protobuf.message import DecodeError
+from levanter.utils.profile_dirs import (
+    PROFILER_DIR_NAME,
+    WandbRunLike,
+    mirror_profile_dir,
+    normalize_run_target,
+    resolve_profile_dir,
+    resolve_profile_run_id,
+)
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
+    TraceSummaryContext,
     load_trace_payload,
     parse_complete_events,
     sha256_for_path,
@@ -28,7 +34,6 @@ from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, s
 logger = logging.getLogger(__name__)
 
 PROFILE_ARTIFACT_TYPE = "jax_profile"
-DEFAULT_ARTIFACT_ALIAS = "latest"
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,12 @@ class DownloadedProfileArtifact:
     artifact_ref: str
     artifact_name: str
     artifact_dir: Path
+    run_metadata: RunMetadata
+
+
+@dataclass(frozen=True)
+class DownloadedProfileDir:
+    profile_dir: Path
     run_metadata: RunMetadata
 
 
@@ -69,35 +80,31 @@ def download_wandb_profile_artifact(
     )
 
 
-def download_latest_profile_artifact_for_run(
+def download_profile_dir_for_run(
     run_target: str,
     *,
     entity: str | None = None,
     project: str | None = None,
-    alias: str = DEFAULT_ARTIFACT_ALIAS,
     download_root: Path | None = None,
-) -> DownloadedProfileArtifact:
+) -> DownloadedProfileDir:
     """
-    Download the latest (or alias-selected) `jax_profile` artifact for a W&B run.
+    Mirror a run's profiler directory from `trainer.log_dir` and attach metadata.
 
     Args:
         run_target: Bare run id, `entity/project/run_id`, or W&B run URL.
         entity: W&B entity when `run_target` is a bare run id.
         project: W&B project when `run_target` is a bare run id.
-        alias: Artifact alias preference (defaults to `latest`).
-        download_root: Optional output directory for artifact download.
+        download_root: Optional output directory where the profiler tree will be mirrored.
     """
-    run_entity, run_project, run_id = normalize_run_target(run_target, entity=entity, project=project)
-    run_path = f"{run_entity}/{run_project}/{run_id}"
+    run_target_info = normalize_run_target(run_target, entity=entity, project=project)
+    run_path = f"{run_target_info.entity}/{run_target_info.project}/{run_target_info.run_id}"
 
     api = wandb.Api()
     run = api.run(run_path)
-    artifact = select_profile_artifact(run, alias=alias)
-    artifact_ref = f"{run_entity}/{run_project}/{artifact.name}"
+    profile_dir = resolve_profile_dir(run)
 
-    return _download_artifact_with_metadata(
-        artifact=artifact,
-        artifact_ref=artifact_ref,
+    return _download_profile_dir_with_metadata(
+        profile_dir=profile_dir,
         run=run,
         download_root=download_root,
     )
@@ -141,10 +148,10 @@ def summarize_profile_artifact(
     breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """
-    Summarize a downloaded profile artifact into the normalized schema.
+    Summarize a downloaded profile directory into the normalized schema.
 
     Args:
-        profile_dir: Local path to a `jax_profile` artifact directory.
+        profile_dir: Local path to a profiler directory.
         run_metadata: Optional run metadata to attach.
         warmup_steps: Number of initial steps to exclude from steady-state stats.
         hot_op_limit: Maximum number of hot ops to include.
@@ -157,28 +164,9 @@ def summarize_profile_artifact(
             hot_op_limit=hot_op_limit,
             breakdown_mode=breakdown_mode,
         )
-    except DecodeError:
-        trace_path = find_profile_trace(profile_dir)
-        return summarize_trace(
-            trace_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            breakdown_mode=breakdown_mode,
-        )
-    except FileNotFoundError as xplane_error:
-        try:
-            trace_path = find_profile_trace(profile_dir)
-        except FileNotFoundError:
-            raise xplane_error from None
-        return summarize_trace(
-            trace_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            breakdown_mode=breakdown_mode,
-        )
-    except MultipleXPlaneFilesError as xplane_error:
+    except (DecodeError, FileNotFoundError, MultipleXPlaneFilesError) as xplane_error:
+        # No single decodable XPlane protobuf: fall back to the Perfetto/Chrome trace JSON.
+        # When there is no trace either, the XPlane failure is the more useful diagnostic.
         try:
             trace_path = find_profile_trace(profile_dir)
         except FileNotFoundError:
@@ -210,85 +198,26 @@ def summarize_trace(
         hot_op_limit: Maximum number of hot ops to include.
     """
     payload = load_trace_payload(trace_path)
-    display_time_unit = payload.get("displayTimeUnit")
-    all_events = payload.get("traceEvents", [])
-    if not isinstance(all_events, list):
-        raise ValueError(f"Trace at '{trace_path}' does not contain a list under 'traceEvents'.")
+    display_time_unit = payload.displayTimeUnit
+    all_events = payload.traceEvents
 
     parsed_events, process_names, thread_names = parse_complete_events(all_events)
     return summarize_complete_events(
         parsed_events,
-        source_format="perfetto_trace_json",
-        source_path=trace_path,
-        display_time_unit=display_time_unit if isinstance(display_time_unit, str) else None,
-        num_events_total=len(all_events),
-        process_names=process_names,
-        thread_names=thread_names,
-        trace_sha256=sha256_for_path(trace_path),
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
+        context=TraceSummaryContext(
+            source_format="perfetto_trace_json",
+            source_path=trace_path,
+            display_time_unit=display_time_unit,
+            num_events_total=len(all_events),
+            process_names=process_names,
+            thread_names=thread_names,
+            trace_sha256=sha256_for_path(trace_path),
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        ),
     )
-
-
-def normalize_run_target(target: str, *, entity: str | None, project: str | None) -> tuple[str, str, str]:
-    """
-    Normalize run target into `(entity, project, run_id)`.
-
-    Accepted target forms:
-    - bare run id (`abc123`) with explicit `entity` and `project`
-    - `entity/project/run_id`
-    - W&B run URL (`https://wandb.ai/entity/project/runs/run_id`)
-    """
-    if target.startswith(("http://", "https://")):
-        parts = [part for part in urlparse(target).path.split("/") if part]
-        if len(parts) < 3:
-            raise ValueError(f"Could not parse run information from URL: {target}")
-    else:
-        parts = [part for part in target.split("/") if part]
-        if len(parts) == 1:
-            if entity is None or project is None:
-                raise ValueError("Bare run ids require --entity and --project.")
-            return entity, project, parts[0]
-        if len(parts) < 3:
-            raise ValueError(f"Unrecognized run target: {target}")
-
-    run_id = parts[3] if parts[2] == "runs" and len(parts) >= 4 else parts[2]
-    return parts[0], parts[1], run_id
-
-
-def select_profile_artifact(run: Any, *, alias: str | None) -> Any:
-    """
-    Select a `jax_profile` artifact from a W&B run.
-
-    If `alias` matches no artifact, falls back to the most recently updated one.
-    """
-    candidates = [
-        artifact for artifact in run.logged_artifacts() if getattr(artifact, "type", None) == PROFILE_ARTIFACT_TYPE
-    ]
-    if not candidates:
-        raise RuntimeError(f"No artifacts of type '{PROFILE_ARTIFACT_TYPE}' were found for run {run.path}.")
-
-    if alias:
-        for artifact in candidates:
-            if alias in _alias_names(artifact):
-                return artifact
-
-    candidates.sort(
-        key=lambda artifact: getattr(artifact, "updated_at", None) or getattr(artifact, "created_at", None),
-        reverse=True,
-    )
-    return candidates[0]
-
-
-def _alias_names(artifact: Any) -> set[str]:
-    names: set[str] = set()
-    for alias in getattr(artifact, "aliases", None) or []:
-        name = getattr(alias, "name", alias)
-        if name is not None:
-            names.add(str(name))
-    return names
 
 
 def _download_artifact_with_metadata(
@@ -321,6 +250,18 @@ def _download_artifact_with_metadata(
         artifact_dir=artifact_dir,
         run_metadata=metadata,
     )
+
+
+def _download_profile_dir_with_metadata(
+    *,
+    profile_dir: str,
+    run: WandbRunLike,
+    download_root: Path | None,
+) -> DownloadedProfileDir:
+    run_id = resolve_profile_run_id(run)
+    local_profile_dir = mirror_profile_dir(profile_dir, download_root, run_id=run_id)
+    metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILER_DIR_NAME)
+    return DownloadedProfileDir(profile_dir=local_profile_dir, run_metadata=metadata)
 
 
 def _pick_first(mapping: dict[str, Any], *keys: str) -> str | None:
@@ -362,7 +303,7 @@ def _int_or_none(value: Any) -> int | None:
     return None
 
 
-def _run_metadata_from_run(run: Any, *, artifact_ref: str, artifact_name: str) -> RunMetadata:
+def _run_metadata_from_run(run: WandbRunLike, *, artifact_ref: str, artifact_name: str) -> RunMetadata:
     summary = dict(run.summary)
     config = dict(run.config)
     return RunMetadata(

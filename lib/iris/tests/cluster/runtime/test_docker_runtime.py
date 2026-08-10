@@ -3,15 +3,14 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
-from __future__ import annotations
-
 import subprocess
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.runtime.docker import DockerRuntime, _security_flags
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.rpc import job_pb2
 
 
 @pytest.fixture
@@ -38,7 +37,7 @@ def test_resolve_mounts_workdir(monkeypatch, tmp_path, runtime):
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
     resolved = runtime.resolve_mounts(mounts, workdir_host_path=workdir)
 
     assert len(calls) == 0
@@ -50,7 +49,7 @@ def test_resolve_mounts_workdir(monkeypatch, tmp_path, runtime):
 
 def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     """CACHE mounts resolve to subdirectories under cache_dir."""
-    mounts = [MountSpec(container_path="/root/.cache/uv", kind=MountKind.CACHE)]
+    mounts = [MountSpec("root-cache-uv", container_path="/root/.cache/uv", kind=MountKind.CACHE)]
     resolved = runtime.resolve_mounts(mounts)
 
     assert len(resolved) == 1
@@ -61,7 +60,7 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
 
 def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
     """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
-    mounts = [MountSpec(container_path="/tmp", kind=MountKind.TMPFS)]
+    mounts = [MountSpec("tmp", container_path="/tmp", kind=MountKind.TMPFS)]
     resolved = runtime.resolve_mounts(mounts)
 
     assert len(resolved) == 1
@@ -73,7 +72,7 @@ def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
     """WORKDIR mount without workdir_host_path raises RuntimeError."""
     runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR)]
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR)]
     with pytest.raises(RuntimeError, match="workdir_host_path"):
         runtime.resolve_mounts(mounts)
 
@@ -83,6 +82,52 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
+
+
+@pytest.mark.parametrize(
+    ("device", "memory_bytes", "expected_shm_mb"),
+    [
+        (None, 12 * 1024**3, 12 * 1024),
+        ("tpu", 12 * 1024**3, 12 * 1024),
+        ("tpu", 0, 100 * 1024),
+    ],
+)
+def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
+    monkeypatch, tmp_path, runtime, device, memory_bytes, expected_shm_mb
+):
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        stdout = "container-id\n" if cmd[:2] == ["docker", "create"] else ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    resources = job_pb2.ResourceSpecProto(memory_bytes=memory_bytes)
+    if device == "tpu":
+        resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5p", count=4))
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(
+            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
+        ),
+        env={},
+        resources=resources,
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+    )
+
+    runtime.create_container(config).run()
+
+    create_command = next(command for command in commands if command[:2] == ["docker", "create"])
+    if memory_bytes:
+        assert create_command[create_command.index("--memory") + 1] == f"{expected_shm_mb}m"
+    else:
+        assert "--memory" not in create_command
+    assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
@@ -103,3 +148,54 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+
+
+# ---------------------------------------------------------------------------
+# Container security profiles -> docker flags
+# ---------------------------------------------------------------------------
+
+
+def test_security_flags_default_cpu():
+    """UNSPECIFIED resolves to DEFAULT: hardened CPU defaults with SYS_PTRACE."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "SYS_PTRACE"]
+
+
+def test_security_flags_default_tpu_is_privileged():
+    """A TPU run is privileged for device access even under DEFAULT."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DEFAULT, is_tpu_run=True)
+    assert "--privileged" in flags
+    assert "no-new-privileges" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_restricted_omits_ptrace():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_RESTRICTED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+    assert "SYS_PTRACE" not in flags
+
+
+def test_security_flags_privileged_cpu():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_PRIVILEGED, is_tpu_run=False)
+    assert "--privileged" in flags
+    assert "--cap-drop" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_docker_access_mounts_socket():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS, is_tpu_run=False)
+    assert "-v" in flags
+    assert "/var/run/docker.sock:/var/run/docker.sock" in flags
+    # Still hardened like DEFAULT otherwise.
+    assert "--cap-drop" in flags
+
+
+def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
+    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+    assert flags == ["--runtime", "runsc"]
+    # in-guest root needs the default cap set, so the container is NOT cap-dropped
+    # or privileged — gVisor provides the host isolation instead.
+    assert "--cap-drop" not in flags
+    assert "--privileged" not in flags
+    assert "no-new-privileges" not in flags

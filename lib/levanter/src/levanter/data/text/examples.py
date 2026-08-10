@@ -148,6 +148,13 @@ class GrugLmExample:
             dtype = jnp.float32
             loss_weight = causal_loss_mask.astype(dtype)
 
+        # Prepacked datasets mark padding positions with segment id -1. A position whose
+        # successor is padding predicts a pad token, so it must never contribute loss --
+        # otherwise the (arbitrary) padding value would leak into the objective.
+        if segment_ids is not None:
+            predicts_real_token = (jnp.roll(segment_ids, -1) >= 0).astype(dtype)
+            loss_weight = loss_weight * predicts_real_token
+
         if ignore_id is not None:
             ignore_mask = jnp.roll(tokens, -1) != ignore_id
             ignore_mask = ignore_mask.astype(loss_weight.dtype)
@@ -252,6 +259,30 @@ def _resolve_batch_axis(batch_axis: AxisSelector | None, batch_size: int) -> Axi
     raise TypeError(f"Unsupported batch axis selector: {batch_axis!r}")
 
 
+def _resolve_token_axes(
+    tokens: jax.Array,
+    Pos: Axis,
+    batch_axis: AxisSelector | None,
+    *,
+    kind: str,
+) -> tuple[tuple[Axis, ...], AxisSelector | None]:
+    """Resolve axes for a rank-1 ``(Pos,)`` or rank-2 ``(Batch, Pos)`` example array.
+
+    ``kind`` names the example type (e.g. ``"GrugLmExample"``) so validation errors point at
+    the caller's data. Returns the token axes and the resolved batch axis (``None`` when rank-1).
+    """
+    if tokens.ndim == 1:
+        if tokens.shape[0] != Pos.size:
+            raise ValueError(f"{kind} token length ({tokens.shape[0]}) must match Pos axis size ({Pos.size})")
+        return (Pos,), None
+    if tokens.ndim == 2:
+        Batch = _resolve_batch_axis(batch_axis, tokens.shape[0])
+        if tokens.shape[1] != Pos.size:
+            raise ValueError(f"{kind} position length ({tokens.shape[1]}) must match Pos axis size ({Pos.size})")
+        return (Batch, Pos), Batch
+    raise ValueError(f"{kind} tokens must be rank-1 or rank-2, got rank={tokens.ndim}")
+
+
 def named_attention_mask_from_grug(
     mask: GrugAttentionMask,
     Pos: Axis,
@@ -318,23 +349,7 @@ def named_lm_example_from_labeled(
             f"{example.loss_labels.shape}."
         )
 
-    if example.tokens.ndim == 1:
-        if example.tokens.shape[0] != Pos.size:
-            raise ValueError(
-                f"LabeledLmExample token length ({example.tokens.shape[0]}) must match Pos axis size ({Pos.size})"
-            )
-        token_axes: tuple[Axis, ...] = (Pos,)
-        resolved_batch_axis: AxisSelector | None = None
-    elif example.tokens.ndim == 2:
-        Batch = _resolve_batch_axis(batch_axis, example.tokens.shape[0])
-        if example.tokens.shape[1] != Pos.size:
-            raise ValueError(
-                f"LabeledLmExample position length ({example.tokens.shape[1]}) must match Pos axis size ({Pos.size})"
-            )
-        token_axes = (Batch, Pos)
-        resolved_batch_axis = Batch
-    else:
-        raise ValueError(f"LabeledLmExample tokens must be rank-1 or rank-2, got rank={example.tokens.ndim}")
+    token_axes, resolved_batch_axis = _resolve_token_axes(example.tokens, Pos, batch_axis, kind="LabeledLmExample")
 
     labels = hax.named(example.loss_labels.astype(jnp.int32), token_axes)
     if scored_labels is None:
@@ -363,23 +378,7 @@ def named_lm_example_from_grug(
             f"GrugLmExample token shape {example.tokens.shape} must match loss_weight shape {example.loss_weight.shape}."
         )
 
-    if example.tokens.ndim == 1:
-        if example.tokens.shape[0] != Pos.size:
-            raise ValueError(
-                f"GrugLmExample token length ({example.tokens.shape[0]}) must match Pos axis size ({Pos.size})"
-            )
-        token_axes: tuple[Axis, ...] = (Pos,)
-        resolved_batch_axis: AxisSelector | None = None
-    elif example.tokens.ndim == 2:
-        Batch = _resolve_batch_axis(batch_axis, example.tokens.shape[0])
-        if example.tokens.shape[1] != Pos.size:
-            raise ValueError(
-                f"GrugLmExample position length ({example.tokens.shape[1]}) must match Pos axis size ({Pos.size})"
-            )
-        token_axes = (Batch, Pos)
-        resolved_batch_axis = Batch
-    else:
-        raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2, got rank={example.tokens.ndim}")
+    token_axes, resolved_batch_axis = _resolve_token_axes(example.tokens, Pos, batch_axis, kind="GrugLmExample")
 
     return LmExample(
         tokens=hax.named(example.tokens, token_axes),

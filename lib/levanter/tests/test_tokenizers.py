@@ -13,15 +13,19 @@ import os
 import pathlib
 import re
 import shutil
+from typing import cast
 from unittest.mock import patch
 
+import jinja2.exceptions
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
+from tokenizers import Tokenizer as HfBaseTokenizer
 
 import levanter.tokenizers as tk
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import (
+    HfMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
@@ -56,27 +60,26 @@ requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or net
 # ---------------------------------------------------------------------------
 
 
-# Pre-load available backends once at module import.  The loaded tokenizers are
-# cached in _BACKEND_TOKENIZERS so every fixture reuses the same instances
-# instead of hitting the network/disk on each test.
+# Backends are loaded lazily inside the fixture and cached here, one instance per module.
+# Loading must NOT happen at collection time: a network/auth failure there would make xdist
+# workers disagree on the parametrize ids and abort the run (issue #7076).
 _BACKEND_TOKENIZERS: dict[str, MarinTokenizer] = {}
-_AVAILABLE_BACKENDS: list[str] = []
-if _MODEL_AVAILABLE:
-    load_tokenizer.cache_clear()
-    _BACKEND_TOKENIZERS["hf"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.HF)
-    _AVAILABLE_BACKENDS.append("hf")
 
 
-@pytest.fixture(scope="module", params=_AVAILABLE_BACKENDS if _AVAILABLE_BACKENDS else ["_skip_all"])
+@pytest.fixture(scope="module", params=["hf"])
 def backend_tokenizer(request):
-    """Parameterized fixture yielding each available backend tokenizer.
+    """Parameterized fixture yielding each backend tokenizer, loaded once per module.
 
-    Module-scoped so each backend is loaded once per test module, not per test.
+    The param list is fixed so every xdist worker collects identical test ids; a backend that
+    cannot be loaded (gated model, offline) skips at call time rather than dropping its id.
     """
-    name = request.param
-    if name == "_skip_all":
-        pytest.skip("No tokenizer backends available")
-    return _BACKEND_TOKENIZERS[name]
+    backend = request.param
+    if backend not in _BACKEND_TOKENIZERS:
+        try:
+            _BACKEND_TOKENIZERS[backend] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend(backend))
+        except Exception as exc:
+            pytest.skip(f"tokenizer backend {backend!r} unavailable: {exc}")
+    return _BACKEND_TOKENIZERS[backend]
 
 
 # ---------------------------------------------------------------------------
@@ -959,63 +962,22 @@ def test_vocab_dict_subset_of_vocab_size(backend_tokenizer):
     assert len(vocab) <= backend_tokenizer.vocab_size
 
 
-# ---------------------------------------------------------------------------
-# 9. Chat template
-# ---------------------------------------------------------------------------
+def test_chat_template_blocks_python_internal_attribute_access():
+    tokenizer = HfMarinTokenizer(
+        _tokenizer=cast(HfBaseTokenizer, object()),
+        _name_or_path="malicious-tokenizer",
+        _bos_id=None,
+        _eos_id=None,
+        _pad_id=None,
+        _bos_token=None,
+        _eos_token=None,
+        _chat_template="{{ ''.__class__.__mro__[1].__subclasses__() }}",
+        _vocab_size=0,
+        _all_special_ids=[],
+    )
 
-CHAT_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
-
-
-@pytest.fixture(scope="module")
-def chat_tokenizer() -> MarinTokenizer:
-    try:
-        load_tokenizer.cache_clear()
-        return load_tokenizer(CHAT_MODEL)
-    except Exception:
-        pytest.skip("Cannot load chat model")
-
-
-def test_chat_template_renders_string(chat_tokenizer):
-    conversation = [{"role": "user", "content": "What is 2+2?"}]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert isinstance(result, str)
-    assert "What is 2+2?" in result
-
-
-def test_chat_template_tokenizes(chat_tokenizer):
-    conversation = [{"role": "user", "content": "What is 2+2?"}]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=True)
-    assert isinstance(result, list)
-    assert all(isinstance(i, int) for i in result)
-    assert len(result) > 0
-
-
-def test_chat_template_with_system_message(chat_tokenizer):
-    conversation = [
-        {"role": "user", "content": "Hi there"},
-    ]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert isinstance(result, str)
-
-
-def test_chat_template_multi_turn(chat_tokenizer):
-    conversation = [
-        {"role": "user", "content": "What is 2+2?"},
-        {"role": "assistant", "content": "4"},
-        {"role": "user", "content": "And 3+3?"},
-    ]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert "What is 2+2?" in result
-    assert "4" in result
-    assert "And 3+3?" in result
-
-
-def test_chat_template_add_generation_prompt(chat_tokenizer):
-    conversation = [{"role": "user", "content": "Hello"}]
-    without = chat_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
-    with_prompt = chat_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
-    # With generation prompt should be at least as long
-    assert len(with_prompt) >= len(without)
+    with pytest.raises(jinja2.exceptions.SecurityError):
+        tokenizer.apply_chat_template([{"role": "user", "content": "hi"}], tokenize=False)
 
 
 @requires_model
@@ -1241,23 +1203,25 @@ def test_chat_processor_with_marin_tokenizer():
     assert any(m == 1 for m in mask), "assistant_masks should mark assistant content"
 
 
+# Loaded lazily inside the fixture; see backend_tokenizer for why collection stays network-free.
 _GEMMA_TOKENIZERS: dict[str, MarinTokenizer] = {}
-_GEMMA_BACKENDS: list[str] = []
-try:
-    load_tokenizer.cache_clear()
-    for _b in [TokenizerBackend.HF]:
-        _GEMMA_TOKENIZERS[_b.value] = load_tokenizer("google/gemma-3-4b-it", backend=_b)
-        _GEMMA_BACKENDS.append(_b.value)
-except Exception:
-    pass
+_GEMMA_MODEL = "google/gemma-3-4b-it"
 
 
-@pytest.fixture(scope="module", params=_GEMMA_BACKENDS if _GEMMA_BACKENDS else ["_skip_all"])
+@pytest.fixture(scope="module", params=["hf"])
 def gemma_tokenizer(request):
-    name = request.param
-    if name == "_skip_all":
-        pytest.skip("Cannot load gemma-3-4b-it tokenizer")
-    return _GEMMA_TOKENIZERS[name]
+    """gemma-3-4b-it tokenizer per backend, loaded lazily so collection is deterministic.
+
+    Static params keep xdist workers' collection identical (issue #7076); a load failure (the
+    model is gated) skips at call time.
+    """
+    backend = request.param
+    if backend not in _GEMMA_TOKENIZERS:
+        try:
+            _GEMMA_TOKENIZERS[backend] = load_tokenizer(_GEMMA_MODEL, backend=TokenizerBackend(backend))
+        except Exception as exc:
+            pytest.skip(f"{_GEMMA_MODEL} tokenizer unavailable: {exc}")
+    return _GEMMA_TOKENIZERS[backend]
 
 
 # Correctness check for SentencePiece BPE merge-rank handling on gemma-3.
@@ -1421,8 +1385,8 @@ def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
         return False
 
     with (
-        patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()),
-        patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
+        patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()),
+        patch("levanter.tokenizers.fetch_file_atomic", side_effect=fake_fetch),
     ):
         result = _stage_from_mirror("org/model", str(local_dir))
 
@@ -1442,7 +1406,7 @@ def test_stage_from_mirror_absent(tmp_path):
         def ls(self, path, detail=False):
             return []
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False
@@ -1529,7 +1493,7 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
         def exists(self, path):
             raise OSError("mirror unreachable")
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=BrokenMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=BrokenMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False

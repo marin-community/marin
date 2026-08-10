@@ -26,10 +26,14 @@ pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
 
 /// Return the next merge job, or `None` if nothing is due.
 ///
-/// Walks tiers from L0 upward and returns the first promotable run. The selected
-/// run prefix is capped at the level's byte target (`take_until_target`) so a
-/// large backlog drains one target-sized chunk per tick rather than OOMing a
-/// single merge.
+/// Walks tiers from L0 upward and returns the first promotable run, capping the
+/// selected prefix at the level's compressed byte target.
+///
+/// The job's MEMORY cost is not decided here: a segment's decoded Arrow size
+/// cannot be read off its footer (see `max_merge_arrow_bytes`), so the executor
+/// measures it while reading and merges only the prefix of `inputs` that fits.
+/// A job this planner returns is therefore an upper bound on what one tick
+/// merges, not a promise.
 pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<CompactionJob> {
     for (n, &target) in config.level_targets.iter().enumerate() {
         let level = n as i32;
@@ -39,10 +43,7 @@ pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<Compac
         }
         at_level.sort_by_key(|s| s.min_seq);
         for run in contiguous_runs(&at_level) {
-            if run_bytes(&run) >= target {
-                return Some(build_job(take_until_target(&run, target), level + 1));
-            }
-            if run.len() >= config.max_segments_per_level {
+            if run_bytes(&run) >= target || run.len() >= config.max_segments_per_level {
                 return Some(build_job(take_until_target(&run, target), level + 1));
             }
         }
@@ -72,15 +73,15 @@ fn run_bytes(run: &[&SegmentRow]) -> i64 {
     run.iter().map(|s| s.byte_size).sum()
 }
 
-/// Take the shortest prefix of `run` whose byte sum hits `target`. Always
-/// returns at least one segment.
+/// Take the shortest prefix of `run` whose compressed byte sum hits `target`.
+/// Always returns at least one segment.
 fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a SegmentRow> {
     let mut out: Vec<&SegmentRow> = Vec::new();
-    let mut total: i64 = 0;
+    let mut compressed: i64 = 0;
     for &seg in run {
         out.push(seg);
-        total += seg.byte_size;
-        if total >= target {
+        compressed += seg.byte_size;
+        if compressed >= target {
             break;
         }
     }
@@ -89,12 +90,10 @@ fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a Segment
 
 fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJob {
     let output_min_seq = run.iter().map(|s| s.min_seq).min().expect("run non-empty");
-    let output_max_seq = run.iter().map(|s| s.max_seq).max().expect("run non-empty");
     CompactionJob {
         inputs: run.into_iter().cloned().collect(),
         output_level,
         output_min_seq,
-        output_max_seq,
     }
 }
 
@@ -222,8 +221,7 @@ mod tests {
         let mins: Vec<i64> = taken.iter().map(|s| s.min_seq).collect();
         assert_eq!(mins, vec![1, 2]);
         // sub-target run still makes forward progress with >=1 input.
-        let taken = take_until_target(&run, 1_000_000);
-        assert_eq!(taken.len(), 3);
+        assert_eq!(take_until_target(&run, 1_000_000).len(), 3);
         let single = vec![&r0];
         assert_eq!(take_until_target(&single, 1_000_000).len(), 1);
     }

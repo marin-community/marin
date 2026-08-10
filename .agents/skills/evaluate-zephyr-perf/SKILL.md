@@ -233,7 +233,7 @@ Same protocol for all three gates; substitute the tier-N specifics.
 
 ```bash
 mkdir -p /tmp/zephyr-perf/<PR>
-uv run python scripts/datakit/submit_perf_run.py \
+uv run python scripts/ci/submit_perf_run.py \
   --gate <N> --pr <PR_NUMBER> --cwd "$TREATMENT_WT" \
   --status-out gs://marin-us-central1/tmp/ttl=7d/zephyr-perf/<PR>/treatment-g<N>.json \
   > /tmp/zephyr-perf/<PR>/submit-g<N>.json
@@ -254,7 +254,7 @@ run masks a real regression.
 workflows use, so the JSON matches the baseline structurally:
 
 ```bash
-uv run python scripts/datakit/collect_perf_metrics.py \
+uv run python scripts/ci/collect_perf_metrics.py \
   --job-id "$TREATMENT_JOB_ID" \
   --status gs://marin-us-central1/tmp/ttl=7d/zephyr-perf/<PR>/treatment-g<N>.json \
   --out /tmp/zephyr-perf/<PR>/treatment-g<N>-perf-report.json

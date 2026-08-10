@@ -7,10 +7,8 @@ Env inheritance uses JobInfo.env (populated from IRIS_JOB_ENV) which contains
 only the explicit vars from the parent's EnvironmentConfig — not infrastructure
 vars like TPU_NAME or PATH that happen to be in os.environ.
 
-Extras and pip_packages are inherited via IRIS_JOB_EXTRAS and IRIS_JOB_PIP_PACKAGES.
+The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
 """
-
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from unittest.mock import patch
@@ -18,7 +16,7 @@ from unittest.mock import patch
 import pytest
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
-from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 
@@ -201,3 +199,41 @@ def test_child_explicit_region_overrides_parent_worker_region(capturing_client, 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
     assert region_constraints[0].value.string_value == "europe-west4"
+
+
+def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):
+    """A child carrying the ANY marker submits with no region constraint, even when the
+    parent worker has a region to inherit."""
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
+    ):
+        client.submit(entrypoint, "child-any-region", resources, constraints=[any_region_constraint()])
+
+    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert region_constraints == []
+
+
+def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
+    """A child carrying the ANY marker submits with no region constraint, even when the
+    parent job is pinned to a region."""
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-west4"),
+        ),
+    ):
+        client.submit(entrypoint, "child-any-clears-pin", resources, constraints=[any_region_constraint()])
+
+    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert region_constraints == []

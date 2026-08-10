@@ -27,19 +27,29 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Subset of ACTIVE that excludes RUNNING — dispatched to a worker (or pod) but
+# not yet observed running. These tasks age from their current attempt's
+# creation in the ``iris.task_state`` wait-age columns.
+DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+    }
+)
+
 
 class RunningTaskEntry(NamedTuple):
     """Task ID and attempt ID pair captured at snapshot time.
 
-    ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
-    a gang preemption (WORKER_FAILED) rather than an application failure: when
-    Kueue preempts a pod group it deletes every pod, leaving no terminal pod
-    status to read — only the absence. See K8sTaskProvider._poll_pods.
+    ``attempt_uid`` is the incarnation key the K8s provider needs to rebuild the
+    pod name (which embeds it): a resubmit reuses (task_id, attempt_id) but mints
+    a new uid, so poll must target this attempt's pod, not a stale one. Empty off
+    the direct-dispatch path.
     """
 
     task_id: JobName
     attempt_id: int
-    coscheduled: bool = False
+    attempt_uid: str = ""
 
 
 def task_is_finished(
@@ -96,19 +106,18 @@ class ActiveTaskRow:
     state: int
     current_attempt_id: int
     current_worker_id: WorkerId | None
-    failure_count: int
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    is_reservation_holder: bool
     has_coscheduling: bool
 
 
-class TaskDetailRow(Protocol):
-    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
+@dataclass(frozen=True, slots=True)
+class TaskDetailRow:
+    """Task-detail projection: ``TASK_DETAIL_COLS`` plus the federated worker label.
 
-    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``reconcile.py`` use
-    this Protocol as the value type of the task map.
+    ``failure_count`` / ``preemption_count`` are derived from the task's attempt
+    rows — there are no such columns on ``tasks``.
     """
 
     task_id: JobName
@@ -119,12 +128,20 @@ class TaskDetailRow(Protocol):
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
+    submitted_at_ms: Timestamp
     priority_band: int
     error: str | None
     exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
-    current_worker_id: str | None
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    # Backend status one-liner for a waiting/building task (why it is not running
+    # yet); None/"" when running or quiet. See tasks.status_message.
+    status_message: str | None
+    backend_id: str
+    cluster: str
+    # Federated task's peer-side worker label ("" for a local task); NULL from the
+    # outer join when absent.
+    peer_worker_label: str | None

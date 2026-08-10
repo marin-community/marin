@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
-from iris.cluster.token_store import store_token
 from iris.rpc import job_pb2, time_pb2
 from marin.mcp.babysitter import (
     _token_provider,
@@ -11,6 +10,7 @@ from marin.mcp.babysitter import (
     parse_zephyr_thread_state,
     task_status_to_json,
 )
+from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
 
 
 def _timestamp(epoch_ms: int):
@@ -115,14 +115,18 @@ def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch
     assert "resource_requests" in payload
 
 
-def test_token_provider_loads_iris_token_store(tmp_path):
-    store_path = tmp_path / "tokens.json"
-    store_token("iris-prod", "https://controller.example.com", "stored-token", store_path=store_path)
-
-    provider = _token_provider("iris-prod", store_path=store_path)
-
+def test_token_provider_uses_env_override(monkeypatch):
+    # Pure-IAP: the controller mints no user token, so the only Authorization bearer
+    # is the explicit $MARIN_CLUSTER_TOKEN escape hatch (e.g. a worker JWT for CI).
+    monkeypatch.setenv(MARIN_CLUSTER_TOKEN_ENV, "env-token")
+    provider = _token_provider()
     assert provider is not None
-    assert provider.get_token() == "stored-token"
+    assert provider.get_token() == "env-token"
+
+
+def test_token_provider_none_without_env(monkeypatch):
+    monkeypatch.delenv(MARIN_CLUSTER_TOKEN_ENV, raising=False)
+    assert _token_provider() is None
 
 
 def test_parse_zephyr_progress_keeps_latest_stage_snapshot():

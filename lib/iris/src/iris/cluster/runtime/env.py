@@ -16,6 +16,7 @@ from pathlib import Path
 from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
+from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -23,6 +24,76 @@ logger = logging.getLogger(__name__)
 
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
+IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
+IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
+
+# Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
+# the setup script populates the venv at VENV_PATH (which the run phase activates).
+WORKDIR_PATH = "/app"
+VENV_PATH = f"{WORKDIR_PATH}/.venv"
+
+# Download caches, bound to node-local storage that outlives the container
+# (hostPath on K8s, cache_dir on Docker) so a wheel or a model is fetched once
+# per node instead of once per task. Paths sit outside $HOME because a task may
+# bring its own image: build_common_iris_env points each tool here explicitly, so
+# nothing depends on that image's HOME.
+UV_CACHE_PATH = "/uv/cache"
+HF_HUB_CACHE_PATH = "/hf/cache"
+CARGO_HOME_PATH = "/cargo"
+# Unclaimed node-local scratch, for anything that needs a real directory on the
+# node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
+# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
+# which has no object-store filesystem.
+SCRATCH_CACHE_PATH = "/cache"
+
+# The task container filesystem, as mounted by every runtime. Each runtime binds
+# a CACHE entry to cache_host_dirname(path) under its own cache_dir, so one node
+# directory backs a task whether it lands as a K8s pod or a Docker container.
+#
+# This list and the cache env in build_common_iris_env are one contract: the env
+# names these exact paths, so both must be defined together. A cache whose env
+# var and mount disagree still runs -- it just writes to the container's own
+# writable layer and re-downloads on every task, with nothing to see in a log.
+WORKDIR_MOUNT = MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR)
+
+STANDARD_MOUNTS: tuple[MountSpec, ...] = (
+    WORKDIR_MOUNT,
+    MountSpec("tmpfs", "/tmp", kind=MountKind.TMPFS),
+    MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
+    MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
+    MountSpec("cargo", CARGO_HOME_PATH, kind=MountKind.CACHE),
+    MountSpec("scratch-cache", SCRATCH_CACHE_PATH, kind=MountKind.CACHE),
+)
+
+
+def cache_host_dirname(container_path: str) -> str:
+    """Host directory name for a CACHE mount, relative to a runtime's cache_dir."""
+    return container_path.strip("/").replace("/", "-")
+
+
+# Heredoc delimiter for materializing a setup script to disk. Distinctive enough
+# that a real setup script will not contain it as a standalone line.
+_SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+
+
+def render_setup_steps(scripts: Sequence[str]) -> list[str]:
+    """Render bash lines that run each setup script as a separate step.
+
+    Each script is written to its own file and run in a fresh ``bash`` with a
+    banner, rather than concatenated, so a failure points at the exact step. The
+    caller's ``set -e`` stops the sequence on the first non-zero step.
+    """
+    lines: list[str] = []
+    total = len(scripts)
+    for index, script in enumerate(scripts, start=1):
+        step_file = f"/tmp/iris-setup-step-{index}.sh"
+        lines.append(f"cat > {step_file} <<'{_SETUP_STEP_DELIMITER}'")
+        lines.append(script.rstrip("\n"))
+        lines.append(_SETUP_STEP_DELIMITER)
+        lines.append(f'echo "[iris setup] step {index}/{total}"')
+        lines.append(f"bash {step_file}")
+    return lines
 
 
 def normalize_workdir_relative_path(path: str) -> str:
@@ -112,9 +183,11 @@ def build_common_iris_env(
     """
     env: dict[str, str] = {}
 
-    # Task identity. Append :attempt_id for retries so tasks see the correct
-    # attempt via JobInfo (matches TaskAttemptIdentity.to_wire()).
-    wire_task_id = f"{task_id}:{attempt_id}" if attempt_id else task_id
+    # Task identity in canonical TaskAttempt wire form, always carrying the
+    # attempt suffix (/user/job/0:0 for the first attempt) so the id — and the
+    # finelog log key derived from it — is identical across attempts and every
+    # backend.
+    wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
@@ -126,18 +199,30 @@ def build_common_iris_env(
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
-    env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_WORKDIR"] = WORKDIR_PATH
     env["IRIS_PYTHON"] = "python"
-    env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
-    env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
+    # Canonical venv the setup script populates and the run phase activates.
+    # UV_PROJECT_ENVIRONMENT points uv (sync/pip install) at the same path so a
+    # custom setup script does not have to depend on uv's cwd-relative default.
+    env["IRIS_VENV"] = VENV_PATH
+    env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
+    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
+    # task image so a task running its own image still hits the shared caches.
+    # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
+    # must not land on a node directory every other task can read. HF_HUB_CACHE
+    # covers the part worth sharing -- the content-addressed model/dataset blobs.
+    env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
+    env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
+    # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
+    # installed elsewhere still resolves, since PATH finds the binary.
+    env["CARGO_HOME"] = CARGO_HOME_PATH
+    env["CARGO_TARGET_DIR"] = f"{CARGO_HOME_PATH}/target"
 
-    # Propagate extras and pip_packages so child jobs can inherit them
-    extras = list(environment.extras)
-    if extras:
-        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
-    pip_packages = list(environment.pip_packages)
-    if pip_packages:
-        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
+    # Propagate the resolved setup scripts so child jobs reproduce the parent's
+    # environment. Always set (even when empty) so a child can tell a no-setup
+    # parent (bring-your-own image) from a top-level submission with no parent.
+    env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
     # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
     user_env_vars = dict(environment.env_vars)

@@ -1,0 +1,71 @@
+{
+  "type": "table",
+  "title": "Pending / gated pods",
+  "description": "Pods in phase Pending, oldest first: scheduling_gated means a scheduling gate (e.g. Kueue admission) is holding the pod; pending means the scheduler has it but has not placed it.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "age_seconds"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "s"
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/pending",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "namespace",
+          "text": "namespace",
+          "type": "string"
+        },
+        {
+          "selector": "pod",
+          "text": "pod",
+          "type": "string"
+        },
+        {
+          "selector": "state",
+          "text": "state",
+          "type": "string"
+        },
+        {
+          "selector": "reason",
+          "text": "reason",
+          "type": "string"
+        },
+        {
+          "selector": "age_seconds",
+          "text": "age_seconds",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

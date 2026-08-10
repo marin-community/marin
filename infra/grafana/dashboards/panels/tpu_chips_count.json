@@ -1,0 +1,57 @@
+{
+  "type": "stat",
+  "title": "TPU chips",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "iris-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "min": 0,
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "sum"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "auto",
+    "orientation": "auto"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/workers",
+      "url_options": {
+        "method": "GET",
+        "params": []
+      },
+      "columns": [
+        {
+          "selector": "tpu_chips",
+          "text": "tpu_chips",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

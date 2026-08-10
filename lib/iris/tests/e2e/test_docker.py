@@ -13,10 +13,9 @@ import uuid
 from pathlib import Path
 
 import pytest
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import AcceleratorType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-from iris.rpc import config_pb2, job_pb2
-
+from iris.rpc import job_pb2
 from tests.e2e._docker_cluster import E2ECluster
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]
@@ -60,7 +59,7 @@ def tpu_sim_cluster(shared_cache):
         )
         metadata = build_worker_metadata(
             hardware=hardware,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_type=AcceleratorType.TPU,
             accelerator_variant="v4-8-sim",
         )
         return FixedEnvironmentProvider(metadata)

@@ -8,13 +8,13 @@ Usage:
       -- python -m experiments.rollout_data.nemotron_terminal
 """
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.download.nemotron_terminal import download_nemotron_terminal_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 
 def build_steps() -> list[StepSpec]:

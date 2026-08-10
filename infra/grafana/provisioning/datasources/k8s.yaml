@@ -1,0 +1,23 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The k8s datasource, pointed at the bridge's /k8s path on loopback. Panels append
+# a fixed endpoint (`/control_plane`, `/crashloops`, ...) and the alert rules in
+# provisioning/alerting/rules.yaml append `/alerts/...`; the bridge queries every
+# CoreWeave API server with the CW read-role token and returns flat JSON rows with
+# a `cluster` column, so one datasource covers the fleet. The token lives in the
+# bridge, never in datasource config.
+#
+# allowedHosts pins the datasource to the bridge; port 8081 is config.BRIDGE_PORT.
+apiVersion: 1
+
+datasources:
+  - name: k8s
+    uid: k8s
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/k8s

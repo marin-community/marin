@@ -7,12 +7,11 @@ name = "marin-zephyr"
 version = "0.2.0"
 description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-iris",
     "marin-rigging",
     "marin-fray",
-    "typing-extensions>=4.0",
     "click>=8.0",
     "cloudpickle>=3.0",
     "humanfriendly>=10.0",
@@ -21,9 +20,10 @@ dependencies = [
     "fsspec>=2023.1.0",
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
-    "tqdm-loggable>=0.2",
     "vortex-data>=0.61.0",
     "xxhash>=3.4",
+    "polars>=1.41.0",
+    "psutil>=7.2.2",
 ]
 
 [dependency-groups]
@@ -31,7 +31,6 @@ test = [
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",
-    "psutil>=5.9.0",
 ]
 
 dev = [
@@ -45,6 +44,7 @@ packages = ["src/zephyr"]
 packages = ["src/zephyr"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
@@ -53,5 +53,6 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_cluster: marks tests that start a local Iris cluster",
 ]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow and not requires_cluster' --import-mode=importlib"

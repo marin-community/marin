@@ -20,9 +20,11 @@ I/O sink that drains a :class:`ControllerEffects` to SQL lives in
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from rigging.timing import Timestamp
 
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName, WorkerId
 
 # ---------------------------------------------------------------------------
@@ -42,9 +44,10 @@ class TaskRowDelta:
     exit_code: int | None = None
     started_at: Timestamp | None = None
     finished_at: Timestamp | None = None
-    failure_count: int | None = None
-    preemption_count: int | None = None
     container_id: str | None = None
+    # Tri-state, folded last-non-null: None leaves the column unchanged, "" clears it,
+    # a string sets it (commit._flush_tasks coalesces None→keep, ""→clear).
+    status_message: str | None = None
 
 
 @dataclass
@@ -58,6 +61,12 @@ class AttemptRowDelta:
     finished_at: Timestamp | None = None
     exit_code: int | None = None
     error: str | None = None
+    # Backend object identity + terminal cause, folded last-non-null (see
+    # snapshot.TaskUpdate). None leaves the column unchanged.
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    node_name: str | None = None
+    terminal_reason: str | None = None
 
 
 @dataclass
@@ -83,16 +92,18 @@ class JobRowDelta:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class EndpointDeletion:
-    task_id: JobName
-
-
 @dataclass(slots=True)
 class WorkerHealthEffect:
-    heartbeat: list[WorkerId] = field(default_factory=list)
+    """Kernel-derived health signal surfaced to the controller (not applied here).
+
+    The reconcile kernel cannot reach the in-memory health tracker — health is
+    folded in exactly one place (``WorkerHealthTracker.apply``). The kernel only
+    *derives* build failures (a BUILDING/ASSIGNED→FAILED transition on the worker
+    path); the controller reads ``build_failed`` off the returned effects and
+    translates it into ``BUILD_FAILED`` events for ``apply``.
+    """
+
     build_failed: list[WorkerId] = field(default_factory=list)
-    make_unhealthy: list[WorkerId] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +112,28 @@ class LogEvent:
     entity_id: str
     trigger: str | None = None
     details: tuple[tuple[str, object], ...] = ()
+
+
+class TaskActionReason(StrEnum):
+    """Stable reason codes for controller-authored task events."""
+
+    RETRY_SCHEDULED = "TaskRetryScheduled"
+    TERMINATED = "TaskTerminated"
+    COSCHEDULED_SIBLING_TERMINATED = "CoscheduledSiblingTerminated"
+    COSCHEDULED_SIBLING_REQUEUED = "CoscheduledSiblingRequeued"
+    JOB_FINALIZED_TASK_KILLED = "JobFinalizedTaskKilled"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActionEvent:
+    """A durable controller decision affecting one task attempt."""
+
+    task_id: JobName
+    attempt_id: int
+    ts: Timestamp
+    reason: TaskActionReason
+    message: str
+    severity: TaskEventSeverity = TaskEventSeverity.NORMAL
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +155,15 @@ class ControllerEffects:
     attempts: dict[tuple[JobName, int], AttemptRowDelta] = field(default_factory=dict)
     jobs: dict[JobName, JobRowDelta] = field(default_factory=dict)
 
-    endpoint_deletions: list[EndpointDeletion] = field(default_factory=list)
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
+    task_events: list[TaskActionEvent] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this batch records no committable writes.
+
+        ``health.build_failed`` is excluded: it is folded into the liveness
+        tracker by the backend, never persisted by ``commit_effects``.
+        """
+        return not (self.tasks or self.attempts or self.jobs or self.log_events or self.task_events)

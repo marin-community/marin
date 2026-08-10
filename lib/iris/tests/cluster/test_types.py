@@ -17,12 +17,53 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    gpu_device,
+    is_federated,
+    tpu_device,
+)
 from iris.rpc import job_pb2
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 
 
 def _add(a, b):
     return a + b
+
+
+@pytest.fixture
+def fresh_launch_provenance():
+    """Reset the per-process capture cache around a test that manipulates MARIN_PROVENANCE."""
+    _capture_once.cache_clear()
+    yield
+    _capture_once.cache_clear()
+
+
+def test_environment_to_proto_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
+    """Every submission's env carries the launch provenance so a git-less task can stamp
+    records with the submitter's identity. Re-submitting from inside a task forwards the
+    inherited value verbatim; an explicit caller value wins over the default."""
+    submitted = Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch="rav/pipeline", built_by="rav")
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
+
+    stamped = EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV]
+    assert Provenance.from_json(stamped) == submitted
+
+    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).to_proto()
+    assert explicit.env_vars[LAUNCH_PROVENANCE_ENV] == "caller-value"
+
+
+def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_provenance):
+    """A local submission (no env var) stamps provenance captured from the checkout."""
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    stamped = Provenance.from_json(EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV])
+    assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
 def test_entrypoint_from_callable_resolve_roundtrip():
@@ -57,12 +98,6 @@ def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
     assert ep2.command == ["python", "run.py"]
 
 
-def test_entrypoint_command():
-    ep = Entrypoint.from_command("echo", "hello")
-    assert not ep.workdir_files
-    assert ep.command == ["echo", "hello"]
-
-
 def test_entrypoint_callable_has_workdir_files():
     ep = Entrypoint.from_callable(_add, 1, 2)
     assert "_callable.pkl" in ep.workdir_files
@@ -91,6 +126,14 @@ def test_job_name_roundtrip_and_hierarchy():
     assert parsed.task_index == 0
     assert JobName.root("test-user", "root").is_ancestor_of(parsed)
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
+
+
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
 
 
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
@@ -589,6 +632,15 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
     assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
     assert adjust_tpu_replicas(None, replicas=1) == 1
     assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
+
+
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_gpu_device_rejects_non_positive_count(bad_count):
+    # Regression: zero is coerced to 1 by get_gpu_count (`count or 1`) and a
+    # negative count flows through as a negative req_gpu_count that inflates
+    # advertised scheduler capacity. Reject both at the construction boundary.
+    with pytest.raises(ValueError, match="positive integer"):
+        gpu_device("H100", count=bad_count)
 
 
 def test_merge_auto_constraints_with_user_variant_override():

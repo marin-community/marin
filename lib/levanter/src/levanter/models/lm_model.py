@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import dataclasses
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar, cast
+from typing import Generic, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
 import jax.numpy as jnp
+import haliax.nn as hnn
+from haliax.jax_utils import maybe_rng_split
 from jaxtyping import PRNGKeyArray
+from typing_extensions import Self
 
 import haliax as hax
 from haliax import Axis, NamedArray, NamedOrNumeric
@@ -19,6 +23,37 @@ from levanter.models.loss import maybe_fused_next_token_loss
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
+
+
+class SupportsResizeEmbeddings(Protocol):
+    """Embedding module that can grow or shrink its vocabulary axis."""
+
+    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> Self: ...
+
+
+EmbeddingsT = TypeVar("EmbeddingsT", bound=SupportsResizeEmbeddings)
+
+
+def resize_embeddings_and_lm_head(
+    Vocab: Axis,
+    embeddings: EmbeddingsT,
+    lm_head: Optional[hnn.Linear],
+    new_size: int,
+    key: Optional[PRNGKeyArray] = None,
+) -> tuple[EmbeddingsT, Optional[hnn.Linear]]:
+    """Resize the input embeddings and optional (untied) lm_head to ``new_size`` tokens.
+
+    Shared by the standard LM-head model layout where ``embeddings`` exposes ``resize_embeddings``
+    and ``lm_head`` is a ``Linear`` whose ``Out`` axis is the vocabulary ``Vocab``. When the head is
+    tied to the embeddings (``lm_head is None``), only the embeddings are resized.
+    """
+    k1, k2 = maybe_rng_split(key, 2)
+    new_embeddings = embeddings.resize_embeddings(new_size, key=k1)
+    if lm_head is None:
+        return new_embeddings, None
+    new_lm_matrix = hax.tree_util.resize_axis(lm_head.weight, Vocab, new_size, key=k2)
+    new_lm_head = dataclasses.replace(lm_head, Out=Vocab.resize(new_size), weight=new_lm_matrix)
+    return new_embeddings, new_lm_head
 
 
 class LmExample(eqx.Module):
@@ -115,7 +150,7 @@ class LmExample(eqx.Module):
         return loss_weight
 
 
-# TODO: for some reason, mypy doesn't like the discover_packages_path argument?
+# TODO: for some reason, pyrefly doesn't like the discover_packages_path argument?
 @dataclass(frozen=True)
 class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_path="levanter.models"):  # type: ignore
     max_seq_len: int
@@ -134,6 +169,18 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         return Axis("position", self.max_seq_len)
 
     @property
+    def requires_explicit_mesh_axes(self) -> bool:
+        """Whether this model's forward/sharding needs an ``AxisType.Explicit`` device mesh.
+
+        Models that reshard with ``jax.sharding.reshard(..., out_sharding=)`` over named
+        ``PartitionSpec``s (e.g. Snowball/Grug) require explicit mesh axes. The default
+        haliax named-axis partitioning does not, so this is ``False`` for most models.
+        Consumers that build the mesh (e.g. the marin-serve Levanter backend) read this to
+        decide whether to set ``TrainerConfig.use_explicit_mesh_axes``.
+        """
+        return False
+
+    @property
     @abc.abstractmethod
     def Embed(self) -> Axis:
         pass
@@ -146,6 +193,20 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
         return self.model_type.init(Vocab, self, key=key)  # type: ignore
+
+
+def split_activations(
+    activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+) -> tuple[NamedArray, NamedOrNumeric]:
+    """Normalize an ``activations`` return value into ``(hidden_states, aux_loss)``.
+
+    [`LmHeadModel.activations`][] returns either a bare hidden-state array or, for MoE heads that add a
+    router auxiliary loss, a ``(hidden_states, aux_loss)`` tuple. Callers that only need the hidden
+    states use ``x, _ = split_activations(...)``; the aux loss defaults to ``0``.
+    """
+    if isinstance(activations, tuple):
+        return activations
+    return activations, 0
 
 
 class LmHeadModel(eqx.Module, Generic[LmConfigT]):
@@ -273,11 +334,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
-        activations = self.activations(example.tokens, example.attn_mask, key=key)
-
-        aux_loss = 0
-        if isinstance(activations, tuple):
-            activations, aux_loss = activations
+        activations, aux_loss = split_activations(self.activations(example.tokens, example.attn_mask, key=key))
 
         loss = maybe_fused_next_token_loss(
             self.Pos,

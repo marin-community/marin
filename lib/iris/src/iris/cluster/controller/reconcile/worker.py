@@ -40,6 +40,20 @@ _TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
 }
 
 
+def _holds_preemption_victim(row: "ReconcileRow") -> bool:
+    """Whether this row is a preemption victim still occupying its worker.
+
+    The scheduler commits a preemptor ASSIGNED onto the worker its victim frees
+    before the victim's process is actually gone; the victim's attempt is
+    PREEMPTED but not yet finalized, so it stays worker-bound (reconcile rows are
+    the live, ``finished_at_ms IS NULL`` attempts). Covers both the budget-exhausted
+    victim (task PREEMPTED) and the retry/coscheduled-requeue victim (task rolled
+    back to PENDING) — both leave the attempt in PREEMPTED. It is the one signal
+    that a device is held by a process the preemptor must not race.
+    """
+    return row.attempt_state == job_pb2.TASK_STATE_PREEMPTED
+
+
 # ---------------------------------------------------------------------------
 # Reconcile planner inputs/outputs
 # ---------------------------------------------------------------------------
@@ -76,17 +90,30 @@ class WorkerReconcilePlan:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
+class WorkerReconcileResult:
     """Unified per-worker reconcile outcome.
 
     ``observations`` is the (possibly empty) list of proto observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
-    outright failed; ``observations`` is then empty.
+    outright failed; ``observations`` is then empty. ``self_healthy`` is the
+    worker's own health verdict from the Reconcile response (always ``True`` on
+    an RPC error, where it is meaningless): a worker that responds but reports
+    unhealthy — e.g. a failed disk — is still counted as a liveness failure so
+    it is eventually reaped.
+
+    ``responder_worker_id`` is the ``worker_id`` the responding daemon stamped on
+    its Reconcile response. It is the *answerer's* identity, which can differ
+    from the targeted :attr:`worker_id` if the controller dialed a stale address
+    that a different live worker now owns (GCP recycles a deleted worker's
+    internal IP onto a new VM). ``None`` on an RPC error or when the daemon did
+    not report an id.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
+    self_healthy: bool = True
+    responder_worker_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -106,13 +133,24 @@ def _reconcile_worker(
 ) -> WorkerReconcilePlan:
     desired: list[worker_pb2.Worker.DesiredAttempt] = []
 
+    # A preemptor is committed ASSIGNED onto the worker its victim frees before
+    # the victim's process is actually gone. While a preemption victim still
+    # occupies this worker, withhold the ASSIGNED run-intents so the worker does
+    # not start the preemptor against the live victim (libtpu fixed-port crash
+    # loop). The victim's terminal observation stamps ``finished_at_ms``, which
+    # drops it from the next reconcile snapshot and lets the run-intent through —
+    # a hold of, in the healthy case, a single reconcile cycle.
+    hold_assigned_dispatch = any(_holds_preemption_victim(row) for row in rows)
+
     for row in rows:
         wire_task_id = row.task_id.to_wire()
         if row.task_state in _ASSIGNED_STATES:
+            if hold_assigned_dispatch:
+                continue
             spec = job_specs.get(row.job_id)
             if spec is None:
-                # Reservation holder or job disappeared mid-tick; the
-                # scheduler reissues on a subsequent tick.
+                # Job disappeared mid-tick; the scheduler reissues on a
+                # subsequent tick.
                 continue
             req = job_pb2.RunTaskRequest()
             req.CopyFrom(spec)

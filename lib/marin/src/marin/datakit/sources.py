@@ -18,30 +18,52 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.agenttrove import agenttrove_normalize_steps
+from marin.datakit.download.biocollection import biocollection_normalize_steps
+from marin.datakit.download.biocorpus import biocorpus_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
+from marin.datakit.download.common_corpus import common_corpus_normalize_steps
+from marin.datakit.download.common_crawl_focus import common_crawl_focus_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
     davinci_dev_ctx_native_normalize_steps,
     davinci_dev_env_native_normalize_steps,
 )
-from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_steps
+from marin.datakit.download.dna import dna_normalize_steps
+from marin.datakit.download.docx_corpus import docx_corpus_normalize_steps
+from marin.datakit.download.dolma3_5_code import dolma3_5_code_prose_normalize_steps
+from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
+from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
+from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
 from marin.datakit.download.hplt import hplt_v3_normalize_steps
+from marin.datakit.download.identity_data import identity_data_content_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v1_content import nemotron_code_v1_content_normalize_steps
+from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
-from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
+from marin.datakit.download.nemotron_v2 import (
+    NEMOTRON_PRETRAINING_LEGAL_V1,
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+    nemotron_v2_normalize_steps,
+)
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
+from marin.datakit.download.penfever_rollouts import penfever_rollouts_normalize_steps
+from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
+from marin.datakit.download.stack_v3 import stack_v3_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
+from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
@@ -56,9 +78,8 @@ class DatakitSource:
     """Mixture-component key, e.g. ``"nemotron_cc_v2_1/high_quality"``."""
 
     normalize_steps: tuple[StepSpec, ...]
-    """Ordered step chain. Always starts with a download and ends with
-    ``normalize``; may contain preprocessing steps in between for sources
-    that need filtering or transforms."""
+    """Ordered step chain ending with ``normalize``. Earlier steps include a
+    download or depend on one transitively, and may preprocess the source."""
 
     rough_token_count_b: float
     """Approximate token count in billions (Llama-3 tokenizer). Used as the
@@ -87,7 +108,8 @@ def _rows_flat(
     The registry names in ``counts`` must match the keys returned by
     ``factory()``. Rows whose registry name isn't in ``counts`` are skipped.
     """
-    return tuple((name, lambda f=factory, n=name: f()[n], count) for name, count in counts.items())
+    cached_factory = cache(factory)
+    return tuple((name, lambda f=cached_factory, n=name: f()[n], count) for name, count in counts.items())
 
 
 def _rows_nemotron(
@@ -116,64 +138,120 @@ def _rows_nemotron(
     return tuple(rows)
 
 
-# ---- Disabled sources (tracked in the token-count-viewer but can't ferry today) ----
-#
-# TODO: confirm there's a download module for PleIAs/common_corpus.
-# Staged dir ``raw/common_corpus_english-b78a5c1`` is missing its
-# .executor_status marker, so we can't confirm the staging run completed
-# cleanly. Re-enable once the staging is re-verified.
-#
 @cache
 def all_sources() -> dict[str, DatakitSource]:
     """Return the canonical active source set as ``{name: DatakitSource}``.
 
     Every entry is materializable — has a full :attr:`DatakitSource.normalize_steps`
-    chain ready to run. Disabled entries (see TODOs above) are commented out of
-    the module.
+    chain ready to run.
     """
     # Single-source families. Each exposes a ``<family>_normalize_steps()``
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 8,957,298,636 tokens / 781,076 docs. The row chain behind that doc count
+        # is 1,696,847 → 997,026 past the proprietary-teacher filter → 869,901
+        # with a non-null transcript → 781,076 after exact dedup.
+        ("agenttrove", agenttrove_normalize_steps, 8.957298636),
+        # Measured with marin-community/marin-tokenizer:
+        # 9,138,977,526 tokens / 21,138,120 documents.
+        ("biocorpus", biocorpus_normalize_steps, 9.138977526),
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        # Canonical token-count-viewer estimate for the pinned b78a5c1 revision
+        # (10,005 files / 4.49 TB); not yet measured with the Marin tokenizer.
+        ("common_corpus/english", common_corpus_normalize_steps, 1015.39),
+        ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 9,094,282,709 tokens / 64,026,220 docs.
+        ("dna/functional-regions", dna_normalize_steps, 9.094282709),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 1,497,301,429 tokens / 242,086 docs.
+        ("docx-corpus/en", docx_corpus_normalize_steps, 1.497301429),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 65,538,632,427 tokens / 31,179,056 docs.
+        ("dolma_code_prose", dolma3_5_code_prose_normalize_steps, 65.54),
+        ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
-        ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact:
+        # 253,343,866,746 tokens / 2,613,421 documents.
+        ("ghalogs/public", ghalogs_public_normalize_steps, 253.343866746),
+        # Exact count from the tokenized cache .stats.json, measured with
+        # marin-community/marin-tokenizer over the normalized artifact under the
+        # final-turn truncation filter: 64,054,289 tokens / 2,835 docs.
+        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_normalize_steps, 0.064054289),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
         ("hplt_v3", hplt_v3_normalize_steps, 612.7),
+        ("identity-data/content", identity_data_content_normalize_steps, 0.061711380),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        # Rough count: no tokenized cache exists yet, so this scales v2's measured
+        # rate (120.254379519 B tokens / 132,666,330 present docs ~= 906 tokens/doc)
+        # to v1's 513,109,851 present docs. Replace with the measured
+        # marin-community/marin-tokenizer total once the normalized cache is built.
+        (
+            "nemotron_code_v1/content",
+            nemotron_code_v1_content_normalize_steps,
+            465.0,
+        ),
+        (
+            "nemotron_code_v2/content",
+            nemotron_code_v2_content_normalize_steps,
+            120.254379519,
+        ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
+        ("sec-edgar", sec_edgar_normalize_steps, 334.90),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 3,363,007,313,642 tokens / 172,898,790 docs.
+        ("stack-v3", stack_v3_normalize_steps, 3363.007313642),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
+        ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("swe-zero-12m", swe_zero_12m_normalize_steps, 106.91),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
     )
 
-    # StarCoder2-Extras: 5 of 6 subsets advertised (ir_low_resource isn't in
-    # the token-count-viewer set).
+    # StarCoder2-Extras: exact ir_low_resource count from train/.stats.json,
+    # measured with marin-community/marin-tokenizer: 4,267,993,726 tokens / 387,030 docs.
     starcoder2_extras = _rows_flat(
         starcoder2_extras_normalize_steps,
         {
             "starcoder2/documentation": 1.40,
             "starcoder2/ir_cpp": 39.01,
+            "starcoder2/ir_low_resource": 4.267993726,
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
         },
     )
 
-    # common-pile: 27 entries, each its own HF repo.
+    # TheBioCollection: two synthetic bio/chem streams from one HF repo, each
+    # staged and downloaded per-stream (see biocollection.py). Token counts are
+    # the exact Marin-tokenizer (Llama-3) totals from each stream's tokenized
+    # cache .stats.json.
+    biocollection = _rows_flat(
+        biocollection_normalize_steps,
+        {
+            "biocollection/free_text_stream": 33.186704843,
+            "biocollection/instruction_stream": 18.123700603,
+        },
+    )
+
+    # common-pile: 26 entries, each its own HF repo.
     common_pile = _rows_flat(
         common_pile_normalize_steps,
         {
@@ -197,7 +275,6 @@ def all_sources() -> dict[str, DatakitSource]:
             "cp/pubmed": 38.08,
             "cp/regulations": 1.28,
             "cp/stackexchange": 21.89,
-            "cp/stackv2_code": 352.76,
             "cp/ubuntu_irc": 1.76,
             "cp/uk_hansard": 2.13,
             "cp/usgpo": 7.78,
@@ -233,6 +310,12 @@ def all_sources() -> dict[str, DatakitSource]:
             "finepdfs/ukr_Cyrl": 25.53,
         },
     )
+
+    # dolma3.5_pool PDF subset, minus the finepdfs component we already ingest
+    # separately (see dolma4pdfs.py). Exact count measured over the normalized
+    # data with marin-community/marin-tokenizer: 1,804,002,448,556 tokens over
+    # 137,132,279 documents.
+    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1804.002448556})
 
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
@@ -320,12 +403,192 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_specialized_v1_1/unconditional_algorithmic": 0.19,
         },
     )
+    # v1.2 supersedes neither v1 nor v1.1 — it adds four new synthetic subsets
+    # (fact-seeking, moral scenarios, generative and multiple-choice questions).
+    # Its multiple_choice is a distinct, larger regeneration of the v1.1 subset
+    # of the same name, so both are carried.
+    nemotron_specialized_v1_2 = _rows_nemotron(
+        NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+        "nemotron_specialized_v1_2",
+        {
+            "nemotron_specialized_v1_2/fact_seeking": 34.264249298,
+            "nemotron_specialized_v1_2/generative": 0.657347056,
+            "nemotron_specialized_v1_2/moral_scenarios": 0.014813270,
+            "nemotron_specialized_v1_2/multiple_choice": 6.826340523,
+        },
+    )
+    nemotron_legal = _rows_nemotron(
+        NEMOTRON_PRETRAINING_LEGAL_V1,
+        "nemotron_legal",
+        {
+            "nemotron_legal/california_code_of_regulations": 0.033064243,
+            "nemotron_legal/case_law_summary": 0.027076493,
+            "nemotron_legal/casehold": 3.839242351,
+            "nemotron_legal/definition_classification": 0.001354030,
+            "nemotron_legal/diversity_jurisdiction": 0.000837717,
+            "nemotron_legal/ecfr": 0.122605305,
+            "nemotron_legal/ecfr_qa": 0.549815436,
+            "nemotron_legal/function_of_decision": 0.023167261,
+            "nemotron_legal/globalcit": 0.007366386,
+            "nemotron_legal/legalbench_cuad_v2": 0.047987198,
+            "nemotron_legal/nycourts_judicial_ethics_opinions": 0.004178264,
+        },
+    )
+
+    # Public, verifier-valid Penfever rollouts generated by OT-Agent. Exact
+    # Marin-tokenizer totals measured from each normalized outputs/main partition.
+    penfever_rollouts = _rows_flat(
+        penfever_rollouts_normalize_steps,
+        {
+            "penfever-traces/glm52-terminus2/exp_rpt_crosscodeeval-csharp-v4": 0.008070063,
+            "penfever-traces/glm52-terminus2/exp_rpt_curriculum-easy": 0.002825703,
+            "penfever-traces/glm52-terminus2/exp_rpt_curriculum-medium": 0.003581589,
+            "penfever-traces/glm52-terminus2/exp_rpt_e2egit-large": 0.013010654,
+            "penfever-traces/glm52-terminus2/exp_rpt_e2egit-v2": 0.001973393,
+            "penfever-traces/glm52-terminus2/exp_rpt_nemotron-cpp-v2": 0.005972134,
+            "penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-large-v2": 0.014874754,
+            "penfever-traces/glm52-terminus2/exp_rpt_stack-pytest-v2": 0.003459174,
+            "penfever-traces/glm52-terminus2/exp_rpt_unitsyn-python-v3": 0.001513535,
+            "penfever-traces/glm52-terminus2/nemotron-gym-agent-calendar": 0.010360275,
+            "penfever-traces/glm52-terminus2/nemotron-gym-instruction-following-structured": 0.045397822,
+            "penfever-traces/glm52-terminus2/nemotron-gym-knowledge-web-search-mcqa": 0.004136590,
+            "penfever-traces/glm52-terminus2/nl2bash-tasks-cleaned-oracle": 0.005420789,
+            "penfever-traces/minimax-m27-131k/code-contests-noblock": 0.041670628,
+            "penfever-traces/minimax-m27-131k/exp_rle_minimal_instructions-v3": 0.003536026,
+            "penfever-traces/minimax-m27-131k/exp_rpt_codenet-python-v2": 0.051694971,
+            "penfever-traces/minimax-m27-131k/exp_rpt_crosscodeeval-csharp-v4": 0.006607215,
+            "penfever-traces/minimax-m27-131k/exp_rpt_curriculum-easy": 0.005071607,
+            "penfever-traces/minimax-m27-131k/exp_rpt_curriculum-medium": 0.006573366,
+            "penfever-traces/minimax-m27-131k/exp_rpt_e2egit-large": 0.020399676,
+            "penfever-traces/minimax-m27-131k/exp_rpt_e2egit-v2": 0.002916292,
+            "penfever-traces/minimax-m27-131k/exp_rpt_ghactions-v3": 0.065295466,
+            "penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v2": 0.113518298,
+            "penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v3": 0.112029440,
+            "penfever-traces/minimax-m27-131k/exp_rpt_nemotron-cpp": 0.075063199,
+            "penfever-traces/minimax-m27-131k/exp_rpt_nemotron-junit": 0.056740958,
+            "penfever-traces/minimax-m27-131k/exp_rpt_pr": 0.077198027,
+            "penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-large": 0.036085462,
+            "penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-v3": 0.002810780,
+            "penfever-traces/minimax-m27-131k/exp_rpt_stack-bash-v3": 0.123445639,
+            "penfever-traces/minimax-m27-131k/exp_rpt_stack-junit-v6": 0.013192622,
+            "penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-large": 0.063853123,
+            "penfever-traces/minimax-m27-131k/exp_rpt_stack-pytest-v2": 0.006595728,
+            "penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-large": 0.035914122,
+            "penfever-traces/minimax-m27-131k/exp_rpt_unitsyn-python-v3": 0.003640472,
+            "penfever-traces/minimax-m27-131k/inferredbugs-sandboxes-verifier": 0.069410314,
+            "penfever-traces/minimax-m27-131k/llm-verifier-freelancer": 0.086688988,
+            "penfever-traces/minimax-m27-131k/mix_h10_reward_binary-v2": 0.028913157,
+            "penfever-traces/minimax-m27-131k/mix_h10_reward_proportional-v2": 0.028366331,
+            "penfever-traces/minimax-m27-131k/mix_h10_reward_staged-v2": 0.032856039,
+            "penfever-traces/minimax-m27-131k/mix_h11_single_skill_only-v2": 0.028528031,
+            "penfever-traces/minimax-m27-131k/mix_h1_struggle_zone-v2": 0.033145965,
+            "penfever-traces/minimax-m27-131k/mix_h2_language_balanced-v2": 0.072780597,
+            "penfever-traces/minimax-m27-131k/mix_h2_language_proportional": 0.067285067,
+            "penfever-traces/minimax-m27-131k/mix_h4_binary_easy": 0.021767055,
+            "penfever-traces/minimax-m27-131k/mix_h8_original_tests-v2": 0.028239350,
+            "penfever-traces/minimax-m27-131k/nemotron-code-oracle-filtered": 0.067355329,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-agent-calendar": 0.026902671,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-agent-workplace-v2": 0.001743026,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-competitive-coding": 0.055010437,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-identity-following-v2": 0.043814106,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-calendar": 0.084894789,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-instruction-following-structured": 0.086420315,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-knowledge-web-search-mcqa": 0.008531157,
+            "penfever-traces/minimax-m27-131k/nemotron-gym-math-advanced-calculations-v3": 0.022153297,
+            "penfever-traces/minimax-m27-131k/nl2bash-tasks-cleaned-oracle": 0.007379352,
+            "penfever-traces/minimax-m27-131k/selfinstruct-naive-sandboxes-2-verified": 0.074465568,
+            "penfever-traces/minimax-m27-131k/swegym-tasks-patched-validated-v5": 0.052539033,
+            "penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock": 0.027831006,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rle_adversarial": 0.025376885,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4": 0.001120885,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java": 0.003440201,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy": 0.001048594,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard": 0.000075641,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium": 0.001348109,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large": 0.002311839,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2": 0.000713506,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3": 0.008662580,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue": 0.001306873,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_methods2test-large-v3": 0.024942384,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_multifile": 0.000467893,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-cpp-v2": 0.002420860,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit": 0.001937810,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pr": 0.022140239,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large": 0.009401375,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3": 0.000684863,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-junit-v6": 0.004064447,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large": 0.003894620,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2": 0.001611288,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large": 0.003282044,
+            "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3": 0.000155216,
+            "penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier": 0.020497700,
+            "penfever-traces/qwen35-122b-131k-opencode/llm-verifier-freelancer": 0.004848697,
+            "penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy": 0.004973851,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-code-oracle-filtered": 0.026799853,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar": 0.003000065,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2": 0.000284795,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-identity-following-v2": 0.006123802,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured": 0.012474566,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa": 0.002115121,
+            "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3": 0.004362460,
+            "penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle": 0.000995519,
+            "penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified": 0.018857351,
+            "penfever-traces/qwen35-122b-32k/code-contests-noblock": 0.055291277,
+            "penfever-traces/qwen35-122b-32k/exp_rle_minimal_instructions-v3": 0.004251604,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_codenet-python-v2": 0.059380947,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_crosscodeeval-csharp-v4": 0.006985170,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-easy": 0.004855759,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_curriculum-medium": 0.007135595,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-large": 0.021364740,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_e2egit-v2": 0.003110807,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_ghactions-v3": 0.076818874,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v2": 0.096947834,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_methods2test-large-v3": 0.052148568,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_nemotron-junit": 0.060738727,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_pr": 0.114700330,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-large": 0.038533161,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_pymethods2test-v3": 0.003940142,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_stack-bash-v3": 0.137293070,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_stack-junit-v6": 0.004473094,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-large": 0.068791662,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_stack-pytest-v2": 0.007550969,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-large": 0.038694528,
+            "penfever-traces/qwen35-122b-32k/exp_rpt_unitsyn-python-v3": 0.004142880,
+            "penfever-traces/qwen35-122b-32k/inferredbugs-sandboxes-verifier": 0.091581370,
+            "penfever-traces/qwen35-122b-32k/llm-verifier-freelancer": 0.029776580,
+            "penfever-traces/qwen35-122b-32k/mix_h10_reward_binary-v2": 0.016227266,
+            "penfever-traces/qwen35-122b-32k/mix_h10_reward_proportional-v2": 0.027948423,
+            "penfever-traces/qwen35-122b-32k/mix_h10_reward_staged-v2": 0.032282822,
+            "penfever-traces/qwen35-122b-32k/mix_h11_single_skill_only-v2": 0.026607571,
+            "penfever-traces/qwen35-122b-32k/mix_h1_struggle_zone-v2": 0.034907709,
+            "penfever-traces/qwen35-122b-32k/mix_h2_language_balanced-v2": 0.079634168,
+            "penfever-traces/qwen35-122b-32k/mix_h2_language_proportional": 0.072763552,
+            "penfever-traces/qwen35-122b-32k/mix_h4_binary_easy": 0.021044715,
+            "penfever-traces/qwen35-122b-32k/mix_h8_original_tests-v2": 0.028283627,
+            "penfever-traces/qwen35-122b-32k/nemotron-code-oracle-filtered": 0.079828237,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-agent-calendar": 0.024679850,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-agent-workplace-v2": 0.001705024,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-competitive-coding": 0.096302423,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-identity-following-v2": 0.020298878,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-calendar": 0.076755739,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-structured": 0.072988170,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-instruction-following-v2": 0.135201586,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-mcqa": 0.028061522,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-openqa-v2": 0.023734064,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-knowledge-web-search-mcqa": 0.009396997,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-math-advanced-calculations-v3": 0.016605649,
+            "penfever-traces/qwen35-122b-32k/nemotron-gym-safety-v2": 0.060330369,
+            "penfever-traces/qwen35-122b-32k/nemotron-math-oracle-filtered": 0.102042173,
+            "penfever-traces/qwen35-122b-32k/nl2bash-tasks-cleaned-oracle": 0.007051800,
+            "penfever-traces/qwen35-122b-32k/selfinstruct-naive-sandboxes-2-verified": 0.009689368,
+            "penfever-traces/qwen35-122b-32k/swesmith-oracle-filtered": 0.016318382,
+        },
+    )
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
-    # excluded to avoid double-counting that corpus). Token counts measured
-    # by tokenizing every subset with the marin-community tokenizer (see
-    # ``scripts/datakit/tokenize_safety_pt.py``).
+    # excluded to avoid double-counting that corpus). Token counts were measured
+    # by tokenizing every subset with the marin-community tokenizer.
     safety_pretraining = _rows_flat(
         safety_pretraining_normalize_steps,
         {
@@ -343,8 +606,10 @@ def all_sources() -> dict[str, DatakitSource]:
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
+        *biocollection,
         *common_pile,
         *finepdfs,
+        *dolma4pdfs,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,
@@ -353,6 +618,9 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *nemotron_specialized_v1_2,
+        *nemotron_legal,
+        *penfever_rollouts,
         *safety_pretraining,
     )
 

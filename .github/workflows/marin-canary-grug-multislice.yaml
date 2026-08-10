@@ -58,12 +58,12 @@ jobs:
         run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -111,17 +111,20 @@ jobs:
       # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
       # leaves 45m for diagnostics + triage.
       - name: Wait for Grug multislice smoke
+        id: wait
         timeout-minutes: 135
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
             --child-wait-timeout 5400 \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Summarize Grug multislice profile
+        if: steps.wait.outputs.resource_exhausted != 'true'
         continue-on-error: true
         shell: bash -l {0}
         run: |
@@ -141,7 +144,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/grug-multislice-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "$IRIS_CONFIG" \
             --provider gcp \
@@ -153,7 +156,7 @@ jobs:
 
       - name: Upload diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grug-multislice-diagnostics
           path: grug-multislice-diagnostics/
@@ -178,7 +181,7 @@ jobs:
 
       - name: Upload Slack message
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slack-message
           path: slack_message.md
@@ -193,7 +196,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: ./.github/actions/notify-slack
+        uses: marin-community/marin-style/actions/notify-slack@main
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Grug multislice smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

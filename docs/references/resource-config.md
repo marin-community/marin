@@ -15,7 +15,7 @@ tpu_multislice = ResourceConfig.with_tpu("v4-8", slice_count=2)
 
 # GPU configuration
 gpu_config = ResourceConfig.with_gpu("H100", count=8)
-gpu_auto = ResourceConfig.with_gpu()  # auto-detect GPU type
+single_gpu = ResourceConfig.with_gpu("H100")  # count defaults to 1
 
 # CPU-only configuration
 cpu_config = ResourceConfig.with_cpu()

@@ -5,8 +5,10 @@
 
 
 import pytest
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
+
+from tests.test_utils import skip_if_no_tpu
 
 try:
     from vllm import LLM, SamplingParams
@@ -30,13 +32,18 @@ def run_vllm_inference(model_path, **model_init_kwargs):
     return generated_texts
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 def test_local_llm_inference():
-    config = ModelConfig(
+    config = InferenceModelConfig(
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
-        generation_params={"max_tokens": 16},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)
-    run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+    generated_texts = run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+
+    # vLLM returns one RequestOutput for the single prompt; assert it actually
+    # decoded a non-empty completion rather than silently returning nothing.
+    assert len(generated_texts) == 1
+    assert generated_texts[0].outputs
+    assert generated_texts[0].outputs[0].text.strip()

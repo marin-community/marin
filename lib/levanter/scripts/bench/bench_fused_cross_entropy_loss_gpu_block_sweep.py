@@ -130,7 +130,7 @@ def main() -> None:
         dot_tiles = _ceil_div(embed, h_block_size) * _ceil_div(vocab, v_block_size)
         if dot_tiles > args.max_dot_tiles:
             print(
-                "pallas_gpu",
+                "batched_xla",
                 f"b={b_block_size}",
                 f"h={h_block_size}",
                 f"v={v_block_size}",
@@ -144,8 +144,8 @@ def main() -> None:
             v_block_size=v_block_size,
         )
         try:
-            compile_pallas, steady_pallas = _bench(
-                lambda x_in, w_in, y_in: _loss_fn(x_in, w_in, y_in, block_sizes, "pallas_gpu"),
+            compile_batched_xla, steady_batched_xla = _bench(
+                lambda x_in, w_in, y_in: _loss_fn(x_in, w_in, y_in, block_sizes, "batched_xla"),
                 x,
                 w,
                 y,
@@ -154,7 +154,7 @@ def main() -> None:
             )
         except Exception as exc:  # pragma: no cover - backend/runtime dependent
             print(
-                "pallas_gpu",
+                "batched_xla",
                 f"b={b_block_size}",
                 f"h={h_block_size}",
                 f"v={v_block_size}",
@@ -163,21 +163,21 @@ def main() -> None:
             )
             continue
 
-        pallas_tps = tokens / steady_pallas
+        batched_xla_tps = tokens / steady_batched_xla
         delta = np.nan
         if args.compare_xla:
-            delta = pallas_tps / xla_tps - 1.0
+            delta = batched_xla_tps / xla_tps - 1.0
         print(
-            "pallas_gpu",
+            "batched_xla",
             f"b={b_block_size}",
             f"h={h_block_size}",
             f"v={v_block_size}",
             "compile_s",
-            f"{compile_pallas:.6f}",
+            f"{compile_batched_xla:.6f}",
             "steady_s",
-            f"{steady_pallas:.6f}",
+            f"{steady_batched_xla:.6f}",
             "tokens_per_s",
-            f"{pallas_tps:.3f}",
+            f"{batched_xla_tps:.3f}",
             "vs_xla",
             f"{delta:+.3%}" if args.compare_xla else "n/a",
         )

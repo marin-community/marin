@@ -1,0 +1,4 @@
+interface:
+  display_name: "Recover Stuck K8s Pod"
+  short_description: "Safely recover stuck CoreWeave GPU pods"
+  default_prompt: "Use $recover-stuck-k8s-pod to diagnose and safely recover this stuck CoreWeave Kubernetes pod."

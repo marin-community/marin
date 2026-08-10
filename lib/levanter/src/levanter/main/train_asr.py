@@ -15,12 +15,14 @@ from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
+import levanter.config
+import levanter.tracker
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCompatConfig, ModelWithHfSerializationMixin, save_hf_checkpoint_callback
 from levanter.data.audio import AudioIODatasetConfig, AudioMixtureDatasetConfig, AudioTextDataset
 from levanter.models.asr_model import ASRConfig, AudioTextExample
 from levanter.models.whisper import WhisperConfig
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
@@ -62,8 +64,7 @@ def main(config: TrainASRConfig):
 
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.hf_checkpoint_converter()
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            logger.warning("The tokenizers appear to be different. You may want to check this.")
+        converter.warn_if_tokenizer_mismatch(tokenizer)
 
         if isinstance(config.initialize_from_hf, str):
             converter = converter.replaced(
@@ -84,7 +85,7 @@ def main(config: TrainASRConfig):
     else:
         converter = None
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def compute_loss(
@@ -176,6 +177,10 @@ def main(config: TrainASRConfig):
             trainer.add_eval_hook(hax_eval_dataset, name=name)
 
         trainer.add_hook(callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size), every=1)
+        trainer.add_hook(
+            callbacks.iris_status_reporter(Pos.size, trainer.config.train_batch_size, trainer.config.num_train_steps),
+            every=10,
+        )
         if config.hf_save_path is not None:
             assert converter is not None, "converter must be set when saving HF checkpoints"
             full_save_path = os.path.join(config.hf_save_path, trainer.run_id)

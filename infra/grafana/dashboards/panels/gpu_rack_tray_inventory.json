@@ -1,0 +1,93 @@
+{
+  "type": "table",
+  "title": "GPU rack tray inventory",
+  "description": "GB200 NVL72 nodes only (instance type contains 'gb200') grouped by CoreWeave physical rack: trays currently registered with the k8s API vs. Ready, against the 18-tray-full/16-minimum rack spec. Other GPU instance types (e.g. standalone H100 servers) carry a CoreWeave rack label too but with a different physical-rack topology — mostly one node per rack — so they're excluded rather than misread against a threshold that isn't about them. A rack below 16, or with a gap between trays_total and its expected full count, needs a CoreWeave ticket citing rack_name — a tray that never re-registers is invisible here, so this is a floor on down trays, not a guarantee.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "trays_ready"
+        },
+        "properties": [
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-background"
+            }
+          },
+          {
+            "id": "thresholds",
+            "value": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "orange",
+                  "value": 16
+                },
+                {
+                  "color": "green",
+                  "value": 18
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/gpu_racks",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "rack",
+          "text": "rack",
+          "type": "string"
+        },
+        {
+          "selector": "rack_name",
+          "text": "rack_name",
+          "type": "string"
+        },
+        {
+          "selector": "instance_type",
+          "text": "instance_type",
+          "type": "string"
+        },
+        {
+          "selector": "trays_ready",
+          "text": "trays_ready",
+          "type": "number"
+        },
+        {
+          "selector": "trays_total",
+          "text": "trays_total",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

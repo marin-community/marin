@@ -3,10 +3,6 @@
 
 """Unit tests for the AIMD backoff detector."""
 
-from __future__ import annotations
-
-import math
-
 import pytest
 from iris.cluster.controller.autoscaler.backoff_detector import (
     DEFAULT_DECAY_PER_FAILURE,
@@ -300,14 +296,3 @@ def test_health_never_exceeds_one() -> None:
     # Many quiet ticks shouldn't push score over 1.0.
     detector.health(ts(0))
     assert detector.health(ts(10**8)) == 1.0
-
-
-def test_recovery_rate_matches_recovery_duration() -> None:
-    """Internal: recovery_per_second exactly bridges floor → 1.0 in recovery_duration."""
-    detector = make_detector(recovery_duration=Duration.from_hours(1))
-    floor = DEFAULT_PROBE_FLOOR_PER_MINUTE / BASE_RATE_PER_MIN
-    expected = (1.0 - floor) / Duration.from_hours(1).to_seconds()
-    assert detector._recovery_per_second == pytest.approx(expected, abs=1e-12)
-    # And the inverse — number of failures needed to floor — matches log math.
-    n_to_floor = math.ceil(math.log(floor) / math.log(DEFAULT_DECAY_PER_FAILURE))
-    assert n_to_floor >= 5  # default tuning: ~10 failures to floor

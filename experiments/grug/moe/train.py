@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 import logging
@@ -25,23 +23,25 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.data import AsyncDataset, DataLoader
+from levanter.data.dataset import AsyncDataset
+from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
-from levanter.data.text import GrugLmExample, LmDataConfig
-from levanter.data.text.examples import grug_lm_example_from_named
+from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -58,7 +58,7 @@ class GrugTrainerConfig:
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
-    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -69,6 +69,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    sharding_dump_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,9 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
+    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    processes_per_task: int = 1
 
 
 def build_train_dataset(
@@ -178,7 +182,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -435,6 +439,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if trainer.initialize_from is not None:
+            state = init_weights_only_from_checkpoint(
+                state,
+                trainer.initialize_from,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+                additional_weight_fields=("pending_qb_betas",),
+            )
+        dump_grug_state_sharding_run_artifact(
+            state,
+            log_dir=trainer.log_dir,
+            run_id=run_id,
+            path_override=config.trainer.sharding_dump_path,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -472,11 +490,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                callbacks.profile(
+                profiler_cfg.build(
                     str(trainer.log_dir / run_id / "profiler"),
-                    profiler_cfg.start_step,
-                    profiler_num_steps,
-                    profiler_cfg.perfetto_link,
+                    run_id=run_id,
+                    num_steps=profiler_num_steps,
                 ),
                 every=1,
             )
@@ -570,6 +587,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        processes_per_task=config.processes_per_task,
     )
 
 

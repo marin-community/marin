@@ -1,35 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Synthetic infra canary. Three probes against Iris and Finelog, run on a
-fixed cadence, results logged to stdout (picked up by Cloud Logging on COS).
+"""Synthetic infra canary.
+
+Health checks cover the internal Marin controller, its public IAP/federation
+path to every peer, and Finelog. Cluster/provisioning gauges run alongside them,
+each as a collector on its own cadence. Samples are logged to stdout (picked up
+by Cloud Logging on COS) and fanned to the sinks.
 """
 
-from __future__ import annotations
-
-import asyncio
 import logging
-import tempfile
 import time
 import uuid
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 import click
+from cluster import collect_jobs, collect_workers
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
+from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.constraints import zone_constraint
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.rpc import job_pb2
-from result import ProbeResult
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from provisioning import collect_provisioning
+from rigging.filesystem import load_cluster_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
-from sinks import FinelogTableSink, JsonlGcsSink, ProbeSink
+from runner import METRIC_UP, Collector, CollectorRunner, MetricSink, health_collector
+from sample import Sample
+from sinks import FinelogTableSink, JsonlGcsSink
 
 logger = logging.getLogger(__name__)
+
+_MARIN_CONFIG = load_cluster_config("marin")
 
 # Iris advertises the finelog log-server under this logical name in its endpoint
 # registry; resolve it to a concrete address via list_endpoints (same name the
@@ -39,25 +45,36 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 # Default zones to canary when --zone is not given: the busiest europe-west4 and
 # us-west4 zones in the fleet.
 DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
+DEFAULT_IRIS_CLUSTER = "marin"
 
-# The iris worker unconditionally runs `uv sync --all-packages --no-group dev`
-# against the job's bundle, which fails without a pyproject.toml (and without a
-# `dev` group for --no-group to exclude). The canary sleep job needs no deps, so
-# ship a throwaway workspace whose only content is a minimal pyproject that
-# resolves to an empty venv: an empty dev group satisfies --no-group dev, and
-# package=false skips building it as a package.
-CANARY_PYPROJECT = """\
-[project]
-name = "iris-canary"
-version = "0"
-requires-python = ">=3.11"
+# Scheduling probes request only enough resources for the pod to exercise Iris,
+# federation, Kueue, and Kubernetes placement. They use the task image as-is:
+# setup_scripts=[] avoids a workspace upload and uv-sync build phase.
+CANARY_CPU = 0.1
+CANARY_MEMORY = "128m"
+CANARY_SCHEDULING_TIMEOUT = 60.0
+CANARY_RUNTIME_TIMEOUT = 60.0
+CANARY_WAIT_TIMEOUT = 100.0
+CANARY_PEER_TIMEOUT = 120.0
+CANARY_COLLECTOR_TIMEOUT = 240.0
+CANARY_CADENCE = 1800.0
 
-[dependency-groups]
-dev = []
+# Provisioning gauge: a trailing window over the controller's iris.provisioning
+# namespace, re-emitted each cadence. A 3h window smooths the bursty per-minute
+# noise (stockouts persist for hours); 15min cadence is ample resolution and the
+# finelog query is sub-second. The timeout covers the query plus aggregation.
+PROVISION_WINDOW_HOURS = 3.0
+PROVISION_CADENCE = 900.0
+PROVISION_TIMEOUT = 60.0
 
-[tool.uv]
-package = false
-"""
+# Cluster-state gauges. Workers is a single ListWorkers RPC paged client-side;
+# jobs is one raw-SQL GROUP BY. Both are sub-second, so the cadences are about
+# freshness (workers churn faster than the 24h job window) and the timeouts only
+# cover a slow/hung controller.
+WORKERS_CADENCE = 60.0
+WORKERS_TIMEOUT = 30.0
+JOBS_CADENCE = 120.0
+JOBS_TIMEOUT = 30.0
 
 # finelog-write probe: the key/source the canary writes under. Reads match on
 # the KEY column (FetchLogsRequest.source + MatchScope are key matchers despite
@@ -71,84 +88,15 @@ FINELOG_FLUSH_TIMEOUT = 8.0
 FINELOG_READBACK_TIMEOUT = 5.0
 FINELOG_READBACK_POLL_INTERVAL = 0.25
 
-# Where each ProbeResult is persisted (beyond the stdout log line). The local
-# dir is the VM's /var/lib/probes host mount; finished daily files roll up to GCS
-# in the same region as the VM (no cross-region egress).
+# Where each Sample is persisted (beyond the stdout log line). The local dir is
+# the VM's /var/lib/probes host mount; finished daily files roll up to GCS in the
+# same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
-PROBE_RESULTS_GCS_PREFIX = "gs://marin-us-central1/infra/probes"
-PROBE_RESULTS_NAMESPACE = "infra.canary.probes"
+PROBE_RESULTS_GCS_PREFIX = f"gs://{_MARIN_CONFIG.region_buckets['us-central1'].name}/infra/probes"
+PROBE_RESULTS_NAMESPACE = "infra.canary.metrics"
 
 
-# A probe fn reports only whether the probe succeeded; the runner stamps the
-# rest of the ProbeResult.
-ProbeFn = Callable[[], bool]
-
-
-@dataclass
-class Probe:
-    """A registered probe: a callable to run, a name to report it under, and
-    timing (per-run timeout, between-runs cadence)."""
-
-    name: str
-    fn: ProbeFn
-    timeout: float
-    cadence: float
-
-
-class ProbeRunner:
-    """Register probes, then ``run()`` to execute each one forever on its own
-    cadence. Ctrl-C kills the process — there is no graceful shutdown path;
-    samples are stateless so there's nothing to clean up. Each result is
-    logged as ``probe <name>: ok|fail [<wall_ms>ms] start=<utc-iso>`` and
-    that's the only output — operator log aggregation does the rest."""
-
-    def __init__(self, sinks: Sequence[ProbeSink] = ()) -> None:
-        self._probes: list[Probe] = []
-        self._sinks = tuple(sinks)
-
-    def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None:
-        self._probes.append(Probe(name, fn, timeout, cadence))
-
-    def run(self) -> None:
-        if not self._probes:
-            raise ValueError("no probes registered")
-        asyncio.run(self._run_async())
-
-    async def _run_async(self) -> None:
-        await asyncio.gather(*(self._run_probe(probe) for probe in self._probes))
-
-    async def _run_probe(self, probe: Probe) -> None:
-        while True:
-            started_at = datetime.now(timezone.utc)
-            start = time.monotonic()
-            try:
-                is_success = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
-            except asyncio.TimeoutError:
-                is_success = False
-            except Exception:
-                logger.exception("probe %s raised", probe.name)
-                is_success = False
-            wall_time = time.monotonic() - start
-            result = ProbeResult(is_success=is_success, name=probe.name, started_at=started_at, wall_time=wall_time)
-            level = logging.INFO if result.is_success else logging.ERROR
-            status = "ok" if result.is_success else "fail"
-            logger.log(
-                level,
-                "probe %s: %s [%dms] start=%s",
-                result.name,
-                status,
-                wall_time * 1000,
-                started_at.isoformat(timespec="milliseconds"),
-            )
-            for sink in self._sinks:
-                try:
-                    sink.record(result)
-                except Exception:
-                    logger.exception("sink %s failed for probe %s", type(sink).__name__, result.name)
-            await asyncio.sleep(probe.cadence)
-
-
-# ---- probes ---------------------------------------------------------------
+# ---- health checks --------------------------------------------------------
 
 
 def probe_controller_ping(iris: RemoteClusterClient) -> bool:
@@ -156,20 +104,89 @@ def probe_controller_ping(iris: RemoteClusterClient) -> bool:
     return True
 
 
-def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> bool:
-    job_id = JobName.root("infra-probes", f"canary-{zone}-{int(time.time())}")
+def iris_job_succeeds(
+    iris: RemoteClusterClient,
+    target: str,
+    constraints: list[job_pb2.Constraint],
+) -> bool:
+    job_id = JobName.root(
+        "infra-probes",
+        f"canary-{target}-{int(time.time())}-{uuid.uuid4().hex[:8]}",
+    )
     submitted = iris.submit_job(
         job_id=job_id,
         entrypoint=Entrypoint.from_command("python", "-c", "import time; time.sleep(1)"),
-        resources=ResourceSpec(cpu=1.0, memory="256m").to_proto(),
-        environment=EnvironmentSpec().to_proto(),
-        constraints=[zone_constraint(zone).to_proto()],
+        resources=ResourceSpec(cpu=CANARY_CPU, memory=CANARY_MEMORY).to_proto(),
+        environment=EnvironmentSpec(setup_scripts=[]).to_proto(),
+        constraints=constraints,
         max_retries_failure=0,
         max_retries_preemption=0,
-        timeout=Duration.from_seconds(60),
+        scheduling_timeout=Duration.from_seconds(CANARY_SCHEDULING_TIMEOUT),
+        timeout=Duration.from_seconds(CANARY_RUNTIME_TIMEOUT),
     )
-    status = iris.wait_for_job(submitted, timeout=100.0)
+    status = iris.wait_for_job(submitted, timeout=CANARY_WAIT_TIMEOUT)
     return status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def _federated_scheduling_health_sample(peer_id: str, succeeded: bool) -> Sample:
+    probe_name = f"iris-job-submit/cluster/{peer_id}"
+    return Sample.of(
+        METRIC_UP,
+        1.0 if succeeded else 0.0,
+        probe=probe_name,
+        cluster=peer_id,
+        route="federation",
+    )
+
+
+def _federated_scheduling_sample(iris: RemoteClusterClient, peer_id: str) -> Sample:
+    constraint = Constraint.create(
+        key=CLUSTER_CONSTRAINT_KEY,
+        op=ConstraintOp.EQ,
+        value=peer_id,
+    )
+    try:
+        succeeded = iris_job_succeeds(
+            iris,
+            f"cluster-{peer_id}",
+            [constraint.to_proto()],
+        )
+    except Exception:
+        logger.exception("federated scheduling probe failed for %s", peer_id)
+        succeeded = False
+    return _federated_scheduling_health_sample(peer_id, succeeded)
+
+
+def collect_federated_scheduling(
+    iris: RemoteClusterClient,
+    peer_client: ControllerServiceClientSync,
+) -> list[Sample]:
+    """Return one scheduling-health sample for every Marin federation peer."""
+    # Do not filter on the latest heartbeat's backend kind: an unreachable peer
+    # has no live backend summary and is exactly the target that must report down.
+    response = peer_client.list_peers(controller_pb2.Controller.ListPeersRequest())
+    peer_ids = sorted(peer.peer_id for peer in response.peers)
+    if not peer_ids:
+        raise RuntimeError("the Marin controller reports no federation peers")
+
+    executor = ThreadPoolExecutor(
+        max_workers=len(peer_ids),
+        thread_name_prefix="federated-scheduling-probe",
+    )
+    try:
+        futures = {executor.submit(_federated_scheduling_sample, iris, peer_id): peer_id for peer_id in peer_ids}
+        completed, pending = wait(futures, timeout=CANARY_PEER_TIMEOUT)
+        samples = [
+            future.result() if future in completed else _federated_scheduling_health_sample(peer_id, False)
+            for future, peer_id in futures.items()
+        ]
+        for future in pending:
+            peer_id = futures[future]
+            logger.error("federated scheduling probe timed out for %s", peer_id)
+        return samples
+    finally:
+        # Waiting here would discard completed samples when one peer call is stuck.
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def probe_finelog_write(finelog: LogClient) -> bool:
@@ -219,18 +236,10 @@ def resolve_finelog_address(iris: RemoteClusterClient, name: str) -> str:
     return endpoints[0].address
 
 
-def make_canary_workspace() -> Path:
-    """Create the throwaway workspace bundled with the iris-job-submit canary so
-    the worker's `uv sync` build step has a pyproject.toml to resolve against."""
-    workspace = Path(tempfile.mkdtemp(prefix="iris-canary-workspace-"))
-    (workspace / "pyproject.toml").write_text(CANARY_PYPROJECT)
-    return workspace
-
-
-def build_sinks(finelog: LogClient) -> list[ProbeSink]:
-    """Construct the result sinks, skipping any that fail to initialize so the
-    canary still runs (and reports probe results) on a sink-side fault."""
-    sinks: list[ProbeSink] = []
+def build_sinks(finelog: LogClient) -> list[MetricSink]:
+    """Construct the sample sinks, skipping any that fail to initialize so the
+    canary still runs (and reports samples) on a sink-side fault."""
+    sinks: list[MetricSink] = []
     try:
         sinks.append(JsonlGcsSink(PROBE_RESULTS_DIR, PROBE_RESULTS_GCS_PREFIX))
     except Exception:
@@ -242,34 +251,98 @@ def build_sinks(finelog: LogClient) -> list[ProbeSink]:
     return sinks
 
 
+def build_collectors(
+    iris: RemoteClusterClient,
+    federated_iris: RemoteClusterClient,
+    finelog: LogClient,
+    query_client: ControllerServiceClientSync,
+    zones: tuple[str, ...],
+) -> list[Collector]:
+    """Health checks plus the provisioning/workers/jobs gauges, each on its own cadence."""
+    collectors = [
+        health_collector("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0),
+        health_collector("finelog-write", lambda: probe_finelog_write(finelog), timeout=15.0, cadence=60.0),
+        Collector(
+            name="provisioning",
+            collect=lambda: collect_provisioning(finelog, window_hours=PROVISION_WINDOW_HOURS),
+            timeout=PROVISION_TIMEOUT,
+            cadence=PROVISION_CADENCE,
+        ),
+        Collector(
+            name="workers",
+            collect=lambda: collect_workers(iris),
+            timeout=WORKERS_TIMEOUT,
+            cadence=WORKERS_CADENCE,
+        ),
+        Collector(
+            name="jobs",
+            collect=lambda: collect_jobs(query_client),
+            timeout=JOBS_TIMEOUT,
+            cadence=JOBS_CADENCE,
+        ),
+    ]
+    for zone in zones:
+        collectors.append(
+            health_collector(
+                f"iris-job-submit/{zone}",
+                lambda z=zone: iris_job_succeeds(
+                    iris,
+                    z,
+                    [zone_constraint(z).to_proto()],
+                ),
+                timeout=CANARY_COLLECTOR_TIMEOUT,
+                cadence=CANARY_CADENCE,
+            )
+        )
+    collectors.append(
+        Collector(
+            name="iris-job-submit/federation",
+            collect=lambda: collect_federated_scheduling(federated_iris, query_client),
+            timeout=CANARY_COLLECTOR_TIMEOUT,
+            cadence=CANARY_CADENCE,
+        )
+    )
+    return collectors
+
+
 @click.command()
 @click.option("--iris-endpoint", required=True, help="controller RPC, e.g. http://10.128.0.3:10000")
+@click.option(
+    "--iris-cluster",
+    default=DEFAULT_IRIS_CLUSTER,
+    show_default=True,
+    help="named public Iris cluster used for authenticated federation probes",
+)
 @click.option(
     "--zone",
     "zones",
     multiple=True,
     help=f"GCP zone for iris-job-submit; repeat for multiple (default: {', '.join(DEFAULT_ZONES)})",
 )
-def main(iris_endpoint: str, zones: tuple[str, ...]) -> None:
+def main(iris_endpoint: str, iris_cluster: str, zones: tuple[str, ...]) -> None:
     zones = zones or DEFAULT_ZONES
 
-    iris = RemoteClusterClient(controller_address=iris_endpoint, workspace=make_canary_workspace())
+    iris = RemoteClusterClient(controller_address=iris_endpoint)
     finelog = LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,
         resolver=lambda name: resolve_finelog_address(iris, name),
     )
+    # Dedicated connect client for the jobs gauge's raw-SQL RPC; null-auth cluster,
+    # so no credentials. RemoteClusterClient doesn't surface ExecuteRawQuery.
+    query_client = rpc_client(iris_endpoint)
 
-    runner = ProbeRunner(sinks=build_sinks(finelog))
-    runner.add_probe("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0)
-    runner.add_probe("finelog-write", lambda: probe_finelog_write(finelog), timeout=15.0, cadence=60.0)
-    for zone in zones:
-        runner.add_probe(
-            f"iris-job-submit/{zone}",
-            lambda z=zone: probe_iris_job_submit(iris, z),
-            timeout=120.0,
-            cadence=300.0,
+    # Federation probes deliberately traverse the public IAP edge. Ambient
+    # service-account credentials become the IAP token; the Marin controller
+    # then authenticates and signs each downstream peer handoff.
+    with connect_controller(cluster_name=iris_cluster) as public_endpoint:
+        federated_iris = RemoteClusterClient(
+            controller_address=public_endpoint.url,
+            interceptors=public_endpoint.credentials.interceptors(),
         )
-    runner.run()
+        runner = CollectorRunner(sinks=build_sinks(finelog))
+        for collector in build_collectors(iris, federated_iris, finelog, query_client, zones):
+            runner.add(collector)
+        runner.run()
 
 
 if __name__ == "__main__":

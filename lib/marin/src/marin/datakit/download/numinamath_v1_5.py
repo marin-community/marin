@@ -11,8 +11,11 @@ transcripts, and preserves source metadata for downstream mixture analysis.
 
 import hashlib
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -52,16 +55,16 @@ def row_to_doc(row: dict) -> list[dict]:
     problem = _clean_text(row, "problem")
     solution = _clean_text(row, "solution")
     if problem is None or solution is None:
-        counters.increment("numinamath_v1_5/dropped_empty")
+        counters.pipeline.update_counter("numinamath_v1_5/dropped_empty", 1)
         return []
 
     if not _is_valid_row(row):
-        counters.increment("numinamath_v1_5/dropped_invalid")
+        counters.pipeline.update_counter("numinamath_v1_5/dropped_invalid", 1)
         return []
 
     text = f"<user>\n{problem}\n</user>\n\n<assistant>\n{solution}\n</assistant>"
 
-    counters.increment("numinamath_v1_5/kept")
+    counters.pipeline.update_counter("numinamath_v1_5/kept", 1)
     return [
         {
             "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),

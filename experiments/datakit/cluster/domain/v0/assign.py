@@ -18,8 +18,6 @@ cache valid across Zephyr tasks.
 Counters: ``assign/docs_in``, ``assign/shards_in``.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile
@@ -28,32 +26,36 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from fray import ResourceConfig
-from marin.execution.artifact import Artifact
-from marin.utils import fsspec_glob
+from fray.types import ResourceConfig
+from marin.datakit.source_key import DatakitArtifactPath
+from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
-from rigging.filesystem import open_url
-from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
+from rigging.filesystem import StoragePath, open_url
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
+ASSIGNMENT_ATTR_DATA_VERSION = 2
 
 
 class AssignmentAttrData(BaseModel):
     """Co-partitioned per-source cluster-assignment parquet shards."""
 
-    version: str = "v1"
-    output_dir: str
-    source_main_dir: str
-    embedding_output_dir: str
+    version: str = f"v{ASSIGNMENT_ATTR_DATA_VERSION}"
+    output_dir: DatakitArtifactPath
+    source_key: str
+    embedding_output_dir: DatakitArtifactPath
     k_train: int
     k_views: list[int]
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
+        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
 
 
 def _read_npy(uri: str) -> np.ndarray:
@@ -131,8 +133,8 @@ def _assign_shard(
                 rec[f"cluster_{k}"] = int(coarser[k][i])
             yield rec
 
-    counters.increment("assign/docs_in", n_docs)
-    counters.increment("assign/shards_in", 1)
+    counters.pipeline.update_counter("assign/docs_in", n_docs)
+    counters.pipeline.update_counter("assign/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs assigned (K=%d centroids, %d coarser views)",
         shard.shard_idx,
@@ -220,11 +222,11 @@ def assign_source(
 
     artifact = AssignmentAttrData(
         output_dir=output_path,
-        source_main_dir=embedding.source_main_dir,
+        source_key=embedding.source_key,
         embedding_output_dir=embedding.output_dir,
         k_train=k_train,
         k_views=k_views,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

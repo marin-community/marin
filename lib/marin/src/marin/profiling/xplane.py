@@ -3,13 +3,13 @@
 
 """Ingest XPlane protobuf profiles directly and through xprof tables."""
 
-from __future__ import annotations
-
 import json
 import logging
 import re
 import tempfile
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Iterable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
@@ -18,7 +18,6 @@ from typing import Any, cast
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from marin.profiling.schema import (
-    BreakdownPart,
     CommunicationOp,
     DurationStats,
     HotOp,
@@ -29,16 +28,24 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
+    empty_category_totals,
+    make_time_breakdown,
 )
 from marin.profiling.semantics import canonical_op_name
 from marin.profiling.trace_summary import (
-    CompleteTraceEvent,
+    TraceEvent,
+    TraceEventArgs,
+    TraceEventTrack,
+    TraceSummaryContext,
+    TraceTrackAggregate,
     collective_kind,
     derive_optimization_candidates,
+    is_device_op_thread,
     op_category,
     sha256_for_path,
-    summarize_complete_events,
+    summarize_event_tracks,
     summarize_semantic_families,
+    trace_event_category,
     trace_quality_warnings,
 )
 
@@ -54,29 +61,46 @@ XPROF_TABLE_TOOLS = (
     "input_pipeline_analyzer",
 )
 
-_TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD = 1_000_000
-_PICoseconds_PER_MICROSECOND = 1_000_000.0
+_NANOSECONDS_PER_MICROSECOND = 1_000.0
+_PICOSECONDS_PER_MICROSECOND = 1_000_000.0
 _XSPACE_MESSAGE_CLASS: Any | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class XPlaneTimeline:
     """Normalized timeline events parsed directly from an XPlane protobuf."""
 
-    events: list[CompleteTraceEvent]
+    tracks: Iterable[TraceEventTrack | TraceTrackAggregate]
     process_names: dict[int, str]
     thread_names: dict[tuple[int, int], str]
     num_events_total: int
     quality_warnings: list[str]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class XPlaneTableExport:
     """Paths and sizes produced while converting an XPlane protobuf with xprof."""
 
     output_dir: Path
     table_sizes: dict[str, int]
     trace_event_count: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _XPlaneEventMetadata:
+    name: str
+    metadata_name: str
+    stats: dict[str, Any]
+    args: TraceEventArgs
+    category: str
+
+
+@dataclass(slots=True)
+class _OpenXPlaneEvent:
+    end: float
+    duration: float
+    child_duration: float
+    category: str
 
 
 class MultipleXPlaneFilesError(ValueError):
@@ -169,26 +193,28 @@ def summarize_xplane_timeline(
     breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """Summarize directly parsed XPlane timeline events."""
-    timeline = parse_xplane_timeline(xplane_path)
-    return summarize_complete_events(
-        timeline.events,
-        source_format="xplane_pb",
-        source_path=xplane_path,
-        display_time_unit="us",
-        num_events_total=timeline.num_events_total,
-        process_names=timeline.process_names,
-        thread_names=timeline.thread_names,
-        trace_sha256=sha256_for_path(xplane_path),
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
-        extra_quality_warnings=timeline.quality_warnings,
+    timeline = parse_xplane_timeline(xplane_path, breakdown_mode=breakdown_mode)
+    return summarize_event_tracks(
+        timeline.tracks,
+        context=TraceSummaryContext(
+            source_format="xplane_pb",
+            source_path=xplane_path,
+            display_time_unit="us",
+            num_events_total=timeline.num_events_total,
+            process_names=timeline.process_names,
+            thread_names=timeline.thread_names,
+            trace_sha256=sha256_for_path(xplane_path),
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+            extra_quality_warnings=timeline.quality_warnings,
+        ),
     )
 
 
-def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
-    """Parse XPlane protobuf timeline events into Marin's normalized event model."""
+def parse_xplane_timeline(xplane_path: Path, *, breakdown_mode: str = "exclusive_per_track") -> XPlaneTimeline:
+    """Parse XPlane protobuf metadata and lazily expose its timeline tracks."""
     if not xplane_path.exists():
         raise FileNotFoundError(f"XPlane protobuf does not exist: {xplane_path}")
 
@@ -198,7 +224,6 @@ def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
 
     process_names: dict[int, str] = {}
     thread_names: dict[tuple[int, int], str] = {}
-    events: list[CompleteTraceEvent] = []
     num_events_total = 0
     quality_warnings = [str(warning) for warning in getattr(xspace, "warnings", [])]
     quality_warnings.extend(str(error) for error in getattr(xspace, "errors", []))
@@ -207,67 +232,204 @@ def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
         pid = plane_index + 1
         process_name = str(plane.name or f"xplane:{plane_index}")
         process_names[pid] = process_name
-        stat_names = {int(key): str(value.name) for key, value in plane.stat_metadata.items()}
-
         for line_index, line in enumerate(plane.lines):
             tid = int(line.id or line_index + 1)
             thread_name = str(line.display_name or line.name or f"xline:{line_index}")
             thread_names[(pid, tid)] = thread_name
             num_events_total += len(line.events)
-            line_start_us = float(line.timestamp_ns) / 1_000.0
-
-            for event in line.events:
-                if event.WhichOneof("data") != "offset_ps":
-                    continue
-                if event.duration_ps <= 0:
-                    continue
-
-                metadata = plane.event_metadata.get(event.metadata_id)
-                if metadata is None:
-                    continue
-
-                event_stats = _xplane_stats_to_mapping(
-                    list(metadata.stats) + list(event.stats),
-                    stat_names=stat_names,
-                )
-                display_name = str(metadata.display_name or "")
-                metadata_name = str(metadata.name or "")
-                name = display_name or metadata_name
-                if not name:
-                    continue
-
-                long_name = _string_stat(event_stats, "long_name") or (metadata_name if metadata_name != name else None)
-                events.append(
-                    CompleteTraceEvent(
-                        name=name,
-                        canonical_name=canonical_op_name(name),
-                        deduplicated_name=_string_stat(event_stats, "deduplicated_name"),
-                        pid=pid,
-                        tid=tid,
-                        ts=line_start_us + (float(event.offset_ps) / _PICoseconds_PER_MICROSECOND),
-                        dur=float(event.duration_ps) / _PICoseconds_PER_MICROSECOND,
-                        tf_op=_string_stat(event_stats, "tf_op"),
-                        source=_string_stat(event_stats, "source", "source_file", "file_name"),
-                        source_stack=_string_stat(event_stats, "source_stack", "stack_frame"),
-                        hlo_category=_string_stat(event_stats, "hlo_category"),
-                        long_name=long_name,
-                        run_id=_string_like_stat(event_stats, "run_id"),
-                        process_name=process_name,
-                        thread_name=thread_name,
-                        step_num=_int_like_stat(event_stats, "step_num", "step"),
-                    )
-                )
-
-    if not events:
-        quality_warnings.append("XPlane protobuf contained no direct timeline events with offset/duration data.")
 
     return XPlaneTimeline(
-        events=events,
+        tracks=_xplane_tracks(xspace, breakdown_mode=breakdown_mode),
         process_names=process_names,
         thread_names=thread_names,
         num_events_total=num_events_total,
         quality_warnings=quality_warnings,
     )
+
+
+def _xplane_tracks(xspace: Any, *, breakdown_mode: str) -> Iterator[TraceEventTrack | TraceTrackAggregate]:
+    for plane_index, plane in enumerate(xspace.planes):
+        pid = plane_index + 1
+        process_name = str(plane.name or f"xplane:{plane_index}")
+        stat_names = {int(key): str(value.name) for key, value in plane.stat_metadata.items()}
+        event_metadata = _xplane_event_metadata(plane, stat_names=stat_names, process_name=process_name)
+
+        for line_index, line in enumerate(plane.lines):
+            tid = int(line.id or line_index + 1)
+            thread_name = str(line.display_name or line.name or f"xline:{line_index}")
+            device_process = process_name.startswith("/device:")
+            detailed_timeline = device_process and (
+                is_device_op_thread(thread_name) or (breakdown_mode == "exclusive_global" and thread_name != "Steps")
+            )
+            if not detailed_timeline:
+                yield _aggregate_xplane_track(
+                    line,
+                    pid=pid,
+                    tid=tid,
+                    process_name=process_name,
+                    thread_name=thread_name,
+                    event_metadata=event_metadata,
+                    stat_names=stat_names,
+                )
+                continue
+            events = _xplane_line_events(
+                line,
+                pid=pid,
+                tid=tid,
+                event_metadata=event_metadata,
+                stat_names=stat_names,
+            )
+            yield TraceEventTrack(
+                pid=pid,
+                tid=tid,
+                process_name=process_name,
+                thread_name=thread_name,
+                events=events,
+            )
+
+
+def _xplane_event_metadata(
+    plane: Any, *, stat_names: dict[int, str], process_name: str
+) -> dict[int, _XPlaneEventMetadata]:
+    event_metadata: dict[int, _XPlaneEventMetadata] = {}
+    for metadata_id, metadata in plane.event_metadata.items():
+        display_name = str(metadata.display_name or "")
+        metadata_name = str(metadata.name or "")
+        name = display_name or metadata_name
+        if not name:
+            continue
+        stats = _xplane_stats_to_mapping(metadata.stats, stat_names=stat_names)
+        long_name = _string_stat(stats, "long_name") or (metadata_name if metadata_name != name else None)
+        event_metadata[int(metadata_id)] = _XPlaneEventMetadata(
+            name=name,
+            metadata_name=metadata_name,
+            stats=stats,
+            args=_trace_event_args_from_xplane_stats(stats, long_name=long_name),
+            category=trace_event_category(name, process_name),
+        )
+    return event_metadata
+
+
+def _aggregate_xplane_track(
+    line: Any,
+    *,
+    pid: int,
+    tid: int,
+    process_name: str,
+    thread_name: str,
+    event_metadata: dict[int, _XPlaneEventMetadata],
+    stat_names: dict[int, str],
+) -> TraceTrackAggregate:
+    num_complete_events = 0
+    profile_start: float | None = None
+    profile_end: float | None = None
+    run_ids: Counter[str] = Counter()
+    source_files: Counter[str] = Counter()
+    step_events: list[TraceEvent] = []
+    breakdown_totals = empty_category_totals()
+    stack: list[_OpenXPlaneEvent] = []
+    line_start_us = float(line.timestamp_ns) / _NANOSECONDS_PER_MICROSECOND
+    include_breakdown = thread_name != "Steps"
+    is_device_step_track = process_name.startswith("/device:") and thread_name == "Steps"
+    is_host_track = process_name.startswith("/host:")
+    previous_key: tuple[float, float] | None = None
+
+    for event in line.events:
+        if event.WhichOneof("data") != "offset_ps" or event.duration_ps <= 0:
+            continue
+        metadata = event_metadata.get(int(event.metadata_id))
+        if metadata is None:
+            continue
+
+        duration = float(event.duration_ps) / _PICOSECONDS_PER_MICROSECOND
+        start = line_start_us + (float(event.offset_ps) / _PICOSECONDS_PER_MICROSECOND)
+        end = start + duration
+        key = (start, -end)
+        if previous_key is not None and key < previous_key:
+            raise ValueError(f"Events on XPlane track ({pid}, {tid}) are not in timeline order.")
+        previous_key = key
+        num_complete_events += 1
+        profile_start = start if profile_start is None else min(profile_start, start)
+        profile_end = end if profile_end is None else max(profile_end, end)
+
+        args = metadata.args
+        if event.stats:
+            args = _xplane_event_args(event, metadata, stat_names=stat_names)
+        if args.run_id is not None:
+            run_ids[str(args.run_id)] += 1
+        if args.source:
+            source_files[args.source] += 1
+
+        is_host_step = is_host_track and metadata.name == "train" and args.step_num is not None
+        if is_device_step_track or is_host_step:
+            step_events.append(
+                TraceEvent(
+                    ph="X",
+                    name=metadata.name,
+                    pid=pid,
+                    tid=tid,
+                    ts=start,
+                    dur=duration,
+                    args=args,
+                    process_name=process_name,
+                    thread_name=thread_name,
+                )
+            )
+
+        if not include_breakdown:
+            continue
+        while stack and (start >= stack[-1].end or end > stack[-1].end):
+            entry = stack.pop()
+            breakdown_totals[entry.category] += max(0.0, entry.duration - entry.child_duration)
+            if stack:
+                stack[-1].child_duration += entry.duration
+        stack.append(_OpenXPlaneEvent(end=end, duration=duration, child_duration=0.0, category=metadata.category))
+
+    while stack:
+        entry = stack.pop()
+        breakdown_totals[entry.category] += max(0.0, entry.duration - entry.child_duration)
+        if stack:
+            stack[-1].child_duration += entry.duration
+
+    return TraceTrackAggregate(
+        num_complete_events=num_complete_events,
+        profile_start=profile_start,
+        profile_end=profile_end,
+        run_ids=run_ids,
+        source_files=source_files,
+        step_events=step_events,
+        breakdown_totals=breakdown_totals,
+    )
+
+
+def _xplane_line_events(
+    line: Any,
+    *,
+    pid: int,
+    tid: int,
+    event_metadata: dict[int, _XPlaneEventMetadata],
+    stat_names: dict[int, str],
+) -> Iterator[TraceEvent]:
+    line_start_us = float(line.timestamp_ns) / _NANOSECONDS_PER_MICROSECOND
+    for event in line.events:
+        if event.WhichOneof("data") != "offset_ps" or event.duration_ps <= 0:
+            continue
+        metadata = event_metadata.get(int(event.metadata_id))
+        if metadata is None:
+            continue
+
+        args = metadata.args
+        if event.stats:
+            args = _xplane_event_args(event, metadata, stat_names=stat_names)
+        yield TraceEvent(
+            ph="X",
+            name=metadata.name,
+            pid=pid,
+            tid=tid,
+            ts=line_start_us + (float(event.offset_ps) / _PICOSECONDS_PER_MICROSECOND),
+            dur=float(event.duration_ps) / _PICOSECONDS_PER_MICROSECOND,
+            args=args,
+        )
 
 
 def summarize_xplane_tables(
@@ -299,7 +461,7 @@ def summarize_xplane_tables(
         trace_event_count=trace_event_count,
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb_xprof_tables",
         source_path=str(xplane_path),
         run_metadata=run_metadata or RunMetadata(),
@@ -328,19 +490,13 @@ def _try_summarize_xprof_tables(
     count_trace_events: bool,
 ) -> ProfileSummary | None:
     try:
-        if output_dir is not None:
-            export = export_xplane_tables(xplane_path, output_dir, count_trace_events=count_trace_events)
-            return summarize_xplane_tables(
-                export.output_dir,
-                xplane_path=xplane_path,
-                run_metadata=run_metadata,
-                warmup_steps=warmup_steps,
-                hot_op_limit=hot_op_limit,
-                trace_event_count=export.trace_event_count,
-            )
-
-        with tempfile.TemporaryDirectory(prefix="marin-xplane-tables-") as temp_dir:
-            export = export_xplane_tables(xplane_path, Path(temp_dir), count_trace_events=count_trace_events)
+        with ExitStack() as stack:
+            # Without a caller-supplied directory the tables are only an intermediate,
+            # so they live in a temp dir that is torn down once summarization is done.
+            table_dir = output_dir
+            if table_dir is None:
+                table_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="marin-xplane-tables-")))
+            export = export_xplane_tables(xplane_path, table_dir, count_trace_events=count_trace_events)
             return summarize_xplane_tables(
                 export.output_dir,
                 xplane_path=xplane_path,
@@ -395,7 +551,7 @@ def _merge_timeline_and_xprof_summaries(
         limit=max(hot_op_limit, 50),
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb",
         source_path=timeline_summary.source_path,
         run_metadata=timeline_summary.run_metadata,
@@ -581,7 +737,7 @@ def _add_field(
         field.oneof_index = oneof_index
 
 
-def _xplane_stats_to_mapping(stats: list[Any], *, stat_names: dict[int, str]) -> dict[str, Any]:
+def _xplane_stats_to_mapping(stats: Iterable[Any], *, stat_names: dict[int, str]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for stat in stats:
         stat_name = stat_names.get(int(stat.metadata_id))
@@ -591,6 +747,25 @@ def _xplane_stats_to_mapping(stats: list[Any], *, stat_names: dict[int, str]) ->
         if value is not None:
             values[stat_name] = value
     return values
+
+
+def _trace_event_args_from_xplane_stats(stats: dict[str, Any], *, long_name: str | None) -> TraceEventArgs:
+    return TraceEventArgs(
+        tf_op=_string_stat(stats, "tf_op"),
+        source=_string_stat(stats, "source", "source_file", "file_name"),
+        long_name=long_name,
+        run_id=_string_like_stat(stats, "run_id"),
+        step_num=_int_like_stat(stats, "step_num", "step"),
+    )
+
+
+def _xplane_event_args(event: Any, metadata: _XPlaneEventMetadata, *, stat_names: dict[int, str]) -> TraceEventArgs:
+    stats = dict(metadata.stats)
+    stats.update(_xplane_stats_to_mapping(event.stats, stat_names=stat_names))
+    long_name = _string_stat(stats, "long_name") or (
+        metadata.metadata_name if metadata.metadata_name != metadata.name else None
+    )
+    return _trace_event_args_from_xplane_stats(stats, long_name=long_name)
 
 
 def _xplane_stat_value(stat: Any, *, stat_names: dict[int, str]) -> Any:
@@ -730,13 +905,7 @@ def _periodicity(steps: list[int]) -> int | None:
 
 
 def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: list[dict[str, Any]]) -> TimeBreakdown:
-    totals = {
-        "compute": 0.0,
-        "communication": 0.0,
-        "host": 0.0,
-        "stall": 0.0,
-        "other": 0.0,
-    }
+    totals = empty_category_totals()
     for row in rows:
         totals["compute"] += (_float_value(row, "deviceComputeTimeMs") or 0.0) * 1000.0
         totals["communication"] += (_float_value(row, "deviceCollectivesTimeMs") or 0.0) * 1000.0
@@ -747,7 +916,7 @@ def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: lis
     if total_from_steps > 0:
         bucket_total = sum(totals.values())
         totals["other"] = max(0.0, total_from_steps - bucket_total)
-        return _make_time_breakdown("xprof_overview_step_time_us", totals, total=total_from_steps)
+        return make_time_breakdown("xprof_overview_step_time_us", totals, total_from_steps)
 
     communication = sum(
         _float_value(row, "total_duration_us") or 0.0
@@ -757,24 +926,7 @@ def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: lis
     total = sum(_float_value(row, "total_duration_us") or 0.0 for row in kernel_rows)
     totals["communication"] = communication
     totals["compute"] = max(0.0, total - communication)
-    return _make_time_breakdown("xprof_kernel_duration_us", totals, total=total)
-
-
-def _make_time_breakdown(duration_basis: str, totals: dict[str, float], *, total: float) -> TimeBreakdown:
-    return TimeBreakdown(
-        duration_basis=duration_basis,
-        total_duration=total,
-        compute=_breakdown_part(totals["compute"], total),
-        communication=_breakdown_part(totals["communication"], total),
-        host=_breakdown_part(totals["host"], total),
-        stall=_breakdown_part(totals["stall"], total),
-        other=_breakdown_part(totals["other"], total),
-    )
-
-
-def _breakdown_part(value: float, total: float):
-    share = (value / total) if total > 0 else 0.0
-    return BreakdownPart(total_duration=value, share_of_total=share)
+    return make_time_breakdown("xprof_kernel_duration_us", totals, total)
 
 
 def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list[HotOp]:
@@ -835,9 +987,8 @@ def _trace_overview_from_xprof_tables(
         "pre-op gap and hierarchical region analysis are unavailable."
     ]
     if trace_event_count is not None:
-        suspected_truncation = trace_event_count == _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD
+        suspected_truncation, trace_warnings = trace_quality_warnings(num_complete_events=trace_event_count)
         if suspected_truncation:
-            _, trace_warnings = trace_quality_warnings(num_complete_events=trace_event_count)
             warnings.extend(trace_warnings)
 
     statement = step_props.get("device_collectives_statement") or step_props.get("statement")

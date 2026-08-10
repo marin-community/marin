@@ -1,13 +1,23 @@
 ---
 name: debug
-description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured debug log.
+description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured incident record.
 ---
 
 # Skill: Debug
 
 Systematic debugging for code-level bugs and Marin infrastructure faults.
-For infrastructure symptoms, route to the right `OPS.md` section first; for
-code bugs, keep a structured debug log.
+For infrastructure symptoms, route to the right `OPS.md` section first. Publish
+durable investigation records to Echo with `write-ops-log`.
+
+Do not add repository debug-log files. Use `write-ops-log` to finish an
+infrastructure or other multi-step incident as a standalone Echo postmortem.
+
+## Consult Echo
+
+Invoke `consult-echo` at the start when prior discussions, decisions, or
+incident patterns could materially shorten debugging. At resolution, always
+invoke it to search before deciding whether the reusable lesson belongs in
+`OPS.md`, `docs/`, the Echo incident record, or an existing or new synthesis.
 
 ## Infrastructure faults
 
@@ -29,11 +39,13 @@ loop (`babysit-job` or `babysit-zephyr`).
 
 ## Code bugs
 
-For code-level bugs that are not infrastructure faults, maintain a debug log
-at `docs/debug-log-<task-name>.md`:
+For code-level bugs that are not infrastructure faults, keep working notes in
+the active task. A contained fix may use the lightweight structure below.
+Publish the complete `write-ops-log` structure to Echo when the investigation
+exposes a durable operational lesson:
 
 ```
-# Debugging log for <task>
+# <System or component>: <symptom>
 
 <goal>
 

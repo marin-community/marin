@@ -40,7 +40,7 @@ unforgivable error; so is fabricating one.
    ```
 
    The command writes its raw per-arm prompts/outputs and the
-   combined findings under `/tmp/marin-linter/<timestamp>/` (path printed at the
+   combined findings under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (path printed at the
    end); read it if a run looks wrong.
 
 3. **Collect the findings.** Each finding the command emits on stdout is one line

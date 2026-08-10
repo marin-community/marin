@@ -1,23 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
+"""BeautifulSoup cleanup helpers for ar5iv HTML.
 
+These transforms are composed by :func:`marin.transform.ar5iv.transform_ar5iv.clean_html`
+to strip academic-paper boilerplate before markdown extraction.
 """
 
-import datetime
-import logging
-from dataclasses import dataclass
 from html import escape, unescape
 
-import draccus
 from bs4 import BeautifulSoup
-from marin import markdown
-from marin.schemas.web.convert import HtmlToMarkdownConfig
-from zephyr import Dataset, ZephyrContext, load_jsonl
-
-logger = logging.getLogger(__name__)
 
 
 def transform_abstract(html: BeautifulSoup):
@@ -169,115 +161,8 @@ def remove_before_section(html: BeautifulSoup):
             section = new_section
 
 
-def remove_title(html: BeautifulSoup):
-    # Title is added by markdown parser
-    title = html.find("title")
-    if title:
-        title.decompose()
-
-
 def remove_figure_captions(html: BeautifulSoup):
     # Remove the figure captions since they are not needed
     captions = html.find_all("figcaption", {"class": "ltx_caption"})
     for caption in captions:
         caption.decompose()
-
-
-def clean_html(html: BeautifulSoup | str) -> str:
-    if isinstance(html, str):
-        html = BeautifulSoup(html, "html.parser")
-    remove_authors(html)
-    remove_title_page(html)
-    clean_li(html)
-    remove_biblio(html)
-    remove_footnotes(html)
-    remove_biblinks(html)
-    linelisting_to_newline(html)
-    deconstruct_eqn(html)
-    remove_ar5iv_footer(html)
-    remove_before_section(html)
-    remove_title(html)
-    return str(html)
-
-
-def clean_ar5iv_record(html_blob: dict) -> dict:
-    """Clean HTML in a single ar5iv record.
-
-    Args:
-        html_blob: Record with 'id' and 'text' (HTML content)
-
-    Returns:
-        Record with cleaned HTML text
-    """
-    content = clean_html(html_blob["text"])
-    return {
-        "id": html_blob["id"],
-        "text": content,
-        "source": "ar5iv",
-        "added": datetime.datetime.now().isoformat(),
-    }
-
-
-def markdownify_ar5iv_record(html_blob: dict) -> dict:
-    """Convert cleaned HTML to markdown for a single ar5iv record.
-
-    Args:
-        html_blob: Record with 'id' and 'text' (cleaned HTML content)
-
-    Returns:
-        Record with markdown text
-    """
-    content = BeautifulSoup(html_blob["text"], "html.parser")
-    try:
-        content = markdown.MyMarkdownConverter(HtmlToMarkdownConfig()).convert_soup(content)
-    except Exception:
-        logger.exception("Error converting to markdown; content was: %s", content)
-        raise
-    # cleanup: replace nbsp as space
-    # this isn't quite right if we preserve html in places, but we currently are not doing that
-    content = content.replace("\xa0", " ").strip()
-    return {
-        "id": html_blob["id"],
-        "text": content,
-        "source": "ar5iv",
-        "added": datetime.datetime.now().isoformat(),
-    }
-
-
-@dataclass
-class Config:
-    """Configuration for ar5iv transformation."""
-
-    input_path: str
-    """Path to the ar5iv jsonl.gz folder"""
-    output_path: str
-    """Path to the ar5iv output folder"""
-    file_size: int = 256
-    """Number of ar5iv documents per file (unused, kept for compatibility)"""
-
-
-@draccus.wrap()
-def main(cfg: Config) -> None:
-    """Convert ar5iv HTML to markdown in two stages."""
-    ctx = ZephyrContext(name="transform-ar5iv")
-    # Stage 1: Clean HTML
-    logger.info("Stage 1: Cleaning HTML...")
-    clean_pipeline = (
-        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
-        .flat_map(load_jsonl)
-        .map(clean_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
-    )
-    ctx.execute(clean_pipeline)
-
-    # Stage 2: Convert to Markdown
-    logger.info("Stage 2: Converting to markdown...")
-    markdown_pipeline = (
-        Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
-        .flat_map(load_jsonl)
-        .map(markdownify_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
-    )
-    ctx.execute(markdown_pipeline)
-
-    logger.info("Transformation complete!")

@@ -10,26 +10,31 @@ Pure routing/packing logic is tested in test_demand_routing.py.
 Integration tests with real GcpWorkerProvider are in test_autoscaler_integration.py.
 """
 
-import time
+import urllib.request
+from collections import deque
+from collections.abc import Sequence
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    SliceStatus,
-)
+from iris.cluster.config import AutoscalerConfig, ScaleGroupConfig, WorkerConfig, WorkerSettings
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
-from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
+from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceStatus,
+)
+from iris.cluster.types import AcceleratorType, WorkerStatus
+from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.backends.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,
@@ -51,8 +56,54 @@ from .conftest import (
 )
 
 
+@dataclass
+class ScriptedSliceHandle:
+    """Slice-handle fake whose public describe response can change by tick."""
+
+    slice_id: str
+    scale_group: str
+    zone: str
+    labels: dict[str, str]
+    created_at: Timestamp
+    responses: deque[SliceStatus | Exception]
+    terminated: bool = False
+
+    def describe(self) -> SliceStatus:
+        response = self.responses.popleft() if len(self.responses) > 1 else self.responses[0]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def terminate(self, *, wait: bool = False) -> None:
+        self.terminated = True
+
+
+def _scripted_slice(
+    slice_id: str,
+    responses: list[SliceStatus | Exception],
+    *,
+    created_at_ms: int = 0,
+) -> FakeSliceHandle:
+    template = make_mock_slice_handle(slice_id, created_at_ms=created_at_ms)
+    return cast(
+        FakeSliceHandle,
+        ScriptedSliceHandle(
+            slice_id=template.slice_id,
+            scale_group=template.scale_group,
+            zone=template.zone,
+            labels=template.labels,
+            created_at=template.created_at,
+            responses=deque(responses),
+        ),
+    )
+
+
+def _slice_status(state: CloudSliceState, workers: Sequence[RemoteWorkerHandle]) -> SliceStatus:
+    return SliceStatus(state=state, worker_count=len(workers), workers=list(workers))
+
+
 @pytest.fixture
-def scale_group_config() -> config_pb2.ScaleGroupConfig:
+def scale_group_config() -> ScaleGroupConfig:
     """A standard scale group configuration."""
     return make_scale_group_config(
         name="test-group",
@@ -105,7 +156,7 @@ class TestAutoscalerScaleUp:
         ids=["at_max_slices", "pending_slices_count"],
     )
     def test_no_scale_up_when_condition_met(
-        self, scale_group_config: config_pb2.ScaleGroupConfig, discovered: list, demand_count: int, reason: str
+        self, scale_group_config: ScaleGroupConfig, discovered: list, demand_count: int, reason: str
     ):
         """Does not scale up when various conditions are met."""
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -118,7 +169,7 @@ class TestAutoscalerScaleUp:
 
         assert len(decisions) == 0
 
-    def test_hostile_zone_drops_to_backoff_for_routing(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_hostile_zone_drops_to_backoff_for_routing(self, scale_group_config: ScaleGroupConfig):
         """At HOSTILE label, the group's availability becomes BACKOFF so demand
         waterfalls to a fallback. Note: this is routing-level behaviour, not a
         detector-level hard block — ``can_scale_up`` only flips false on quota.
@@ -201,7 +252,7 @@ class TestAutoscalerScaleUp:
 class TestAutoscalerScaleDown:
     """Tests for scale-down behavior (delegated to ScalingGroup)."""
 
-    def test_scales_down_idle_slice_via_run_once(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scales_down_idle_slice_via_run_once(self, scale_group_config: ScaleGroupConfig):
         """run_once() scales down idle slices via ScalingGroup.scale_down_if_idle()."""
         ready_ts = Timestamp.from_ms(1_000)
         discovered = [
@@ -273,7 +324,7 @@ class TestAutoscalerScaleDown:
 
         assert group.slice_count() == 2
 
-    def test_no_scale_down_until_idle_threshold(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_no_scale_down_until_idle_threshold(self, scale_group_config: ScaleGroupConfig):
         """Does not scale down until slice has been idle long enough."""
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True),
@@ -311,7 +362,7 @@ class TestAutoscalerScaleDown:
 
         assert group.slice_count() == 2
 
-    def test_scale_down_rate_limited_by_token_bucket(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_rate_limited_by_token_bucket(self, scale_group_config: ScaleGroupConfig):
         """Scale-down is rate-limited by the token bucket (only 1 per minute with rate_limit=1)."""
         ready_ts = Timestamp.from_ms(1_000)
         discovered = [
@@ -347,7 +398,7 @@ class TestAutoscalerScaleDown:
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 2
 
-    def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: ScaleGroupConfig):
         """With enough rate-limit tokens, multiple idle slices are scaled down in one cycle."""
         ready_ts = Timestamp.from_ms(1_000)
         discovered = [
@@ -399,12 +450,11 @@ class TestAutoscalerExecution:
         )
 
         empty_autoscaler.execute([decision], timestamp=Timestamp.from_ms(1000))
-        empty_autoscaler._wait_for_inflight()
 
         group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
 
-    def test_execute_records_failure_on_scale_up_error(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_execute_records_failure_on_scale_up_error(self, scale_group_config: ScaleGroupConfig):
         """execute() routes a scale-up exception through the churn detector."""
         platform = make_mock_platform()
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
@@ -418,7 +468,6 @@ class TestAutoscalerExecution:
         )
 
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         # The create-failure decays the detector's health score below 1.0.
         # One failure at decay=0.7 → health ~0.7 (and recovery over 2 ms is negligible).
@@ -429,7 +478,6 @@ class TestAutoscalerExecution:
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         vm_status_map = {}
         decisions = empty_autoscaler.run_once(demand, vm_status_map)
-        empty_autoscaler._wait_for_inflight()
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
@@ -460,7 +508,7 @@ class TestAutoscalerExecution:
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
-    def test_terminate_slices_for_workers_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_terminate_slices_for_workers_terminates_slice(self, scale_group_config: ScaleGroupConfig):
         """terminate_slices_for_workers() terminates the slice containing the worker."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -474,7 +522,7 @@ class TestAutoscalerWorkerFailure:
 
         assert group.slice_count() == 0
 
-    def test_terminate_slices_for_workers_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_terminate_slices_for_workers_unknown_worker_is_noop(self, scale_group_config: ScaleGroupConfig):
         """terminate_slices_for_workers() does nothing for unknown workers."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -486,9 +534,7 @@ class TestAutoscalerWorkerFailure:
 
         assert group.slice_count() == 1
 
-    def test_terminate_slices_for_workers_returns_sibling_worker_ids(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_terminate_slices_for_workers_returns_sibling_worker_ids(self, scale_group_config: ScaleGroupConfig):
         """terminate_slices_for_workers() returns sibling worker IDs for multi-VM slices."""
         # Create a slice with 4 VMs
         mock_handle = make_mock_slice_handle(
@@ -510,9 +556,7 @@ class TestAutoscalerWorkerFailure:
         assert sorted(siblings) == sorted(expected_siblings)
         assert group.slice_count() == 0
 
-    def test_terminate_slices_for_workers_returns_empty_for_single_vm_slice(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_terminate_slices_for_workers_returns_empty_for_single_vm_slice(self, scale_group_config: ScaleGroupConfig):
         """Single-VM slices return no siblings."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -526,7 +570,7 @@ class TestAutoscalerWorkerFailure:
 
         assert siblings == []
 
-    def test_terminate_slices_for_workers_dedupes_by_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_terminate_slices_for_workers_dedupes_by_slice(self, scale_group_config: ScaleGroupConfig):
         """Workers from the same slice trigger one slice termination."""
         mock_handle = make_mock_slice_handle(
             "slice-001",
@@ -544,9 +588,7 @@ class TestAutoscalerWorkerFailure:
         assert siblings == ["slice-001-vm-2", "slice-001-vm-3"]
         assert group.slice_count() == 0
 
-    def test_terminate_slices_for_workers_cleans_up_even_if_terminate_fails(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_terminate_slices_for_workers_cleans_up_even_if_terminate_fails(self, scale_group_config: ScaleGroupConfig):
         """terminate_slices_for_workers() removes the slice even if terminate() raises."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         mock_handle.terminate_error = RuntimeError("resource not found")
@@ -567,7 +609,7 @@ class TestAutoscalerWorkerFailure:
 class TestAutoscalerIdleVerification:
     """Tests for idle verification during scale-down."""
 
-    def test_verifies_idle_with_worker_idle_map(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_verifies_idle_with_worker_idle_map(self, scale_group_config: ScaleGroupConfig):
         """Scale-down via run_once verifies workers are idle using worker_idle_map."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -640,38 +682,11 @@ class TestAutoscalerStatusReporting:
         assert status.HasField("last_routing_decision")
         assert "test-group" in status.last_routing_decision.routed_entries
 
-    def test_pending_hints_and_routing_proto_are_cached_between_evaluates(self):
-        """Dashboard polls reuse one proto + hint dict per evaluate() (#4844).
-
-        get_job_status calls this per pending job on every dashboard refresh.
-        Rebuilding the status proto each time was measurably slow on busy
-        clusters; repeated calls should return the same cached objects, and a
-        new evaluate() must invalidate the cache.
-        """
-        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
-        group = ScalingGroup(config, make_mock_platform())
-        autoscaler = make_autoscaler({"test-group": group})
-
-        autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
-
-        # Cached: repeated reads return the same objects without rebuilding.
-        proto_first = autoscaler.get_last_routing_decision_proto()
-        hints_first = autoscaler.get_pending_hints()
-        assert proto_first is autoscaler.get_last_routing_decision_proto()
-        assert hints_first is autoscaler.get_pending_hints()
-        # get_status() reuses the same cached routing-decision proto.
-        assert autoscaler.get_status().last_routing_decision == proto_first
-
-        # Invalidated on next evaluate().
-        autoscaler.evaluate(make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8"))
-        assert autoscaler.get_last_routing_decision_proto() is not proto_first
-        assert autoscaler.get_pending_hints() is not hints_first
-
 
 class TestAutoscalerBootstrapLogs:
     """Tests for bootstrap log reporting."""
 
-    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: ScaleGroupConfig):
         """Worker bootstrap logs are captured in autoscaler worker tracking."""
         bootstrap_log = "line1\nline2\nline3"
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True, bootstrap_logs=[bootstrap_log])
@@ -679,22 +694,23 @@ class TestAutoscalerBootstrapLogs:
         group = ScalingGroup(scale_group_config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
-        workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+        group.reconcile()
+        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
 
         vm_id = mock_handle.describe().workers[0].worker_id
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
         assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
 
-    def test_get_vm_by_worker_id(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_get_vm_by_worker_id(self, scale_group_config: ScaleGroupConfig):
         """get_vm() uses platform worker_id as the only lookup key."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
+        group.reconcile()
+        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
         workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
 
         worker = workers[0]
         # Lookup by platform worker_id
@@ -710,24 +726,22 @@ class TestAutoscalerBootstrapLogs:
 class TestAutoscalerQuotaHandling:
     """Tests for quota exceeded error handling."""
 
-    def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: ScaleGroupConfig):
         """QuotaExhaustedError sets group to QUOTA_EXCEEDED state."""
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
         group = ScalingGroup(scale_group_config, platform, quota_timeout=Duration.from_ms(60_000))
-        config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
+        config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
 
-    def test_quota_exceeded_routes_to_fallback_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_quota_exceeded_routes_to_fallback_group(self, scale_group_config: ScaleGroupConfig):
         """When primary group has quota exceeded, demand routes to fallback."""
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
@@ -742,20 +756,18 @@ class TestAutoscalerQuotaHandling:
             quota_timeout=Duration.from_ms(60_000),
         )
         group_fallback = ScalingGroup(config_fallback, platform_fallback)
-        config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
+        config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         decisions = autoscaler.evaluate(demand, timestamp=Timestamp.from_ms(2000))
 
         assert len(decisions) == 1
         assert decisions[0].scale_group == "fallback"
 
-    def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_quota_state_expires_after_timeout(self, scale_group_config: ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
 
         platform = make_mock_platform()
@@ -773,7 +785,7 @@ class TestAutoscalerQuotaHandling:
 
         assert group.availability(Timestamp.from_ms(2100)).status == GroupAvailability.AVAILABLE
 
-    def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: ScaleGroupConfig):
         """Non-quota errors push the churn detector, not the quota gate. Once enough
         failures accumulate, availability flips to BACKOFF (HOSTILE)."""
 
@@ -781,8 +793,7 @@ class TestAutoscalerQuotaHandling:
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
 
         group = ScalingGroup(scale_group_config, platform)
-        config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
+        config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         # Drive enough failures to reach the HOSTILE display band.
@@ -790,7 +801,6 @@ class TestAutoscalerQuotaHandling:
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         for i in range(5):
             autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000 + i))
-            autoscaler._wait_for_inflight()
 
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.BACKOFF
@@ -804,7 +814,6 @@ class TestAutoscalerActionLogging:
         """Verify scale-up actions are logged."""
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
         assert len(status.recent_actions) >= 1
@@ -814,7 +823,7 @@ class TestAutoscalerActionLogging:
         assert action.slice_id != ""
         assert "demand=" in action.reason
 
-    def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_action_log_records_quota_exceeded(self, scale_group_config: ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded in zone")
@@ -823,7 +832,6 @@ class TestAutoscalerActionLogging:
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {})
-        autoscaler._wait_for_inflight()
 
         status = autoscaler.get_status()
         assert len(status.recent_actions) == 1
@@ -832,7 +840,7 @@ class TestAutoscalerActionLogging:
         assert action.scale_group == "test-group"
         assert "Quota exceeded" in action.reason
 
-    def test_action_log_records_worker_failed(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_action_log_records_worker_failed(self, scale_group_config: ScaleGroupConfig):
         """Verify worker failure events are logged."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -852,21 +860,29 @@ class TestAutoscalerActionLogging:
         assert action.slice_id == "slice-001"
         assert failed_worker_id in action.reason
 
-    def test_action_log_bounded_to_100_entries(self, empty_autoscaler: Autoscaler):
-        """Verify action log is bounded to 100 entries."""
-        for i in range(150):
-            empty_autoscaler._log_action("test_action", "test-group", reason=f"action {i}")
+    def test_action_log_bounded_to_100_entries(self):
+        """Public scale-up actions retain only the latest 100 status entries."""
+        groups = {}
+        decisions = []
+        for index in range(150):
+            name = f"group-{index}"
+            groups[name] = ScalingGroup(make_scale_group_config(name=name, max_slices=1), make_mock_platform())
+            decisions.append(ScalingDecision(scale_group=name, action=ScalingAction.SCALE_UP, reason="test"))
+        autoscaler = make_autoscaler(groups)
 
-        status = empty_autoscaler.get_status()
+        batches = (decisions[:50], decisions[50:100], decisions[100:])
+        for batch, timestamp_ms in zip(batches, (1_000, 61_000, 121_000), strict=True):
+            autoscaler.execute(batch, Timestamp.from_ms(timestamp_ms))
+        status = autoscaler.get_status()
+
         assert len(status.recent_actions) == 100
-        assert status.recent_actions[0].reason == "action 50"
-        assert status.recent_actions[99].reason == "action 149"
+        assert status.recent_actions[0].scale_group == "group-50"
+        assert status.recent_actions[99].scale_group == "group-149"
 
     def test_get_status_includes_actions(self, empty_autoscaler: Autoscaler):
         """Verify get_status returns recent actions."""
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
 
@@ -882,7 +898,6 @@ class TestAutoscalerActionLogging:
         before = Timestamp.now().epoch_ms()
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
         after = Timestamp.now().epoch_ms()
 
         status = empty_autoscaler.get_status()
@@ -977,52 +992,31 @@ class TestScalingGroupRequestingState:
         assert status_by_group["group-2"].decision == "idle"
 
 
-class TestAutoscalerAsyncScaleUp:
-    """Tests for async scale-up behavior."""
+class TestAutoscalerSynchronousScaleUp:
+    """Tests for scale-up issuance: creates land before execute() returns (no detached threads)."""
 
-    def test_execute_scale_up_returns_immediately(self):
-        """_execute_scale_up returns immediately without blocking."""
+    def test_execute_scale_up_issues_create_synchronously(self):
+        """execute() issues the create in line and tracks the slice before returning."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
-
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.5)
-            return original_create(config, worker_config)
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
         decision = ScalingDecision(
             scale_group="test-group",
             action=ScalingAction.SCALE_UP,
-            reason="test async",
+            reason="test sync",
         )
 
-        start = time.time()
         autoscaler.execute([decision], timestamp=Timestamp.now())
-        elapsed = time.time() - start
 
-        assert elapsed < 0.1
+        platform.create_slice.assert_called_once()
+        assert group.slice_count() == 1
 
-        autoscaler._wait_for_inflight()
-
-    def test_group_marked_requesting_during_scale_up(self):
-        """Group shows REQUESTING immediately after execute(), cleared when done."""
-
+    def test_group_available_after_scale_up(self):
+        """The slice is tracked and the pending counter cleared once execute() returns."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.2)
-            return original_create(config, worker_config)
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -1035,33 +1029,16 @@ class TestAutoscalerAsyncScaleUp:
 
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(ts))
 
-        # Pending counter is incremented, so availability shows REQUESTING
+        # The create is issued synchronously, so by the time execute() returns the
+        # pending counter is already resolved into a tracked slice.
         availability = group.availability(Timestamp.from_ms(ts))
-        assert availability.status == GroupAvailability.REQUESTING
-
-        autoscaler._wait_for_inflight()
-
-        # After completion, pending counter is decremented and slice is added
-        availability = group.availability(Timestamp.from_ms(ts + 300))
         assert availability.status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 1
 
-    def test_autoscaler_shutdown_waits_for_scale_up(self):
-        """shutdown() waits for in-flight scale-ups to complete."""
+    def test_shutdown_after_scale_up_terminates_created_slice(self):
+        """The synchronously-created slice is terminated on shutdown."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
-
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-        create_completed = []
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.2)
-            result = original_create(config, worker_config)
-            create_completed.append(True)
-            return result
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -1072,10 +1049,32 @@ class TestAutoscalerAsyncScaleUp:
         )
 
         autoscaler.execute([decision], timestamp=Timestamp.now())
+        assert group.slice_count() == 1
 
         autoscaler.shutdown()
+        assert group.slice_count() == 0
 
-        assert len(create_completed) == 1
+    def test_booting_slice_prevents_double_scale_up(self, scale_group_config):
+        """A slice issued in one cycle is tracked (BOOTING) before the next, so steady
+        demand does not double-provision."""
+        platform = make_mock_platform()
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        decisions1 = autoscaler.update(demand, Timestamp.from_ms(1_000))
+        assert len(decisions1) == 1
+        assert group.slice_count() == 1
+
+        # The created slice describes as BOOTING and counts toward capacity, so a
+        # second cycle with the same demand issues no further scale-up.
+        decisions2 = autoscaler.update(demand, Timestamp.from_ms(2_000))
+        assert len(decisions2) == 0, "BOOTING slice should satisfy demand and block re-scale"
+        assert group.slice_count() == 1
+        platform.create_slice.assert_called_once()
+
+        autoscaler.shutdown()
 
     def test_autoscaler_shutdown_terminates_all_slices(self):
         """shutdown() terminates all slices."""
@@ -1096,36 +1095,45 @@ class TestAutoscalerAsyncScaleUp:
 
 
 class TestPerGroupWorkerConfig:
-    """Tests for _per_group_worker_config merging worker attributes into WorkerConfig."""
+    """Worker configuration delivered at the external platform boundary."""
+
+    @staticmethod
+    def _created_worker_config(autoscaler, platform, group_name):
+        autoscaler.execute(
+            [ScalingDecision(scale_group=group_name, action=ScalingAction.SCALE_UP, reason="test")],
+            timestamp=Timestamp.from_ms(1_000),
+        )
+        return platform.create_slice.call_args.kwargs["worker_config"]
 
     def test_merges_worker_attributes(self):
         """Worker attributes and scale group name are merged into WorkerConfig."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
         )
         base_wc.task_env["MARIN_PREFIX"] = "s3://bucket/marin"
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes["custom-label"] = "west-value"
+        sg_config.worker = WorkerSettings(attributes={"custom-label": "west-value"})
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "west-group")
 
         assert wc is not None
         assert wc.docker_image == "test:latest"
         assert wc.worker_attributes["custom-label"] == "west-value"
         assert wc.task_env["MARIN_PREFIX"] == "s3://bucket/marin"
         assert wc.worker_attributes["scale-group"] == "west-group"
-        assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert wc.accelerator_type == AcceleratorType.TPU
         assert wc.accelerator_variant == "v5p-8"
         assert wc.gpu_count == 0
 
     def test_injects_accelerator_config_without_worker_settings(self):
         """Groups without worker settings still inject accelerator config."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
@@ -1133,18 +1141,19 @@ class TestPerGroupWorkerConfig:
         sg_config = make_scale_group_config(
             name="plain-group",
             max_slices=5,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+            accelerator_type=AcceleratorType.GPU,
             accelerator_variant="H100",
         )
         sg_config.resources.device_count = 8
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"plain-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "plain-group")
 
         assert wc is not None
         assert wc is not base_wc
-        assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        assert wc.accelerator_type == AcceleratorType.GPU
         assert wc.accelerator_variant == "H100"
         assert wc.gpu_count == 8
         assert wc.worker_attributes["scale-group"] == "plain-group"
@@ -1152,64 +1161,68 @@ class TestPerGroupWorkerConfig:
     def test_returns_none_without_base(self):
         """Without a base worker config, returns None."""
         sg_config = make_scale_group_config(name="test-group", max_slices=5)
-        sg_config.worker.attributes["custom-label"] = "value"
-        group = ScalingGroup(sg_config, make_mock_platform())
+        sg_config.worker = WorkerSettings(attributes={"custom-label": "value"})
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=None)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "test-group")
 
         assert wc is None
 
     def test_does_not_mutate_base_config(self):
         """Merging should not modify the original base worker config."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes["custom-label"] = "value"
+        sg_config.worker = WorkerSettings(attributes={"custom-label": "value"})
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
-        autoscaler._per_group_worker_config(group)
+        self._created_worker_config(autoscaler, platform, "west-group")
 
         assert "custom-label" not in base_wc.worker_attributes
 
     def test_worker_attributes_injected(self):
         """Worker attributes are injected into WorkerConfig."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="ghcr.io/marin-community/iris-worker:latest",
             port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
-        sg_config.worker.attributes["team"] = "euw4"
+        sg_config.worker = WorkerSettings(attributes={"team": "euw4"})
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"eu-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "eu-group")
 
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
 
     def test_worker_cache_dir_override_applied(self):
         """WorkerSettings.cache_dir overrides the base WorkerConfig.cache_dir."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
             cache_dir="/dev/shm/iris",
         )
         sg_config = make_scale_group_config(name="cpu-group", max_slices=5)
-        sg_config.worker.cache_dir = "/var/lib/iris-cache"
+        sg_config.worker = WorkerSettings(cache_dir="/var/lib/iris-cache")
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"cpu-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "cpu-group")
 
         assert wc is not None
         assert wc.cache_dir == "/var/lib/iris-cache"
@@ -1218,36 +1231,38 @@ class TestPerGroupWorkerConfig:
 
     def test_worker_cache_dir_falls_through_when_unset(self):
         """When WorkerSettings.cache_dir is empty, base cache_dir is preserved."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="test:latest",
             port=10001,
             controller_address="controller:10000",
             cache_dir="/dev/shm/iris",
         )
         sg_config = make_scale_group_config(name="tpu-group", max_slices=5)
-        sg_config.worker.attributes["custom-label"] = "value"
+        sg_config.worker = WorkerSettings(attributes={"custom-label": "value"})
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"tpu-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "tpu-group")
 
         assert wc is not None
         assert wc.cache_dir == "/dev/shm/iris"
 
     def test_derives_region_and_zone_from_scale_group_when_missing(self):
         """Derived region and zone are injected when worker attrs omit them."""
-        base_wc = config_pb2.WorkerConfig(
+        base_wc = WorkerConfig(
             docker_image="ghcr.io/marin-community/iris-worker:latest",
             port=10001,
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="east-group", max_slices=5, zones=["us-east5-a"])
 
-        group = ScalingGroup(sg_config, make_mock_platform())
+        platform = make_mock_platform()
+        group = ScalingGroup(sg_config, platform)
         autoscaler = make_autoscaler({"east-group": group}, base_worker_config=base_wc)
 
-        wc = autoscaler._per_group_worker_config(group)
+        wc = self._created_worker_config(autoscaler, platform, "east-group")
 
         assert wc is not None
         assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-east5"
@@ -1258,15 +1273,15 @@ class TestGpuScaleGroupBugs:
     """Reproduction tests for GPU scale group bugs observed on CoreWeave."""
 
     def test_freshly_ready_slice_not_eligible_for_scaledown(self):
-        """A freshly-READY slice is treated as currently active (quiet_since=None)
-        and is not eligible for scale-down until an autoscaler tick observes it idle.
-        """
+        """A slice becoming ready is retained through its first idle autoscaler cycle."""
         config = make_scale_group_config(
             name="h100-8x",
             buffer_slices=0,
             max_slices=1,
         )
         platform = make_mock_platform()
+        ready_handle = make_mock_slice_handle("new-slice", all_ready=True)
+        platform.create_slice.side_effect = lambda *_args, **_kwargs: ready_handle
         group = ScalingGroup(
             config,
             platform,
@@ -1274,19 +1289,16 @@ class TestGpuScaleGroupBugs:
         )
 
         ts = Timestamp.from_ms(1_000_000)
+        autoscaler = make_autoscaler({"h100-8x": group})
+        autoscaler.execute(
+            [ScalingDecision(scale_group="h100-8x", action=ScalingAction.SCALE_UP, reason="test")],
+            timestamp=ts,
+        )
+        autoscaler.run_once([], {}, timestamp=ts)
 
-        group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
-        group.complete_scale_up(handle, ts)
-
-        worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
-
-        with group._slices_lock:
-            state = group._slices[handle.slice_id]
-
-        assert state.quiet_since is None
-        assert not group.is_slice_eligible_for_scaledown(handle.slice_id, ts)
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 1
+        assert not ready_handle.terminated
 
     def test_idle_threshold_protects_freshly_ready_slice(self):
         """A freshly-ready slice should be protected by idle_threshold even when
@@ -1498,11 +1510,14 @@ class TestAutoscalerUnresolvableTimeout:
     """Tests for UNKNOWN slice -> FAILED after timeout behavior."""
 
     def _make_group_with_unknown_slice(
-        self, scale_group_config: config_pb2.ScaleGroupConfig, created_at_ms: int
+        self, scale_group_config: ScaleGroupConfig, created_at_ms: int
     ) -> tuple[Autoscaler, ScalingGroup, FakeSliceHandle]:
         """Set up a group with one BOOTING slice that reports UNKNOWN state."""
-        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
-        handle._status = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+        handle = _scripted_slice(
+            "slice-001",
+            [_slice_status(CloudSliceState.UNKNOWN, [])],
+            created_at_ms=created_at_ms,
+        )
 
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -1517,33 +1532,54 @@ class TestAutoscalerUnresolvableTimeout:
         )
         return autoscaler, group, handle
 
-    def test_unknown_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A slice in UNKNOWN state before the timeout remains tracked (BOOTING)."""
-        created_at_ms = 0
-        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+    def test_unknown_before_timeout_stays_booting(self, scale_group_config: ScaleGroupConfig):
+        """A slice UNKNOWN for less than the timeout remains tracked (BOOTING)."""
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
 
-        # Refresh at 5 min -- well under 15 min timeout
-        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(0))  # first UNKNOWN starts the clock
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))  # 5 min continuously UNKNOWN < 15 min
 
         assert group.slice_count() == 1
         assert group.ready_slice_count() == 0
         autoscaler.shutdown()
 
-    def test_unknown_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A slice in UNKNOWN state past the timeout is failed and removed."""
-        created_at_ms = 0
-        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+    def test_unknown_after_timeout_triggers_failure(self, scale_group_config: ScaleGroupConfig):
+        """A slice continuously UNKNOWN past the timeout is failed and removed."""
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
 
-        # Refresh at 16 min -- past the 15 min timeout
-        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(0))  # first UNKNOWN starts the clock
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))  # still UNKNOWN 16 min later > 15 min
 
         assert group.slice_count() == 0
         autoscaler.shutdown()
 
-    def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_old_slice_survives_single_transient_unknown(self, scale_group_config: ScaleGroupConfig):
+        """A long-lived slice is not terminated by one transient UNKNOWN describe.
+
+        Regression for the drain-adoption path: the unresolvable timeout measures
+        continuous-UNKNOWN duration, not age since creation, so a freshly-adopted
+        13-day-old slice survives a single describe blip instead of having its
+        running tasks killed.
+        """
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
+
+        # Slice created at t=0; a lone UNKNOWN describe arrives 14 days later. The old
+        # age-since-creation rule would instantly exceed the 15 min timeout and kill it.
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(14 * 24 * 60 * 60 * 1000))
+
+        assert group.slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: ScaleGroupConfig):
         """A slice that was UNKNOWN but becomes READY before timeout is marked ready."""
-        created_at_ms = 0
-        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        handle = _scripted_slice(
+            "slice-001",
+            [
+                _slice_status(CloudSliceState.UNKNOWN, []),
+                _slice_status(CloudSliceState.READY, [worker]),
+            ],
+        )
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
@@ -1555,17 +1591,39 @@ class TestAutoscalerUnresolvableTimeout:
             unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
         )
 
-        # First refresh: UNKNOWN at 5 min -> should stay BOOTING
-        handle._status = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
         autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
         assert group.slice_count() == 1
 
-        # Second refresh: READY before timeout
-        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
-        handle._status = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
         autoscaler.refresh({}, timestamp=Timestamp.from_ms(10 * 60 * 1000))
 
         assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_describe_failure_isolated_across_slices(self, scale_group_config: ScaleGroupConfig):
+        """A describe() that raises leaves its slice tracked without aborting peers.
+
+        One slice failing to describe must not prevent the others from being
+        processed; the failed slice stays tracked for retry next tick.
+        """
+        worker = make_mock_worker_handle("slice-ok-vm-0", "10.0.2.0", vm_pb2.VM_STATE_READY)
+        ok_handle = _scripted_slice("slice-ok", [_slice_status(CloudSliceState.READY, [worker])])
+        bad_handle = _scripted_slice("slice-bad", [RuntimeError("transient GCP describe error")])
+        platform = make_mock_platform(slices_to_discover=[ok_handle, bad_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
+        )
+
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(60 * 1000))
+
+        # Healthy peer processed despite the failure; failing peer left tracked.
+        assert group.ready_slice_count() == 1
+        assert group.slice_count() == 2
         autoscaler.shutdown()
 
 
@@ -1573,33 +1631,32 @@ class TestAutoscalerHealthProbe:
     """Tests for probe_health(): terminate slices whose /health endpoint dies."""
 
     @pytest.fixture
-    def base_worker_config(self) -> config_pb2.WorkerConfig:
-        return config_pb2.WorkerConfig(port=10001)
+    def base_worker_config(self) -> WorkerConfig:
+        return WorkerConfig(port=10001)
 
     def _setup_ready_group(
-        self, scale_group_config: config_pb2.ScaleGroupConfig, base_worker_config: config_pb2.WorkerConfig
+        self, scale_group_config: ScaleGroupConfig, base_worker_config: WorkerConfig
     ) -> tuple[Autoscaler, ScalingGroup, FakeSliceHandle]:
         handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
-        _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        # Seed worker URLs since reconcile() bypasses the refresh() path.
-        group.set_worker_urls(handle.slice_id, autoscaler._worker_urls(handle.describe().workers))
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(1_000))
         return autoscaler, group, handle
 
     def test_healthy_probes_keep_slice_alive(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """Repeated healthy probes never terminate the slice and reset the failure counter."""
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: True,
+            urllib.request.OpenerDirector,
+            "open",
+            lambda *args, **kwargs: SimpleNamespace(status=200),
         )
 
         for _ in range(20):
@@ -1610,20 +1667,21 @@ class TestAutoscalerHealthProbe:
 
     def test_unhealthy_probes_terminate_after_threshold(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """PING_FAILURE_THRESHOLD consecutive failures trip slice termination."""
+        """CONSECUTIVE_FAILURE_THRESHOLD consecutive failures trip slice termination."""
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: False,
+            urllib.request.OpenerDirector,
+            "open",
+            lambda *args, **kwargs: SimpleNamespace(status=503),
         )
 
-        # One probe per tick — need PING_FAILURE_THRESHOLD ticks to trip.
-        for _ in range(PING_FAILURE_THRESHOLD - 1):
+        # One probe per tick — need CONSECUTIVE_FAILURE_THRESHOLD ticks to trip.
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD - 1):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1, "should not have terminated yet"
 
@@ -1633,25 +1691,24 @@ class TestAutoscalerHealthProbe:
 
     def test_recovery_resets_failure_counter(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A single healthy response zeros the per-worker counter so transient flaps don't kill slices."""
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
 
-        # Alternating bad/good probes. We need to avoid hitting PING_FAILURE_THRESHOLD
+        # Alternating bad/good probes. We need to avoid hitting CONSECUTIVE_FAILURE_THRESHOLD
         # consecutive failures even after many ticks.
-        toggle = {"healthy": False}
+        responses = iter([200, 503] * (CONSECUTIVE_FAILURE_THRESHOLD * 2))
 
-        def _probe(url: str) -> bool:
-            toggle["healthy"] = not toggle["healthy"]
-            return toggle["healthy"]
+        def open_health(*args, **kwargs):
+            return SimpleNamespace(status=next(responses))
 
-        monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
 
-        for _ in range(PING_FAILURE_THRESHOLD * 3):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD * 3):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
         assert group.ready_slice_count() == 1
@@ -1659,8 +1716,8 @@ class TestAutoscalerHealthProbe:
 
     def test_lazy_fetches_addresses_when_state_has_none(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """Slices restored without cached URLs get them via handle.describe()."""
@@ -1674,22 +1731,22 @@ class TestAutoscalerHealthProbe:
 
         seen_urls: list[str] = []
 
-        def _probe(url: str) -> bool:
+        def open_health(_opener, url, *args, **kwargs):
             seen_urls.append(url)
-            return True
+            return SimpleNamespace(status=200)
 
-        monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
 
         autoscaler.probe_health(Timestamp.from_ms(1_000))
 
-        expected = list(autoscaler._worker_urls(handle.describe().workers).values())
-        assert sorted(seen_urls) == sorted(expected), "probe should hit each worker's described URL"
+        expected = [f"{worker.worker_url}/health" for worker in handle.describe().workers]
+        assert sorted(seen_urls) == sorted(expected)
         autoscaler.shutdown()
 
     def test_vanished_allocation_terminates_after_threshold(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A READY slice whose cloud allocation reports zero workers is reaped.
@@ -1697,35 +1754,44 @@ class TestAutoscalerHealthProbe:
         Reproduces the preempted-after-restart case: no cached worker URLs, and
         describe() resolves zero workers (tpu_describe returned None), so there
         is nothing to /health-probe and no heartbeat row to expire. The per-slice
-        no-worker counter must trip teardown after PING_FAILURE_THRESHOLD ticks.
+        no-worker counter must trip teardown after CONSECUTIVE_FAILURE_THRESHOLD ticks.
         """
-        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        handle = _scripted_slice(
+            "slice-001",
+            [
+                _slice_status(CloudSliceState.READY, [worker]),
+                _slice_status(CloudSliceState.UNKNOWN, []),
+            ],
+        )
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         # No cached URLs (simulate post-restart) and the backing allocation is gone.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        handle._status = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
 
-        # describe() should never even be probed — there are no workers.
-        monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: pytest.fail("a worker-less slice must not be probed"),
-        )
+        health_requests = []
 
-        for _ in range(PING_FAILURE_THRESHOLD - 1):
+        def open_health(_opener, url, *args, **kwargs):
+            health_requests.append(url)
+            return SimpleNamespace(status=200)
+
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
+
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD - 1):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1, "should not terminate before the threshold"
 
         autoscaler.probe_health(Timestamp.from_ms(2_000))
         assert group.ready_slice_count() == 0, "threshold-th empty observation should terminate"
+        assert health_requests == []
         autoscaler.shutdown()
 
     def test_no_worker_counter_resets_when_workers_return(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A transient empty describe() does not accumulate toward teardown.
@@ -1733,24 +1799,27 @@ class TestAutoscalerHealthProbe:
         If workers reappear before the threshold, the no-worker streak resets so
         a single cloud blip can't eventually reap a healthy slice.
         """
-        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        ready_worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        ready_status = _slice_status(CloudSliceState.READY, [ready_worker])
+        empty_status = _slice_status(CloudSliceState.UNKNOWN, [])
+        alternating = [
+            status for _ in range(CONSECUTIVE_FAILURE_THRESHOLD * 3) for status in (empty_status, ready_status)
+        ]
+        handle = _scripted_slice("slice-001", [ready_status, *alternating])
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        ready_status = handle._status
         monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: True,
+            urllib.request.OpenerDirector,
+            "open",
+            lambda *args, **kwargs: SimpleNamespace(status=200),
         )
 
         # Alternate "allocation gone" and "workers healthy" so the empty streak
         # never reaches the threshold.
-        for i in range(PING_FAILURE_THRESHOLD * 3):
-            handle._status = (
-                SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[]) if i % 2 == 0 else ready_status
-            )
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD * 3):
             # Clear cached URLs each tick so probe_health re-describes.
             group.set_worker_urls(handle.slice_id, {})
             autoscaler.probe_health(Timestamp.from_ms(1_000))
@@ -1760,8 +1829,8 @@ class TestAutoscalerHealthProbe:
 
     def test_mid_boot_partial_describe_does_not_terminate(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A slice with some workers still publishing IPs is retried, not reaped.
@@ -1769,30 +1838,25 @@ class TestAutoscalerHealthProbe:
         A partial describe() (worker handle present but no address yet) is the
         normal mid-boot state and must not count toward the no-worker threshold.
         """
-        handle = make_mock_slice_handle(
-            "slice-001",
-            vm_states=[vm_pb2.VM_STATE_READY, vm_pb2.VM_STATE_READY],
-        )
+        first_worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        second_worker = make_mock_worker_handle("slice-001-vm-1", "10.0.1.1", vm_pb2.VM_STATE_READY)
+        ready_status = _slice_status(CloudSliceState.READY, [first_worker, second_worker])
+        partial = make_mock_worker_handle("slice-001-vm-0", "", vm_pb2.VM_STATE_READY)
+        partial_status = _slice_status(CloudSliceState.READY, [partial, second_worker])
+        handle = _scripted_slice("slice-001", [ready_status, partial_status])
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
 
-        # One worker has no address yet -> _worker_urls drops it -> partial set.
-        described = handle.describe()
-        partial = make_mock_worker_handle("slice-001-vm-0", "", vm_pb2.VM_STATE_READY)
-        handle._status = SliceStatus(
-            state=CloudSliceState.READY,
-            worker_count=2,
-            workers=[partial, described.workers[1]],
-        )
         monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: True,
+            urllib.request.OpenerDirector,
+            "open",
+            lambda *args, **kwargs: SimpleNamespace(status=200),
         )
 
-        for _ in range(PING_FAILURE_THRESHOLD + 1):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD + 1):
             group.set_worker_urls(handle.slice_id, {})
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
@@ -1801,8 +1865,8 @@ class TestAutoscalerHealthProbe:
 
     def test_per_worker_counter_isolates_one_dead_worker(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """One dead worker in a multi-VM slice trips the slice, even when the rest stay healthy."""
@@ -1816,17 +1880,17 @@ class TestAutoscalerHealthProbe:
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        worker_urls = autoscaler._worker_urls(handle.describe().workers)
-        group.set_worker_urls(handle.slice_id, worker_urls)
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(1_000))
 
         dead_worker = handle.describe().workers[1]
-        dead_url = worker_urls[dead_worker.worker_id]
-        monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: url != dead_url,
-        )
+        dead_url = f"{dead_worker.worker_url}/health"
 
-        for _ in range(PING_FAILURE_THRESHOLD):
+        def open_health(_opener, url, *args, **kwargs):
+            return SimpleNamespace(status=503 if url == dead_url else 200)
+
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
+
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
         assert group.ready_slice_count() == 0, "dead worker should trip the slice"
@@ -1834,66 +1898,76 @@ class TestAutoscalerHealthProbe:
 
     def test_describe_failure_during_lazy_fetch_does_not_terminate(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        base_worker_config: config_pb2.WorkerConfig,
+        scale_group_config: ScaleGroupConfig,
+        base_worker_config: WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A transient handle.describe() exception is logged and skipped, not fatal."""
 
-        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        ready_status = _slice_status(CloudSliceState.READY, [worker])
+        handle = _scripted_slice(
+            "slice-001",
+            [
+                ready_status,
+                *[RuntimeError("transient cloud blip") for _ in range(CONSECUTIVE_FAILURE_THRESHOLD)],
+                ready_status,
+            ],
+        )
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         # No cached URLs; describe() will be called.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        good_urls = autoscaler._worker_urls(handle.describe().workers)
+        expected_urls = [f"{worker.worker_url}/health"]
+        health_requests = []
 
-        raising = {"on": True}
-        original_describe = handle.describe
+        def open_health(_opener, url, *args, **kwargs):
+            health_requests.append(url)
+            return SimpleNamespace(status=200)
 
-        def _maybe_raise():
-            if raising["on"]:
-                raise RuntimeError("transient cloud blip")
-            return original_describe()
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
 
-        monkeypatch.setattr(handle, "describe", _maybe_raise)
-        monkeypatch.setattr(
-            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda url: True,
-        )
-
-        # PING_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
-        for _ in range(PING_FAILURE_THRESHOLD):
+        # CONSECUTIVE_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1
-        assert group.get_slice("slice-001") is not None
-        assert group.get_slice("slice-001").describe  # sanity: handle still callable next tick
+        assert not handle.terminated
+        assert health_requests == []
 
         # Once describe() recovers, the probe resolves URLs and caches them.
-        raising["on"] = False
         autoscaler.probe_health(Timestamp.from_ms(2_000))
-        cached = group.ready_slice_probe_targets()[0][2]
-        assert cached == good_urls
+        assert sorted(health_requests) == sorted(expected_urls)
         autoscaler.shutdown()
 
-    def test_worker_urls_pass_through_each_handle(
+    def test_health_probes_preserve_provider_worker_urls(
         self,
-        base_worker_config: config_pb2.WorkerConfig,
+        base_worker_config: WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
     ):
-        """_worker_urls maps each worker to its handle's worker_url verbatim.
+        """Health probes use each provider worker handle's URL verbatim.
 
         Both a config-port worker (GCP/manual) and an auto-assigned-port worker
         (LOCAL) yield a well-formed http://host:port URL with no double port.
         """
-        autoscaler = make_autoscaler({}, base_worker_config=base_worker_config)
         gcp_style = make_mock_worker_handle("w-gcp", "10.0.0.1", vm_pb2.VM_STATE_READY)
         local_style = FakeWorkerHandle(_vm_id="w-local", _internal_address="127.0.0.1", _port=54321)
+        status = _slice_status(CloudSliceState.READY, [gcp_style, local_style])
+        handle = _scripted_slice("slice-001", [status])
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(make_scale_group_config(name="test-group"), platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(1_000))
+        requested_urls: list[str] = []
 
-        worker_urls = autoscaler._worker_urls([gcp_style, local_style])
+        def open_health(_opener, url, *args, **kwargs):
+            requested_urls.append(url)
+            return SimpleNamespace(status=200)
 
-        assert worker_urls == {
-            "w-gcp": "http://10.0.0.1:10001",
-            "w-local": "http://127.0.0.1:54321",
-        }
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_health)
+        autoscaler.probe_health(Timestamp.from_ms(2_000))
+
+        assert sorted(requested_urls) == ["http://10.0.0.1:10001/health", "http://127.0.0.1:54321/health"]
         autoscaler.shutdown()

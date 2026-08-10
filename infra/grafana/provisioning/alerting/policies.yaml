@@ -1,0 +1,25 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The notification policy tree. severity=critical routes to ops-critical (email,
+# Slack, and Loom). severity=warning remains visible in Grafana but uses the
+# always-active dashboard-only mute timing, so it sends no notification. The
+# root receiver sends malformed or unlabeled alerts to Slack.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: ops-slack
+    group_by: ["alertname", "cluster"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: ops-slack
+        object_matchers:
+          - ["severity", "=", "warning"]
+        mute_time_intervals:
+          - dashboard-only
+      - receiver: ops-critical
+        object_matchers:
+          - ["severity", "=", "critical"]

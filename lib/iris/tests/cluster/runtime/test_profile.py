@@ -10,7 +10,6 @@ not on pass-through of constructor arguments.
 import json
 import os
 import threading
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -28,8 +27,6 @@ from iris.cluster.runtime.profile import (
     resolve_memory_spec,
 )
 from iris.rpc import job_pb2
-
-memray = pytest.importorskip("memray")
 
 # ---------------------------------------------------------------------------
 # resolve_cpu_spec: enum → (py_spy_format, ext) mapping and defaults
@@ -158,20 +155,25 @@ def test_memray_transform_stats_includes_json_flag_and_output():
 # ---------------------------------------------------------------------------
 
 
-def _allocate_during(duration_seconds: int) -> list:
-    """Force allocations so memray captures something during short profiles."""
+@contextmanager
+def _allocations_during_profile():
+    """Continuously make bounded allocations until the profile completes."""
+    stop = threading.Event()
 
-    results: list = []
+    def _allocate() -> None:
+        allocations: list[bytearray] = []
+        while not stop.is_set():
+            allocations.append(bytearray(1024))
+            if len(allocations) == 1_000:
+                allocations.clear()
 
-    def _alloc():
-        for _ in range(duration_seconds * 100):
-            results.append(bytearray(1024))
-
-            time.sleep(duration_seconds / 100)
-
-    t = threading.Thread(target=_alloc, daemon=True)
-    t.start()
-    return results
+    thread = threading.Thread(target=_allocate, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=5)
 
 
 def test_resolve_memory_spec_raw_is_raw():
@@ -197,19 +199,21 @@ def test_resolve_memory_spec_flamegraph_is_not_raw():
 )
 def test_run_memray_profile_returns_nonempty_output(proto_format):
     """In-process memray Tracker produces non-empty output for flamegraph/table/stats."""
-    _allocate_during(1)
+    pytest.importorskip("memray")
     cfg = job_pb2.MemoryProfile(format=proto_format, leaks=False)
     pid = str(os.getpid())
-    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    with _allocations_during_profile():
+        result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
     assert len(result) > 0
 
 
 def test_run_memray_profile_stats_returns_valid_json():
     """Stats reporter returns parseable JSON, not a file-path string."""
-    _allocate_during(1)
+    pytest.importorskip("memray")
     cfg = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS, leaks=False)
     pid = str(os.getpid())
-    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    with _allocations_during_profile():
+        result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
     data = json.loads(result)
     assert "total_num_allocations" in data
 

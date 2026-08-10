@@ -9,8 +9,6 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from levanter.kernels.pallas.ssd.reference import (
-    intra_chunk_log_alpha_cumsum,
-    local_log_alpha,
     ssd_scan_chunk_states_reference_batched,
 )
 from levanter.kernels.pallas.ssd.xla import (
@@ -27,7 +25,6 @@ from levanter.kernels.pallas.ssd.xla import (
 from .reference import (
     mamba3_mimo_apply_gate_and_collapse_chunked,
     mamba3_mimo_rank_expand_chunked,
-    prepare_mamba3_chunked_scales,
 )
 
 
@@ -228,23 +225,6 @@ _mamba3_chunked_forward_xla_batched_default_custom_vjp.defvjp(
     _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd,
     _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd,
 )
-
-
-def mamba3_chunked_forward_native_xla_batched(
-    dt: Float[Array, "groups chunks chunk"],
-    lam: Float[Array, "groups chunks chunk"],
-    a: Float[Array, "groups chunks chunk"] | Float[Array, "groups chunks"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
-    """XLA fast path on native Mamba-3 parameters."""
-
-    with jax.named_scope("mamba3_native_xla"):
-        with jax.named_scope("prepare_scales"):
-            src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
-            a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
-        return mamba3_chunked_forward_xla_batched(a_log_cumsum, src_scale, out_correction, b, c, x)
 
 
 def mamba3_mimo_chunk_state_xla_chunked_batched(

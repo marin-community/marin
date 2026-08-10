@@ -3,8 +3,6 @@
 
 """Client protocol and helpers for fray."""
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Sequence
@@ -25,6 +23,10 @@ class JobHandle(Protocol):
         ...
 
     def status(self) -> JobStatus: ...
+
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return a globally bounded tail of retained job log lines."""
+        ...
 
     def terminate(self) -> None: ...
 

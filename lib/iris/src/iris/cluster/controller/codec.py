@@ -49,8 +49,12 @@ def proto_to_json(msg) -> str:
 
 @functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def proto_from_json(json_str: str, proto_cls):
-    """Deserialize a JSON string into a new protobuf message of *proto_cls*."""
-    return json_format.ParseDict(json.loads(json_str), proto_cls())
+    """Deserialize a JSON string into a new protobuf message of *proto_cls*.
+
+    Ignores unknown fields so jobs persisted before a field was removed still
+    replay across a controller restart.
+    """
+    return json_format.ParseDict(json.loads(json_str), proto_cls(), ignore_unknown_fields=True)
 
 
 # ---------------------------------------------------------------------------
@@ -87,26 +91,16 @@ def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
     ]
 
 
-def reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-    """Serialize the reservation field of a LaunchJobRequest to JSON.  Returns None if absent."""
-    if not request.HasField("reservation"):
-        return None
-    return json.dumps(json_format.MessageToDict(request.reservation, **_TO_DICT_OPTS))
-
-
 def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
-    """Serialize a RuntimeEntrypoint, excluding inline workdir_files (stored separately)."""
+    """Serialize a RuntimeEntrypoint, excluding inline workdir_files.
+
+    The files live in ``job_workdir_files``, keyed by job id, so the JSON column stays
+    small. An entrypoint rebuilt from this JSON therefore has no inline files until
+    they are re-attached from that table.
+    """
     d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
     d.pop("workdir_files", None)
     return json.dumps(d)
-
-
-def reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.ReservationEntry]:
-    """Deserialize reservation JSON back to a list of ReservationEntry protos."""
-    if not reservation_json:
-        return []
-    data = json.loads(reservation_json)
-    return [json_format.ParseDict(e, job_pb2.ReservationEntry()) for e in data.get("entries", [])]
 
 
 class DeviceCounts(NamedTuple):
@@ -156,8 +150,21 @@ def resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     )
 
 
-def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRequest:
-    """Reconstruct a LaunchJobRequest proto from native job columns."""
+def reconstruct_launch_job_request(
+    job, *, workdir_files: dict[str, bytes]
+) -> controller_pb2.Controller.LaunchJobRequest:
+    """Reconstruct a LaunchJobRequest proto from native job columns.
+
+    ``job.entrypoint_json`` carries no inline workdir files, so the caller names them:
+    ``reads.get_workdir_files(tx, job_id)`` for a request that will be *run* — a
+    federated handoff delivers this request to the peer, and without the files the peer
+    has no ``_callable_runner.py`` to exec — or ``{}`` for a request that only describes
+    the job's shape.
+
+    ``bundle_blob``, ``client_revision_date`` and ``federation`` are not stored (the
+    bundle survives as ``bundle_id``; the other two belong to the submitting hop), so a
+    reconstruction never carries them.
+    """
     req = controller_pb2.Controller.LaunchJobRequest(
         name=job.name,
         bundle_id=job.bundle_id,
@@ -169,9 +176,12 @@ def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRe
         existing_job_policy=job.existing_job_policy,
         priority_band=job.priority_band,
         task_image=job.task_image,
+        container_profile=job.container_profile,
         fail_if_exists=job.fail_if_exists,
     )
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
+    for filename, data in workdir_files.items():
+        req.entrypoint.workdir_files[filename] = data
     req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
     req.resources.CopyFrom(
         resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
@@ -193,10 +203,6 @@ def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRe
     if job.timeout_ms is not None and job.timeout_ms > 0:
         req.timeout.milliseconds = job.timeout_ms
 
-    if job.reservation_json:
-        for entry in reservation_entries_from_json(job.reservation_json):
-            req.reservation.entries.append(entry)
-
     return req
 
 
@@ -217,10 +223,11 @@ def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata
         gpu_memory_mb=worker.md_gpu_memory_mb,
         gce_instance_name=worker.md_gce_instance_name,
         gce_zone=worker.md_gce_zone,
-        git_hash=worker.md_git_hash,
     )
     if worker.md_device_json and worker.md_device_json != "{}":
         md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
+    if worker.md_provenance_json and worker.md_provenance_json != "{}":
+        md.provenance.CopyFrom(proto_from_json(worker.md_provenance_json, job_pb2.Provenance))
     for key, value in attributes.items():
         md.attributes[key].CopyFrom(python_value_to_attribute_value(value))
     return md

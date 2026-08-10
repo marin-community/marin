@@ -28,8 +28,6 @@ independent so the pipeline is fully resumable across preemptions
 survive a restart).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,8 +35,10 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
-from fray import ResourceConfig
-from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, load_file
+from fray.types import ResourceConfig
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData

@@ -61,28 +61,6 @@ def _make_explicit_abstract_mesh() -> AbstractMesh:
     )
 
 
-@pytest.mark.skip
-def test_causal_mask_blocking():
-    pos = hax.Axis("pos", 128)
-    key_pos = pos.alias("key_pos")
-
-    mask = AttentionMask.causal()
-
-    blocked_mask = mask.blocked(pos, 16).blocked(key_pos, 16)
-    assert blocked_mask.max_Pos.size == 128 // 16
-    assert blocked_mask.KeyPos.size == 128 // 16
-
-    mat_blocked = blocked_mask.materialize()
-
-    assert hax.all(mat_blocked == hax.nn.attention.causal_mask(pos.resize(8), key_pos.resize(8)))
-
-    mat_mask = mask.materialize()
-
-    for i in range(8):
-        for j in range(8):
-            assert mat_blocked.array[i, j] == jnp.any(mat_mask.array[i * 16 : (i + 1) * 16, j * 16 : (j + 1) * 16])
-
-
 def test_causal_mask_slicing():
     pos = hax.Axis("pos", 128)
     key_pos = pos.alias("key_pos")
@@ -955,3 +933,31 @@ def test_attention_equivalence_jax_flash(
     o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
 
     torch.testing.assert_close(o1, o2)
+
+
+def test_bidirectional_sliding_window_mask_is_symmetric():
+    """The bidirectional window admits key j for query i iff |i - j| <= radius (both directions)."""
+    QPos = Axis("position", 8)
+    KPos = Axis("key_position", 8)
+    radius = 2
+    mask = AttentionMask.bidirectional_sliding_window(radius).materialize(QPos, KPos)
+    got = np.asarray(mask.array)
+    i = np.arange(8)[:, None]
+    j = np.arange(8)[None, :]
+    expected = np.abs(i - j) <= radius
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_bidirectional_window_combines_with_segment_ids():
+    """`&` keeps the symmetric window and intersects with a padding/segment mask."""
+    QPos = Axis("position", 6)
+    KPos = Axis("key_position", 6)
+    segment = hax.named(np.array([0, 0, 0, 1, 1, 1]), QPos)
+    kv_segment = segment.rename({"position": "key_position"})
+    combined = AttentionMask.bidirectional_sliding_window(1).with_segment_ids(segment, kv_segment)
+    got = np.asarray(combined.materialize(QPos, KPos).array)
+    i = np.arange(6)[:, None]
+    j = np.arange(6)[None, :]
+    same_segment = (np.array([0, 0, 0, 1, 1, 1])[:, None]) == (np.array([0, 0, 0, 1, 1, 1])[None, :])
+    expected = (np.abs(i - j) <= 1) & same_segment
+    np.testing.assert_array_equal(got, expected)

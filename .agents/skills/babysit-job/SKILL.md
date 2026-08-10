@@ -11,21 +11,21 @@ the execution backend.
 
 ## Required Info
 
-1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
+1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model-20260302-185630`)
 2. `config` — Iris config path (e.g., `lib/iris/config/marin.yaml`). When the user
    refers to a cluster by shorthand name (e.g., "marin_dev", "marin-dev", "marin",
    "coreweave"), resolve it to the matching config file under `lib/iris/config/`.
    Common mappings:
    - `marin` / `marin_prod` -> `lib/iris/config/marin.yaml`
    - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
-   - `coreweave` -> `lib/iris/config/coreweave.yaml`
+   - `coreweave` / `cw-us-east-02a` -> `lib/iris/config/cw-us-east-02a.yaml`; `cw-rno2a` -> `lib/iris/config/cw-rno2a.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin-core:tpu` (not `--extra marin-core:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example resubmit command:
-`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin-core:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin-core:tpu --tpu v5litepod-16 -- python -m experiments.tutorials.train_tiny_model --device v5litepod-16 --dataset tinystories`
 
 If any required field is missing, ask for it before proceeding.
 
@@ -125,11 +125,7 @@ part of the setup. The state file allows resume after context reset.
    `iris job logs <JOB_ID>` includes child-job task logs by default.
 
 3. CHECK STATUS
-   uv run iris --config <CONFIG> job list --json --prefix <JOB_ID>
-
-   Terminal success: JOB_STATE_SUCCEEDED
-   Terminal non-success: JOB_STATE_FAILED, JOB_STATE_KILLED, JOB_STATE_WORKER_FAILED, JOB_STATE_UNSCHEDULABLE
-   Non-terminal: JOB_STATE_PENDING, JOB_STATE_BUILDING, JOB_STATE_RUNNING
+   uv run iris --config <CONFIG> job list --prefix <JOB_ID>
 
    If `pending_reason` indicates worker scale-up/capacity wait, treat as scheduler
    capacity wait — do not run cluster update/recreate/restart actions. Continue
@@ -141,7 +137,7 @@ part of the setup. The state file allows resume after context reset.
 3a. ON TERMINAL STATE / OOM-LIKE SIGNAL — get a structured per-task summary
    (final state, exit, duration, peak memory) instead of grepping logs:
 
-   uv run iris --config <CONFIG> job summary --json <JOB_ID>
+   uv run iris --config <CONFIG> job summary <JOB_ID>
 
    Fast postmortem: e.g. "13/14 shards peaked near the container memory limit
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.

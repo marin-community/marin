@@ -8,29 +8,37 @@ Subcommands:
     build    docker build, tag with git sha + "latest", push to Artifact Registry.
     apply    roll the prod VM to the "latest" image.
     status   show VM state + tail container logs.
+    grant-iap grant the probe service account access to the Marin Iris IAP edge.
     create   one-time: service account, IAM bindings, and the COS VM itself.
 
 Run with ``uv run deploy/deploy.py <command>`` (click resolves from the project
 venv), or ``python deploy/deploy.py <command>`` if click is on the path.
 """
 
-from __future__ import annotations
-
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 import click
+from rigging.filesystem import load_cluster_config
 
 logger = logging.getLogger("deploy")
 
+_MARIN_CONFIG = load_cluster_config("marin")
+
 IMAGE_NAME = "infra-probes"
-# The probes daemon writes its JSONL roll-ups here; the SA needs object-create on
-# this bucket and the canary's GCS prefix lives under it (see infra_probes.py).
-RESULTS_BUCKET = "marin-us-central1"
+# The probes daemon writes its JSONL roll-ups under this bucket+prefix (see
+# infra_probes.py). Rolling a day up overwrites a deterministic per-day object
+# when a stranded local file is re-uploaded after a restart, so the SA needs
+# create+get+delete — granted via objectUser, scoped by IAM condition to the
+# prefix so the canary can't touch the rest of this shared data bucket.
+RESULTS_BUCKET = _MARIN_CONFIG.region_buckets["us-central1"].name
+RESULTS_GCS_PREFIX = "infra/probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
+IAP_GCLB = PROBES_DIR.parent.parent / "lib" / "iris" / "scripts" / "iap_gclb.py"
 
 
 def _run(cmd: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
@@ -44,6 +52,21 @@ def _artifact_registry(region: str, project: str, repo: str) -> str:
 
 def _service_account(project: str) -> str:
     return f"{IMAGE_NAME}@{project}.iam.gserviceaccount.com"
+
+
+def _grant_iap_access(project: str, service_account: str) -> None:
+    member = f"serviceAccount:{service_account}"
+    logger.info("Granting Marin Iris IAP access to %s", service_account)
+    _run(
+        [
+            sys.executable,
+            str(IAP_GCLB),
+            "grant",
+            "marin",
+            f"--project={project}",
+            f"--member={member}",
+        ]
+    )
 
 
 @click.group()
@@ -63,14 +86,18 @@ def cli(ctx: click.Context, project: str, region: str, zone: str, vm_name: str, 
     }
 
 
+def _git_sha() -> str:
+    return _run(
+        ["git", "-C", str(PROBES_DIR), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+    ).stdout.strip()
+
+
 @cli.command()
 @click.pass_obj
 def build(cfg: dict[str, str]) -> None:
     """Build the image, tag with git sha and 'latest', push to Artifact Registry."""
-    sha = _run(
-        ["git", "-C", str(PROBES_DIR), "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-    ).stdout.strip()
+    sha = _git_sha()
     image_sha = f"{cfg['registry']}:{sha}"
     image_latest = f"{cfg['registry']}:latest"
 
@@ -97,9 +124,15 @@ def build(cfg: dict[str, str]) -> None:
 @cli.command()
 @click.pass_obj
 def apply(cfg: dict[str, str]) -> None:
-    """Roll the prod VM to the 'latest' image."""
-    image_latest = f"{cfg['registry']}:latest"
-    logger.info("Rolling VM %s (%s) to %s", cfg["vm_name"], cfg["zone"], image_latest)
+    """Roll the prod VM to the current git sha's image.
+
+    Deploys the immutable ``:<sha>`` tag, not ``:latest``: konlet keeps running a
+    locally-cached ``:latest`` when update-container is handed the same mutable
+    ref, so a same-tag roll silently runs the old image. A distinct ``:<sha>``
+    ref forces the pull. Build the matching image first (``build`` at this HEAD).
+    """
+    image_sha = f"{cfg['registry']}:{_git_sha()}"
+    logger.info("Rolling VM %s (%s) to %s", cfg["vm_name"], cfg["zone"], image_sha)
     _run(
         [
             "gcloud",
@@ -109,7 +142,7 @@ def apply(cfg: dict[str, str]) -> None:
             cfg["vm_name"],
             f"--project={cfg['project']}",
             f"--zone={cfg['zone']}",
-            f"--container-image={image_latest}",
+            f"--container-image={image_sha}",
         ]
     )
 
@@ -145,6 +178,14 @@ def status(cfg: dict[str, str]) -> None:
     )
 
 
+@cli.command("grant-iap")
+@click.pass_obj
+def grant_iap(cfg: dict[str, str]) -> None:
+    """Allow the probe VM's service account through the Marin Iris IAP edge."""
+    project = cfg["project"]
+    _grant_iap_access(project, _service_account(project))
+
+
 @cli.command()
 @click.option(
     "--iris-endpoint",
@@ -169,7 +210,7 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
     logger.info("Creating service account %s", sa)
     _run(["gcloud", "iam", "service-accounts", "create", IMAGE_NAME, f"--project={project}"])
 
-    # SA needs: pull image, ship stdout to Cloud Logging, write GCS roll-ups.
+    # SA needs: pull image, ship stdout to Cloud Logging, manage GCS roll-ups.
     logger.info("Granting IAM roles to %s", sa)
     _run(
         [
@@ -195,6 +236,15 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
             "--condition=None",
         ]
     )
+    # objectUser (create/get/delete) restricted to the roll-up prefix. The
+    # bucket-scoped objects.list it implies is intentionally not covered by the
+    # object-name condition; gcsfs only uses list to sniff bucket type and falls
+    # back gracefully, so the upload still succeeds.
+    prefix_condition = (
+        f'expression=resource.name.startsWith("projects/_/buckets/{RESULTS_BUCKET}'
+        f'/objects/{RESULTS_GCS_PREFIX}/"),title=infra-probes-prefix,'
+        "description=Limit infra-probes SA object access to its rollup prefix"
+    )
     _run(
         [
             "gcloud",
@@ -203,9 +253,11 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
             "add-iam-policy-binding",
             f"gs://{RESULTS_BUCKET}",
             f"--member={member}",
-            "--role=roles/storage.objectCreator",
+            "--role=roles/storage.objectUser",
+            f"--condition={prefix_condition}",
         ]
     )
+    _grant_iap_access(project, sa)
 
     # The host mount persists the JSONL across container restarts; the
     # startup-script makes it writable by the uid-1000 container.

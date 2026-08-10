@@ -12,22 +12,32 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
-    ProfileTrigger,
     build_profile_row,
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import AttemptUid, JobName
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_STATS_NAMESPACE,
+    WORKER_STATS_NAMESPACE,
+    IrisProfile,
+    IrisTaskStat,
+    IrisWorkerStat,
+    ProfileTrigger,
+    WorkerStatus,
+    build_worker_stat,
+)
+from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -41,23 +51,14 @@ from iris.cluster.worker.env_probe import (
     probe_disk_writable,
     probe_hardware,
 )
-from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE, PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import (
-    TASK_STATS_NAMESPACE,
-    WORKER_STATS_NAMESPACE,
-    IrisTaskStat,
-    IrisWorkerStat,
-    WorkerStatus,
-    build_worker_stat,
-)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    port_range: tuple[int, int] = (30000, 40000)
+    port_range: tuple[int, int] = DEFAULT_TASK_PORT_RANGE
     controller_address: str | None = None
     worker_id: str | None = None
     slice_id: str | None = None
@@ -80,61 +81,53 @@ class WorkerConfig:
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
-    accelerator_type: int = 0
+    accelerator_type: AcceleratorType | None = None
     accelerator_variant: str = ""
     gpu_count: int = 0
-    capacity_type: int = 0
+    capacity_type: CapacityType | None = None
     cpu_millicores: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
 
-def worker_config_from_proto(
-    proto: config_pb2.WorkerConfig,
+def worker_config_from_wire(
+    wire: WorkerWireConfig,
     resolve_image: Callable[[str], str] | None = None,
 ) -> WorkerConfig:
-    """Create internal WorkerConfig from WorkerConfig proto.
+    """Create the internal WorkerConfig from the wire (bootstrap) WorkerConfig.
 
-    Translates the proto representation into the internal dataclass,
-    applying defaults where proto fields are unset.
+    Translates the parsed config model into the internal dataclass, applying
+    defaults where fields are unset.
     """
-    port_start, port_end = 30000, 40000
-    if proto.port_range:
-        port_start, port_end = map(int, proto.port_range.split("-"))
+    port_start, port_end = DEFAULT_TASK_PORT_RANGE
+    if wire.port_range:
+        port_start, port_end = map(int, wire.port_range.split("-"))
 
-    controller_address = proto.controller_address
+    controller_address = wire.controller_address
     if controller_address and not controller_address.startswith("http"):
         controller_address = f"http://{controller_address}"
 
     return WorkerConfig(
-        host=proto.host or "0.0.0.0",
-        port=proto.port or 8080,
-        cache_dir=Path(proto.cache_dir) if proto.cache_dir else None,
+        host=wire.host or "0.0.0.0",
+        port=wire.port or 8080,
+        cache_dir=Path(wire.cache_dir) if wire.cache_dir else None,
         port_range=(port_start, port_end),
         controller_address=controller_address or None,
-        worker_id=proto.worker_id or None,
-        slice_id=proto.slice_id or None,
-        worker_attributes=dict(proto.worker_attributes),
-        task_env=dict(proto.task_env),
-        default_task_image=proto.default_task_image or None,
+        worker_id=wire.worker_id or None,
+        slice_id=wire.slice_id or None,
+        worker_attributes=dict(wire.worker_attributes),
+        task_env=dict(wire.task_env),
+        default_task_image=wire.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
-        poll_interval=(
-            Duration.from_ms(proto.poll_interval.milliseconds)
-            if proto.HasField("poll_interval")
-            else Duration.from_seconds(5.0)
-        ),
-        heartbeat_timeout=(
-            Duration.from_ms(proto.heartbeat_timeout.milliseconds)
-            if proto.HasField("heartbeat_timeout")
-            else Duration.from_seconds(600.0)
-        ),
-        accelerator_type=proto.accelerator_type,
-        accelerator_variant=proto.accelerator_variant,
-        gpu_count=proto.gpu_count,
-        capacity_type=proto.capacity_type,
-        cpu_millicores=proto.cpu_millicores,
-        storage_prefix=proto.storage_prefix,
-        auth_token=proto.auth_token,
+        poll_interval=wire.poll_interval if wire.poll_interval is not None else Duration.from_seconds(5.0),
+        heartbeat_timeout=wire.heartbeat_timeout if wire.heartbeat_timeout is not None else Duration.from_seconds(600.0),
+        accelerator_type=wire.accelerator_type,
+        accelerator_variant=wire.accelerator_variant,
+        gpu_count=wire.gpu_count,
+        capacity_type=wire.capacity_type,
+        cpu_millicores=wire.cpu_millicores,
+        storage_prefix=wire.storage_prefix,
+        auth_token=wire.auth_token,
     )
 
 
@@ -150,6 +143,7 @@ class Worker:
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
         worker_metadata: job_pb2.WorkerMetadata | None = None,
+        log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = 10,
     ):
@@ -203,23 +197,21 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogClient and RemoteLogHandler are created in start() before container
-        # adoption and registration. Building before adoption ensures adopted
-        # attempts capture a live client (regression #5261). Building before
-        # registration ensures pre-register failures (container bring-up,
-        # disk/health probes, registration rejection) leave remote logs.
+        # When no client is injected, start() creates one before container
+        # adoption and registration. This gives adopted attempts a live client
+        # and preserves logs for failures that happen before registration.
         # Attachment relies on ``self._worker_id`` having been resolved locally
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
-        self._log_client: LogClient | None = None
+        self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Tables for the iris.worker / iris.task / iris.profile namespaces.
-        # Set in start() after the controller client is built so the LogClient
-        # resolver works.
+        # Stats tables are registered as soon as a LogClient is available.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
         self._profile_table: Table | None = None
+        if log_client is not None:
+            self._register_stats_tables(log_client)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -241,6 +233,9 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        # Endpoint registry (register/list) is a separate service; the worker
+        # only reads it (log-server resolution), sharing the controller address.
+        self._endpoint_client: EndpointServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -253,23 +248,31 @@ class Worker:
         #   2. iris.worker / iris.task tables must be registered before adoption
         #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
         #      which goes through the resolver (_resolve_log_service) — and the
-        #      resolver requires self._controller_client to be set. After the
-        #      controller_client is built and the tables are registered once,
-        #      the per-attempt get_table inside adoption is a cache hit.
+        #      resolver requires self._endpoint_client to be set. After the
+        #      clients are built and the tables are registered once, the
+        #      per-attempt get_table inside adoption is a cache hit.
         #   3. The uvicorn server must be up before we register with the
         #      controller, so the controller's first ping lands on a ready
         #      worker. Lifecycle thread is spawned last for that reason.
-        interceptors: tuple[AuthTokenInjector, ...] = ()
+        interceptors: tuple[BearerTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
-            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
 
         if self._config.controller_address:
-            self._log_client = LogClient.connect(
-                LOG_SERVER_ENDPOINT_NAME,
-                interceptors=interceptors,
-                resolver=self._resolve_log_service,
-            )
+            if self._log_client is None:
+                self._log_client = LogClient.connect(
+                    LOG_SERVER_ENDPOINT_NAME,
+                    interceptors=interceptors,
+                    resolver=self._resolve_log_service,
+                )
             self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=10_000,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
+            self._endpoint_client = EndpointServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
@@ -279,9 +282,8 @@ class Worker:
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.
             assert self._log_client is not None
-            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+            if self._worker_stats_table is None:
+                self._register_stats_tables(self._log_client)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -289,10 +291,10 @@ class Worker:
         if adopted == 0:
             self._cleanup_all_iris_containers()
 
-        # Bring the HTTP server up last so the worker is ready to serve
-        # controller pings the moment registration completes.
-        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
-        # causing TCP resets on idle connections.
+        # Bring the HTTP server up last so the worker is ready to serve the
+        # controller's Reconcile RPC the moment registration completes.
+        # timeout_keep_alive=120: default 5s races with the controller's reconcile
+        # cadence, causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard.app,
@@ -322,6 +324,11 @@ class Worker:
         removed = self._runtime.remove_all_iris_containers()
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
+
+    def _register_stats_tables(self, log_client: LogClient) -> None:
+        self._worker_stats_table = log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+        self._task_stats_table = log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+        self._profile_table = log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def adopt_running_containers(self) -> int:
         """Discover and adopt running containers from a previous worker process.
@@ -431,6 +438,8 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
+        if self._endpoint_client:
+            self._endpoint_client.close()
         self._detach_log_handler()
         if self._log_client is not None:
             self._log_client.close()
@@ -519,9 +528,9 @@ class Worker:
 
     def _resolve_log_service(self, server_url: str) -> str:
         """Look up ``server_url`` on the controller's endpoint registry."""
-        if self._controller_client is None:
-            raise ConnectionError("worker controller client not yet initialized")
-        resp = self._controller_client.list_endpoints(
+        if self._endpoint_client is None:
+            raise ConnectionError("worker endpoint client not yet initialized")
+        resp = self._endpoint_client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
         )
         if not resp.endpoints:
@@ -573,8 +582,8 @@ class Worker:
         """Wait for RPCs from controller. Returns when the controller-contact timeout expires.
 
         This method blocks in a loop, checking the time since the last
-        controller RPC (Ping / Reconcile). When the timeout expires it
-        returns, triggering a reset and re-registration.
+        controller Reconcile RPC. When the timeout expires it returns,
+        triggering a reset and re-registration.
         """
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         logger.info("Serving (waiting for controller RPCs)")
@@ -803,31 +812,11 @@ class Worker:
         snapshot.total_process_count = total_processes
         return snapshot
 
-    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
-        """Liveness check. Resets heartbeat deadline; emits host metrics to stats."""
-        if rule := chaos("worker.ping"):
-            if rule.delay_seconds > 0:
-                time.sleep(rule.delay_seconds)
-            if rule.error:
-                raise rule.error
-            if not rule.delay_seconds:
-                raise RuntimeError("chaos: worker.ping")
-        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
-        resource_snapshot = self._collect_resource_metrics()
-        health = check_worker_health(disk_path=str(self._cache_dir))
-        if not health.healthy:
-            logger.warning("Worker health check failed: %s", health.error)
-        self._emit_worker_stat(resource_snapshot)
-        return worker_pb2.Worker.PingResponse(
-            healthy=health.healthy,
-            health_error=health.error,
-        )
-
     def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         """Append one heartbeat row to the ``iris.worker`` stats namespace.
 
         Non-blocking: ``Table.write`` queues for the bg flush thread, so the
-        ping path never waits on the stats service. Schema-validation
+        reconcile path never waits on the stats service. Schema-validation
         ``TypeError`` bugs from the row encoder deliberately propagate.
         """
         table = self._worker_stats_table
@@ -846,9 +835,39 @@ class Worker:
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
         """Process desired state from the controller and return observed state.
 
+        Reconcile is the sole controller→worker channel, so it is also the
+        worker's keep-alive: every reconcile resets the heartbeat deadline (the
+        worker self-resets only after ``heartbeat_timeout`` with no contact) and
+        emits a host-metrics stat row. The response carries the worker's
+        self-health bit so the controller can reap a responsive-but-unhealthy
+        worker (e.g. failed disk).
+
         Routing is by ``attempt_uid`` only: every DesiredAttempt and
         AttemptObservation is keyed by UID.
         """
+        # Identity guard: only act on reconciles addressed to *this* worker.
+        # After a worker's VM is deleted GCP can recycle its internal IP onto a
+        # new VM; the controller may still hold the dead worker's stale address
+        # and reconcile us under the dead worker's id. Because routing is by
+        # attempt_uid, processing it would run the dead worker's tasks and
+        # zombie-kill our own attempts (absent from the misrouted plan). Refuse,
+        # but report our real id so the controller detects the recycled address
+        # and reaps the stale worker (a wrong-worker reply is not a heartbeat, so
+        # we also skip the deadline reset and the host-metrics stat below).
+        if request.worker_id and self._worker_id and request.worker_id != self._worker_id:
+            logger.warning(
+                "Reconcile addressed to %s but this worker is %s; refusing (recycled address?)",
+                request.worker_id,
+                self._worker_id,
+            )
+            return worker_pb2.Worker.ReconcileResponse(
+                worker_id=self._worker_id,
+                observed=[],
+                health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            )
+
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+
         for desired in request.desired:
             attempt_uid = AttemptUid(desired.attempt_uid)
             if desired.HasField("run"):
@@ -908,6 +927,7 @@ class Worker:
                     )
 
         resource_snapshot = self._collect_resource_metrics()
+        self._emit_worker_stat(resource_snapshot)
         health = check_worker_health(disk_path=str(self._cache_dir))
         if not health.healthy:
             logger.warning("Reconcile: worker health check failed: %s", health.error)

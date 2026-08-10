@@ -13,29 +13,31 @@ For datakit-style separation (per-doc attribute parquet → store assembly), see
 :mod:`marin.processing.tokenize.attributes` and :mod:`marin.processing.tokenize.store_builder`.
 The shared tokenization core lives in :mod:`marin.processing.tokenize._core`.
 """
+
 import abc
 import dataclasses
 import logging
-import os
 import re
 import time
 from collections.abc import Sequence
 
 from datasets import load_dataset_builder
-from fray import ResourceConfig
-from levanter.data.text import (
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import (
+    DatasetComponent,
     HfDatasetSourceConfig,
-    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
+from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import FileEntry
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr.dataset import Dataset, FileEntry
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
-from marin.execution.types import InputName, VersionedValue
+from marin.execution.artifact import Artifact
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,
@@ -46,8 +48,8 @@ from marin.processing.tokenize._core import (
     parquet_window_hint,
     tokenize_pipeline,
 )
+from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +61,69 @@ __all__ = [
     "HfTokenizeConfig",
     "TokenizeConfig",
     "TokenizeConfigBase",
+    "TokenizedCache",
     "bundle_files_by_size",
     "compute_target_group_bytes",
     "tokenize",
 ]
+
+
+class TokenizedCache(Artifact):
+    """A tokenized Levanter cache produced by :func:`tokenize`.
+
+    The realized artifact for every tokenized-dataset handle. ``load`` is a path ref (no tokens
+    pulled into the launcher); the cache's tokenizer/format/tags are read from its recorded
+    config, so a consumer (a training :func:`~marin.experiment.data.mixture`) builds a Levanter
+    component from the artifact alone, never from the producing recipe. Adopted caches resolve
+    through ``record.source``; their tokenizer/format come from the synthetic config recorded when
+    the cache is adopted.
+    """
+
+    @property
+    def _config(self) -> dict:
+        return (self.record.config if self.record is not None else None) or {}
+
+    @property
+    def cache_dir(self) -> str:
+        """The Levanter cache directory: an adopted cache's source, else this artifact's path."""
+        rec = self.record
+        return (rec.source if rec is not None and rec.source else None) or self.path
+
+    @property
+    def tokenizer(self) -> str:
+        """The tokenizer this cache was built with (a mixture must be single-tokenizer)."""
+        tokenizer = self._config.get("tokenizer")
+        if not tokenizer:
+            raise ValueError(f"{self.path}: tokenized cache record has no tokenizer")
+        return tokenizer
+
+    @property
+    def format(self) -> LmDatasetFormatBase:
+        """The dataset format; marin's tokenized caches are text format (``text_key``)."""
+        fmt = self._config.get("format")
+        if isinstance(fmt, dict) and "text_key" in fmt:
+            return TextLmDatasetFormat(text_key=fmt["text_key"])
+        return TextLmDatasetFormat()
+
+    @property
+    def tags(self) -> list[str]:
+        tags = self._config.get("tags")
+        return list(tags) if isinstance(tags, list) else []
+
+    @property
+    def num_train_tokens(self) -> int:
+        """Total number of tokens in the training split (from the cache's ``.stats.json``)."""
+        return read_tokenized_cache_stats(self.cache_dir, "train").total_tokens
+
+    def as_component(self) -> DatasetComponent:
+        """A Levanter mixture component pointing at this built cache.
+
+        A built cache needs no raw urls; the component carries the cache dir, format, and tags.
+        """
+        source = UrlDatasetSourceConfig(
+            tags=self.tags, train_urls=[], validation_urls=[], cache_dir=self.cache_dir, format=self.format
+        )
+        return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,7 +141,7 @@ class TokenizeConfigBase(abc.ABC):
 
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
-    map_workers_per_actor: int | None = None
+    map_task_resources: ResourceConfig | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
@@ -96,7 +157,7 @@ class TokenizeConfigBase(abc.ABC):
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
@@ -127,14 +188,13 @@ class TokenizeConfig(TokenizeConfigBase):
     """
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
-            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
-                we need to resolve it to a string.
+            actual_output_path: The output path to use for the cache.
 
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
@@ -152,8 +212,8 @@ class TokenizeConfig(TokenizeConfigBase):
         if not self.train_paths and not self.validation_paths:
             raise ValueError("At least one of train_paths or validation_paths must be specified")
 
-        assert not isinstance(self.train_paths, str | InputName)
-        assert not isinstance(self.validation_paths, str | InputName)
+        assert not isinstance(self.train_paths, str)
+        assert not isinstance(self.validation_paths, str)
 
         if isinstance(self.train_paths, Sequence):
             assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
@@ -182,7 +242,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     """Number of samples to tokenize. If None, tokenize all samples."""
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
@@ -193,37 +253,22 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str | InputName], warn):
+def _validate_train_urls(train_paths: list[str], warn):
     """
-    Validates the training data URLs or InputName attributes to ensure they do not contain forbidden patterns.
+    Validates the training data URLs to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
-    for item in train_paths:
-        url_or_name_to_check: str = ""
-        if isinstance(item, str):
-            url_or_name_to_check = item
-        elif isinstance(item, InputName):
-            url_or_name_to_check = item.name or ""
-
+    for url_to_check in train_paths:
         # \b doesn't work because of underscores
-        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
+        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_to_check) or re.search(r"validation", url_to_check):
             if warn:
-                logger.warning(
-                    f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
-                )
+                logger.warning(f"Warning: Training data URL '{url_to_check}' contains a forbidden pattern ")
             else:
                 raise ValueError(
-                    f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    f"Error: Training data URL '{url_to_check}' contains a forbidden pattern "
                     "('test' or 'validation'). "
                     "Please ensure training data does not include test or validation sets."
                 )
-
-
-def _resolve_input_paths(input_paths: list[str] | VersionedValue) -> list[str]:
-    """Unwrap a ``VersionedValue`` if needed and return the concrete path list."""
-    if isinstance(input_paths, VersionedValue):
-        return list(input_paths.value)
-    return list(input_paths)
 
 
 def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) -> list[list[str]]:
@@ -243,8 +288,8 @@ def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) 
 
 
 def _split_already_done(cache_path: str, split_name: str) -> bool:
-    ledger_path = os.path.join(cache_path, split_name, "shard_ledger.json")
-    if fsspec_exists(ledger_path):
+    ledger_path = ShardedCacheLayout.parse(cache_path).child(split_name).ledger
+    if StoragePath(ledger_path).exists():
         logger.info("Shard ledger already exists for %s at %s; skipping", split_name, ledger_path)
         return True
     return False
@@ -257,7 +302,7 @@ def _run_split(
     split_name: str,
 ) -> None:
     """End-to-end pipeline for one split: glob → tokenize → consolidate → stats."""
-    prefix = os.path.join(config.cache_path, split_name)
+    prefix = prefix_join(config.cache_path, split_name)
     pipeline_start = time.monotonic()
 
     sample_path = parquet_window_hint(file_groups)
@@ -275,8 +320,6 @@ def _run_split(
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
-    if config.map_workers_per_actor is not None:
-        ctx.map_workers_per_actor = config.map_workers_per_actor
     # Broadcast tokenizer config to workers. We send name + backend rather than
     # the tokenizer object because not all backends support pickling.
     ctx.put("tokenizer_name", config.tokenizer)
@@ -287,6 +330,7 @@ def _run_split(
         dataset=tokenized_ds,
         output_path=prefix,
         batch_size=batch_size,
+        task_resources=config.map_task_resources,
     )
 
     stats_path, _ = write_stats_json(prefix, ledger)
@@ -307,10 +351,8 @@ def tokenize(config: TokenizeConfigBase) -> None:
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
     if isinstance(config, TokenizeConfig):
-        train_patterns = expand_tokenize_paths(_resolve_input_paths(config.train_paths)) if config.train_paths else []
-        validation_patterns = (
-            expand_tokenize_paths(_resolve_input_paths(config.validation_paths)) if config.validation_paths else []
-        )
+        train_patterns = expand_tokenize_paths(list(config.train_paths)) if config.train_paths else []
+        validation_patterns = expand_tokenize_paths(list(config.validation_paths)) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 

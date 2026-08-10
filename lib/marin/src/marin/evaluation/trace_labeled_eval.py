@@ -12,21 +12,18 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-import equinox as eqx
 import fsspec
-import haliax as hax
 import jax
 import jmp
 import levanter
-from fray import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+import levanter.tracker
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
-from levanter.data.text import (
-    LmDatasetSourceConfigBase,
+from levanter.data.text.datasets import LmDatasetSourceConfigBase
+from levanter.data.text.trace_chat import (
     TraceChatEvaluationFormat,
     build_trace_chat_dataset_cache,
     dataset_for_trace_chat_format,
@@ -35,13 +32,10 @@ from levanter.eval import LabeledEvaluator, eval_labeled_model
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
-from levanter.tracker.json_file import JsonFileTrackerConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 
-from marin.execution import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.evaluation.model_loading import load_eval_model
+from marin.training.run_environment import extras_for_resources
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +114,7 @@ class TraceLabeledEvalConfig:
 
 @dataclass(frozen=True)
 class TraceLabeledEvalOutput:
-    """Executor artifact produced by a completed trace-labeled evaluation step."""
+    """Output produced by a completed trace-labeled evaluation run."""
 
     results_path: str
 
@@ -529,11 +523,10 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
 
     _validate_eval_config(config)
 
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     try:
         tokenizer = load_marin_tokenizer(config.tokenizer)
 
-        hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
         EvalBatch = config.trainer.EvalBatch
         Pos = config.model.max_Pos.resize(config.max_eval_length)
 
@@ -550,25 +543,17 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
 
             mp: jmp.Policy = config.trainer.mp
 
-            if config.checkpoint_path is not None and not config.checkpoint_is_hf:
-                with use_cpu_device():
-                    model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                    model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-                model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-            elif hf_checkpoint is not None:
-                model_config = config.model
-                if not hasattr(model_config, "hf_checkpoint_converter"):
-                    raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-                converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-                converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-                model = converter.load_pretrained(
-                    model_config.model_type,
-                    ref=hf_checkpoint,
-                    axis_mapping=parameter_axis_mapping,
-                    dtype=mp.compute_dtype,
-                )
-            else:
-                raise AssertionError("Should not get here")
+            assert config.checkpoint_path is not None  # ensured by _validate_eval_config
+            model = load_eval_model(
+                config.model,
+                config.checkpoint_path,
+                checkpoint_is_hf=config.checkpoint_is_hf,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                mp=mp,
+                key=key,
+            )
 
             results = _load_or_create_results(config)
             dataset_results = _dataset_results(results)
@@ -638,9 +623,7 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
 
     client = current_client()
 
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
+    extras = extras_for_resources(config.resources)
 
     job_name = "trace-labeled-eval"
     if config.trace_labeled_eval_config.name:
@@ -655,61 +638,10 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
             extras=extras,
         ),
         max_retries_failure=config.trace_labeled_eval_config.job_failure_max_retries,
+        max_task_failures=config.trace_labeled_eval_config.job_failure_max_retries,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
     return TraceLabeledEvalOutput(
         results_path=os.path.join(config.trace_labeled_eval_config.output_path, RESULTS_FILENAME),
-    )
-
-
-def trace_labeled_eval_step(
-    *,
-    checkpoint: str | InputName,
-    model: LmConfig,
-    tokenizer: str,
-    datasets: dict[str, TraceLabeledEvalDatasetConfig],
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 1,
-    max_eval_length: int = 4096,
-    name: str | None = None,
-    wandb_project: str = DEFAULT_TRACE_LABELED_EVAL_WANDB_PROJECT,
-    wandb_tags: Sequence[str] = DEFAULT_TRACE_LABELED_EVAL_WANDB_TAGS,
-    wandb_group: str | None = None,
-) -> ExecutorStep:
-    """Create an ExecutorStep that evaluates labeled agent trace spans."""
-
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-
-    return ExecutorStep(
-        name=f"analysis/trace_labeled_eval/{name}",
-        fn=run_trace_labeled_eval_on_pod,
-        config=TraceLabeledEvalOnPodConfig(
-            trace_labeled_eval_config=TraceLabeledEvalConfig(
-                name=name,
-                checkpoint_path=checkpoint,  # type: ignore[arg-type]
-                checkpoint_is_hf=checkpoint_is_hf,
-                tokenizer=tokenizer,
-                model=model,
-                datasets=datasets,
-                trainer=TrainerConfig(
-                    tracker=(
-                        WandbConfig(
-                            project=wandb_project,
-                            name=name,
-                            tags=list(wandb_tags),
-                            group=wandb_group,
-                        ),
-                        JsonFileTrackerConfig(output_path=this_output_path()),
-                    ),
-                    per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
-                ),
-                max_eval_length=max_eval_length,
-                output_path=this_output_path(),
-            ),
-            resources=resource_config,
-        ),
     )
