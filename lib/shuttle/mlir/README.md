@@ -30,13 +30,16 @@ Then run:
 
 ```bash
 bazel build @shuttle_mlir//:shuttle_ops_inc_gen
+bazel build @shuttle_mlir//:ShuttleDialect
 bazel build @shuttle_mlir//:shuttle-opt
 bazel test @shuttle_mlir//:mlir_tests
 ```
 
 The generated-operations target is the fast preflight for ODS and TableGen
-compatibility with the pinned MLIR revision. Run it before compiling the C++
-dialect or scheduling a cluster build.
+compatibility with the pinned MLIR revision. The dialect library is the next
+preflight: it compiles the generated operation declarations and definitions
+without building the pass driver or linking `shuttle-opt`. Run both before
+scheduling the larger cluster build.
 
 Building from XLA rather than an installed `_jax.so` is intentional. MLIR's C++
 ABI and the private LLVM/StableHLO revisions embedded in a jaxlib wheel are not

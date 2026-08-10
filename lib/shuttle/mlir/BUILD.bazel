@@ -82,6 +82,7 @@ cc_library(
         ":shuttle_dialect_inc_gen",
         ":shuttle_ops_inc_gen",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:BytecodeOpInterface",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SideEffectInterfaces",
         "@llvm-project//mlir:Support",
