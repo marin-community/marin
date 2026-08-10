@@ -285,8 +285,8 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
         ]
         smoke = _run_stage(
             "smoke",
-            [*torchrun, "benchmarks/bench_mok.py"],
-            cwd=source,
+            [*torchrun, str(source / "benchmarks" / "bench_mok.py")],
+            cwd=working_dir,
             env=smoke_environment,
         )
         stage_data.update(
@@ -299,7 +299,7 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
         benchmark = _run_stage(
             "benchmark",
             [*torchrun, str(worker), "--json-output", str(worker_output)],
-            cwd=source,
+            cwd=working_dir,
             env=environment,
         )
         stage_data.update(
