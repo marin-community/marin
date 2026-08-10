@@ -3693,3 +3693,23 @@ author: dlwh
 - The delayed plan remains a separate real-algebra-equivalent candidate with
   the two `gamma @ W` and `beta @ W` vector projections. It is not described
   as source-ordered. No GPU allocation or latency claim was made.
+
+### 2026-08-09 - TLTC-XLA-071 partitioned SM90 runnable-source continuation
+
+- The external QuACK patch now includes a bounded generic
+  `PartitionedGemmSm90` executor rather than helper functions alone. One
+  nonpersistent launch uses one load warp, a common A stage and K traversal,
+  tuple RHS TMA copies with a combined transaction count, and one math
+  warpgroup issuing independent WGMMA accumulator groups.
+- Each accumulator group crosses an explicit BF16 round-to-nearest-even shared
+  boundary. A finalizer generated from `PartitionedGemmProgram` applies scalar
+  ASTs and direct passthrough stores; the exponential and tanh mutations retain
+  the same RHS/output ABI and differ only in generated scalar source.
+- The patch applies cleanly, and both the patch and generated authoring module
+  pass Python source compilation. Eighteen focused tests pass, including the
+  natural-program CPU/JAX reference, mutation, ABI, and workload-token audits.
+- The standalone H100 preflight now requires the executor, imports the patched
+  module, recovers a supplied HLO module, generates and imports the authoring
+  module, and calls its `run` entry point. Linux-only CuTe dependencies prevent
+  that import on the current macOS host. Device compilation, correctness, and
+  timing remain unproven, and no GPU was requested for this checkpoint.

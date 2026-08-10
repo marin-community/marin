@@ -114,22 +114,26 @@ sites:
 
 The first isolated extension patch is
 `lib/tile_lifetime/backends/h100/quack_partitioned_sm90.patch` (SHA-256
-`07749c9aa93339d5a91b412c649bbbbe2e35ae76feb6220afdc4cad50486b357`).
-It adds only the reusable tuple validation, congruent accumulator partitioning,
-ordered group-WGMMA issue, and BF16-boundary helpers. It intentionally does not
-pretend that these helpers make the stock single-B `GemmSm90` launch path
-executable.
+`79e276d3e2b60f53fd117277c3f0cb0a0ebf689f7feddd000d7398f4611f5e47`).
+It adds reusable tuple validation, congruent accumulator partitioning,
+ordered group-WGMMA issue, BF16-boundary helpers, and a bounded
+`PartitionedGemmSm90` executor. The executor is intentionally nonpersistent:
+one load warp stages one A tile and every static RHS tile, one math warpgroup
+issues all accumulator groups in the same K loop, and a generated finalizer
+writes scalar and passthrough outputs from BF16 shared-memory boundaries.
+This avoids changing QuACK's persistent scheduler merely to preserve its
+existing class shape.
 
-The stock QuACK packages cannot execute this plan today. Consequently this
-checkpoint is a static physical design and source-lineage proof, not GPU
-correctness or performance evidence. No H100 allocation should be requested
-until the extension compiles in an environment that can import CuTe DSL and a
-generated SiLU-to-tanh mutation reaches the same physical family.
+The stock QuACK packages cannot execute this plan without the patch. The patch
+and generated authoring source pass host-side syntax and mutation/ABI tests,
+but have not yet been imported or compiled by CuTe DSL on an H100. This is not
+GPU correctness or performance evidence.
 
 `benchmarks/h100_quack_partitioned_mainloop_preflight.py` checks the source
 revision, patch digest, patched-module import, and helper symbols on an H100
-host without allocating the device. It then requires a generic
-`PartitionedGemmSm90` executor symbol and fails before correctness or timing if
-the producer/epilogue extension remains absent. This prevents a stock
+host without launching the device. It imports both the patched executor and a
+generated module recovered from the supplied HLO, and requires the generic
+entry point before any correctness or timing run. This prevents a stock
 single-RHS or split-GEMM fallback from being reported as the requested
-candidate.
+candidate. CuTe device compilation and execution remain the next gate after
+static review.
