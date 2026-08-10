@@ -178,9 +178,11 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
   SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
   SmallVector<char> boundDimensions(domain.getNumDims(), 0);
   bool hasRankedTensor = false;
+  size_t mapPosition = 0;
   for (auto [mapAttribute, indexedType] :
        llvm::zip_equal(indexingMaps, indexedTypes)) {
     AffineMap indexingMap = cast<AffineMapAttr>(mapAttribute).getValue();
+    const bool isResultMap = mapPosition++ >= map.getInputs().size();
     if (indexingMap.getNumSymbols() != 0) {
       return map.emitOpError(
           "map indexing maps must not contain affine symbols");
@@ -189,6 +191,12 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
       return map.emitOpError(
           "map indexing maps must be projected permutations of direct domain "
           "dimensions");
+    }
+    if (isResultMap &&
+        indexingMap.getNumResults() != indexingMap.getNumDims()) {
+      return map.emitOpError(
+          "map result indexing maps must cover every domain dimension "
+          "exactly once");
     }
     auto tensorType = dyn_cast<RankedTensorType>(indexedType);
     if (!tensorType) {

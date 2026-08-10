@@ -130,3 +130,55 @@ module {
     return %result : f32
   }
 }
+
+// -----
+
+module {
+  func.func @projected_result(%arg: tensor<2x4xf32>) -> tensor<2xf32> {
+    %result = "shuttle.region"(%arg) ({
+    ^bb0(%region_arg: tensor<2x4xf32>):
+      // expected-error @+1 {{map result indexing maps must cover every domain dimension exactly once}}
+      %mapped = "shuttle.map"(%region_arg) ({
+      ^bb0(%element: f32):
+        "shuttle.yield"(%element) : (f32) -> ()
+      }) {
+        indexing_maps = [
+          affine_map<(m, n) -> (m, n)>,
+          affine_map<(m, n) -> (m)>
+        ],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x4xf32>) -> tensor<2xf32>
+      "shuttle.yield"(%mapped) : (tensor<2xf32>) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x4xf32>) -> tensor<2xf32>
+    return %result : tensor<2xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @scalar_result(%arg: tensor<2x4xf32>) -> f32 {
+    %result = "shuttle.region"(%arg) ({
+    ^bb0(%region_arg: tensor<2x4xf32>):
+      // expected-error @+1 {{map result indexing maps must cover every domain dimension exactly once}}
+      %mapped = "shuttle.map"(%region_arg) ({
+      ^bb0(%element: f32):
+        "shuttle.yield"(%element) : (f32) -> ()
+      }) {
+        indexing_maps = [
+          affine_map<(m, n) -> (m, n)>,
+          affine_map<(m, n) -> ()>
+        ],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x4xf32>) -> f32
+      "shuttle.yield"(%mapped) : (f32) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x4xf32>) -> f32
+    return %result : f32
+  }
+}

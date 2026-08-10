@@ -69,6 +69,10 @@ whose element types equal the scalar numeric accumulator types. Initializers,
 combiner arguments and yields, and result elements use the same accumulator
 types; an output cast must be a separate `shuttle.map`.
 
+Map input indexing maps may project dimensions to express broadcast. Result
+maps are full domain permutations: projection would imply duplicate writes,
+for which Map deliberately has no semantics.
+
 The first `shuttle.contract` surface is intentionally closed to two-input,
 one-result `dot_general` with f32 operands, accumulator, and result. Its
 indexing maps are symbol-free projected permutations of direct domain
