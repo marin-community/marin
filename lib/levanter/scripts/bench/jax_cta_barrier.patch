@@ -1,0 +1,63 @@
+diff --git a/jax/_src/pallas/mosaic_gpu/primitives.py b/jax/_src/pallas/mosaic_gpu/primitives.py
+index 44560436a..d72fcc727 100644
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py
+@@ -1597,8 +1597,58 @@ def barrier_wait_parity(barrier: state.AbstractRef, parity: jax.Array) -> None:
+   barrier_wait_parity_p.bind(
+       barrier, parity, *flat_transforms, transforms_treedef=transforms_treedef
+   )
+ 
+ 
++cta_barrier_p = jax_core.Primitive("cta_barrier")
++cta_barrier_p.multiple_results = True
++
++
++@cta_barrier_p.def_effectful_abstract_eval
++def _cta_barrier_abstract_eval():
++  return (), {gpu_core._memory_effect}
++
++
++@lowering.register_lowering_rule(
++    cta_barrier_p, mgpu.LoweringSemantics.Lane
++)
++def _cta_barrier_lowering(ctx: lowering.LoweringRuleContext):
++  del ctx
++  gpu_dialect.barrier()
++  return ()
++
++
++def cta_barrier() -> None:
++  cta_barrier_p.bind()
++
++
++cluster_barrier_p = jax_core.Primitive("cluster_barrier")
++cluster_barrier_p.multiple_results = True
++
++
++@cluster_barrier_p.def_effectful_abstract_eval
++def _cluster_barrier_abstract_eval():
++  return (), {gpu_core._memory_effect}
++
++
++@lowering.register_lowering_rule(
++    cluster_barrier_p, mgpu.LoweringSemantics.Lane
++)
++def _cluster_barrier_lowering(ctx: lowering.LoweringRuleContext):
++  del ctx
++  llvm_dialect.inline_asm(
++      ir.Type.parse("!llvm.void"),
++      [],
++      "barrier.cluster.arrive.release.aligned; barrier.cluster.wait.acquire.aligned;",
++      "",
++      has_side_effects=True,
++  )
++  return ()
++
++
++def cluster_barrier() -> None:
++  cluster_barrier_p.bind()
++
++
+ wait_smem_to_gmem_p = jax_core.Primitive("wait_smem_to_gmem")
+ wait_smem_to_gmem_p.multiple_results = True
+ 

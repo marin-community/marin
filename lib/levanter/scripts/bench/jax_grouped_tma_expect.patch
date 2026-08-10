@@ -1,0 +1,59 @@
+diff --git a/jax/_src/pallas/mosaic_gpu/primitives.py b/jax/_src/pallas/mosaic_gpu/primitives.py
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py
+@@ -778,4 +778,6 @@ def _copy_gmem_to_smem_lowering(
+     impl,
+     has_user_predicate,
+     thread_parallel,
++    arrive,
++    expect_bytes,
+ ):
+@@ -842,4 +844,6 @@ def _copy_gmem_to_smem_lowering(
+     )
+   bytes = bits // 8
++  if expect_bytes is not None:
++    bytes = expect_bytes
+ 
+   if is_leader_tracked_copy:
+@@ -897,7 +901,7 @@ def _copy_gmem_to_smem_lowering(
+         barrier.arrive_expect_tx(
+             arith_dialect.muli(mgpu.c(bytes, i32), num_valid)
+         )
+       gpu_dialect.barrier()
+-    elif not is_cp_async:
++    elif arrive and not is_cp_async:
+       if bytes % WARPGROUP_SIZE:
+         raise NotImplementedError(
+@@ -1009,6 +1013,7 @@ def _copy_gmem_to_smem_lowering(
+   else:
+     arrive_ctx = contextlib.nullcontext()
+-  with arrive_ctx:
+-    mgpu.dialect.arrive_expect_tx(barrier_ref, bytes)
++  if arrive:
++    with arrive_ctx:
++      mgpu.dialect.arrive_expect_tx(barrier_ref, bytes)
+ 
+   mgpu.dialect.async_load(
+@@ -1045,4 +1050,6 @@ def copy_gmem_to_smem(
+     leader_tracked: CopyPartition | None = None,
+     oob_mode: OOBFillMode | None = None,
+     thread_parallel: bool = False,
++    arrive: bool = True,
++    expect_bytes: int | None = None,
+ ) -> None:
+@@ -1134,3 +1141,7 @@ def copy_gmem_to_smem(
+   if impl == "tma" and oob_mode is None:
+     oob_mode = OOBFillMode.ZEROS
++  if not arrive and expect_bytes is not None:
++    raise ValueError("expect_bytes requires arrive=True")
++  if expect_bytes is not None and expect_bytes < 0:
++    raise ValueError("expect_bytes must be non-negative")
+   copy_gmem_to_smem_p.bind(
+@@ -1157,5 +1168,7 @@ def copy_gmem_to_smem(
+       impl=impl,
+       has_user_predicate=predicate is not None,
+       thread_parallel=thread_parallel,
++      arrive=arrive,
++      expect_bytes=expect_bytes,
+   )
+   return None

@@ -1,0 +1,14 @@
+diff --git a/jax/experimental/mosaic/gpu/core.py b/jax/experimental/mosaic/gpu/core.py
+index af155b3..a239c9d 100644
+--- a/jax/experimental/mosaic/gpu/core.py
++++ b/jax/experimental/mosaic/gpu/core.py
+@@ -778,9 +778,6 @@ def _launch(
+     yield ctx, smem_ref_tree
+ 
+     if tmem_allocs:
+-      nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.BEFORE_THREAD_SYNC)
+-      gpu.barrier()  # Make sure everyone is done before we release TMEM.
+-      nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.AFTER_THREAD_SYNC)
+       if lowering_semantics == LoweringSemantics.Warpgroup:
+         init_warp_ctx = contextlib.nullcontext()
+       else:

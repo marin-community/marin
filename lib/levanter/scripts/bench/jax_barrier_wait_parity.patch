@@ -1,0 +1,68 @@
+diff --git a/jax/_src/pallas/mosaic_gpu/primitives.py b/jax/_src/pallas/mosaic_gpu/primitives.py
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py
+@@ -1534,6 +1534,64 @@ def barrier_wait(barrier: state.AbstractRef) -> None:
+   )
+ 
+ 
++barrier_wait_parity_p = jax_core.Primitive("barrier_wait_parity")
++barrier_wait_parity_p.multiple_results = True
++
++
++@barrier_wait_parity_p.def_effectful_abstract_eval
++def _barrier_wait_parity_abstract_eval(barrier, parity, *args, **params):
++  _check_ref(barrier, "barrier", gpu_core.SMEM)
++  del parity, args, params
++  return (), {gpu_core._memory_effect}
++
++
++@lowering.register_lowering_rule(
++    barrier_wait_parity_p, mgpu.LoweringSemantics.Lane
++)
++def _barrier_wait_parity_lowering(
++    ctx: lowering.LoweringRuleContext,
++    barrier,
++    parity,
++    *flat_transforms,
++    transforms_treedef,
++):
++  barrier_aval = ctx.avals_in[0]
++  assert isinstance(barrier_aval, state_types.AbstractRef)
++  transforms = transforms_treedef.unflatten(flat_transforms)
++  base_index = _get_barrier_base_index(barrier_aval, transforms)
++  if base_index is not None:
++    barrier = barrier[base_index]
++  parity = lowering._ensure_ir_value(parity, jnp.bool)
++  i32 = ir.IntegerType.get_signless(32)
++  parity = arith_dialect.extui(i32, parity)
++  llvm_dialect.inline_asm(
++      ir.Type.parse("!llvm.void"),
++      [barrier.get_ptr(), parity],
++      """{
++      .reg .pred P1;
++      MOK_WAIT:
++      mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 P1, [$0], $1;
++      @P1 bra.uni MOK_DONE;
++      bra.uni MOK_WAIT;
++      MOK_DONE:
++      }""",
++      "l,r",
++      has_side_effects=True,
++  )
++  return ()
++
++
++def barrier_wait_parity(barrier: state.AbstractRef, parity: jax.Array) -> None:
++  """Waits on an explicit barrier parity."""
++  barrier, transforms = state_primitives.get_ref_and_transforms(
++      barrier, None, "barrier_wait_parity"
++  )
++  flat_transforms, transforms_treedef = tree_util.tree_flatten(transforms)
++  barrier_wait_parity_p.bind(
++      barrier, parity, *flat_transforms, transforms_treedef=transforms_treedef
++  )
++
++
+ wait_smem_to_gmem_p = jax_core.Primitive("wait_smem_to_gmem")
+ wait_smem_to_gmem_p.multiple_results = True
+ 

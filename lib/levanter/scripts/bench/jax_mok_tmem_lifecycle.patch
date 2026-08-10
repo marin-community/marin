@@ -1,0 +1,79 @@
+diff --git a/jax/experimental/mosaic/gpu/core.py b/jax/experimental/mosaic/gpu/core.py
+index a295634..af155b3 100644
+--- a/jax/experimental/mosaic/gpu/core.py
++++ b/jax/experimental/mosaic/gpu/core.py
+@@ -724,9 +724,6 @@ def _launch(
+       # TODO(apaszke): Only initialize cluster barriers before the cluster wait.
+       if utils.get_arch().major >= 9:
+         nvvm.fence_mbarrier_init()
+-      if math.prod(cluster) != 1:
+-        nvvm.cluster_arrive_relaxed(aligned=True)
+-        nvvm.cluster_wait(aligned=True)
+       if tmem_allocs:
+         init_warp_ctx: contextlib.AbstractContextManager
+         if lowering_semantics == LoweringSemantics.Warpgroup:
+@@ -762,21 +759,39 @@ def _launch(
+             dialect.tmem_relinquish_alloc_permit(collective=collective)
+           else:
+             tcgen05.tmem_relinquish_alloc_permit(collective=collective)
++        nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.BEFORE_THREAD_SYNC)
+       gpu.barrier()  # Make sure the init is visible to all threads.
++      if tmem_allocs:
++        nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.AFTER_THREAD_SYNC)
++      if math.prod(cluster) != 1:
++        llvm.inline_asm(
++            ir.Type.parse("!llvm.void"),
++            [],
++            "barrier.cluster.arrive.release.aligned; barrier.cluster.wait.acquire.aligned;",
++            "",
++            has_side_effects=True,
++        )
+       smem_ref_tree = smem_ref_tree_thunk()
+ 
+     yield ctx, smem_ref_tree
+ 
+     if tmem_allocs:
++      nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.BEFORE_THREAD_SYNC)
+       gpu.barrier()  # Make sure everyone is done before we release TMEM.
+-      if any(alloc.collective for alloc in tmem_allocs):
+-        nvvm.cluster_arrive_relaxed(aligned=True)
+-        nvvm.cluster_wait(aligned=True)
++      nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.AFTER_THREAD_SYNC)
+       if lowering_semantics == LoweringSemantics.Warpgroup:
+         init_warp_ctx = contextlib.nullcontext()
+       else:
+         init_warp_ctx = utils.when(is_init_warp)  # pyrefly: ignore[unbound-name]
+       with init_warp_ctx:
++        if any(alloc.collective for alloc in tmem_allocs):
++          llvm.inline_asm(
++              ir.Type.parse("!llvm.void"),
++              [],
++              "barrier.cluster.arrive.release.aligned; barrier.cluster.wait.acquire.aligned;",
++              "",
++              has_side_effects=True,
++          )
+         for alloc in tmem_allocs:
+           alloc.dealloc()
+     if prof is not None:
+diff --git a/jax/experimental/mosaic/gpu/tcgen05.py b/jax/experimental/mosaic/gpu/tcgen05.py
+index 390549d..6ca08f9 100644
+--- a/jax/experimental/mosaic/gpu/tcgen05.py
++++ b/jax/experimental/mosaic/gpu/tcgen05.py
+@@ -900,10 +900,13 @@ def tmem_dealloc(tmem_addr: ir.Value, ncols: int, collective: bool = False, exac
+   if tmem_addr.type != ir.IntegerType.get_signless(32):
+     raise ValueError(f"tmem_addr must be an i32, got: {tmem_addr.type}")
+   ncols = tmem_alloc_exact_ncols(ncols, exact)
+-  group = nvvm.CTAGroupKind.CTA_2 if collective else nvvm.CTAGroupKind.CTA_1
+-  i32 = ir.IntegerType.get_signless(32)
+-  nvvm.tcgen05_dealloc(
+-      _tmem_addr_to_ptr(tmem_addr), utils.c(ncols, i32), group=group
++  num_cta = 2 if collective else 1
++  llvm.inline_asm(
++      ir.Type.parse("!llvm.void"),
++      [tmem_addr],
++      f"tcgen05.dealloc.cta_group::{num_cta}.sync.aligned.b32 $0, {ncols};",
++      "r",
++      has_side_effects=True,
+   )
+ 
+ 

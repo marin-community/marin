@@ -1,0 +1,227 @@
+diff --git a/jax/_src/pallas/mosaic_gpu/primitives.py b/jax/_src/pallas/mosaic_gpu/primitives.py
+index 315fa0e9e..44560436a 100644
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py
+@@ -218,4 +218,5 @@ def _copy_smem_to_gmem_lowering(
+     has_user_predicate,
+     commit_group,
+     reduction_op,
++    thread_parallel,
+ ):
+@@ -250,6 +251,11 @@ def _copy_smem_to_gmem_lowering(
+       ctx, src_aval, src, src_transform_avals, src_transforms,
+       handle_transposes=handle_transposes
+   )
++  if thread_parallel:
++    if src_transforms:
++      raise NotImplementedError("Thread-parallel copies require an unsliced SMEM source.")
++    row = arith_dialect.index_cast(ir.IndexType.get(), mgpu.thread_idx())
++    src = mgpu.memref_slice(src, (mgpu.ds(row, 1), slice(None)))
+   copy_params = {
+       **_extract_gmem_copy_params(ctx, dst_transforms, dst_transform_avals, supports_multicast=True),
+       **_extract_smem_copy_params(src_aval, src_transforms),
+@@ -270,19 +276,24 @@ def _copy_smem_to_gmem_lowering(
+   if ctx.module_ctx.lowering_semantics == mgpu.LoweringSemantics.Lane:
+-    if not is_scatter:
++    if thread_parallel:
++      predicate_kwarg = dict(predicate=predicate)
++    elif not is_scatter:
+       lane_pred = ctx.module_ctx.single_lane_predicate
+       assert lane_pred is not None  # Satisfy pytype
+       if predicate is not None:
+         predicate = arith_dialect.andi(predicate, lane_pred)
+       else:
+         predicate = lane_pred
++      predicate_kwarg = dict(predicate=predicate)
++    else:
++      predicate_kwarg = {}
+ 
+     ctx.launch_ctx.async_copy(
+         src_ref=src,
+         dst_ref=dst,
+         arrive=commit_group,
+         reduction_op=reduction_op,
+         oob_mode=OOBFillMode.UNDEFINED,
+         **copy_params,
+-        **(dict(predicate=predicate) if predicate is not None else {}),  # pyrefly: ignore[bad-argument-type]
++        **predicate_kwarg,
+     )
+     return ()
+@@ -427,7 +437,8 @@ def copy_smem_to_gmem(
+     predicate: jax.Array | None = None,
+     *,
+     commit_group: bool = True,
+     reduction_op: mgpu.TMAReductionOp | None = None,
++    thread_parallel: bool = False,
+ ) -> None:
+   """Asynchronously copies a SMEM reference to a GMEM reference.
+ 
+@@ -442,6 +453,9 @@ def copy_smem_to_gmem(
+     reduction_op: If set, perform the specified reduction operation when storing
+       to GMEM. For example, using ``"add"`` is conceptually equivalent to
+       doing ``src += dst``.
++    thread_parallel: If true, every thread stores one row of an unsliced SMEM
++      source using its own dynamic destination indices. Only supported under
++      lane lowering semantics.
+ 
+   See also:
+     :func:`jax.experimental.pallas.mosaic_gpu.wait_smem_to_gmem`
+@@ -469,6 +483,7 @@ def copy_smem_to_gmem(
+       dst_transforms_treedef=dst_transforms_treedef,
+       has_user_predicate=predicate is not None,
+       commit_group=commit_group,
+       reduction_op=reduction_op,
++      thread_parallel=thread_parallel,
+   )
+   return None
+@@ -706,6 +706,9 @@ def _copy_gmem_to_smem_pp_eqn(
+   pp_params = {}
+   if collective_axes := eqn.params["collective_axes"]:
+     pp_params["collective_axes"] = collective_axes
++  if eqn.params["has_user_predicate"]:
++    flat_args, user_predicate = flat_args[:-1], flat_args[-1]
++    pp_params["user_predicate"] = user_predicate.pretty_print(context)
+   flat_src_transforms, flat_dst_transforms, flat_barrier_transforms = (
+       util.split_list(
+           flat_args,
+@@ -759,7 +762,14 @@ def _copy_gmem_to_smem_lowering(
+     leader_tracked,
+     oob_mode,
+     impl,
++    has_user_predicate,
++    thread_parallel,
+ ):
++  if has_user_predicate:
++    flat_transforms, user_predicate = flat_transforms[:-1], flat_transforms[-1]
++    predicate = lowering._ensure_ir_value(user_predicate, jnp.bool)
++  else:
++    predicate = None
+   flat_src_transforms, flat_dst_transforms, flat_barrier_transforms = (
+       util.split_list(
+           flat_transforms,
+@@ -799,6 +800,17 @@ def _copy_gmem_to_smem_lowering(
+       ctx, dst_ref_aval, dst, dst_transform_avals, dst_transforms,
+       handle_transposes=handle_transposes)
+ 
++  if thread_parallel:
++    if dst_transforms:
++      raise NotImplementedError("Thread-parallel copies require an unsliced SMEM destination.")
++    row = arith_dialect.index_cast(
++        ir.IndexType.get(),
++        arith_dialect.remui(
++            mgpu.thread_idx(),
++            mgpu.c(WARPGROUP_SIZE, ir.IntegerType.get_signless(32)),
++        ),
++    )
++    dst = mgpu.memref_slice(dst, (mgpu.ds(row, 1), slice(None)))
+   copy_params = {
+       **_extract_smem_copy_params(dst_ref_aval, dst_transforms),
+       **_extract_gmem_copy_params(ctx, src_transforms, src_transform_avals),
+@@ -842,6 +857,40 @@ def _copy_gmem_to_smem_lowering(
+ 
+   if ctx.module_ctx.lowering_semantics == mgpu.LoweringSemantics.Lane:
+     is_cp_async = impl == "cp_async"
++    if thread_parallel:
++      if is_cp_async or collective is not None:
++        raise NotImplementedError(
++            "Thread-parallel copies require non-collective TMA."
++        )
++      if ctx.module_ctx.primitive_semantics != gpu_core.PrimitiveSemantics.Warpgroup:
++        raise NotImplementedError(
++            "Thread-parallel copies require warpgroup primitive semantics."
++        )
++      i32 = ir.IntegerType.get_signless(32)
++      orders_tensor_core = barrier_ref_aval.inner_aval.dtype.orders_tensor_core
++      if predicate is None:
++        num_valid = mgpu.c(WARPGROUP_SIZE, i32)
++        if ctx.module_ctx.auto_barriers:
++          mgpu.warpgroup_barrier()
++      else:
++        predicate_i32 = arith_dialect.extui(i32, predicate)
++        num_valid = nvvm_dialect.barrier_reduction(
++            nvvm_dialect.BarrierReduction.POPC,
++            predicate_i32,
++            results=[i32],
++        )
++      block_leader = mgpu_utils.single_thread_predicate(
++          mgpu_utils.ThreadSubset.BLOCK
++      )
++      with mgpu.when(block_leader):
++        if not orders_tensor_core:
++          barrier.arrive(
++              arrival_count=WARPGROUP_SIZE - 1, can_complete=False
++          )
++        barrier.arrive_expect_tx(
++            arith_dialect.muli(mgpu.c(bytes, i32), num_valid)
++        )
++      gpu_dialect.barrier()
+-    if not is_cp_async:
++    elif not is_cp_async:
+       if bytes % WARPGROUP_SIZE:
+         raise NotImplementedError(
+@@ -887,10 +934,13 @@ def _copy_gmem_to_smem_lowering(
+           barrier.arrive(arrival_count=3, can_complete=False)
+           barrier.arrive_expect_tx(bytes)
+ 
+-    predicate_kwarg = (
+-        {}
+-        if is_cp_async
+-        else dict(predicate=ctx.module_ctx.single_lane_predicate)
+-    )
++    if thread_parallel:
++      predicate_kwarg = dict(predicate=predicate)
++    else:
++      predicate_kwarg = (
++          {}
++          if is_cp_async
++          else dict(predicate=ctx.module_ctx.single_lane_predicate)
++      )
+     # Gathers are a warpgroup-level collective and can't take a predicate.
+     if gmem_slice := copy_params.get("gmem_slice", ()):
+@@ -971,9 +1033,11 @@ def copy_gmem_to_smem(
+     src: _Ref,
+     dst: _Ref,
+     barrier: _Ref,
++    predicate: jax.Array | None = None,
+     *,
+     impl: Literal["tma", "cp_async"] = "tma",
+     collective_axes: str | tuple[str, ...] | None = None,
+     leader_tracked: CopyPartition | None = None,
+     oob_mode: OOBFillMode | None = None,
++    thread_parallel: bool = False,
+ ) -> None:
+@@ -1003,6 +1067,8 @@ def copy_gmem_to_smem(
+     src: The source Ref. Must be in GMEM.
+     dst: The destination Ref. Must be in SMEM.
+     barrier: The barrier to use for tracking completion of the copy.
++    predicate: A per-thread boolean indicating whether the copy should be
++      performed. Only supported when ``thread_parallel=True``.
+     impl: The underlying copy implementation to use: ``"cp_async"`` or
+       ``"tma"``. Defaults to ``"tma"``.
+     collective_axes: The collective axes to use for the copy. Only a single
+@@ -1017,5 +1083,9 @@ def copy_gmem_to_smem(
+     oob_mode: The optional out-of-bounds fill mode. Can be
+       ``OOBFillMode.UNDEFINED``, ``OOBFillMode.PROMISE_IN_BOUNDS`` or
+       ``OOBFillMode.ZEROS``. Only supported when ``impl="tma"``.
++    thread_parallel: If true, every thread in the warpgroup issues a copy with
++      its own dynamic indices after one lane registers the aggregate byte count
++      with the barrier. Only supported for non-collective TMA under lane
++      lowering semantics.
+ 
+   See also:
+@@ -1067,6 +1137,7 @@ def copy_gmem_to_smem(
+       *flat_src_transforms,
+       *flat_dst_transforms,
+       *flat_barrier_transforms,
++      *[] if predicate is None else [predicate],
+       src_transforms_treedef=src_transforms_treedef,
+       dst_transforms_treedef=dst_transforms_treedef,
+       barrier_transforms_treedef=barrier_transforms_treedef,
+@@ -1075,5 +1146,7 @@ def copy_gmem_to_smem(
+       leader_tracked=leader_tracked,
+       oob_mode=oob_mode,
+       impl=impl,
++      has_user_predicate=predicate is not None,
++      thread_parallel=thread_parallel,
+   )
+   return None
