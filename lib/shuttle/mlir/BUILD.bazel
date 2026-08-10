@@ -167,6 +167,29 @@ cc_library(
     ],
 )
 
+# This bridge is linked only into the dedicated validation jaxlib selected by
+# the pinned JAX patch's SHUTTLE_TEST_OBSERVER build define. It is not part of
+# Shuttle options or the compilation cache identity.
+cc_library(
+    name = "ShuttleObserverTestBridge",
+    srcs = ["lib/Transforms/ObserverTestBridge.cc"],
+    hdrs = ["include/shuttle/Testing/ObserverTestBridge.h"],
+    strip_include_prefix = "include",
+    visibility = ["//:__pkg__"],
+    deps = [":ShuttlePasses"],
+)
+
+cc_library(
+    name = "ShuttlePythonObserverTestBridge",
+    srcs = ["lib/Transforms/PythonObserverTestBridge.cc"],
+    hdrs = ["include/shuttle/Testing/PythonObserverTestBridge.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":ShuttleObserverTestBridge",
+        "@nanobind",
+    ],
+)
+
 cc_binary(
     name = "shuttle-opt",
     srcs = ["tools/shuttle-opt.cc"],
@@ -220,6 +243,20 @@ cc_test(
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:SCFDialect",
+        "@stablehlo//:register",
+    ],
+)
+
+cc_test(
+    name = "observer_test_bridge_test",
+    srcs = ["test/observer-test-bridge-test.cc"],
+    deps = [
+        ":ShuttleObserverTestBridge",
+        ":ShuttleXlaRegistration",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
         "@stablehlo//:register",
     ],
 )

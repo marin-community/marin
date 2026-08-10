@@ -1,0 +1,111 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Verify the guarded observer bridge selection in a patched JAX checkout."""
+
+import argparse
+import subprocess
+from pathlib import Path
+
+PINNED_JAX_REVISION = "619764c15117fbefc4ba13ab941871cb514c23f6"
+DEFINE = "--define=SHUTTLE_TEST_OBSERVER=1"
+BRIDGE = "@shuttle_mlir//:ShuttlePythonObserverTestBridge"
+ADAPTER = "@shuttle_mlir//:ShuttleXlaRegistryAdapter"
+
+
+def run_query(
+    bazel: Path,
+    jax_source: Path,
+    output_user_root: Path,
+    xla_source: Path,
+    shuttle_mlir: Path,
+    arguments: list[str],
+) -> str:
+    return subprocess.run(
+        [
+            str(bazel),
+            f"--output_user_root={output_user_root}",
+            "cquery",
+            f"--override_repository=xla={xla_source}",
+            f"--override_repository=shuttle_mlir={shuttle_mlir}",
+            *arguments,
+        ],
+        cwd=jax_source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bazel", required=True, type=Path)
+    parser.add_argument("--jax-source", required=True, type=Path)
+    parser.add_argument("--xla-source", required=True, type=Path)
+    parser.add_argument("--shuttle-mlir", required=True, type=Path)
+    parser.add_argument("--output-user-root", required=True, type=Path)
+    arguments = parser.parse_args()
+
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=arguments.jax_source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if revision != PINNED_JAX_REVISION:
+        parser.error(f"JAX revision is {revision}, expected {PINNED_JAX_REVISION}")
+    source = (arguments.jax_source / "jaxlib" / "jax.cc").read_text()
+    guarded_include = '#ifdef SHUTTLE_TEST_OBSERVER\n#include "shuttle/Testing/PythonObserverTestBridge.h"\n#endif'
+    guarded_registration = (
+        "#ifdef SHUTTLE_TEST_OBSERVER\n" "  mlir::shuttle::testing::registerShuttleObserverTestBindings(m);\n" "#endif"
+    )
+    if source.count(guarded_include) != 1 or source.count(guarded_registration) != 1:
+        parser.error("jax.cc does not contain exactly one guarded test bridge binding")
+
+    selected_build = run_query(
+        arguments.bazel,
+        arguments.jax_source,
+        arguments.output_user_root,
+        arguments.xla_source,
+        arguments.shuttle_mlir,
+        [DEFINE, "--output=build", "//jaxlib:_jax_pywrap_library"],
+    )
+    if selected_build.count('"-DSHUTTLE_TEST_OBSERVER"') != 1:
+        parser.error("acceptance configuration did not select the _jax compile define")
+    selected_deps = run_query(
+        arguments.bazel,
+        arguments.jax_source,
+        arguments.output_user_root,
+        arguments.xla_source,
+        arguments.shuttle_mlir,
+        [DEFINE, "--output=label", "deps(//jaxlib:_jax_pywrap_library)"],
+    ).splitlines()
+    if BRIDGE not in selected_deps or ADAPTER not in selected_deps:
+        parser.error("acceptance _jax does not reach the observer bridge and registry adapter")
+
+    default_build = run_query(
+        arguments.bazel,
+        arguments.jax_source,
+        arguments.output_user_root,
+        arguments.xla_source,
+        arguments.shuttle_mlir,
+        ["--output=build", "//jaxlib:_jax_pywrap_library"],
+    )
+    default_deps = run_query(
+        arguments.bazel,
+        arguments.jax_source,
+        arguments.output_user_root,
+        arguments.xla_source,
+        arguments.shuttle_mlir,
+        ["--output=label", "deps(//jaxlib:_jax_pywrap_library)"],
+    ).splitlines()
+    if "-DSHUTTLE_TEST_OBSERVER" in default_build or BRIDGE in default_deps:
+        parser.error("ordinary _jax configuration unexpectedly includes the test bridge")
+    if ADAPTER not in default_deps:
+        parser.error("ordinary _jax configuration lost the Shuttle registry adapter")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
