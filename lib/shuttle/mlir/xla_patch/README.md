@@ -7,11 +7,21 @@ JAX 0.10.1 stack.
 
 The patch adds a generic, public StableHLO module-transform registry. When
 `xla_shuttle_enable` is true, `MlirToXlaComputation` runs the registered
-transforms after Shardy and CHLO cleanup and immediately before
+`shuttle` transform after Shardy and CHLO cleanup and immediately before
 `ConvertStablehloToHloWithOptions`. The registry clones the module, passes the
-opaque `xla_shuttle_options` string to each transform, verifies the resulting
-MLIR, and commits the clone only after every transform succeeds. Enabling the
-hook without a registered transform is a compilation error.
+opaque `xla_shuttle_options` string only to that composite transform, verifies
+the resulting MLIR, and commits the clone only after the transform succeeds.
+Other registered transforms do not run. The first execution atomically seals
+the registry, so a later registration cannot change compilation without a
+process or binary change. Enabling the hook without a registered `shuttle`
+transform is a compilation error.
+
+PJRT MLIR entry points apply only `xla_shuttle_enable` and
+`xla_shuttle_options` before this hook. Other environment option overrides stay
+deferred to their existing backend boundary. The patch routes the CPU,
+interpreter, StreamExecutor, and deviceless GPU callers through the same narrow
+wrapper while retaining the original overrides for later application,
+serialization, and cache identity.
 
 The patch does not contain the Shuttle dialect or pass pipeline. A
 Shuttle-enabled jaxlib must link a registration translation unit that calls:
@@ -36,6 +46,7 @@ git apply /path/to/0001-add-stablehlo-module-transform-hook.patch
 bazel test \
   //xla/pjrt:stablehlo_module_transform_test \
   //xla/pjrt:mlir_to_hlo_test \
+  //xla/pjrt:mlir_to_hlo_unregistered_transform_test \
   //xla/pjrt:pjrt_executable_test
 ```
 
