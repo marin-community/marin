@@ -1,0 +1,45 @@
+proof_started_utc=2026-08-10T15:03:02Z
+canonical_sha=b120bf9ce86e98341c687c0b97f4837f5e7e46b6
+payload_shuttle_file_count=54
+payload_matches_current_tree_without_artifacts=PASS
+BUNDLED_SHUTTLE_FILE_COUNT=54
+EXPECTED_MLIR_TEST_COUNT=17
+  @shuttle_mlir//:shuttle_ops_inc_gen \
+  @shuttle_mlir//:ShuttleDialect \
+  @shuttle_mlir//:ShuttlePasses \
+  @shuttle_mlir//:ShuttleXlaRegistration \
+  @shuttle_mlir//:shuttle-opt \
+  @shuttle_mlir//:pipeline_observer_test \
+  @shuttle_mlir//:pipeline_observer_test \
+  @shuttle_mlir//:mlir_tests \
+  @shuttle_mlir//:mlir_tests \
+  //xla/pjrt:stablehlo_module_transform_test \
+  //xla/pjrt:mlir_to_hlo_test \
+  //xla/pjrt:mlir_to_hlo_unregistered_transform_test \
+  //xla/pjrt:pjrt_executable_test \
+runner_ordered_gate_and_no_device_query_proof=PASS
+patch_0001_apply=PASS
+patch_0002_apply=PASS
+patch_reverse_checks=PASS_BOTH
+combined_diff_check=PASS
+225:            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+256:        cfg = Label("//xla:lit.cfg.py"),
+419:    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+451:            Label("//xla/stream_executor/cuda:all_runtime"),
+452:            Label("//xla/tsl/cuda:nvshmem_stub"),
+454:            Label("//xla/tsl/cuda:nccl"),
+510:                   Label("//xla:lit_google_cfg.py"),
+anchored_xla_runtime_label_count=7
+class OptionForwardingTestObserver {
+OptionForwardingTestObserver& GetOptionForwardingTestObserver() {
+  static absl::NoDestructor<OptionForwardingTestObserver> observer;
+            GetOptionForwardingTestObserver().Observe(options);
+  OptionForwardingTestObserver& observer = GetOptionForwardingTestObserver();
+              ElementsAre("{\"numerics\":\"source_ordered\"}"));
+    func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
+    func.func @main() -> tensor<16xf32> {
+    func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
+observer_fixture_source_proof=PASS
+actual_reverse_order=0002,0001
+exact_xla_tree_clean_after_reverse=PASS
+proof_finished_utc=2026-08-10T15:03:02Z
