@@ -2,16 +2,18 @@
 
 TL;DR: the first H100 sweep will compare ordinary XLA, Shuttle
 `SOURCE_ORDERED`, and Shuttle `FAST` on anonymous dense Contract/Map programs.
-It will measure kernel-only and full forward/backward boundaries separately.
-The checked-in harness only emits an immutable plan. GPU execution remains
-disabled until both Shuttle backends and the resource collectors use the
-ordinary-JAX transform seam and pass review.
+It measures kernel-only and full forward/backward boundaries separately. The
+checked-in runner is executable but has not been launched. GPU execution
+remains gated on review, and the direct FFI backends remain outside the native
+ordinary-JAX Shuttle transform seam.
 
 ## Status and architecture boundary
 
-This checkpoint is `architecture_nonconforming`. It contains no GPU results.
-It does not import JAX, query a device, reserve an H100, or call a retained
-workload-specific rewriter.
+This checkpoint is `architecture_nonconforming`. It contains no GPU results and
+has not reserved an H100. The staging-manifest CLI remains package-independent
+and refuses `--execute-gpu` before importing JAX. The separate executable
+runner performs its source, tool, device, and fresh-directory preflight before
+importing JAX in isolated workers.
 
 The current native path under `lib/shuttle/mlir` forms generic f32 Contract and
 Map algebra and lowers it back to StableHLO inside XLA. It does not yet lower
@@ -54,17 +56,34 @@ is part of this checkpoint.
 one-CTA shared-memory body and reconstruct a different residual-gated graph
 from an HLO artifact. Current H100 backend code must not import them.
 
-The launch gate therefore requires all of the following before it can be
-enabled:
+The launch gate requires all of the following:
 
 1. A reviewed generated `SOURCE_ORDERED` backend reached through the native
    ordinary-JAX Shuttle transform.
 2. A reviewed generated `FAST` backend reached through the same transform.
-3. Resource collectors for generated and ordinary-XLA executables.
+3. Review of the checked-in generated and ordinary-XLA resource collectors.
 4. A review that removes the `architecture_nonconforming` status.
 
-The benchmark CLI's `--execute-gpu` preflight fails before importing
-`tile_lifetime` or JAX, creating an output file, or inspecting an accelerator.
+The source-only runner is
+`lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py`. A reviewed
+launch uses an unset `XLA_FLAGS`, a clean exact source SHA, a fresh artifact
+directory, and explicit JAX and NVCC identities:
+
+```bash
+python lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py \
+  --execute \
+  --source-root "$PWD" \
+  --source-sha "$(git rev-parse HEAD)" \
+  --artifact-directory /fresh/path/contract-map-h100 \
+  --require-jax-version <exact-version> \
+  --nvcc /absolute/cuda/bin/nvcc
+```
+
+Preflight requires one visible H100 with compute capability 9.0, `sm_90a`, and
+absolute executable paths for Git, `nvidia-smi`, NVCC, sibling `ptxas` and
+`cuobjdump`, `ncu`, and `nsys`. It records each tool's content hash and version.
+An existing artifact directory, tracked source modification, version mismatch,
+missing profiler, or different GPU rejects before worker execution.
 
 ## Reused prototype evidence
 
@@ -85,11 +104,15 @@ The staging schema reuses behavior that already has focused tests:
 - `jax_contract_map_backend_ffi.py` defines the typed forward and reverse ABI.
   The reverse exposes its preactivation-adjoint scratch result so XLA owns the
   buffer; the handler does not allocate device memory.
-- `contract_map_backend_resources.py` defines retained CUDA artifact commands,
-  ptxas resource parsing, and the expected logical boundary. Profiler,
-  unexpected-copy, and ordinary-XLA collectors are still missing.
+- `contract_map_backend_resources.py` defines executable retained CUDA artifact
+  commands, ptxas resource parsing, and the expected logical boundary.
 - `h100_contract_map_backend_training.py` maps the reviewed structural cases to
   scalar ASTs and creates both generated policies without reading HLO fixtures.
+- `h100_contract_map_backend_runner.py` compiles and registers both policies,
+  compiles ordinary JAX forward plus JAX VJP, runs numerical and repeat gates
+  before timing, and coordinates isolated compile, cache, Nsight Compute, and
+  Nsight Systems workers. It publishes `accepted_bundle.json` only after the
+  existing validator accepts all 24 records in fixed order.
 - `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`,
   `jax_contract_map_chain_ffi.py`, and
   `h100_generated_contract_map_chain_training.py` are historical evidence.
@@ -166,6 +189,11 @@ Timing uses isolated processes and records four costs independently:
 4. persistent-cache cold and hit processes under isolated cache roots.
 
 Compile and persistent-cache samples are not folded into steady-state latency.
+The logical sample is the host interval for 100 compiled forward-plus-VJP
+executions followed by device synchronization. Nsight Systems captures the same
+NVTX range through CUPTI. The kernel-only sample is the sum of contained CUDA
+kernel durations divided by 100 and rounded to the nearest nanosecond. Every
+iteration must have the same ordered kernel sequence.
 
 ## Numerical gates
 
@@ -218,6 +246,27 @@ A missing resource field, missing raw sample, unexpected copy, malformed or
 empty artifact identity, empty provenance field, empty compile/warmup/cache
 sample list, or launch-count mismatch rejects the headline row. PTXAS text
 alone is insufficient when SASS or profiler evidence is missing.
+
+Generated variants retain the emitted source, shared library, PTX, cubin, and
+SASS. Their ptxas registers, spills, and static shared memory must agree with
+Nsight Compute launch evidence. Ordinary XLA must expose exactly one nonempty
+PTX and cubin from its first isolated compile worker through the pinned jaxlib
+dump flags; the runner copies them, disassembles the cubin with the preflighted
+`cuobjdump`, and hashes every artifact. The run aborts if ordinary-XLA SASS
+contains `LDL` or `STL` because the public dump path does not provide ptxas
+spill-byte evidence. It does not
+substitute a private executable extractor or infer spill bytes from instruction
+counts.
+
+Nsight Compute must report the closed launch, register, shared-memory,
+occupancy-limit, and achieved-occupancy metric set for every launch. Nsight
+Systems must export `NVTX_EVENTS`, `StringIds`,
+`CUPTI_ACTIVITY_KIND_KERNEL`, and `CUPTI_ACTIVITY_KIND_MEMCPY` tables. Missing
+tables, ambiguous kernel identities, launch-order drift, or any steady-state
+CUDA copy aborts the run. Three independent compile workers and three paired
+cold/hit cache roots retain compile, first-execution, and cache samples. A cache
+pair must preserve its content identity, and all isolated roots must converge
+to the same identity.
 
 The machine result schema requires 24 records: one for each of the four reviewed
 structural cases, three backends, and two measurement boundaries. Kernel

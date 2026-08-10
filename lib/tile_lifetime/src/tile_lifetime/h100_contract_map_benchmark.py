@@ -697,6 +697,22 @@ def _validate_numerical_output(output: Mapping[str, Any], floor: NumericalFloor,
         raise ValueError(f"{context}.pairwise_drift must cover every repeat pair exactly once")
 
 
+def validate_backend_numerical_evidence(
+    backend: BackendVariant,
+    outputs: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Apply immutable per-output floors before a runner may begin timing."""
+    if type(backend) is not BackendVariant:
+        raise TypeError("backend must be a BackendVariant")
+    if tuple(outputs) != NUMERICAL_OUTPUT_ROLES:
+        raise ValueError("numerical outputs must contain forward, dx, dw0, and dw1 in fixed order")
+    floor = _reviewed_floor(backend.value)
+    for role in NUMERICAL_OUTPUT_ROLES:
+        output = _mapping(outputs[role], f"numerical.outputs.{role}")
+        _require_fields(output, NUMERICAL_OUTPUT_REQUIRED_FIELDS, f"numerical.outputs.{role}")
+        _validate_numerical_output(output, floor, f"numerical.outputs.{role}")
+
+
 def _serialized_schedule(timing: TimingProtocol) -> list[dict[str, Any]]:
     return [
         {
