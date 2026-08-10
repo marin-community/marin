@@ -1,0 +1,33 @@
+Benchmark source revision:
+
+  155137c49565590ce09232e0a67ede303ecc7911
+
+Minimal source archive creation:
+
+  git archive --format=tar.gz \
+    --output=shuttle-source.tar.gz \
+    155137c49565590ce09232e0a67ede303ecc7911 \
+    lib/tile_lifetime/src \
+    lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py \
+    lib/tile_lifetime/benchmarks/run_jax_row_normalization_warp_finalize_h100.sh
+
+Linux dependency preflight:
+
+  uv sync --dry-run --extra gpu --no-group dev \
+    --python-platform x86_64-unknown-linux-gnu
+
+Final authorized launch command:
+
+  /tmp/marin-current-iris-dYl9RP/.venv/bin/iris \
+    --config /tmp/marin-current-iris-dYl9RP/lib/iris/config/cw-us-east-02a.yaml \
+    job run --no-wait \
+    --job-name shuttle-rms-warp-finalize-h100-validation-20260809 \
+    --enable-extra-resources --gpu H100x1 --cpu 1 \
+    --memory 16GB --disk 50GB --priority batch \
+    --max-retries 0 --timeout 3600 --extra gpu -- \
+    bash -lc '/app/run.sh'
+
+The launch client failed before submission because its config did not declare
+the CoreWeave object store required by current Iris. The benchmark command in
+`minimal-holder/run.sh` was never invoked.
+

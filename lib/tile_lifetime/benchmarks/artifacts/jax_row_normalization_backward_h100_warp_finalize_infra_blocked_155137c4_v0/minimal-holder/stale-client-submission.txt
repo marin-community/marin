@@ -1,0 +1,73 @@
+I20260809 19:45:22 8418467456 iris.cluster.config Loading config from /tmp/shuttle-rms-warp-Nu18Sl/lib/iris/config/cw-us-east-02a.yaml
+I20260809 19:45:22 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 19:45:23 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10001 -> iris-controller-svc:10000
+I20260809 19:45:23 8418467456 iris.cli.job Submitting job: shuttle-rms-warp-finalize-h100-validation-20260809
+I20260809 19:45:23 8418467456 iris.cli.job Command: bash -lc /app/run.sh
+I20260809 19:45:23 8418467456 iris.cli.job Resources: cpu=1, memory=16GB, disk=50GB
+I20260809 19:45:23 8418467456 iris.cli.job GPU: 1x H100
+I20260809 19:45:23 8418467456 iris.cli.job Using controller: http://127.0.0.1:10001
+I20260809 19:45:23 8418467456 iris.cli.job Priority band: batch
+I20260809 19:45:23 8418467456 iris.cluster.client.remote_client Workspace bundle size: 0.5 MB
+I20260809 19:45:24 8418467456 iris.cluster.platforms.k8s.service k8s: LIST pods labels={'app': 'iris-controller'} field_selector=None
+W20260809 19:45:24 8418467456 iris.cluster.platforms.k8s.controller Post-mortem iris-controller-d44b4d6ff-7cwn2: phase=Running restarts=0
+I20260809 19:45:24 8418467456 iris.cluster.platforms.k8s.service k8s: logs iris-controller-d44b4d6ff-7cwn2 container=None tail=50 previous=True
+Traceback (most recent call last):
+  File "/Users/dlwh/src/marin/.venv/bin/iris", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cli/main.py", line 287, in main
+    iris()
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cli/job.py", line 1069, in run
+    exit_code = run_iris_job(
+                ^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cli/job.py", line 744, in run_iris_job
+    return _submit_and_wait_job(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cli/job.py", line 802, in _submit_and_wait_job
+    job = client.submit(
+          ^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/client/client.py", line 755, in submit
+    canonical_id = self._cluster_client.submit_job(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cluster/client/remote_client.py", line 218, in submit_job
+    response = call_with_retry(f"launch_job({job_id})", _call)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/rpc/errors.py", line 201, in call_with_retry
+    return retry_with_backoff(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/rigging/src/rigging/timing.py", line 617, in retry_with_backoff
+    return call_fn()
+           ^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/cluster/client/remote_client.py", line 216, in _call
+    return self._client.launch_job(request, timeout_ms=launch_timeout_ms)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/lib/iris/src/iris/rpc/controller_connect.py", line 1585, in launch_job
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/connectrpc/_client_sync.py", line 210, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dlwh/src/marin/.venv/lib/python3.12/site-packages/connectrpc/_client_sync.py", line 334, in _send_request_unary
+    raise ConnectWireError.from_response(resp).to_exception()
+connectrpc.errors.ConnectError: marin-iris client is too old (build 2026-07-21; minimum 2026-07-27). Run `uv sync` or upgrade marin-iris and retry.

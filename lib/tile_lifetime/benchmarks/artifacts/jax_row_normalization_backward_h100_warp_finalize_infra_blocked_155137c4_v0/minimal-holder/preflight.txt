@@ -1,0 +1,41 @@
+minimal_bundle_bytes=481889
+minimal_bundle_sha256=b5f27c0152f7130d00327b7654eb21f3f2dc5c448ecd7a9120fbd0d92ba9253c
+source_archive_sha256=03bb2f6a04cdc81533e398090bb2f2bba8d65f31d6278d25fa059eccf8be4643
+source_revision=155137c49565590ce09232e0a67ede303ecc7911
+
+Linux dependency dry run:
+Using CPython 3.12.11
+Would create project environment at: .venv
+Resolved 24 packages in 3ms
+Found up-to-date lockfile at: uv.lock
+Would download 21 packages
+Would install 23 packages
+ + jax==0.10.1
+ + jax-cuda13-pjrt==0.10.1
+ + jax-cuda13-plugin==0.10.1
+ + jaxlib==0.10.1
+ + ml-dtypes==0.5.4
+ + numpy==2.5.2
+ + nvidia-cublas==13.6.1.10
+ + nvidia-cuda-cccl==13.3.3.4.1
+ + nvidia-cuda-crt==13.3.73
+ + nvidia-cuda-cupti==13.3.75
+ + nvidia-cuda-nvcc==13.3.73
+ + nvidia-cuda-nvrtc==13.3.33
+ + nvidia-cuda-runtime==13.3.29
+ + nvidia-cudnn-cu13==9.24.0.43
+ + nvidia-cufft==12.3.0.29
+ + nvidia-cusolver==12.2.6.9
+ + nvidia-cusparse==12.8.2.51
+ + nvidia-nccl-cu13==2.30.7
+ + nvidia-nvjitlink==13.3.33
+ + nvidia-nvshmem-cu13==3.7.2
+ + nvidia-nvvm==13.3.73
+ + opt-einsum==3.4.0
+ + scipy==1.18.0
+
+Controller query:
+I20260809 19:45:09 8418467456 iris.cluster.config Loading config from /tmp/shuttle-rms-warp-Nu18Sl/lib/iris/config/cw-us-east-02a.yaml
+I20260809 19:45:09 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 19:45:10 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+No jobs found.
