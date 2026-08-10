@@ -204,6 +204,7 @@ def main() -> None:
             "distribution": physical_call.physical_support.distribution,
             "version": physical_call.physical_support.version,
             "source_root": str(physical_call.physical_support.source_root),
+            "msa_source_root": str(physical_call.physical_support.msa_source_root),
             "source_sha256": dict(physical_call.physical_support.source_sha256),
             "loaded_modules": list(physical_call.physical_support.loaded_modules),
         },
