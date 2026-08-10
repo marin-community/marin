@@ -83,3 +83,69 @@ The required generic QuACK/CuTe extension is a partition-aware epilogue adapter:
 This is a bounded backend experiment. The checked-in typed-FFI replacement is
 structurally valid but has no registered physical target. It is not an accepted
 compute path and carries no performance or GPU-correctness claim.
+
+### Pinned interface inspection
+
+The bounded adapter targets QuACK revision
+`84ef91df9bec87c7e4938517234fafb07ef844dd`. At that revision, the reusable
+pieces and missing pieces are precise:
+
+- `quack/epilogue/frontend.py` supports elementwise accumulator visits and
+  `acc_pair`. `acc_pair` groups adjacent N lanes and halves every output. It
+  cannot pair corresponding coordinates from two contiguous 32-wide ranges or
+  preserve an independent 4-wide range.
+- `quack/epilogue/visit.py::epi_visit_subtile` is the smallest place to add a
+  coordinate-aware accumulator-partition view. The view must use the fragment's
+  logical coordinate tensor; CuTe register layout is thread-distributed, so a
+  Python slice of the register storage is not a semantic N slice.
+- `quack/epilogue/ops.py::TileStore` already owns conversion, register-to-shared
+  copy, and TMA store setup. It needs a generic input N-range to output-local
+  coordinate map instead of the existing Boolean `gated` half-width special
+  case.
+- `quack/gemm_base.py` already sequences multiple auxiliary output fragments
+  through conversion, shared memory, and TMA stores. It does not need a
+  workload-specific branch.
+
+The natural inputs are three distinct HLO parameters. They are not aliases or
+views of one packed weight allocation:
+
+```text
+f32[32,32] parameter(21) -> bf16 -> transpose -> N [0:32]
+f32[32,32] parameter(22) -> bf16 -> transpose -> N [32:64]
+f32[32,4]  parameter(17) -> bf16 -> transpose -> N [64:68]
+```
+
+Consequently, epilogue partitioning alone is insufficient. The mainloop's B
+producer must accept a static segmented tensor source: one logical `(N,K)`
+domain backed by several independent tensors. Each TMA stage composes the
+loads for all source intervals intersecting its N tile and accounts for their
+combined transaction bytes in the existing pipeline barrier. This remains a
+generic tensor-source adapter; it does not encode gate, up, routing, or a model
+name. QuACK's later `concat_layout` support only interleaves one physical
+tensor and therefore does not remove this requirement.
+
+`plan_quack_partitioned_gemm_adapter` records the reusable physical contract:
+
+1. static segmented RHS source intervals;
+2. FP32 logical accumulator partition views;
+3. BF16 round-to-nearest-even boundaries before the generated scalar AST;
+4. direct scalar and passthrough stores with output-local coordinates;
+5. the exact QuACK implementation hooks above.
+
+The smallest implementation sequence is:
+
+1. add a segmented RHS tensor descriptor and compose its intersecting TMA
+   loads into the existing shared B stage;
+2. add an accumulator-partition descriptor to `EpiMod` and its semantic cache
+   key;
+3. form dense coordinate-aligned partition fragments in
+   `epi_visit_subtile`;
+4. generalize `TileStore` from `gated` half-width output to an explicit N-range
+   domain map;
+5. keep the existing multi-output store driver unchanged;
+6. compile and test SiLU and tanh scalar mutations through the same adapter,
+   then measure against the natural concatenated GEMM.
+
+Until those steps execute on GPU, the adapter plan is an implementation
+contract only. It does not establish physical ownership or satisfy a
+performance acceptance row.

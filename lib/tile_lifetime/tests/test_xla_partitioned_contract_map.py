@@ -6,11 +6,18 @@ from __future__ import annotations
 import gzip
 import math
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import ml_dtypes
+import pytest
 
 from tile_lifetime.cast_scalar_program import CastScalarKind, evaluate_cast_scalar_program
+from tile_lifetime.quack_partitioned_gemm_adapter import (
+    QUACK_PARTITION_ADAPTER_BASE_REVISION,
+    QuackPartitionFinalizationKind,
+    plan_quack_partitioned_gemm_adapter,
+)
 from tile_lifetime.xla_low_rank_gated_product_ffi import (
     plan_generated_low_rank_contract_map_training,
     replace_generated_low_rank_contract_map_training,
@@ -154,3 +161,80 @@ def test_activation_mutation_regenerates_through_the_same_partitioned_family() -
         ("mul.781", ("dot_general.182",)),
         ("slice.72", ("reshape.1025",)),
     )
+
+
+def test_quack_adapter_requires_one_segmented_rhs_mainloop_and_direct_partition_stores() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+
+    adapter = plan_quack_partitioned_gemm_adapter(family.program)
+
+    assert adapter.base_revision == QUACK_PARTITION_ADAPTER_BASE_REVISION
+    assert adapter.unpartitioned_operand_index == 0
+    assert tuple(
+        (source.operand_index, source.n_start, source.n_limit, source.shape) for source in adapter.segmented_rhs_sources
+    ) == (
+        (1, 0, 32, "bf16[32,32]{0,1}"),
+        (2, 32, 64, "bf16[32,32]{0,1}"),
+        (3, 64, 68, "bf16[4,32]{0,1}"),
+    )
+    assert tuple((view.n_start, view.n_limit) for view in adapter.accumulator_views) == (
+        (0, 32),
+        (32, 64),
+        (64, 68),
+    )
+    assert all(view.boundary_dtype == "bf16" for view in adapter.accumulator_views)
+    assert all(view.boundary_rounding == "round_to_nearest_even" for view in adapter.accumulator_views)
+    assert tuple((store.kind, store.source_partitions, store.output_shape) for store in adapter.stores) == (
+        (QuackPartitionFinalizationKind.SCALAR_MAP, (0, 1), "bf16[8,32]{1,0}"),
+        (QuackPartitionFinalizationKind.PASSTHROUGH, (2,), "bf16[2,4,4]{2,1,0}"),
+    )
+    scalar_body = adapter.stores[0].scalar_body
+    assert scalar_body is not None
+    assert "expf" in scalar_body
+    assert adapter.stores[1].scalar_body is None
+    assert adapter.requires_composed_rhs_tma
+    assert adapter.requires_physical_proof
+    assert adapter.implementation_sites[-1].startswith("quack/gemm_base.py")
+
+
+def test_quack_adapter_mutation_reuses_physical_partition_structure() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    original = plan_attached_partitioned_contract_maps(hlo, target_prefix=_TARGET_PREFIX).families[0]
+    mutated = plan_attached_partitioned_contract_maps(_tanh_gate_mutation(hlo), target_prefix=_TARGET_PREFIX).families[0]
+
+    original_adapter = plan_quack_partitioned_gemm_adapter(original.program)
+    mutated_adapter = plan_quack_partitioned_gemm_adapter(mutated.program)
+
+    assert original_adapter.segmented_rhs_sources == mutated_adapter.segmented_rhs_sources
+    assert original_adapter.accumulator_views == mutated_adapter.accumulator_views
+    original_stores = tuple(
+        (store.kind, store.source_partitions, store.output_shape) for store in original_adapter.stores
+    )
+    mutated_stores = tuple((store.kind, store.source_partitions, store.output_shape) for store in mutated_adapter.stores)
+    assert original_stores == mutated_stores
+    assert original_adapter.semantic_digest != mutated_adapter.semantic_digest
+    original_body = original_adapter.stores[0].scalar_body
+    mutated_body = mutated_adapter.stores[0].scalar_body
+    assert original_body is not None
+    assert mutated_body is not None
+    assert "expf" in original_body
+    assert "tanhf" in mutated_body
+
+
+def test_quack_adapter_rejects_a_partition_source_with_the_wrong_physical_extent() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+    invalid = replace(
+        family.program,
+        operand_shapes=(
+            family.program.operand_shapes[0],
+            "bf16[31,32]{0,1}",
+            *family.program.operand_shapes[2:],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="physical shape"):
+        plan_quack_partitioned_gemm_adapter(invalid)
