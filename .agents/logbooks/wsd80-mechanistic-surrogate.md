@@ -5939,3 +5939,33 @@ corrupt a sweep.** Bound the design or reject out-of-range fits before quoting a
 
 A regression test (`test_general_mixture_surrogate.py`) now locks in relabelling invariance; reintroducing
 the old QR makes 4 of 5 checks fail.
+
+### Follow-up: the robustness defect is real, partially fixable, and every remedy trades
+
+Diagnosed the blow-up completely. Two unbounded sources: repetition damage `max(E-1,0)^tau` reaching
+6.3e22, and the readout `(E+offset)^-gamma` capped only by `offset^-gamma` on buckets with exactly zero
+weight — 41 such entries on 300M against 2 on WSD80, whose smallest real exposure is 0.1 epochs. That
+asymmetry is why the catastrophe was 300M-specific and WSD80 looked clean throughout.
+
+Both are now bounded. Damage uses its Hill form with the knee fixed at the independently measured 105
+excess epochs; the offset floor is 1e-2. Random-parameter recovery of explainable MSE on 300M goes from
+−1559 to +0.517, so random parameters now beat an intercept where they were 23× worse.
+
+Then the trades, measured on both panels rather than inferred from one. The offset floor that would tame
+arc_challenge (1e-1 or tighter) collapses WSD80 from 10/12 to 3/12 and then 1/12, with optima drifting to
+(0.000,0.535) and (0.188,0.240). So 1e-2 is the maximum safe floor and it leaves 300M extrapolating.
+
+A four-arm ablation separated the two structural changes. The saturating readout is free to slightly
+better on 300M (0.005811 vs 0.005885) and costs one WSD80 cell, while delivering most of the benefit —
+arc_challenge 18.5 → 2.84 on its own. Dropping the per-bucket departures block finished the job
+(arc_challenge → 0.96, predictions entirely inside the observed range) but **costs 66% on 300M Uncheatable
+RMSE against a 5% gate**, so it is rejected.
+
+Two things worth remembering. WSD80 cannot inform the departures question at all: with one bucket per
+family, `family_sums(near) ≡ near` exactly, so the block is a duplicate and dropping it is a no-op there —
+its 11/12 is the baseline's number, not evidence. And the reference-normalised readout, which I nearly
+recommended as the structural fix, is a **provable no-op** (8.9e-16) — the same defect SUR-109 was killed
+for, nearly repeated within the same round.
+
+Net: no free fix among the remedies tested. The open direction is keeping departures but shrinking them
+much harder, with the penalty selected on held-out prediction *range* rather than error.
