@@ -36,11 +36,18 @@ BF16 byte size is checked before source generation. Each value must be at most
 bounds apply to both `SOURCE_ORDERED` and `FAST`; exceeding any bound rejects
 the candidate.
 
-Each generated variant has a physical digest over the semantic digest, target
-prefix, threads, launch-check or command-buffer traits, the complete FFI ABI,
-kernel topology, five reverse operations, and the declared fusion. The digest
-suffix appears in both FFI targets, all exported symbols, the reported backend
-fingerprint, and every CUDA artifact stem.
+Each generated variant is rendered twice. The first render uses a fixed
+placeholder in both FFI targets, all host symbols, the reported backend
+fingerprint, and all six CUDA kernel entry names. SHA-256 over that complete
+source, a NUL separator, and the canonical JSON encoding of the closed physical
+record defines the physical digest. The physical record includes the semantic
+digest, target prefix, threads, launch-check or command-buffer traits, complete
+FFI ABI, kernel topology, five reverse operations, and declared fusion. The
+second render substitutes the full digest for every placeholder, including
+every CUDA artifact stem. This fixed-placeholder scheme avoids a circular
+source hash while ensuring that an emitted kernel-body change rotates every
+linkable identity. This is source-only evidence; no CUDA compile or GPU result
+is part of this checkpoint.
 
 `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`, and
 `h100_generated_contract_map_chain_training.py` remain historical. They use a

@@ -41,6 +41,7 @@ from tile_lifetime.tensor_program import (
 CONTRACT_MAP_INT32_MAX = 2_147_483_647
 CONTRACT_MAP_BF16_BYTES = 2
 CONTRACT_MAP_GRID_X_MAX = 2_147_483_647
+_PHYSICAL_IDENTITY_PLACEHOLDER = "SHUTTLE_CONTRACT_MAP_PHYSICAL_IDENTITY"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,10 @@ class GeneratedCudaContractMapBackendFfi:
     reverse_target: str
     forward_handler_symbol: str
     reverse_handler_symbol: str
+    forward_implementation_symbol: str
+    reverse_implementation_symbol: str
+    forward_binding_symbol: str
+    reverse_binding_symbol: str
     forward_call_count_symbol: str
     reverse_call_count_symbol: str
     backend_fingerprint_symbol: str
@@ -210,10 +215,13 @@ def generate_cuda_contract_map_backend_ffi(
     rows, reduction, features = program.rows, program.reduction, program.features
     reverse_plan = contract_map_reverse_lowering_plan(program)
     physical_abi = contract_map_backend_physical_abi(program)
-    reverse_kernels = _render_reverse_kernels(program, reverse_plan)
+    identity = _PHYSICAL_IDENTITY_PLACEHOLDER
+    first_forward_kernel_name = _identity_symbol("ShuttleContractMapFirstForwardKernel", identity)
+    second_forward_kernel_name = _identity_symbol("ShuttleContractMapSecondForwardKernel", identity)
+    reverse_kernels = _render_reverse_kernels(program, reverse_plan, identity=identity)
     kernel_names = (
-        "ShuttleContractMapFirstForwardKernel",
-        "ShuttleContractMapSecondForwardKernel",
+        first_forward_kernel_name,
+        second_forward_kernel_name,
         *(kernel.name for kernel in reverse_kernels),
     )
     _validate_contract_map_backend_sizes(
@@ -222,24 +230,28 @@ def generate_cuda_contract_map_backend_ffi(
         physical_abi=physical_abi,
         reverse_kernels=reverse_kernels,
     )
-    physical_digest = _physical_codegen_digest(
-        program,
-        reverse_plan,
-        physical_abi=physical_abi,
-        kernel_names=kernel_names,
-        threads=threads,
-        physical_candidate=physical_candidate,
-        target_prefix=target_prefix,
-    )
-    suffix = physical_digest
-    forward_target = f"{target_prefix}.{program.numerical_policy.value}.{suffix}.forward"
-    reverse_target = f"{target_prefix}.{program.numerical_policy.value}.{suffix}.reverse"
+    forward_target = f"{target_prefix}.{program.numerical_policy.value}.{identity}.forward"
+    reverse_target = f"{target_prefix}.{program.numerical_policy.value}.{identity}.reverse"
     forward_symbol = _target_symbol(forward_target)
     reverse_symbol = _target_symbol(reverse_target)
-    forward_call_count_symbol = f"shuttle_contract_map_backend_forward_call_count_{suffix}"
-    reverse_call_count_symbol = f"shuttle_contract_map_backend_reverse_call_count_{suffix}"
-    backend_fingerprint_symbol = f"shuttle_contract_map_backend_fingerprint_{suffix}"
+    forward_implementation_symbol = _identity_symbol("ShuttleContractMapForward", identity)
+    reverse_implementation_symbol = _identity_symbol("ShuttleContractMapReverse", identity)
+    forward_binding_symbol = _identity_symbol("ShuttleContractMapForwardBinding", identity)
+    reverse_binding_symbol = _identity_symbol("ShuttleContractMapReverseBinding", identity)
+    forward_counter_variable = _identity_symbol("forward_call_count", identity)
+    reverse_counter_variable = _identity_symbol("reverse_call_count", identity)
+    forward_call_count_symbol = _identity_symbol("shuttle_contract_map_backend_forward_call_count", identity)
+    reverse_call_count_symbol = _identity_symbol("shuttle_contract_map_backend_reverse_call_count", identity)
+    backend_fingerprint_symbol = _identity_symbol("shuttle_contract_map_backend_fingerprint", identity)
     scalar_include = _scalar_include(program, reverse_plan)
+    first_forward_kernel_source = _first_forward_kernel(
+        program.numerical_policy,
+        name=first_forward_kernel_name,
+    )
+    second_forward_kernel_source = _second_forward_kernel(
+        program.numerical_policy,
+        name=second_forward_kernel_name,
+    )
     forward_feature_grid = _grid_expression("kRows * kFeatures", program.numerical_policy)
     forward_output_grid = _grid_expression("kRows * kReduction", program.numerical_policy)
     forward_status = direct_launch_status_check(physical_candidate, operation="Contract/Map forward")
@@ -268,16 +280,16 @@ constexpr int kReduction = {reduction};
 constexpr int kFeatures = {features};
 constexpr int kThreads = {threads};
 constexpr int kWarpsPerBlock = kThreads / 32;
-std::atomic<std::uint64_t> forward_call_count{{0}};
-std::atomic<std::uint64_t> reverse_call_count{{0}};
+std::atomic<std::uint64_t> {forward_counter_variable}{{0}};
+std::atomic<std::uint64_t> {reverse_counter_variable}{{0}};
 
-{_first_forward_kernel(program.numerical_policy)}
+{first_forward_kernel_source}
 
-{_second_forward_kernel(program.numerical_policy)}
+{second_forward_kernel_source}
 
 {reverse_kernel_source}
 
-ffi::Error ShuttleContractMapForward(
+ffi::Error {forward_implementation_symbol}(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> activation_buffer,
     ffi::Buffer<ffi::BF16, 2> first_weight_buffer,
@@ -291,16 +303,16 @@ ffi::Error ShuttleContractMapForward(
   __nv_bfloat16* output = reinterpret_cast<__nv_bfloat16*>(output_buffer->typed_data());
   __nv_bfloat16* preactivation = reinterpret_cast<__nv_bfloat16*>(preactivation_buffer->typed_data());
   __nv_bfloat16* hidden = reinterpret_cast<__nv_bfloat16*>(hidden_buffer->typed_data());
-  ShuttleContractMapFirstForwardKernel<<<{forward_feature_grid}, kThreads, 0, stream>>>(
+  {first_forward_kernel_name}<<<{forward_feature_grid}, kThreads, 0, stream>>>(
       activation, first_weight, preactivation, hidden);
-  ShuttleContractMapSecondForwardKernel<<<{forward_output_grid}, kThreads, 0, stream>>>(
+  {second_forward_kernel_name}<<<{forward_output_grid}, kThreads, 0, stream>>>(
       hidden, second_weight, output);
 {forward_status}
-  forward_call_count.fetch_add(1, std::memory_order_relaxed);
+  {forward_counter_variable}.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
 
-ffi::Error ShuttleContractMapReverse(
+ffi::Error {reverse_implementation_symbol}(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> activation_buffer,
     ffi::Buffer<ffi::BF16, 2> first_weight_buffer,
@@ -324,11 +336,11 @@ ffi::Error ShuttleContractMapReverse(
   __nv_bfloat16* preactivation_adjoint = reinterpret_cast<__nv_bfloat16*>(preactivation_adjoint_buffer->typed_data());
 {reverse_launch_source}
 {reverse_status}
-  reverse_call_count.fetch_add(1, std::memory_order_relaxed);
+  {reverse_counter_variable}.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
 
-auto ShuttleContractMapForwardBinding() {{
+auto {forward_binding_symbol}() {{
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
@@ -339,7 +351,7 @@ auto ShuttleContractMapForwardBinding() {{
       .Ret<ffi::Buffer<ffi::BF16, 2>>();
 }}
 
-auto ShuttleContractMapReverseBinding() {{
+auto {reverse_binding_symbol}() {{
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
@@ -356,35 +368,66 @@ auto ShuttleContractMapReverseBinding() {{
 }}  // namespace
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    {forward_symbol}, ShuttleContractMapForward,
-    ShuttleContractMapForwardBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
+    {forward_symbol}, {forward_implementation_symbol},
+    {forward_binding_symbol}()__SHUTTLE_FFI_HANDLER_TRAITS__);
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    {reverse_symbol}, ShuttleContractMapReverse,
-    ShuttleContractMapReverseBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
+    {reverse_symbol}, {reverse_implementation_symbol},
+    {reverse_binding_symbol}()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" std::uint64_t {forward_call_count_symbol}() {{
-  return forward_call_count.load(std::memory_order_relaxed);
+  return {forward_counter_variable}.load(std::memory_order_relaxed);
 }}
 
 extern "C" std::uint64_t {reverse_call_count_symbol}() {{
-  return reverse_call_count.load(std::memory_order_relaxed);
+  return {reverse_counter_variable}.load(std::memory_order_relaxed);
 }}
 
 extern "C" const char* {backend_fingerprint_symbol}() {{
-  return "{physical_digest}";
+  return "{identity}";
 }}
 """
-    source = finalize_ffi_handler_source(
+    canonical_source = finalize_ffi_handler_source(
         source_template,
         command_buffer_compatible=physical_candidate.command_buffer_compatible,
         expected_handler_count=2,
     )
+    physical_record = _physical_codegen_record(
+        program,
+        reverse_plan,
+        physical_abi=physical_abi,
+        kernel_names=kernel_names,
+        threads=threads,
+        physical_candidate=physical_candidate,
+        target_prefix=target_prefix,
+        identity=identity,
+    )
+    physical_record_json = json.dumps(physical_record, sort_keys=True, separators=(",", ":"))
+    physical_digest = hashlib.sha256(f"{canonical_source}\0{physical_record_json}".encode()).hexdigest()
+    if identity not in canonical_source or identity not in physical_record_json:
+        raise ValueError("canonical Contract/Map render omitted the physical identity placeholder")
+    source = canonical_source.replace(identity, physical_digest)
+    forward_target = forward_target.replace(identity, physical_digest)
+    reverse_target = reverse_target.replace(identity, physical_digest)
+    forward_symbol = forward_symbol.replace(identity, physical_digest)
+    reverse_symbol = reverse_symbol.replace(identity, physical_digest)
+    forward_implementation_symbol = forward_implementation_symbol.replace(identity, physical_digest)
+    reverse_implementation_symbol = reverse_implementation_symbol.replace(identity, physical_digest)
+    forward_binding_symbol = forward_binding_symbol.replace(identity, physical_digest)
+    reverse_binding_symbol = reverse_binding_symbol.replace(identity, physical_digest)
+    forward_call_count_symbol = forward_call_count_symbol.replace(identity, physical_digest)
+    reverse_call_count_symbol = reverse_call_count_symbol.replace(identity, physical_digest)
+    backend_fingerprint_symbol = backend_fingerprint_symbol.replace(identity, physical_digest)
+    kernel_names = tuple(name.replace(identity, physical_digest) for name in kernel_names)
     return GeneratedCudaContractMapBackendFfi(
         policy=program.numerical_policy,
         forward_target=forward_target,
         reverse_target=reverse_target,
         forward_handler_symbol=forward_symbol,
         reverse_handler_symbol=reverse_symbol,
+        forward_implementation_symbol=forward_implementation_symbol,
+        reverse_implementation_symbol=reverse_implementation_symbol,
+        forward_binding_symbol=forward_binding_symbol,
+        reverse_binding_symbol=reverse_binding_symbol,
         forward_call_count_symbol=forward_call_count_symbol,
         reverse_call_count_symbol=reverse_call_count_symbol,
         backend_fingerprint_symbol=backend_fingerprint_symbol,
@@ -456,9 +499,16 @@ def _scalar_include(
     )
 
 
-def _first_forward_kernel(policy: ContractMapNumericalPolicy) -> str:
+def _identity_symbol(base: str, identity: str) -> str:
+    symbol = f"{base}_{identity}"
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", symbol) is None:
+        raise ValueError("physical identity must produce a valid C++ symbol")
+    return symbol
+
+
+def _first_forward_kernel(policy: ContractMapNumericalPolicy, *, name: str) -> str:
     return _contract_kernel(
-        name="ShuttleContractMapFirstForwardKernel",
+        name=name,
         parameters=(
             "const __nv_bfloat16* activation",
             "const __nv_bfloat16* first_weight",
@@ -481,9 +531,9 @@ def _first_forward_kernel(policy: ContractMapNumericalPolicy) -> str:
     )
 
 
-def _second_forward_kernel(policy: ContractMapNumericalPolicy) -> str:
+def _second_forward_kernel(policy: ContractMapNumericalPolicy, *, name: str) -> str:
     return _contract_kernel(
-        name="ShuttleContractMapSecondForwardKernel",
+        name=name,
         parameters=("const __nv_bfloat16* hidden", "const __nv_bfloat16* second_weight", "__nv_bfloat16* output"),
         output_count="kRows * kReduction",
         coordinates="const int row = linear / kReduction;\n  const int column = linear - row * kReduction;",
@@ -500,30 +550,32 @@ def _second_forward_kernel(policy: ContractMapNumericalPolicy) -> str:
 def _render_reverse_kernels(
     program: ContractMapBackendProgram,
     plan: ContractMapReverseLoweringPlan,
+    *,
+    identity: str,
 ) -> tuple[_RenderedReverseKernel, ...]:
     roles = _reverse_value_roles(program, plan)
     return (
         _render_reverse_contract_kernel(
-            "ShuttleContractMapAdjointMapKernel",
+            _identity_symbol("ShuttleContractMapAdjointMapKernel", identity),
             plan.hidden_adjoint_contract,
             program,
             roles,
             fused_map=plan.pointwise_adjoint,
         ),
         _render_reverse_contract_kernel(
-            "ShuttleContractMapSecondWeightAdjointKernel",
+            _identity_symbol("ShuttleContractMapSecondWeightAdjointKernel", identity),
             plan.second_weight_adjoint_contract,
             program,
             roles,
         ),
         _render_reverse_contract_kernel(
-            "ShuttleContractMapInputAdjointKernel",
+            _identity_symbol("ShuttleContractMapInputAdjointKernel", identity),
             plan.input_adjoint_contract,
             program,
             roles,
         ),
         _render_reverse_contract_kernel(
-            "ShuttleContractMapFirstWeightAdjointKernel",
+            _identity_symbol("ShuttleContractMapFirstWeightAdjointKernel", identity),
             plan.first_weight_adjoint_contract,
             program,
             roles,
@@ -671,7 +723,11 @@ def contract_map_backend_size_audit(
         program,
         threads=threads,
         physical_abi=contract_map_backend_physical_abi(program),
-        reverse_kernels=_render_reverse_kernels(program, reverse_plan),
+        reverse_kernels=_render_reverse_kernels(
+            program,
+            reverse_plan,
+            identity=_PHYSICAL_IDENTITY_PLACEHOLDER,
+        ),
     )
 
 
@@ -817,7 +873,7 @@ def _grid_expression(output_count: str, policy: ContractMapNumericalPolicy) -> s
     return f"({output_count} + kWarpsPerBlock - 1) / kWarpsPerBlock"
 
 
-def _physical_codegen_digest(
+def _physical_codegen_record(
     program: ContractMapBackendProgram,
     reverse_plan: ContractMapReverseLoweringPlan,
     *,
@@ -826,7 +882,8 @@ def _physical_codegen_digest(
     threads: int,
     physical_candidate: DirectLaunchFfiPhysicalCandidate,
     target_prefix: str,
-) -> str:
+    identity: str,
+) -> dict[str, object]:
     roles = _reverse_value_roles(program, reverse_plan)
     axis_roles = {
         program.activation.axes[0]: "row",
@@ -863,7 +920,8 @@ def _physical_codegen_digest(
                 "expression": _expression_digest_record(operation.expression, roles),
             }
         )
-    record = {
+    record: dict[str, object] = {
+        "identity": identity,
         "semantic_digest": program.semantic_fingerprint,
         "policy": program.numerical_policy.value,
         "threads": threads,
@@ -887,7 +945,7 @@ def _physical_codegen_digest(
             "fusion": ("hidden_adjoint_contract", "pointwise_adjoint"),
         },
     }
-    return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return record
 
 
 def _buffer_digest_records(buffers: tuple[ContractMapBackendBuffer, ...]) -> tuple[dict[str, object], ...]:
