@@ -10,9 +10,8 @@ author: kaiyuew
 ## Current TL;DR
 
 Implementation and local validation are complete at commit
-`87426191277502d955b50806873435b43bcc8206`. The Gate-1 CPU launcher
-`/kaiyuew/moe-row-norm-gate1-8131` is pending ordinary worker scale-up in
-`us-central1`; neither TPU child has allocated yet.
+`87426191277502d955b50806873435b43bcc8206`. Both Gate-1 v5p-8 children are
+running with verified W&B identities/configs and advancing finite losses.
 
 ## Scope
 
@@ -219,3 +218,33 @@ baseline when the two factors are constrained to their initial norms?
   CPU-parent placement mechanism on the current scaling-group catalog.
 - Next action: wait for the CPU parent, verify exactly two v5p-8 children, then
   validate W&B startup and configuration.
+
+### 2026-08-10 14:42 PDT - Both Gate-1 cells healthy
+
+- Hypothesis: both exact cells start from scratch with the intended
+  factorized-row-norm configuration and produce finite, advancing training
+  metrics.
+- Commit Hash: `cde4e2704131ba2bc929cd2af1b35b9271bb7cfa`.
+- Command: `uv run python scratch/monitor_moe_row_norm.py`, plus targeted
+  Iris log and W&B config queries.
+- Config:
+  - d512: batch 16, 10,980 steps, LR 0.0098041002, Adam LR 0.0022624847,
+    checkpoint root
+    `gs://marin-us-central1/grug/moe_row_norm_gate1_d512/2026.08.10/checkpoints`.
+  - d768: batch 32, 16,875 steps, LR 0.0083729565, Adam LR 0.0019322207,
+    checkpoint root
+    `gs://marin-us-central1/grug/moe_row_norm_gate1_d768/2026.08.10/checkpoints`.
+  - Both: 8192-token context, scratch initialization, z-loss 0, v5p-8.
+- Result: Iris shows exactly the parent plus
+  `grug-train-MOE-ROW-NORM-001-d512` and
+  `grug-train-MOE-ROW-NORM-002-d768`, all running. At the config check, d512
+  was at step 1,941 with finite loss 4.0748 and about 346,885 tokens/s; d768 was
+  at step 439 with finite loss 4.2815 and about 254,738 tokens/s. Representative
+  parameter norms remained constant from step 0 to 830 within floating-point
+  error: `v_q` 22.6274185 to 22.6274338, `w_q` 11.1722631 to 11.1722679,
+  and the 3D expert `v_gate` global norm 256.0 to 256.0002.
+- Interpretation: the launch, runtime routing, and norm constraints are healthy.
+  Early throughput is close to the July controls, but quality and effective
+  speedup require terminal metrics.
+- Next action: monitor both cells to successful terminal state, verify final
+  checkpoint metadata, and compute effective speedup at each width.
