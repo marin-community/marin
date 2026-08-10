@@ -223,6 +223,8 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
                 str(venv / "bin" / "python"),
                 "--extra-index-url",
                 TORCH_INDEX,
+                "--index-strategy",
+                "unsafe-best-match",
                 f"torch=={TORCH_VERSION}",
                 "setuptools>=80",
             ],

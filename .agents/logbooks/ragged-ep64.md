@@ -1043,3 +1043,12 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Confidence: exploratory. This is one standalone Torch/cuDNN Frontend run with five steady-state samples per shape, not yet a JAX FFI or full-training measurement. The result is large enough to justify adapter work, but the projection is not a training result.
 - Artifact: `s3://marin-us-east-02a/marin/benchmarks/cudnn-ragged-weight-grad-gb200/2026.08.10.39`.
 - Next action: run the serialized Transformer Engine exact-shape feasibility probe, then design the smallest JAX FFI wrapper around the cuDNN Frontend operation while the four-GPU MoK oracle remains queued.
+
+### 2026-08-10 18:02 UTC - Transformer Engine is not an available JAX arm
+
+- Probe: `ra2a-s40i-transformer-engine-wgrad-bench-20260810-coord`, following setup-only S40-S40h attempts. The final child completed on one GB200 without retry or preemption and stored `s3://marin-us-east-02a/marin/benchmarks/transformer-engine-ragged-weight-grad-gb200/2026.08.10.50`.
+- Packaging result: Transformer Engine 2.17.1's JAX source extension requires the CUDA 13, CCCL, cuDNN, NCCL, NVTX, and cuDNN Frontend development headers plus an unversioned NCCL linker alias. With those supplied from the pinned split Python SDKs, the aarch64 extension built successfully in 153.7 seconds.
+- Availability result: the successful target install did not expose an importable `transformer_engine_jax` module, so no capability or kernel timing row could be produced. Earlier failures were build-environment omissions rather than backend measurements; the final result establishes that the current aarch64 Python install route is not usable by Marin without more packaging work.
+- Decision: stop spending GPU time on the redundant TE wrapper. The native cuDNN Frontend Wgrad kernel already supplies the exact positive timing and has a much smaller JAX CuTe bridge. Keep TE as a future packaging/upstream option, not a candidate for this campaign.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5244031038.
+- Next arm: S41 runs the pinned Mixture-of-Kittens main branch on one four-GB200 node using four `torchrun` processes, exact per-GPU token/hidden/expert geometry, an intermediate width padded from 6272 to 6400, and the upstream shared-expert work. Six communication/minibatch schedules run serially inside the allocation.
