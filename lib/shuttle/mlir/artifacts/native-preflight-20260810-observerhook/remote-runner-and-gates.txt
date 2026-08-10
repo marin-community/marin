@@ -1,0 +1,34 @@
+Remote runner proof and gate summary
+
+source=b120bf9ce86e98341c687c0b97f4837f5e7e46b6
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+bundled_shuttle_files=54
+patch_order=0001,0002
+apply_check=PASS_BOTH
+reverse_apply_check=PASS_BOTH
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=18.283s actions=1
+@shuttle_mlir//:ShuttleDialect PASS elapsed=50.864s actions=952
+@shuttle_mlir//:ShuttlePasses PASS elapsed=70.717s actions=498
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=1.885s actions=9
+@shuttle_mlir//:shuttle-opt PASS elapsed=54.048s actions=778
+@shuttle_mlir//:pipeline_observer_test build PASS elapsed=35.173s actions=261
+@shuttle_mlir//:pipeline_observer_test execution PASS_UNCACHED elapsed=1.714s tests=1/1
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=35.524s targets=17 actions=591
+bazel test @shuttle_mlir//:mlir_tests FAIL_UNCACHED elapsed=1.252s tests=14/17
+
+failed_lit_tests:
+coverage-mutation-errors.mlir
+vertical-slice-algebra.mlir
+vertical-slice-lowering.mlir
+
+representative_failure:
+cannot open input file '.../external/shuttle_mlir/test/Inputs/jax-0.10.1-tanh-dot-vjp.mlir': No such file or directory
+
+xla_test_targets_analyzed=0
+xla_test_targets_compiled=0
+xla_tests_executed=0
+preflight_exit_code=3
+preflight_finished_utc=2026-08-10T15:13:48Z
