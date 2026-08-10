@@ -3775,3 +3775,24 @@ author: dlwh
 - No GB200 allocation was made. The bounded replay remains blocked until a
   generated primary-shape executor passes multi-rank cotangent correctness,
   source-lineage, determinism, and toolchain preflight.
+### 2026-08-09 18:36 PDT - TLTC-XLA-076 partitioned SM90 H100 import gate
+
+- After static review, exactly one batch-priority H100 job was submitted as
+  `/dlwh/shuttle-quack-partitioned-sm90-h100-20260809`. It requested one H100,
+  one CPU, 16 GB host memory, 50 GB disk, a one-hour timeout, and zero retries.
+  QuACK `84ef91df9bec87c7e4938517234fafb07ef844dd` and the recorded patch applied
+  cleanly. Torch `2.13.0+cu130` and CUTLASS DSL `4.6.1` installed successfully
+  on an H100 80 GB HBM3 with driver `595.71.05`.
+- The narrow environment did not install JAX. Importing the requested Shuttle
+  submodule first executed `tile_lifetime/__init__.py`, which eagerly imports
+  `jax_collective_transport`, so preflight stopped with
+  `ModuleNotFoundError: No module named 'jax'`. The patched QuACK executor was
+  not imported, CuTe device compilation did not begin, and the correctness
+  harness did not execute. Physical correctness and performance remain
+  unmeasured; this failure does not establish a backend limitation.
+- Iris reports terminal failure after 29.42 seconds with one task failure, no
+  preemptions, and no retries. No second allocation was requested. The exact
+  Kubernetes task-label query returned no pods after artifact retrieval.
+  Full logs, environment, decoded task archive, integrity hashes, and release
+  proof are under
+  `lib/tile_lifetime/benchmarks/artifacts/quack_partitioned_sm90_h100_compile_gate_v0/`.
