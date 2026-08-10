@@ -6,7 +6,12 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
-from tile_lifetime.event_dataflow import EventMemoryScope, verify_event_dataflow_program
+from tile_lifetime.event_dataflow import (
+    EventMemoryScope,
+    EventSchedulingMode,
+    execute_event_dataflow,
+    verify_event_dataflow_program,
+)
 from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan, build_fixed_capacity_relation_plan, build_relation_plan
 from tile_lifetime.relation_transport import (
@@ -258,6 +263,15 @@ def test_fixed_capacity_validates_rows_and_empty_destination_readiness() -> None
     assert tuple(index for index, count in enumerate(counts) if count == 0) == expected_ready
     assert flow.readiness.runtime_inputs.initially_ready_events == expected_ready
     assert flow.transfer_rows.axes[0].extent == sum(sum(row) for row in runtime.template.coalesced_capacity_by_rank_pair)
+    flow_execution = execute_event_dataflow(
+        flow.dataflow,
+        actions={family.name: lambda _coordinate, _state: None for family in flow.dataflow.task_families},
+        state={},
+        scheduling_mode=EventSchedulingMode.DYNAMIC,
+        generation=flow.epoch.stored_generation,
+        random_seed=5,
+    )
+    assert len(flow_execution.executed_tasks) == sum(len(family.coordinates) for family in flow.dataflow.task_families)
     source = np.arange(18, dtype=np.float32).reshape(6, 3)
     joined = execute_dispatch_field(runtime, flow.field, source)
     for row in np.flatnonzero(runtime.destination_row_valid):
@@ -340,6 +354,17 @@ def test_tile_pipeline_keeps_exact_graph_separate_from_kernelization_candidates(
     )
 
     verify_event_dataflow_program(pipeline.program)
+    pipeline_execution = execute_event_dataflow(
+        pipeline.program,
+        actions={family.name: lambda _coordinate, _state: None for family in pipeline.program.task_families},
+        state={},
+        scheduling_mode=EventSchedulingMode.DYNAMIC,
+        generation=epoch.stored_generation,
+        random_seed=11,
+    )
+    assert len(pipeline_execution.executed_tasks) == sum(
+        len(family.coordinates) for family in pipeline.program.task_families
+    )
     assert pipeline.stage_families[0].axes[1].name == "macrobatch"
     assert pipeline.stage_families[0].axes[2].name == "tile"
     candidates = {candidate.policy: candidate for candidate in pipeline.kernelization_candidates}
