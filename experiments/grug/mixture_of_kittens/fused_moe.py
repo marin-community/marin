@@ -24,13 +24,11 @@ _EXPERT_AXIS = "expert"
 _NUM_DEVICES = 4
 
 
-def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh, config: MoKForwardConfig) -> None:
+def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
     if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != _NUM_DEVICES:
         raise ValueError("Mixture-of-Kittens requires an expert axis of size four")
     if jax.process_count() != 1 or jax.local_device_count() != _NUM_DEVICES:
         raise ValueError("Mixture-of-Kittens requires one JAX process with four visible GPUs")
-    if config.schedule_capacity_multiplier < _NUM_DEVICES:
-        raise ValueError("schedule_capacity_multiplier must cover all four source ranks")
 
 
 def _fused_forward(
@@ -46,8 +44,8 @@ def _fused_forward(
     *,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     config: MoKForwardConfig,
-) -> jax.Array:
-    _validate_topology(mesh, config)
+) -> tuple[jax.Array, jax.Array]:
+    _validate_topology(mesh)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
@@ -72,7 +70,7 @@ def _fused_forward(
         local_shared_gate: jax.Array,
         local_shared_up: jax.Array,
         local_shared_down: jax.Array,
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, jax.Array]:
         all_selected_experts = jax.lax.all_gather(local_selected_experts, _EXPERT_AXIS)
         rank = jax.lax.axis_index(_EXPERT_AXIS)
         local_experts = local_w_gate.shape[0]
@@ -88,7 +86,7 @@ def _fused_forward(
             schedule_capacity=capacity,
             rank=rank,
         )
-        return forward_bf16_local(
+        output = forward_bf16_local(
             local_x,
             local_combine_weights,
             jnp.transpose(local_shared_gate),
@@ -103,6 +101,8 @@ def _fused_forward(
             schedule.tokens_per_expert,
             config=config,
         )
+        dropped_assignments = jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS)
+        return output, dropped_assignments
 
     return jax.shard_map(
         local_forward,
@@ -118,7 +118,7 @@ def _fused_forward(
             shared_weight_spec,
             shared_weight_spec,
         ),
-        out_specs=batch_spec,
+        out_specs=(batch_spec, P()),
         check_vma=False,
     )(x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down)
 
@@ -149,7 +149,15 @@ def mixture_of_kittens_reference(
         activation=ActivationFunctionEnum.silu,
         implementation=fallback_implementation,
         mesh=mesh,
-        capacity_factor=float(config.schedule_capacity_multiplier),
+        capacity_factor=(
+            schedule_capacity(
+                x.shape[0] // int(mesh.shape[_EXPERT_AXIS]),
+                selected_experts.shape[1],
+                w_gate.shape[0] // int(mesh.shape[_EXPERT_AXIS]),
+                config,
+            )
+            / ((x.shape[0] // int(mesh.shape[_EXPERT_AXIS])) * selected_experts.shape[1])
+        ),
         ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
     )
     if isinstance(routed, tuple):
@@ -171,7 +179,7 @@ def _custom_forward(
     config: MoKForwardConfig,
     fallback_implementation: MoeImplementation,
     ragged_all_to_all_splits_per_peer: int,
-) -> Callable[..., jax.Array]:
+) -> Callable[..., tuple[jax.Array, jax.Array]]:
     @jax.custom_vjp
     def fused(
         x: jax.Array,
@@ -183,7 +191,7 @@ def _custom_forward(
         shared_gate: jax.Array,
         shared_up: jax.Array,
         shared_down: jax.Array,
-    ) -> jax.Array:
+    ) -> tuple[jax.Array, jax.Array]:
         return _fused_forward(
             x,
             selected_experts,
@@ -198,14 +206,17 @@ def _custom_forward(
             config=config,
         )
 
-    def fused_fwd(*arguments: jax.Array) -> tuple[jax.Array, tuple[jax.Array, ...]]:
+    def fused_fwd(
+        *arguments: jax.Array,
+    ) -> tuple[tuple[jax.Array, jax.Array], tuple[jax.Array, ...]]:
         output = _fused_forward(*arguments, mesh=mesh, config=config)
         return output, arguments
 
     def fused_bwd(
         residuals: tuple[jax.Array, ...],
-        output_gradient: jax.Array,
+        output_gradients: tuple[jax.Array, jax.Array],
     ) -> tuple[jax.Array | None, ...]:
+        output_gradient, _ = output_gradients
         x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = residuals
 
         def reference(*differentiable: jax.Array) -> jax.Array:
@@ -259,7 +270,7 @@ def mixture_of_kittens_mlp(
     config: MoKForwardConfig,
     fallback_implementation: MoeImplementation,
     ragged_all_to_all_splits_per_peer: int,
-) -> jax.Array:
+) -> tuple[jax.Array, jax.Array]:
     """Run the fused forward and differentiate through the JAX MoE path."""
     forward = _custom_forward(
         mesh=mesh,

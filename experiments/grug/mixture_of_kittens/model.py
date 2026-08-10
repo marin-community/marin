@@ -815,7 +815,7 @@ class MoEMLP(eqx.Module):
         if self.cfg.mixture_of_kittens is not None:
             if fused_shared is None:
                 raise ValueError("Mixture-of-Kittens requires one shared expert")
-            routed_flat = mixture_of_kittens_mlp(
+            routed_flat, dropped_assignments = mixture_of_kittens_mlp(
                 x_flat,
                 selected_experts,
                 combine_weights,
@@ -830,7 +830,6 @@ class MoEMLP(eqx.Module):
                 fallback_implementation=self.expert_mlp.implementation,
                 ragged_all_to_all_splits_per_peer=self.expert_mlp.ragged_all_to_all_splits_per_peer,
             )
-            dropped_assignments = _zero_dropped_assignments()
         else:
             moe_out = self.expert_mlp(
                 x_flat,

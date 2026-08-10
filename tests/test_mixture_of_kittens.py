@@ -119,6 +119,7 @@ def test_build_schedule_matches_peer_interleaving_and_expert_padding(
     np.testing.assert_array_equal(actual.peer_token_idx, expected[1])
     assert int(actual.num_tokens) == expected[2]
     np.testing.assert_array_equal(actual.tokens_per_expert, expected[3])
+    assert int(actual.dropped_assignments) == 0
     assert not bool(actual.overflow)
 
 
@@ -133,7 +134,9 @@ def test_build_schedule_reports_capacity_overflow():
         expert_padding=4,
     )
 
-    assert int(schedule.num_tokens) == 8
+    assert int(schedule.num_tokens) == 4
+    np.testing.assert_array_equal(schedule.tokens_per_expert, np.array([4], dtype=np.int32))
+    assert int(schedule.dropped_assignments) == 2
     assert bool(schedule.overflow)
 
 
@@ -291,10 +294,10 @@ def test_fused_gate_records_the_mixture_of_kittens_boundary():
     fused = config["model"]["mixture_of_kittens"]
     assert fused["num_comm_sms"] == 40
     assert fused["minibatch_size"] == 4096
-    assert fused["schedule_capacity_multiplier"] == 4
+    assert fused["schedule_capacity_factor"] == 1.1
 
 
-def test_fused_schedule_capacity_covers_all_routes_and_expert_padding():
+def test_fused_schedule_capacity_adds_headroom_and_expert_padding():
     capacity = schedule_capacity(
         num_tokens=16 * 4096,
         top_k=4,
@@ -302,8 +305,8 @@ def test_fused_schedule_capacity_covers_all_routes_and_expert_padding():
         config=MoKForwardConfig(),
     )
 
-    worst_case_routes = 4 * 16 * 4096 * 4
-    assert capacity >= worst_case_routes + 2 * 255
+    average_routes = 16 * 4096 * 4
+    assert capacity >= average_routes * 1.1 + 2 * 255
     assert capacity % 4096 == 0
 
 

@@ -9,6 +9,7 @@ import atexit
 import ctypes
 import hashlib
 import importlib.metadata
+import math
 import os
 import shutil
 import subprocess
@@ -44,15 +45,15 @@ class MoKForwardConfig:
 
     num_comm_sms: int = 40
     minibatch_size: int = 4096
-    schedule_capacity_multiplier: int = _NUM_DEVICES
+    schedule_capacity_factor: float = 1.1
 
     def __post_init__(self) -> None:
         if self.num_comm_sms < _CLUSTER_SIZE or self.num_comm_sms % _CLUSTER_SIZE != 0:
             raise ValueError("num_comm_sms must be a positive multiple of the cluster size")
         if self.minibatch_size < _TILE_ROWS or self.minibatch_size % _TILE_ROWS != 0:
             raise ValueError("minibatch_size must be a positive multiple of 256")
-        if self.schedule_capacity_multiplier < _NUM_DEVICES:
-            raise ValueError("schedule_capacity_multiplier must cover all four source ranks")
+        if self.schedule_capacity_factor < 1.0:
+            raise ValueError("schedule_capacity_factor must be at least one")
 
 
 def _jaxlib_include_dir() -> Path:
@@ -129,16 +130,16 @@ def _prepared_source_bytes(source_root: Path) -> tuple[bytes, bytes, bytes]:
         first_host_wrapper -= 1
     mok_text = "".join(mok_lines[:first_host_wrapper])
     mok_text = mok_text.replace('#include "pyutils/torchutils.cuh"\n', "")
-    mok_text = mok_text.replace('#include <ATen/ops/empty.h>\n', "")
-    mok_text = mok_text.replace('#include <ATen/ops/empty_like.h>\n', "")
-    mok_text = mok_text.replace('#include <ATen/ops/zeros.h>\n', "")
+    mok_text = mok_text.replace("#include <ATen/ops/empty.h>\n", "")
+    mok_text = mok_text.replace("#include <ATen/ops/empty_like.h>\n", "")
+    mok_text = mok_text.replace("#include <ATen/ops/zeros.h>\n", "")
     mok_text += "\n};  // struct dispatch_mlp_swiglu_combiner\n"
 
     mxfp8_lines = (source_root / "csrc" / "mxfp8.cuh").read_text().splitlines(keepends=True)
     first_mxfp8_host = next(index for index, line in enumerate(mxfp8_lines) if "static __host__" in line)
     mxfp8_text = "".join(mxfp8_lines[:first_mxfp8_host])
     mxfp8_text = mxfp8_text.replace('#include "pyutils/torchutils.cuh"\n', "")
-    mxfp8_text = mxfp8_text.replace('#include <ATen/ops/empty.h>\n', "")
+    mxfp8_text = mxfp8_text.replace("#include <ATen/ops/empty.h>\n", "")
     mxfp8_text += "\n}  // namespace mxfp8_quantize\n"
 
     utils_text = """#pragma once
@@ -300,11 +301,11 @@ def schedule_capacity(
     config: MoKForwardConfig,
 ) -> int:
     """Return the static padded route capacity for one expert rank."""
-    if config.schedule_capacity_multiplier < 1:
-        raise ValueError("schedule_capacity_multiplier must be at least one")
+    if config.schedule_capacity_factor < 1.0:
+        raise ValueError("schedule_capacity_factor must be at least one")
     if num_local_experts < 1:
         raise ValueError("num_local_experts must be at least one")
-    assignments = num_tokens * top_k * config.schedule_capacity_multiplier
+    assignments = math.ceil(num_tokens * top_k * config.schedule_capacity_factor)
     expert_padding = num_local_experts * (_TILE_ROWS - 1)
     return _round_up(assignments + expert_padding, config.minibatch_size)
 

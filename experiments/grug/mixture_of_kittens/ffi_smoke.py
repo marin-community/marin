@@ -129,23 +129,29 @@ def main() -> None:
     peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)
     ensure_runtime(num_tokens=NUM_TOKENS, hidden_dim=HIDDEN_DIM, top_k=TOP_K)
 
-    mesh = Mesh(np.asarray(devices), ("expert",), axis_types=(AxisType.Explicit,))
-    sharded = NamedSharding(mesh, P("expert"))
+    mesh = Mesh(
+        np.asarray(devices).reshape(1, 1, WORLD_SIZE, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    expert_sharded = NamedSharding(mesh, P("expert"))
+    batch_sharded = NamedSharding(mesh, P(("replica_dcn", "data", "expert")))
+    shared_model_sharded = NamedSharding(mesh, P(("data", "expert"), "model"))
     replicated = NamedSharding(mesh, P())
     x, router_weights, shared_gate, shared_up, shared_down, routed_gate, routed_up, routed_down = inputs
     arguments = (
-        jax.device_put(jnp.asarray(x, dtype=jnp.bfloat16), sharded),
-        jax.device_put(jnp.asarray(router_weights), sharded),
+        jax.device_put(jnp.asarray(x, dtype=jnp.bfloat16), expert_sharded),
+        jax.device_put(jnp.asarray(router_weights), expert_sharded),
         jax.device_put(jnp.asarray(shared_gate, dtype=jnp.bfloat16), replicated),
-        jax.device_put(jnp.asarray(routed_gate, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(routed_gate, dtype=jnp.bfloat16), expert_sharded),
         jax.device_put(jnp.asarray(shared_up, dtype=jnp.bfloat16), replicated),
-        jax.device_put(jnp.asarray(routed_up, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(routed_up, dtype=jnp.bfloat16), expert_sharded),
         jax.device_put(jnp.asarray(shared_down, dtype=jnp.bfloat16), replicated),
-        jax.device_put(jnp.asarray(routed_down, dtype=jnp.bfloat16), sharded),
-        jax.device_put(jnp.asarray(peer_rank), sharded),
-        jax.device_put(jnp.asarray(peer_token_idx), sharded),
-        jax.device_put(jnp.asarray(num_scheduled_tokens), sharded),
-        jax.device_put(jnp.asarray(tokens_per_expert), sharded),
+        jax.device_put(jnp.asarray(routed_down, dtype=jnp.bfloat16), expert_sharded),
+        jax.device_put(jnp.asarray(peer_rank), expert_sharded),
+        jax.device_put(jnp.asarray(peer_token_idx), expert_sharded),
+        jax.device_put(jnp.asarray(num_scheduled_tokens), expert_sharded),
+        jax.device_put(jnp.asarray(tokens_per_expert), expert_sharded),
     )
 
     def local_forward(
@@ -222,33 +228,33 @@ def main() -> None:
 
     output_gradient = np.random.default_rng(4321).normal(size=x.shape).astype(np.float32)
     current_layout_arguments = (
-        jax.device_put(jnp.asarray(x.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), sharded),
-        jax.device_put(jnp.asarray(router_weights.reshape(-1, TOP_K)), sharded),
+        jax.device_put(jnp.asarray(x.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), batch_sharded),
+        jax.device_put(jnp.asarray(router_weights.reshape(-1, TOP_K)), batch_sharded),
         jax.device_put(
             jnp.asarray(
                 np.transpose(routed_gate, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
             ),
-            sharded,
+            expert_sharded,
         ),
         jax.device_put(
             jnp.asarray(
                 np.transpose(routed_up, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
             ),
-            sharded,
+            expert_sharded,
         ),
         jax.device_put(
             jnp.asarray(
                 np.transpose(routed_down, (0, 1, 3, 2)).reshape(-1, INTERMEDIATE_DIM, HIDDEN_DIM), dtype=jnp.bfloat16
             ),
-            sharded,
+            expert_sharded,
         ),
-        jax.device_put(jnp.asarray(shared_gate.T, dtype=jnp.bfloat16), replicated),
-        jax.device_put(jnp.asarray(shared_up.T, dtype=jnp.bfloat16), replicated),
-        jax.device_put(jnp.asarray(shared_down.T, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(shared_gate.T, dtype=jnp.bfloat16), shared_model_sharded),
+        jax.device_put(jnp.asarray(shared_up.T, dtype=jnp.bfloat16), shared_model_sharded),
+        jax.device_put(jnp.asarray(shared_down.T, dtype=jnp.bfloat16), shared_model_sharded),
     )
-    selected_experts = jax.device_put(jnp.asarray(top_experts.reshape(-1, TOP_K)), sharded)
+    selected_experts = jax.device_put(jnp.asarray(top_experts.reshape(-1, TOP_K)), batch_sharded)
     sharded_output_gradient = jax.device_put(
-        jnp.asarray(output_gradient.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), sharded
+        jnp.asarray(output_gradient.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), batch_sharded
     )
 
     def integrated_loss(*differentiable: jax.Array) -> jax.Array:
@@ -262,7 +268,7 @@ def main() -> None:
             integrated_shared_up,
             integrated_shared_down,
         ) = differentiable
-        output = mixture_of_kittens_mlp(
+        output, _ = mixture_of_kittens_mlp(
             integrated_x,
             selected_experts,
             integrated_combine_weights,

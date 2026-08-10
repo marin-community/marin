@@ -17,6 +17,7 @@ class MoKSchedule(NamedTuple):
     peer_token_idx: Int[Array, " capacity"]
     num_tokens: Int[Array, ""]
     tokens_per_expert: Int[Array, " local_experts"]
+    dropped_assignments: Int[Array, ""]
     overflow: Bool[Array, ""]
 
 
@@ -125,11 +126,16 @@ def build_schedule(
         mode="drop",
     )
 
-    num_tokens = jnp.sum(tokens_per_expert, dtype=jnp.int32)
+    total_num_tokens = jnp.sum(tokens_per_expert, dtype=jnp.int32)
+    available_per_expert = jnp.maximum(schedule_capacity - expert_offsets, 0)
+    clipped_tokens_per_expert = jnp.minimum(tokens_per_expert, available_per_expert)
+    num_tokens = jnp.minimum(total_num_tokens, schedule_capacity)
+    dropped_assignments = jnp.sum(flat_valid, dtype=jnp.int32) - jnp.sum(within_capacity, dtype=jnp.int32)
     return MoKSchedule(
         peer_rank=peer_rank,
         peer_token_idx=peer_token_idx,
         num_tokens=num_tokens,
-        tokens_per_expert=tokens_per_expert,
-        overflow=num_tokens > schedule_capacity,
+        tokens_per_expert=clipped_tokens_per_expert,
+        dropped_assignments=dropped_assignments,
+        overflow=dropped_assignments > 0,
     )

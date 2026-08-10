@@ -202,3 +202,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The adapter built under the nightly FFI ABI, but training stopped during backward tracing before a step ran. The shared-expert down projection did not set its output sharding, so JAX rejected a contraction where both intermediate dimensions use the model axis. The later coordination error was only a result of the GPU task exit.
 - Interpretation: This is an explicit-mesh annotation error, not a kernel, CUDA, memory, or collective error. The standard model shared expert already sets the required batch output sharding.
 - Next action: Apply the same output-sharding rule to the fallback shared projection, rerun local checks, and repeat the one-step gate.
+
+### 2026-08-10 09:31 UTC - Worst-case route capacity exceeded the memory target
+
+- Hypothesis: The output-sharding fix lets the four-times-capacity fused forward and fallback backward compile at the full shape.
+- Commit Hash: `2c327aa25`.
+- Commands: One four-GPU GB200 Iris run with one requested training step and no retry.
+- Config: The prior full-shape gate after the shared-down output-sharding fix.
+- Result: Tracing passed and the adapter built. XLA estimated 295.75 GiB before rematerialization and could reduce it only to 290.81 GiB, above its 170.60 GiB target. The later device-versus-pinned-host sharding assertion followed that failed memory schedule. No training step ran.
+- Interpretation: A four-times worst-case route reserve is not a viable training configuration. The matched XLA arm uses bounded receiver capacity. The fused schedule must also bound capacity, clip safely at full expert blocks, and report dropped routes.
+- Next action: Use 1.1-times route capacity plus expert padding, make schedule clipping kernel-safe, return its dropped-route count, and repeat the exact gradient and full-shape gates.
