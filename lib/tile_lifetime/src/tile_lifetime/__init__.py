@@ -158,6 +158,14 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     generate_streaming_attention_backward_ffi,
     register_streaming_attention_backward_ffi,
 )
+from tile_lifetime.jax_streaming_attention_forward_ffi import (
+    CompiledStreamingAttentionForwardFfi,
+    GeneratedStreamingAttentionForwardFfi,
+    call_streaming_attention_forward_ffi,
+    compile_streaming_attention_forward_ffi,
+    generate_streaming_attention_forward_ffi,
+    register_streaming_attention_forward_ffi,
+)
 from tile_lifetime.kimi_delta_scan import (
     KimiDeltaScanCompilation,
     chunkwise_kimi_delta_reference,
@@ -557,4 +565,15 @@ from tile_lifetime.xla_streaming_attention_backward_ffi import (
     plan_streaming_attention_backward_hlo_replacement,
     replace_streaming_attention_backward_entry_with_custom_call,
     replace_streaming_attention_backward_region_with_custom_call,
+)
+from tile_lifetime.xla_streaming_attention_training_regions import (
+    StreamingAttentionTrainingRegionAudit,
+    StreamingAttentionTrainingRegionPlan,
+    StreamingForwardHloProvenance,
+    StreamingForwardHloRegionReplacementPlan,
+    StreamingForwardHloRole,
+    StreamingForwardHloValue,
+    audit_streaming_attention_training_region_replacement,
+    plan_streaming_attention_training_regions,
+    replace_streaming_attention_training_regions_with_custom_calls,
 )

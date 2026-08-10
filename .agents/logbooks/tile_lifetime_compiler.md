@@ -3857,3 +3857,32 @@ author: dlwh
   transformed distributed natural-JAX module. Fixed-capacity relation shapes,
   transposed input-adjoint weight layouts, JAX collective payload return, and
   router-VJP wiring remain gates.
+
+### 2026-08-09 - TLTC-XLA-077 legal streaming-attention training split
+
+- An ordinary JAX attention differentiated by `jax.vjp` now drives two
+  generated typed-FFI families. The early family consumes Q/K/V and emits BF16
+  output plus FP32 log-normalizer state. The later saved-state family consumes
+  Q/K/V/O/LSE/dO and emits dQ/dK/dV. JAX retains AD ownership and determines
+  when dO becomes ready.
+- The natural Grug post-SPMD planner recovers the early
+  `dot.16/max.56/sum.634/dot.17` forward, the checkpoint-rematerialized
+  `dot.31/max.64/sum.698/dot.32` forward, and the existing generic reverse.
+  The rewrite publishes one O/LSE pair, redirects both forward and rematerialized
+  output consumers to O, and threads the LSE get-tuple-element directly to the
+  later reverse.
+- The liveness audit reports the old early forward, rematerialized forward, and
+  reverse closures root-dead. The saved-state producer precedes its consumer,
+  singleton-head/layout adapters are explicit, and all eleven placement
+  collectives remain outside the two generated regions.
+- A score-scale mutation from `0.5` to `0.375` retains the same ABI and physical
+  family while changing generated semantics and AOT specialization. Sixty-two
+  focused existing and new attention tests pass. Scoped pre-commit, including
+  Pyrefly, passes.
+- This is a static ownership checkpoint, not a latency claim. Existing
+  standalone combined forward/backward parity measures a different one-call
+  boundary and must not be used as evidence for this legal train-step split.
+  No GPU was allocated. The next gate is compile/load, numerical execution,
+  final-HLO audit, and matched H100/GB200 timing of the two calls.
+- Design/status:
+  `.agents/projects/tile_lifetime_compiler/streaming_attention_training_region_split.md`.
