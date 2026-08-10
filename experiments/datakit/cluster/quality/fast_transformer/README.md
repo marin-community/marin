@@ -47,6 +47,34 @@ Calibration is a monotonic remap, so it does not change document ranking; it onl
 warps the bell-shaped raw score so the fixed cutpoints `[0.2, 0.4, 0.6, 0.8]` land
 on the oracle quality levels (labeled-set bucket-vs-level agreement: within-1 ≈0.98).
 
+### Calibration is per content type
+
+The oracle grades each document as an example of its own type, but the types do not
+share a ceiling: solved agent trajectories reach the top score 3.4% of the time
+against prose's 26%. One global remap encodes prose's scale, so whole types are
+pushed out of the top bucket however good their members are.
+
+[`calibrate.py`](calibrate.py) therefore fits one remap per type. The remap stays
+monotonic within a type, so it reorders nothing — it corrects the *offset* and
+nothing else.
+
+The alternative considered was equal-count bands within a domain, and the data
+rules it out. Per-domain mean quality runs 2.13 to 4.38: forcing equal mass would
+put one domain's quality-3.0 documents in the top bucket while dropping another's
+quality-4.0 documents out of it. Sources differ just as much (2.13 for
+`cp/wikiteam`, which is 73% junk, against 4.72 for `cp/arxiv_papers`), and that
+difference is the most reliable signal the filter has. `test_calibrate.py` asserts
+both halves — a compressed type recovers, and a genuinely poor type does not — so
+the distinction cannot be quietly undone.
+
+Calibration needs a type where the pipeline has only text, so
+[`content_type.py`](content_type.py) predicts one: a hashed bag of tokens plus
+structural features, a hash and one matrix multiply. It is fitted on *predicted*
+types rather than the oracle's, so a type that absorbs some neighbouring documents
+gets cutpoints fitted on the mixture it will actually be handed. `score.py` carries
+the predicted type on every scored record, so per-type parity stays auditable on
+the corpus rather than only on the labeled set.
+
 ## Architecture
 
 `embed → pool over 64-token windows → input proj + positions → N transformer
@@ -74,14 +102,23 @@ chunks — measured at 0.9 GB as an Arrow table and 1.8 GB once materialized as
 Python rows — while `iris job run` defaults to 0.1 CPU and a small memory request.
 Under-requesting does not fail cleanly: the task is SIGKILLed (exit 137) partway
 through the read, before the module logs anything, which reads as a mysterious
-startup crash rather than as an OOM.
+startup crash rather than as an OOM. A request of 4 GB or more also needs
+`--enable-extra-resources`, which the CLI rejects rather than trims.
+
+**Serve on GB200.** The H100 fleet is not a working fallback for this model: FlashInfer
+JIT-builds the SM90 fused-MoE kernel on first start and the link fails with
+`cannot find -lnvrtc`, ~29 minutes in, after all 756 GB of weights have loaded. SM100
+takes a path that does not build it. GB200 capacity is contended and the gang binds to
+one NVLink domain, so it can sit queued for hours; `--max-retries` lets it ride out
+transient Ray startup races without losing checkpointed work.
 
 ```bash
-iris --cluster=cw-rno2a job run --cpu 4 --memory 16g --disk 64g \
+iris --cluster=marin job run --target-cluster cw-us-east-08a \
+    --enable-extra-resources --cpu 4 --memory 8g --disk 64g --max-retries 6 \
     -- python -m experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 \
     --label-set  s3://.../label_set_100k \
     --out        s3://.../glm52_labels.parquet \
-    --run-id <tag> --fleet h100 --object-store-endpoint https://cwobject.com
+    --run-id <tag> --fleet gb200 --object-store-endpoint https://cwobject.com
 ```
 
 Reruns resume from `<out>.chunks/`, skipping ids already labeled, so an
@@ -100,8 +137,11 @@ English, so a 12k-character document can exceed 12k tokens; with output tokens
 reserved on top, those prompts overflow the context and the server rejects them.
 Counting such rejections as ordinary dropped documents hides the failure completely,
 because what is lost is exactly the *longest* documents — the same length bias the
-excerpting fix removes. The context is sized so the cap plus the reserved answer
-always fit, and a chunk that mostly fails aborts instead of dropping rows.
+excerpting fix removes. Enlarging the context is the wrong lever: it spends KV cache
+on every request to accommodate a handful of dense ones. The prompt text is capped
+instead, narrower than the stored excerpt, and a chunk that mostly fails aborts rather
+than dropping rows. A small tail of unusually dense documents still overflows (~1% on
+the 88k set), which is what the long-document retention gate measures.
 
 ## Validation
 
@@ -156,6 +196,7 @@ Labeling:
 - [`sample_labels.py`](sample_labels.py) — stratified draw across every source, excerpted on a boundary.
 - [`label_with_glm52.py`](label_with_glm52.py) — run the grader with checkpointing and resume; aborts a chunk that mostly fails rather than dropping rows.
 - [`gate_labels.py`](gate_labels.py) — decide whether a label set is fit to train on.
+- [`content_type.py`](content_type.py) — predict a document's content type, which the per-type calibration needs at scoring time.
 
 Evaluation:
 
@@ -164,6 +205,7 @@ Evaluation:
 - [`compare_by_domain.py`](compare_by_domain.py) — per-domain bucket distributions across model versions.
 - [`sample_disagreements.py`](sample_disagreements.py) — surface the documents two scorers most disagree about, for reading.
 - [`intruder_ab.py`](intruder_ab.py) — bucket-coherence intruder test, `--bucketing {global,domain-quantile}`.
+- [`gate_model.py`](gate_model.py) — decide whether a trained model beats the deployed one: within-type ranking, cross-type parity, and per-source signal, measured on the training holdout.
 
 ## Artifacts
 
