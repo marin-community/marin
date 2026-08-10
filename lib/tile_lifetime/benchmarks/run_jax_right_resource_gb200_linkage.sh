@@ -5,7 +5,8 @@
 set -euo pipefail
 
 readonly MSA_REVISION="80434d7f67877c6570ca19cac444b84bc9855dac"
-readonly SHUTTLE_ROOT="$(git rev-parse --show-toplevel)"
+readonly SHUTTLE_REVISION="${SHUTTLE_REVISION:?set SHUTTLE_REVISION to the committed bundled source}"
+readonly SHUTTLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly PYTHON="${SHUTTLE_ROOT}/.venv/bin/python"
 readonly ARTIFACT_DIRECTORY="${1:-/tmp/shuttle-event-right-resource-gb200}"
 readonly MSA_ROOT="${ARTIFACT_DIRECTORY}/msa"
@@ -84,4 +85,5 @@ export PYTHONPATH="${SHUTTLE_ROOT}/lib/tile_lifetime/src:${SHUTTLE_ROOT}/lib/til
   --warmups 2 \
   --repeats 10 \
   --architecture sm_100a \
+  --shuttle-revision "${SHUTTLE_REVISION}" \
   --output "${RESULT_OUTPUT}"

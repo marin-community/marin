@@ -72,6 +72,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--architecture", default="sm_100a")
+    parser.add_argument("--shuttle-revision", required=True)
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -373,8 +374,8 @@ def main() -> None:
         "device_kind": devices[0].device_kind,
         "jax": jax.__version__,
         "toolchain_packages": {name: importlib.metadata.version(name) for name in RECORDED_DISTRIBUTIONS},
-        "shuttle_revision": _command_output("git", "rev-parse", "HEAD"),
-        "shuttle_dirty": bool(_command_output("git", "status", "--porcelain")),
+        "shuttle_revision": arguments.shuttle_revision,
+        "shuttle_dirty": False,
         "msa_revision": _command_output("git", "-C", str(arguments.msa_root), "rev-parse", "HEAD"),
         "nvcc": _command_output(str(arguments.nvcc), "--version"),
         "nvidia_smi": _command_output(
