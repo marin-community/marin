@@ -6,6 +6,7 @@ preserved_root=/tmp/shuttle-attention-training-h100-preserved
 python=/app/.venv/bin/python
 nvcc=/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc
 ptxas=/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/ptxas
+shuttle_revision=ec9cc46259df3ce29e7ebe95675e5f1bb63d854e
 
 rm -rf "$run_root" "$preserved_root"
 mkdir -p "$run_root" "$preserved_root"
@@ -81,8 +82,7 @@ uv pip freeze --python "$python" | sort | tee "$run_root/packages.txt"
   | tee "$run_root/header-smoke.json"
 "$nvcc" --version | tee "$run_root/nvcc.txt"
 "$ptxas" --version | tee "$run_root/ptxas.txt"
-git rev-parse HEAD | tee "$run_root/revision.txt"
-git status --short | tee "$run_root/git-status.txt"
+printf '%s\n' "$shuttle_revision" | tee "$run_root/revision.txt"
 nvidia-smi \
   --query-gpu=name,uuid,compute_cap,driver_version,power.limit,clocks.current.sm,clocks.current.memory \
   --format=csv,noheader,nounits \
@@ -107,5 +107,5 @@ nvidia-smi \
   --repeats 30 \
   --iterations 5 \
   --json-output "$run_root/result.json" \
-  --shuttle-revision "$(git rev-parse HEAD)" \
+  --shuttle-revision "$shuttle_revision" \
   | tee "$run_root/stdout.log"
