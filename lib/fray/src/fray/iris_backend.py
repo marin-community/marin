@@ -9,6 +9,7 @@ via submitted jobs, and deferred actor handle resolution.
 """
 
 import logging
+import os
 import threading
 import time
 from concurrent.futures import Future
@@ -169,6 +170,38 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
         be = entrypoint.binary_entrypoint
         return IrisEntrypoint.from_command(be.command, *be.args)
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
+
+
+NSYS_TASKS_ENV = "IRIS_NSYS_TASKS"
+
+
+def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
+    """Run the entrypoint under ``nsys profile`` when ``IRIS_NSYS_TASKS`` is set.
+
+    ``iris.hooks.nsys_main`` is a submit-time wrapper: Nsight injects CUDA tracing
+    through ``CUDA_INJECTION64_PATH``, which the driver reads once at ``cuInit``,
+    so nsys has to be the parent process from the start. iris does not inject the
+    wrapper, and a callable entrypoint builds its command inside this backend, so
+    fray composes it here for the same reason it composes the multigpu supervisor.
+
+    The variable holds the ``--tasks`` spec: ``first``, ``all``, or a
+    comma-separated list of task indices. An unselected task execs the command
+    unchanged and pays nothing.
+    """
+    tasks = os.environ.get(NSYS_TASKS_ENV)
+    if not tasks:
+        return entrypoint
+    command = list(entrypoint.command)
+    if command[:2] == ["bash", "-c"] and len(command) == 3:
+        inner = command[2].removeprefix("exec ")
+        wrapped = ["bash", "-c", f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks} -- {inner}"]
+    else:
+        wrapped = ["$IRIS_PYTHON", "-m", "iris.hooks.nsys_main", "--tasks", tasks, "--", *command]
+    return IrisEntrypoint(
+        command=wrapped,
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
 
 
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
@@ -629,6 +662,7 @@ class FrayIrisClient:
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         if request.processes_per_task > 1:
             iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
+        iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 

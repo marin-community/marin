@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { statsRpcCall } from '@/composables/useRpc'
+import { timeZoneMode } from '@/composables/useDisplayPrefs'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
+import { classifyColumns, type ColumnKind } from '@/utils/columnKind'
+import { MAX_SERIES, type ChartMark } from '@/utils/chart'
+import { formatMetric, formatRelativeTime, formatTimestampMs } from '@/utils/formatting'
+import { shortColumnType, type ProtoSchema } from '@/types/stats'
+import type { NamespaceColumns } from '@/utils/sqlComplete'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import CellDetailPanel from '@/components/shared/CellDetailPanel.vue'
+import ResultChart from '@/components/shared/ResultChart.vue'
+import SqlEditor from '@/components/shared/SqlEditor.vue'
 
 interface QueryResponse {
   arrowIpc?: string
@@ -12,54 +21,261 @@ interface QueryResponse {
 }
 
 const route = useRoute()
+const router = useRouter()
 const sql = ref<string>(typeof route.query.sql === 'string' ? route.query.sql : 'SELECT 1')
-const result = ref<ArrowResult>({ columns: [], rows: [] })
+const result = ref<ArrowResult>({ columns: [], types: {}, rows: [] })
 const rowCount = ref<number>(0)
+const elapsedMs = ref<number | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-const columns = computed<Column[]>(() =>
-  result.value.columns.map((c) => ({ key: c, label: c, mono: true })),
+const view = ref<'table' | 'chart'>('table')
+const chartX = ref('')
+const chartY = ref('')
+const chartSeries = ref('')
+const chartMark = ref<ChartMark>('line')
+const chartSmoothing = ref(0)
+const chartYScale = ref<'linear' | 'log'>('linear')
+const detail = ref<{ column: string; row: Record<string, unknown> } | null>(null)
+/** Set while a URL-supplied chart selection is still waiting for a result to apply to. */
+let restoreUrlChartState = typeof route.query.view === 'string'
+
+const kinds = computed<Record<string, ColumnKind>>(() =>
+  classifyColumns(result.value.columns, result.value.types, result.value.rows),
 )
+
+const numericColumns = computed(() =>
+  result.value.columns.filter((c) => kinds.value[c] === 'number'),
+)
+
+/** Text columns with few enough distinct values to read as a legend. */
+const seriesCandidates = computed(() =>
+  result.value.columns.filter((c) => {
+    if (kinds.value[c] !== 'text') return false
+    const distinct = new Set(result.value.rows.map((r) => String(r[c] ?? '')))
+    return distinct.size > 1 && distinct.size <= MAX_SERIES
+  }),
+)
+
+const columns = computed<Column[]>(() =>
+  result.value.columns.map((c) => ({
+    key: c,
+    label: c,
+    // Mono for data that is scanned character by character — identifiers,
+    // numbers, JSON. Prose stays in the body face, where it is easier to read.
+    mono: kinds.value[c] !== 'text',
+    numeric: kinds.value[c] === 'number',
+  })),
+)
+
+/** Rows with timestamps rendered for display; the chart reads the raw values. */
+const displayRows = computed(() => {
+  const timestampColumns = result.value.columns.filter((c) => kinds.value[c] === 'timestamp')
+  if (timestampColumns.length === 0 && !result.value.columns.some((c) => kinds.value[c] === 'number')) {
+    return result.value.rows
+  }
+  return result.value.rows.map((row) => {
+    const out: Record<string, unknown> = { ...row }
+    for (const c of timestampColumns) {
+      if (typeof row[c] === 'number') out[c] = formatTimestampMs(row[c] as number, timeZoneMode.value)
+    }
+    for (const c of result.value.columns) {
+      if (kinds.value[c] === 'number' && typeof row[c] === 'number') out[c] = formatMetric(row[c] as number)
+    }
+    return out
+  })
+})
+
+/**
+ * Seed the chart axes from the result's own shape.
+ *
+ * y is always a measurement, so it is claimed first; x is then whatever the
+ * result offers to plot it against, in the order those columns actually carry
+ * meaning — an instant, then a label, then another number.
+ */
+function pickChartDefaults() {
+  const cols = result.value.columns
+  chartY.value = numericColumns.value[0] ?? ''
+
+  const timestamp = cols.find((c) => kinds.value[c] === 'timestamp')
+  const label = seriesCandidates.value[0] ?? cols.find((c) => kinds.value[c] === 'text')
+  const otherNumber = numericColumns.value.find((c) => c !== chartY.value)
+  chartX.value = timestamp ?? label ?? otherNumber ?? cols[0] ?? ''
+
+  // A column already spent on x cannot also split the series.
+  chartSeries.value = seriesCandidates.value.find((c) => c !== chartX.value) ?? ''
+  chartMark.value = kinds.value[chartX.value] === 'timestamp' ? 'line' : 'bar'
+}
+
+const canChart = computed(() => numericColumns.value.length > 0 && result.value.rows.length > 0)
+
+/**
+ * Every namespace and its columns, for the editor's completion.
+ *
+ * `seq` is not in any registered schema — the store assigns it — but it is in
+ * enough real queries (it is the column that prunes a recent-rows window) that
+ * leaving it out would make completion look wrong.
+ */
+const schema = ref<NamespaceColumns[]>([])
+
+async function loadSchema() {
+  try {
+    const resp = await statsRpcCall<{ namespaces?: { namespace: string; schema?: ProtoSchema }[] }>(
+      'ListNamespaces',
+    )
+    schema.value = (resp.namespaces ?? []).map((n) => ({
+      namespace: n.namespace,
+      columns: [
+        ...(n.schema?.columns ?? []).map((c) => ({ name: c.name, type: shortColumnType(c.type) })),
+        { name: 'seq', type: 'int64' },
+      ],
+    }))
+  } catch {
+    // Completion is an assist. Losing it should not put an error banner over a
+    // page whose own query may be running fine.
+    schema.value = []
+  }
+}
+
+const HISTORY_KEY = 'finelog-query-history'
+const HISTORY_LIMIT = 20
+
+interface HistoryEntry {
+  sql: string
+  atMs: number
+  rows: number
+  ms: number
+}
+
+function readHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    return raw ? (JSON.parse(raw) as HistoryEntry[]) : []
+  } catch {
+    return []
+  }
+}
+
+const history = ref<HistoryEntry[]>(readHistory())
+const historyOpen = ref(false)
+
+/** Record a query that returned, newest first and one entry per distinct SQL. */
+function remember(entry: HistoryEntry) {
+  history.value = [entry, ...history.value.filter((h) => h.sql !== entry.sql)].slice(0, HISTORY_LIMIT)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch {
+    // Blocked site data: history still works for this session.
+  }
+}
+
+/** One CSV field: quoted only when the value would otherwise break the row. */
+function csvField(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+/** Download the result as CSV — raw values, not the display formatting. */
+function downloadCsv() {
+  const { columns: cols, rows } = result.value
+  const lines = [cols.map(csvField).join(',')]
+  for (const row of rows) lines.push(cols.map((c) => csvField(row[c])).join(','))
+  const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'finelog-query.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
 
 async function execute() {
   if (!sql.value.trim()) return
   loading.value = true
   error.value = null
+  detail.value = null
+  const started = performance.now()
   try {
     const resp = await statsRpcCall<QueryResponse>('Query', { sql: sql.value })
     result.value = decodeArrowIpc(resp.arrowIpc)
     rowCount.value = Number(resp.rowCount ?? result.value.rows.length)
+    elapsedMs.value = performance.now() - started
+    remember({ sql: sql.value, atMs: Date.now(), rows: rowCount.value, ms: elapsedMs.value })
+    pickChartDefaults()
+    if (!canChart.value) view.value = 'table'
+    if (restoreUrlChartState) {
+      applyUrlChartState()
+      restoreUrlChartState = false
+    }
+    syncUrl()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
-    result.value = { columns: [], rows: [] }
+    result.value = { columns: [], types: {}, rows: [] }
     rowCount.value = 0
+    elapsedMs.value = null
   } finally {
     loading.value = false
   }
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault()
-    void execute()
+/**
+ * Mirror the submitted query and how it is being viewed into the URL, so the
+ * address bar is a link to what is on screen. A new query is a history entry —
+ * back returns to the previous one — while changing an axis only rewrites the
+ * current entry, which would otherwise bury the query behind every adjustment.
+ */
+function syncUrl() {
+  const query: Record<string, string> = { sql: sql.value }
+  if (view.value === 'chart') {
+    query.view = 'chart'
+    query.mark = chartMark.value
+    if (chartX.value) query.x = chartX.value
+    if (chartY.value) query.y = chartY.value
+    if (chartSeries.value) query.series = chartSeries.value
   }
+  const isNewQuery = query.sql !== route.query.sql
+  void (isNewQuery ? router.push({ query }) : router.replace({ query }))
 }
 
+/** Restore a shared link's chart selection, which the type-aware defaults would otherwise overwrite. */
+function applyUrlChartState() {
+  const { view: urlView, x, y, series, mark } = route.query
+  if (typeof x === 'string' && x) chartX.value = x
+  if (typeof y === 'string' && y) chartY.value = y
+  if (typeof series === 'string') chartSeries.value = series
+  if (mark === 'line' || mark === 'bar' || mark === 'scatter') chartMark.value = mark
+  if (urlView === 'chart' && canChart.value) view.value = 'chart'
+}
+
+watch(chartX, () => {
+  if (chartY.value === chartX.value) {
+    chartY.value = numericColumns.value.find((c) => c !== chartX.value) ?? ''
+  }
+})
+
+watch([view, chartX, chartY, chartSeries, chartMark], () => {
+  if (result.value.columns.length > 0) syncUrl()
+})
+
+// Navigating history (or following a second link) replaces the query without
+// remounting the page, so the new SQL has to be picked up and run.
+watch(() => route.query.sql, (next) => {
+  if (typeof next === 'string' && next !== sql.value) {
+    sql.value = next
+    restoreUrlChartState = true
+    void execute()
+  }
+})
+
 onMounted(() => {
+  void loadSchema()
   if (typeof route.query.sql === 'string' && route.query.sql.trim()) void execute()
 })
 </script>
 
 <template>
   <div class="space-y-3">
-    <InfoCard title="SQL · Postgres-flavored DuckDB">
-      <textarea
-        v-model="sql"
-        class="w-full font-mono text-sm bg-surface-sunken border border-surface-border rounded p-3 min-h-[120px] focus:outline-none focus:border-accent"
-        spellcheck="false"
-        @keydown="onKeydown"
-      />
+    <InfoCard title="SQL · DataFusion">
+      <SqlEditor v-model="sql" :schema="schema" @submit="execute" />
       <div class="flex items-center gap-3 mt-2">
         <button
           class="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
@@ -68,9 +284,33 @@ onMounted(() => {
         >
           {{ loading ? 'Running…' : 'Execute' }}
         </button>
-        <span class="text-xs text-text-muted">⌘/Ctrl-Enter to run</span>
-        <span v-if="!loading && !error && result.rows.length > 0" class="text-xs text-text-muted ml-auto">
-          {{ rowCount.toLocaleString() }} row{{ rowCount === 1 ? '' : 's' }}
+        <span class="text-xs text-text-muted">⌘/Ctrl-Enter to run · Tab to complete</span>
+
+        <div v-if="history.length" class="relative">
+          <button
+            class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+            @click="historyOpen = !historyOpen"
+          >Recent ▾</button>
+          <ul
+            v-if="historyOpen"
+            class="absolute z-20 mt-1 w-[34rem] max-h-72 overflow-auto rounded border border-surface-border bg-surface shadow-lg py-1"
+          >
+            <li
+              v-for="h in history"
+              :key="h.sql"
+              class="px-2.5 py-1.5 cursor-pointer hover:bg-surface-raised"
+              @click="sql = h.sql; historyOpen = false; execute()"
+            >
+              <div class="font-mono text-xs truncate">{{ h.sql }}</div>
+              <div class="text-[0.65rem] text-text-muted tabular-nums">
+                {{ formatRelativeTime(h.atMs) }} · {{ h.rows.toLocaleString() }} rows · {{ Math.round(h.ms) }} ms
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <span v-if="!loading && !error && elapsedMs !== null" class="text-xs text-text-muted ml-auto tabular-nums">
+          {{ rowCount.toLocaleString() }} row{{ rowCount === 1 ? '' : 's' }} · {{ Math.round(elapsedMs) }} ms
         </span>
       </div>
     </InfoCard>
@@ -81,13 +321,105 @@ onMounted(() => {
     >{{ error }}</div>
 
     <InfoCard v-if="!error" title="Result">
-      <DataTable
-        :columns="columns"
-        :rows="result.rows"
-        :loading="loading"
-        :page-size="50"
-        empty-message="No rows."
-      />
+      <template #default>
+        <div class="flex flex-wrap items-center gap-2 pb-2 -mt-1">
+          <div class="inline-flex rounded border border-surface-border overflow-hidden">
+            <button
+              v-for="mode in (['table', 'chart'] as const)"
+              :key="mode"
+              class="px-2.5 py-1 text-xs capitalize disabled:opacity-40 disabled:cursor-not-allowed"
+              :class="view === mode ? 'bg-accent text-white' : 'hover:bg-surface-raised'"
+              :disabled="mode === 'chart' && !canChart"
+              :title="mode === 'chart' && !canChart ? 'Charting needs a numeric column' : undefined"
+              @click="view = mode"
+            >{{ mode }}</button>
+          </div>
+
+          <template v-if="view === 'chart'">
+            <label class="text-xs text-text-secondary">x
+              <select v-model="chartX" class="ml-1 text-xs bg-surface-sunken border border-surface-border rounded px-1.5 py-1 font-mono">
+                <option v-for="c in result.columns" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </label>
+            <label class="text-xs text-text-secondary">y
+              <select v-model="chartY" class="ml-1 text-xs bg-surface-sunken border border-surface-border rounded px-1.5 py-1 font-mono">
+                <option v-for="c in numericColumns" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </label>
+            <label class="text-xs text-text-secondary">series
+              <select v-model="chartSeries" class="ml-1 text-xs bg-surface-sunken border border-surface-border rounded px-1.5 py-1 font-mono">
+                <option value="">none</option>
+                <option v-for="c in seriesCandidates" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </label>
+            <label v-if="chartMark === 'line'" class="text-xs text-text-secondary flex items-center gap-1.5">
+              smooth
+              <input
+                v-model.number="chartSmoothing"
+                type="range" min="0" max="0.95" step="0.05"
+                class="w-20 accent-accent"
+                :title="chartSmoothing ? `EMA weight ${chartSmoothing.toFixed(2)}` : 'Raw samples'"
+              >
+            </label>
+            <div class="inline-flex rounded border border-surface-border overflow-hidden">
+              <button
+                v-for="s in (['linear', 'log'] as const)"
+                :key="s"
+                class="px-2 py-1 text-xs"
+                :class="chartYScale === s ? 'bg-accent text-white' : 'hover:bg-surface-raised'"
+                :title="`${s} y axis`"
+                @click="chartYScale = s"
+              >{{ s === 'linear' ? 'lin' : 'log' }}</button>
+            </div>
+            <div class="inline-flex rounded border border-surface-border overflow-hidden ml-auto">
+              <button
+                v-for="m in (['line', 'bar', 'scatter'] as const)"
+                :key="m"
+                class="px-2.5 py-1 text-xs capitalize"
+                :class="chartMark === m ? 'bg-accent text-white' : 'hover:bg-surface-raised'"
+                @click="chartMark = m"
+              >{{ m }}</button>
+            </div>
+          </template>
+          <template v-else-if="result.rows.length">
+            <span class="text-xs text-text-muted ml-auto">Click a cell for its full value</span>
+            <button
+              class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+              @click="downloadCsv"
+            >CSV</button>
+          </template>
+        </div>
+
+        <ResultChart
+          v-if="view === 'chart'"
+          :rows="result.rows"
+          :kinds="kinds"
+          :x="chartX"
+          :y="chartY"
+          :series="chartSeries || undefined"
+          :mark="chartMark"
+          :smoothing="chartSmoothing"
+          :y-scale="chartYScale"
+        />
+        <DataTable
+          v-else
+          :columns="columns"
+          :rows="displayRows"
+          :loading="loading"
+          :page-size="50"
+          inspectable
+          empty-message="No rows."
+          @inspect="(column, row) => (detail = { column, row: result.rows[displayRows.indexOf(row)] ?? row })"
+        />
+      </template>
     </InfoCard>
+
+    <CellDetailPanel
+      v-if="detail"
+      :column="detail.column"
+      :row="detail.row"
+      :kinds="kinds"
+      @close="detail = null"
+    />
   </div>
 </template>

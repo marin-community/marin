@@ -315,6 +315,8 @@ custom_roles:
   - artifactregistry.versions.get
   - artifactregistry.versions.list
   - artifactregistry.yumartifacts.create
+  - cloudkms.cryptoKeyVersions.useToDecrypt
+  - cloudkms.cryptoKeyVersions.useToEncrypt
   - compute.acceleratorTypes.get
   - compute.acceleratorTypes.list
   - compute.addresses.get
@@ -1494,7 +1496,7 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: marin-grafana-slack-webhook
+- secret: marin-grafana-slack-bot-token
   grants:
   - role: projects/hai-gcp-models/roles/marinSecretIamManager
     members:

@@ -653,3 +653,213 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Logbook finding: No rewrite because this research logbook is append-only.
 - Tests: The default Grug MoE and EP hero suites pass with 20 tests and 6 skips. The set now includes the four-device fixed all-to-all forward and gradient test. The 200-step dry run still resolves EP64, capacity 1.0, fixed all-to-all, batch 1024, and the recorded optimizer values.
 - Checks: The full changed-file pre-commit and Pyrefly checks pass. The one required advisory rule-catalog review reports no findings.
+
+### 2026-08-04 18:28 UTC - MHEP-009 FSDP-shape local gate passed
+
+- Hypothesis: The FSDP hero model shape runs on the EP64 mesh, and its MFU is directly comparable
+  to the FSDP hero result because the analytic FLOP count depends only on the model config.
+- Motive: The recorded FSDP reference has a different model shape, thus the baseline section calls
+  it out as no EP control. One shape on two sharding strategies removes that limit.
+- Change: `heuristic.py` gets a `HeroShape` selector and the FSDP hero model spec. `launch.py` gets
+  `--shape` and takes host offload of the optimizer state from the selected shape.
+- Forced deltas: `moe_implementation` becomes `fixed_all_to_all` because `sonic_cute` has no EP
+  collectives, and `expert_chunks` becomes 1 because `moe_mlp` rejects a larger value when the
+  expert axis is larger than one. All other model fields stay equal to the FSDP hero.
+- Capacity note: The local FSDP backend computes every assignment. EP drops each assignment above
+  its fixed cell capacity, thus the EP drop fraction is part of the result.
+- Memory: A 64-device shape check reports 359.64 B parameters, 24.59 GiB of parameters per device,
+  and 27.78 GiB of optimizer state per device. With host offload the resident estimate is about 106
+  GiB per device. The measured d5120 EP shape estimates about 110 GiB per device without offload,
+  thus 128 experts on 64 devices fit with margin. Two whole experts land on each device.
+- Mesh selection: EP64 is the lowest-memory mesh for this shape on 64 GPUs. A hybrid mesh such as
+  EP32 with two-way FSDP replicates each expert twice, because the EP path shards expert weights
+  on the expert axis only. Thus no hybrid mesh was selected.
+- Tests: The eight EP-hero and FSDP-hero tests pass. The new parity test fails if the two model
+  specs drift apart in more fields than the two forced deltas.
+- Dry run: The plan resolves d6144, 128 experts, top-4, two shared experts, SConv, sliding window
+  512, EP64, capacity 1.0, batch 1024, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-04 18:31 UTC - MHEP-009 launch contract ready and submitted
+
+- Hypothesis: The FSDP hero shape completes 25 steps on one EP64 rack, and its median MFU gives the
+  first same-shape comparison between EP and FSDP sharding.
+- Run ID: `mhep-009-fsdp-shape-25-20260804-1831`.
+- Job: `/rav/mhep-009-fsdp-shape-25-20260804-1831-coord`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2
+  --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name
+  mhep-009-fsdp-shape-25-20260804-1831-coord -e WANDB_MODE offline -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id mhep-009-fsdp-shape-25-20260804-1831 --num-steps 25
+  --shape fsdp --version 2026.08.04 --run`.
+- Code snapshot: `01025d80b`; clean tree. Source bundle: Iris workspace bundle, 9.6 MB.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-009-fsdp-shape-25-20260804-1831`, project `marin_moe`, group
+  `moe-hero-ep`, tag `shape-fsdp`, and offline mode.
+- Final step: 25. Checkpoint policy: No checkpoints. This gate writes metrics only.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Monitor to a terminal state, read `tracker_metrics.jsonl`, then run the one-rack FSDP
+  control at the same shape and batch.
+
+### 2026-08-04 18:38 UTC - MHEP-010 one-rack FSDP control submitted
+
+- Purpose: Give MHEP-009 a same-shape, same-day control. The recorded FSDP reference is a two-rack
+  200-step average, thus it mixes a topology change into the transport comparison.
+- Run ID: `mhep-010-fsdp-control-25-20260804-1838`.
+- Job: `/rav/mhep-010-fsdp-control-25-20260804-1838-coord`.
+- Command: The same coordinator form as MHEP-009, but `python -m experiments.grug.moe_hero_fsdp.launch
+  --run-id mhep-010-fsdp-control-25-20260804-1838 --dp-racks 1 --num-steps 25 --no-save-checkpoints
+  --version 2026.08.04 --run`.
+- Code snapshot: `8a055fec1`; clean tree.
+- Change to the FSDP hero: `--no-save-checkpoints` makes this gate metrics-only. The forced
+  completion checkpoint writes the parameters and the offloaded optimizer state, about 2.7 TiB at
+  this shape, which an MFU gate does not need. All other hero settings stay unchanged.
+- Matched between the two gates: model shape, batch 1024, sequence 4096, 25 steps, capacity 1.0,
+  MuonH with the same compute-scaled values, host offload of the optimizer state, mixed precision,
+  SlimPajama-6B at `2026.06.28`, and 16 workers with four GB200 GPUs each.
+- Not matched: the MoE backend, `expert_chunks`, the mesh, and each hero's own runtime environment.
+  PGLE is on for FSDP and off for EP. Each variant keeps the runtime that its own gates selected,
+  thus this compares two tuned strategies, not one isolated variable.
+- Comparison anchor: A prior EP64 arm at d6144, 4-of-128, sliding window 2048, and 120 steps
+  measured 24.842% median MFU and 274,954 tokens/s (issue 7279 comment 5095217108). That arm is not
+  this shape, but it bounds the expected range.
+
+### 2026-08-04 23:50 UTC - MHEP-009 passed: the FSDP shape runs on EP64
+
+- Completion: All 16 GPU tasks succeeded with exit 0 and zero failures. The run completed all 25
+  steps. Admission took nine attempts across 5 hours and 17 minutes, with eight preemptions before
+  the successful window. No preemption reached step 0, thus no GPU work was lost.
+- Performance: Median MFU is 27.7544%, mean MFU is 26.0191%, p10 MFU is 19.8324%, and p90 MFU is
+  29.3997% over 26 samples. The last sample is 26.4006% MFU, 316,473 tokens/s, and 13.2533 seconds.
+- Training: Final loss is 6.0498. Final MoE drop fraction is 9.9683%, or 80,275,372 assignments.
+- Memory: The run confirms the pre-flight estimate. There was no OOM and no allocator failure at an
+  estimated 106 GiB per device with host offload of the optimizer state.
+- Variance caveat: The standard deviation is 6.5623 over 26 samples, because the early samples
+  include compile and warmup. Use the median. The 200-step EP hero gate had a 0.5656 deviation, so a
+  longer run is necessary before any small difference is called real.
+- Capacity caveat: The 9.9683% drop fraction means EP does less work than the analytic FLOP count
+  credits. The FSDP control computes every assignment. Thus the MFU comparison is not yet
+  quality-fair, and MHEP-012 remains necessary.
+- Comparison anchors: A prior EP64 arm at d6144, 4-of-128, and sliding window 2048 measured 24.842%
+  median MFU. The native d5120 EP hero measured 23.6969% at 200 steps. This shape is above both.
+- Next action: Read the MHEP-010 control when it completes, then report the same-shape comparison.
+
+### 2026-08-05 00:00 UTC - MHEP-010 control gives the same-shape EP versus FSDP result
+
+- Completion: All 16 GPU tasks succeeded with exit 0 and zero failures. The run completed all 25
+  steps after seven preemptions, on the same rack allocation window as MHEP-009.
+- Performance: Median MFU is 19.3951%, mean MFU is 16.7629%, p10 MFU is 2.9288%, and p90 MFU is
+  19.6933% over 26 samples. The last sample is 19.6144% MFU, 235,125 tokens/s, and 17.8386 seconds.
+- Training: Final loss is 6.0754. Final MoE drop fraction is 1.8779%, or 15,122,972 assignments.
+- Result: At one rack and this exact model shape, EP64 measures 8.3593 percentage points more median
+  MFU than FSDP64, or 43.1% relative. Last-sample throughput is 34.6% higher.
+- Correction to the MHEP-009 entry: The local `sonic_cute` backend does drop assignments. It dropped
+  1.8779%, not zero. The earlier claim that the FSDP path computes every assignment is wrong.
+- Adjusted comparison: EP completed 90.03% of assignments and FSDP completed 98.12%. A first-order
+  correction of the EP median for the work it did not do gives about 25.5% against 19.4%. Thus the
+  EP lead is about 6 percentage points, not 8.4, and it survives the correction.
+- Variance limit: Both runs have a wide spread because 26 samples include compile and warmup. The
+  FSDP p10 of 2.9288% is a warmup sample, not steady state. Use the medians. The 200-step EP hero
+  gate had a 0.5656 deviation against 5.5456 and 6.5623 here.
+- Cost record: The pair took 5 hours and 30 minutes from submit to result, of which about 20 minutes
+  was GPU work. Fifteen preemptions across both jobs, none of which reached step 0.
+- Next action: MHEP-012 (capacity sweep) is now necessary rather than optional, because the drop
+  gap of 8.1 percentage points funds part of the EP lead. MHEP-011 (FSDP at expert_chunks=1) remains
+  the cheapest way to attribute the rest.
+
+### 2026-08-05 01:00 UTC - MHEP-011 to MHEP-016 queued: size ladder and capacity sweep
+
+- Code snapshot: `5c7d9d2aa`. The EP launcher takes `--num-experts`, `--intermediate-dim`, and
+  `--capacity-factor`, and rejects a bank that does not divide the 64-way expert axis.
+- W&B: All six runs and `mhep-009b` write live to entity `marin-community`, project `rav_moe`.
+- Common settings: EP64, one rack, `--shape fsdp`, 25 steps, batch 1024, d6144, 48 layers, top-4,
+  two shared experts, host offload of the optimizer state.
+
+Size ladder. Each keeps 256 experts (four per device) and about 20 B active parameters, and each is
+larger than any shape measured on this rack before. Estimates come from a 64-device shape check.
+
+| run | experts x width | total | active | resident estimate | headroom |
+| --- | --- | --- | --- | --- | --- |
+| `mhep-011` | 256 x i2560 | 591.6 B | 19.9 B | 140.6 GiB | 32.6 GiB |
+| `mhep-012` | 256 x i2816 | 649.6 B | 20.8 B | 149.0 GiB | 24.2 GiB |
+| `mhep-013` | 256 x i3072 | 707.6 B | 21.7 B | 157.5 GiB | 15.8 GiB |
+
+- Expectation: `mhep-011` fits. `mhep-013` is at the estimate boundary and can fail, because the
+  estimate omits the FA4 workspace, the cross-entropy logit blocks, NCCL buffers, fragmentation, and
+  the Newton-Schulz transient (about 7 GiB at four experts per device). An OOM there is a result.
+- A fourth candidate, 512 x i1536 at top-8, estimates 167.2 GiB with 6.1 GiB of headroom. It was not
+  queued, because it fails the same estimate by a larger margin.
+
+Capacity sweep at the measured MHEP-009 shape (128 x i3072, top-4), where capacity 1.0 dropped
+9.9683% of assignments: `mhep-014` at 1.125, `mhep-015` at 1.25, `mhep-016` at 1.5. Cell capacity
+goes from 2,048 rows to 2,304, 2,560, and 3,072. The native EP hero measured a 4.1% relative MFU
+cost for capacity 1.0625, thus a cost is expected here as well.
+
+- Purpose: Price the drop correction that the MHEP-009 versus MHEP-010 comparison currently carries.
+- Cluster note: Seven of our gangs are queued at once against a saturated A08. They serialize. This
+  is a deliberate choice to keep the queue full while 12-rack runs cycle.
+
+### 2026-08-05 02:45 UTC - Size ladder result: the one-rack ceiling is between 592 B and 650 B
+
+- 591.6 B (`mhep-011`, 256 x i2560, top-4, 19.9 B active) PASSES. Median MFU is 24.0032%, tokens/s
+  is 307,778, step time is 13.6277 s, final loss is 6.0396, and the drop fraction is 12.2660%.
+  Four whole experts land on each device. Nothing this large ran on one rack before.
+- 649.6 B (`mhep-012c`, 256 x i2816) FAILS with `JaxRuntimeError: INTERNAL: NCCL operation
+  ncclAlltoAll(...)` on several ranks, from `NCCL WARN Cuda failure 2 'out of memory'`. Stopped
+  after repeated retries.
+- 707.6 B (`mhep-013c`, 256 x i3072) stopped without a clean measurement. It is larger than the
+  configuration that already fails, thus it is declared too big for one rack.
+- Failure mechanism: XLA reserves the model, then NCCL allocates its all-to-all send and receive
+  buffers outside the XLA pool through `cudaMalloc`. With `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`
+  XLA grows on demand and keeps no headroom, thus NCCL fails instead of XLA. The buffers are about
+  3.2 GiB each for send and receive at this shape, plus internal channels.
+- Correction: An earlier entry in this session called the 650 B failure not-an-OOM, because
+  `RESOURCE_EXHAUSTED`, allocator, and `XlaRuntimeError` searches returned nothing. That search
+  missed the NCCL path. It is an out-of-memory failure.
+- Estimate limit: The `resident = 53.8 GiB + 0.1465 x params_B` curve counts XLA-side memory only.
+  It omits NCCL buffers, thus it overstates what fits. Use 592 B as the measured pass and 650 B as
+  the measured fail, not the arithmetic ceiling.
+- Untested lever: Cap XLA with `XLA_PYTHON_CLIENT_MEM_FRACTION` instead of `cuda_async`, or lower
+  `NCCL_BUFFSIZE`, to leave the communicator room. Neither was measured.
+
+### 2026-08-05 03:35 UTC - MHEP-019 stopped: lower top-k does not rescue the 641 B tier
+
+- Configuration: 192 experts x i3712 at top-3, 641.4 B total, 20.7 B active, three whole experts per
+  device. Dispatch buffers are 2.25 GiB, a quarter less than the 3.00 GiB of the 649.6 B run that
+  already failed.
+- Result: The rank-0 diagnostic reports `NCCL operation ncclAlltoAll(...)`, the same failure as
+  MHEP-012c, with the coscheduled siblings cascading. Stopped after two failures.
+- Interpretation: Two different routings now fail near 650 B. Thus the binding constraint is total
+  parameter memory that leaves NCCL too little room, not the size of the dispatch buffers. Lower
+  top-k reduces the communicator demand but does not offset the parameter growth.
+- Ceiling update: One rack fits 591.6 B (measured pass) and does not fit 641.4 B (measured fail).
+  The earlier bound of 592 B to 650 B narrows to 592 B to 641 B.
+- Still open: MHEP-020 tests the other direction, holding parameters at the 590.7 B of the known
+  pass while raising dispatch to 4.50 GiB with top-6. A pass there confirms that parameters, not the
+  communicator, set the ceiling.
+
+### 2026-08-05 03:45 UTC - MHEP-020 stopped: top-k is the expensive axis, width is the cheap one
+
+- Configuration: 256 experts x i2560 at top-6, 590.7 B total, 24.5 B active. Parameters are equal to
+  the MHEP-011 configuration that passed, so only the routing multiplicity changed.
+- Result: `worker_failed` with one failed task and 15 coscheduled cascades, after the run entered
+  the training loop. Stopped after four failures.
+- Correction: This session first estimated top-6 as about 4.5 GiB more than top-4. That is wrong.
+  Six buffers scale with top-k, and one of them is float32:
+
+| buffer | top-4 | top-6 |
+| --- | --- | --- |
+| dispatch send (bf16) | 3.00 GiB | 4.50 GiB |
+| received after all-to-all (bf16) | 3.00 GiB | 4.50 GiB |
+| expert w13 output (bf16) | 2.50 GiB | 3.75 GiB |
+| expert output and combine (bf16) | 3.00 GiB | 4.50 GiB |
+| gathered [T, k, H] (bf16) | 3.00 GiB | 4.50 GiB |
+| backward grad_rows (float32) | 6.00 GiB | 9.00 GiB |
+| total | 20.50 GiB | 30.75 GiB |
+
+- The true delta is 10.25 GiB, and its peak is in the backward pass. That matches the observed
+  failure after the training loop started rather than during compilation.
+- Rule for sizing: active routed neurons are top-k multiplied by the expert width. Parameters track
+  expert count multiplied by width, and the k-scaled buffers track tokens multiplied by top-k.
+  Width is thus the cheap way to buy active compute and top-k is the expensive way.
+- Next test: MHEP-021 runs 128 experts x i5120 at top-4. It doubles the active neurons of MHEP-011
+  to 20,480 at the same 590.7 B of parameters, for 23.00 GiB of k-scaled buffers.

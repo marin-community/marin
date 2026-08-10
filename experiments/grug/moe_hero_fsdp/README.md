@@ -25,6 +25,35 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
 W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
+Pass `--mode supervised` for NCCL diagnostics. Each GPU task runs training in a child process with
+XLA's 600-second per-execution deadman and no in-pod restart. The supervisor allows one hour for the
+first completed step, then 30 minutes between completed steps. A deadman abort or another child
+failure fails the task immediately; the existing 15-minute progress watchdog remains the fallback.
+
+Use `--mode failsafe-control` to keep the XLA failsafes without the supervisor parent, or
+`--mode stock-control` to run without either and without task retries.
+
+Checkpoint staging benchmark:
+
+```bash
+python -m experiments.grug.moe_hero_fsdp.checkpoint_benchmark \
+  --run-id checkpoint-52b-1rack --dp-racks 1 --num-steps 12 \
+  --checkpoint-every-steps 8 --version dev
+```
+
+This uses a 52.85B-total, approximately 1.71B-active top-1 MoE. It offloads the optimizer state,
+writes a deterministic checkpoint at step 8 and another at clean completion, and records the
+synchronous host-staging and asynchronous commit phases without enabling Python allocation tracing.
+The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
+by the one-day lifecycle policy.
+
+### Kernel cache
+
+The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
+cache is consulted, so a compilation-cache hit still regenerates them. Levanter persists them under
+`cutlass-kernels/` in the 30-day region-local temp prefix, fronted by an in-process memory tier.
+Entries are content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
+
 ## Files
 
 | file | contents |
@@ -56,6 +85,7 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pa
   the scan.
 
 ### Systems (FSDP)
+- Each Iris task reserves one four-GPU GB200 node and starts one JAX process per GPU.
 - **One rack**: `expert_axis_size=1`, `replica_axis_size=1` → one 64-GPU `data` axis.
 - **Two racks**: `expert_axis_size=1`, `replica_axis_size=2` → two DP replicas, each with a
   64-GPU `data` axis. Model parameters are replicated across `replica_dcn` and FSDP-sharded only
@@ -89,6 +119,11 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pa
 - **25 steps**, batch **1024 per rack**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab
   128256.
 - Mixed precision: params fp32, compute/output bf16.
-- Checkpointing and eval are **off for this run** but the machinery is retained for later.
+- Eval is off. Training writes a resumable checkpoint every 30 minutes and at clean completion;
+  a restarted gang resumes from the latest fully committed checkpoint.
+- The process-local watchdog is disabled until one training hour has elapsed and the first step has
+  completed. It then exits with code 124 when a later training step runs for 15 minutes or another
+  lifecycle phase makes no progress for 60 minutes. This is a fallback for collectives that fail to
+  honor XLA's 10-minute NCCL termination timeout; Iris treats it as a failure and retries the gang.
 - FA4 metadata constants are explicitly replicated before batch sharding. This prevents the
   compiler from routing each attention metadata transfer through device 0 on a multi-rack run.

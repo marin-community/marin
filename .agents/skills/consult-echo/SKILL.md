@@ -80,6 +80,22 @@ adding another.
 
 ## Write or revise a wiki note
 
+Write for future action, not for exhaustiveness. Echo results are loaded into
+limited model context, so every unnecessary detail makes later work slower and
+more expensive. Prefer the shortest entry that changes what a future reader
+will do:
+
+- Lead with an actionable value: a decision, command, diagnostic discriminator,
+  guardrail, or recovery step.
+- Include only the facts needed to support or apply that action. Link to the
+  canonical PR, issue, dashboard, log bundle, or report for chronology and raw
+  evidence instead of copying it into Echo.
+- Put the action in the title, `use_when`, or opening paragraph so a search
+  result is useful before the full entry is fetched.
+- Keep investigation history outside the wiki when it provides no reusable
+  decision or procedure. An issue, logbook, or source artifact is a better home
+  for a record whose only value is completeness.
+
 Write an Open Knowledge Format document:
 
 ```markdown
@@ -98,7 +114,9 @@ State the reusable pattern, how to distinguish its causes, and the evidence URLs
 
 Use lowercase kebab-case tags. Keep the title concrete and make `use_when`
 describe the future search trigger. Make the body stand alone. Cite canonical
-URLs inline.
+URLs inline. Concision still requires enough context to apply the guidance
+safely; do not omit a precondition, destructive-action warning, or material
+caveat.
 
 Create a note:
 

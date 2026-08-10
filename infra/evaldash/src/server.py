@@ -657,11 +657,14 @@ def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
 
 
 def _status_rollup(statuses: set[str]) -> str:
-    """Collapse a launch's per-eval statuses into one: all-succeeded, a single shared failure, or mixed."""
+    """Collapse a launch's per-eval statuses without inventing an evaluator failure."""
     if statuses == {"succeeded"}:
         return "succeeded"
     if "succeeded" not in statuses:
-        return next(iter(statuses)) if len(statuses) == 1 else "failed"
+        if len(statuses) == 1:
+            return next(iter(statuses))
+        if "failed" in statuses:
+            return "failed"
     return "mixed"
 
 
@@ -799,6 +802,7 @@ def create_app(
             offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
             limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=params.get("correct") or "all",
+            extraction_filter=params.get("extraction_filter") or None,
         )
         return JSONResponse(payload.model_dump(mode="json"))
 

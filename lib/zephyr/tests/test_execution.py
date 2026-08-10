@@ -37,7 +37,12 @@ from zephyr.coordinator import (
     ZephyrCoordinator,
 )
 from zephyr.dataset import Dataset
-from zephyr.execution import _NON_RETRYABLE_ERRORS, ZephyrContext
+from zephyr.execution import (
+    _NON_RETRYABLE_ERRORS,
+    MAX_IRIS_WORKER_REPLICAS,
+    ZephyrContext,
+    _distributed_worker_limit,
+)
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_checkpoint import ZephyrStageCheckpoint
@@ -1322,7 +1327,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(coordinator):
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
     mock_group.is_done.return_value = False
-    coordinator.set_worker_group(mock_group)
+    coordinator._worker_group = mock_group
 
     # Two workers pull both tasks.
     coordinator.heartbeat("worker-A")
@@ -1659,6 +1664,51 @@ def test_heartbeat_failures_fail_actor_context():
     assert isinstance(actor_ctx._errors[0], CoordinatorUnreachable)
 
 
+def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
+    """Registration keeps trying until it lands, and a late answer is not a new attempt.
+
+    ``register_worker`` requeues a worker's in-flight tasks whenever it sees a known
+    worker_id, so a duplicate registration from a live worker would hand a shard it is
+    still running to somebody else.
+    """
+
+    class _RegistrationRpc:
+        """Fails the first call. Answers the second one after two poll timeouts.
+
+        Doubles as the future it returns, so the test drives the outcome of each poll
+        instead of waiting on a clock.
+        """
+
+        def __init__(self):
+            self.calls = 0
+            self._timeouts = 2
+
+        def remote(self, *_args):
+            self.calls += 1
+            return self
+
+        def result(self, timeout=None):
+            if self.calls == 1:
+                raise ConnectionError("simulated coordinator overload")
+            if self._timeouts > 0:
+                self._timeouts -= 1
+                raise TimeoutError
+            return ()
+
+    rpc = _RegistrationRpc()
+    worker = ZephyrWorker.__new__(ZephyrWorker)
+    worker._coordinator = MagicMock(register_worker=rpc)
+    worker._worker_id = "test-worker-0"
+    worker._actor_handle = MagicMock()
+    worker._memory_store = MagicMock()
+    worker._shutdown_event = threading.Event()
+    worker._host_shutdown_event = None
+
+    assert worker._register() is True
+    assert rpc.calls == 2, "one retry for the failed RPC, none for the slow answer"
+    worker._memory_store.restore.assert_called_once_with(())
+
+
 # --- Integration tests (all backends) ---
 
 
@@ -1725,6 +1775,18 @@ def test_report_from_a_previous_stage_is_rejected(coordinator):
         run.stage_generation,
     )
     assert run.completed_shards == 1
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (None, MAX_IRIS_WORKER_REPLICAS),
+        (512, 512),
+        (4096, MAX_IRIS_WORKER_REPLICAS),
+    ],
+)
+def test_distributed_worker_limit_caps_iris_replicas(configured: int | None, expected: int):
+    assert _distributed_worker_limit(configured) == expected
 
 
 def test_failed_execution_drains_in_flight_tasks_before_teardown(coordinator):

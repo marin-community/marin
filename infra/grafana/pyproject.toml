@@ -23,6 +23,8 @@ dependencies = [
     # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
     # line, matching infra/probes.
     "httpx >= 0.28.1, < 1",
+    # Startup role migration for the production PostgreSQL-backed Grafana database.
+    "psycopg[binary] >= 3.2",
 ]
 
 [project.scripts]

@@ -90,7 +90,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.types import MountKind
+from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -427,13 +427,13 @@ def _lookup_pod(
 
 def _build_volumes_and_mounts(
     cache_dir: str,
-    has_accelerator: bool,
+    shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
     Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed with a
-    generous limit for GPU/TPU multi-process communication.
+    they persist across pods on the same node. /dev/shm is memory-backed and
+    shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -458,8 +458,8 @@ def _build_volumes_and_mounts(
         mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
-    if has_accelerator:
-        shm_spec["sizeLimit"] = "100Gi"
+    if shm_limit_bytes:
+        shm_spec["sizeLimit"] = str(shm_limit_bytes)
     volumes.append({"name": "dshm", "emptyDir": shm_spec})
     mounts.append({"name": "dshm", "mountPath": "/dev/shm"})
 
@@ -641,12 +641,7 @@ def _build_logship_sidecar(
 
 
 def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
-    """Heuristic: single-task job with no accelerators is a coordinator/orchestrator.
-
-    Coordinator pods (e.g. zephyr *-coord jobs) are single-replica, CPU-only
-    processes whose loss kills the entire pipeline. Returns True so the caller
-    can create a PodDisruptionBudget to prevent voluntary eviction.
-    """
+    """Return whether a request is a single-task CPU coordinator."""
     if run_req.num_tasks > 1:
         return False
     if run_req.HasField("resources") and run_req.resources.HasField("device"):
@@ -665,9 +660,10 @@ def _build_pdb_manifest(
     pod_name: str,
     namespace: str,
     task_hash: str,
+    priority_band: int,
     managed_label: str = "",
 ) -> dict:
-    """Build a PodDisruptionBudget manifest for a coordinator task pod."""
+    """Build a priority-aware PodDisruptionBudget for a coordinator task pod."""
     labels = {
         _LABEL_MANAGED: "true",
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
@@ -675,6 +671,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
+    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
@@ -684,7 +681,7 @@ def _build_pdb_manifest(
             "labels": labels,
         },
         "spec": {
-            "minAvailable": 1,
+            **availability,
             "selector": {"matchLabels": {_LABEL_TASK_HASH: task_hash}},
         },
     }
@@ -815,6 +812,7 @@ def _build_pod_manifest(
     resources: dict = {}
     gpu_count = 0
     has_tpu = False
+    memory_limit_bytes = 0
     if run_req.HasField("resources"):
         res = run_req.resources
         limits: dict[str, str] = {}
@@ -828,6 +826,8 @@ def _build_pod_manifest(
             requests["cpu"] = f"{res.cpu_millicores}m"
         if res.memory_bytes:
             # Memory stays a hard cap — overshoot is fatal, not just slow.
+            # Memory-backed emptyDir usage is charged to this same cgroup.
+            memory_limit_bytes = res.memory_bytes
             limits["memory"] = str(res.memory_bytes)
             requests["memory"] = str(res.memory_bytes)
         if res.HasField("device"):
@@ -848,9 +848,13 @@ def _build_pod_manifest(
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
             resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
 
-    has_accelerator = gpu_count > 0 or has_tpu
     is_gang = bool(run_req.coscheduling.group_by)
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, has_accelerator=has_accelerator)
+    has_accelerator = gpu_count > 0 or has_tpu
+    shm_limit_bytes = memory_limit_bytes
+    # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
+    if not shm_limit_bytes and has_accelerator:
+        shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
+    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",
@@ -2386,6 +2390,10 @@ class K8sTaskProvider:
     def run_teardown(self) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""
 
+    def collect_garbage(self) -> None:
+        """Run one garbage-collection pass for eligible Kubernetes resources."""
+        self._gc_terminal_resources(self._list_active_pods())
+
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""
 
@@ -2700,6 +2708,7 @@ class K8sTaskProvider:
                 pod_name,
                 self.pods.namespace,
                 _task_hash(run_req.task_id),
+                run_req.priority,
                 managed_label=self.pods.managed_label,
             )
             self.kubectl.apply_json(pdb)

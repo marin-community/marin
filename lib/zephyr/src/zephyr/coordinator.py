@@ -10,23 +10,28 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
-from fray.actor import ActorHandle, current_actor
+from fray.actor import ActorGroup, ActorHandle, current_actor
+from fray.current_client import current_client
+from fray.local_backend import LocalClient
+from fray.types import ActorConfig, ResourceConfig
 from rigging import telemetry
 from rigging.filesystem import StoragePath
-from rigging.timing import ExponentialBackoff, RateLimiter, log_time
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
+from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_checkpoint import load_stage_checkpoint, write_stage_checkpoint
 from zephyr.stage_io import (
     ShardTask,
+    StageRunner,
     TaskResult,
     ZephyrTaskResources,
     ZephyrWorkerError,
@@ -328,7 +333,8 @@ class ZephyrCoordinator:
         # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
-        self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
+        self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
+        self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
         self._lock = threading.Lock()
@@ -337,9 +343,12 @@ class ZephyrCoordinator:
         # frequently than the UI needs to refresh.
         self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
 
+        # Capture the actor context while its ContextVar is still set. Methods called
+        # later run on other threads, where current_actor() is unset.
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
         self._host_shutdown_event = actor_ctx.shutdown_event
+        self._self_handle = actor_ctx.handle
 
         self._stats_writer = StatsWriter.connect()
         self._result_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="zephyr-result")
@@ -351,17 +360,55 @@ class ZephyrCoordinator:
         )
         self._coordinator_thread.start()
 
-    def set_worker_group(self, worker_group: Any) -> None:
-        """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
-        self._worker_group = worker_group
+    def start_workers(
+        self,
+        worker_class: type,
+        worker_count: int,
+        stage_runner_factory: Callable[[], StageRunner],
+        task_resources: ZephyrTaskResources,
+        worker_resources: ResourceConfig,
+        actor_config: ActorConfig,
+    ) -> None:
+        """Create the worker group from inside this coordinator's job.
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
+        Iris derives a submitted job's id from the enclosing job context, so a group
+        created here is a *child* of the coordinator job and Iris cascading termination
+        takes the workers down with it. Creating the group on the driver instead leaves
+        the two as siblings: a dead coordinator strands its workers, and a reconstructed
+        one comes back with no executions for them to poll.
+
+        ``worker_class`` is passed in rather than imported because ``worker`` imports
+        this module.
+        """
+        assert self._worker_group is None, "worker group already started"
+        self._worker_group = current_client().create_actor_group(
+            worker_class,
+            self._self_handle,
+            stage_runner_factory,
+            task_resources,
+            name=f"{self._name}-workers",
+            count=worker_count,
+            resources=worker_resources,
+            actor_config=actor_config,
+        )
+
+    def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:
+        """Wait for ``count`` workers to come up and return their handles."""
+        assert self._worker_group is not None, "worker group not started"
+        return tuple(self._worker_group.wait_ready(count=count, timeout=timeout))
+
+    def worker_job_id(self) -> str:
+        """Wire form of the worker job id, for callers that address worker tasks."""
+        assert self._worker_group is not None, "worker group not started"
+        return str(self._worker_group._job_id)
+
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state.
-
-        Returns the current stage epoch.
+        preemption) by updating the stale handle and resetting worker state. The
+        returned table registrations let the worker restore table metadata
+        before it polls for tasks. Table data is reloaded lazily on first use.
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -378,6 +425,24 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+            return tuple(self._memory_tables.values())
+
+    def register_memory_table(self, registration: MemoryTableRegistration) -> None:
+        """Publish a table after every worker validates its source shards."""
+        with self._lock:
+            if registration.table_id in self._memory_tables:
+                raise ValueError(f"memory table {registration.table_id!r} is already registered")
+            self._memory_tables[registration.table_id] = registration
+
+    def memory_table_registration(self, table_id: str) -> MemoryTableRegistration | None:
+        """Return metadata needed to reload a table on a replacement worker."""
+        with self._lock:
+            return self._memory_tables.get(table_id)
+
+    def unregister_memory_table(self, table_id: str) -> None:
+        """Remove a table from future worker recovery."""
+        with self._lock:
+            self._memory_tables.pop(table_id, None)
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""
@@ -1411,9 +1476,36 @@ class ZephyrCoordinator:
 
         logger.info("Coordinator shutdown complete")
 
-    def stop_workers(self) -> None:
-        """Tell workers to exit while the coordinator actor stays reachable."""
+    def stop_workers(self, drain_timeout: float = 5.0) -> None:
+        """Retire the worker group while this coordinator stays reachable.
+
+        Workers see the shutdown flag on their next ``pull_task`` and exit on their own.
+        Terminating the group is the backstop for the ones that do not.
+        """
         self._shutdown_event.set()
+        if self._worker_group is None:
+            return
+
+        group, self._worker_group = self._worker_group, None
+        try:
+            if isinstance(current_client(), LocalClient):
+                # In-process actors: no job to terminate, so stop each one directly.
+                for worker in group.wait_ready():
+                    worker.shutdown.remote().result(timeout=10.0)
+                group.shutdown()
+                return
+
+            drained = ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
+                group.is_done, timeout=Duration.from_seconds(drain_timeout)
+            )
+            if drained:
+                return
+            logger.warning("Workers did not exit within %.1fs, terminating the group", drain_timeout)
+        except Exception:
+            logger.warning("Worker teardown failed, terminating the group", exc_info=True)
+
+        with suppress(Exception):
+            group.shutdown()
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""

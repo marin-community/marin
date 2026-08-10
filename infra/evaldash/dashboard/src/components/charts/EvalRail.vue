@@ -2,13 +2,13 @@
 /**
  * The eval rail: one gauge per benchmark, in a fixed column order shared across the app.
  * Height is the score, the whisker is ±stderr, the warm caret is the fleet best, and a
- * benchmark the model never ran is an explicit dashed slot (not a missing dot). Failed and
- * infra runs render as a coloured status glyph. Two sizes: `sm` is the strip inside a
+ * benchmark the model never ran is an explicit dashed slot (not a missing dot). Evaluator,
+ * artifact, and infrastructure failures render as a coloured status glyph. Two sizes: `sm` is the strip inside a
  * leaderboard row; `lg` is the axed panel on the model page, with a value label, a benchmark
  * name, and — when history is supplied — a score-over-runs sparkline under each gauge.
  */
 import { computed } from 'vue'
-import type { MatrixCell } from '@/types/api'
+import { RUN_STATUS, type MatrixCell } from '@/types/api'
 import { formatScore, formatStderr } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
 import { type BestCell } from '@/utils/matrix'
@@ -42,7 +42,7 @@ const W = computed(() => (props.size === 'lg' ? 46 : 15))
 interface Gauge {
   task: string
   cell: MatrixCell | null
-  kind: 'score' | 'missing' | 'failed' | 'infra'
+  kind: 'score' | 'missing' | 'failed' | 'artifact' | 'infra'
   fillH: number
   whiskerBottom: number
   whiskerHeight: number
@@ -67,7 +67,12 @@ const gauges = computed<Gauge[]>(() =>
       }
     }
     if (cell.value === null) {
-      const kind = cell.status === 'infra_failed' ? 'infra' : 'failed'
+      const kind =
+        cell.status === RUN_STATUS.INFRA_FAILED
+          ? 'infra'
+          : cell.status === RUN_STATUS.ARTIFACT_FAILED
+            ? 'artifact'
+            : 'failed'
       return {
         task, cell, kind, fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false, color: '',
         content: { title: task, lines: [{ label: props.model, value: cell.status.replace('_', ' '), tone: 'muted' }] },
@@ -123,7 +128,7 @@ function sparkLine(points: HistoryPoint[]): string {
         class="relative rounded"
         :style="{ width: `${W}px`, height: `${H}px` }"
         :class="[
-          g.kind === 'failed' ? 'bg-status-danger-bg' : g.kind === 'infra' ? 'bg-status-warning-bg' : 'bg-surface-sunken',
+          g.kind === 'failed' ? 'bg-status-danger-bg' : g.kind === 'infra' || g.kind === 'artifact' ? 'bg-status-warning-bg' : 'bg-surface-sunken',
           g.kind === 'score' ? 'cursor-pointer hover:outline hover:outline-2 hover:outline-offset-1 hover:outline-accent-border' : '',
           g.kind === 'missing' ? 'border border-dashed border-surface-border bg-transparent' : '',
         ]"
@@ -152,7 +157,7 @@ function sparkLine(points: HistoryPoint[]): string {
         />
         <!-- status glyph -->
         <div
-          v-if="g.kind === 'failed' || g.kind === 'infra'"
+          v-if="g.kind === 'failed' || g.kind === 'artifact' || g.kind === 'infra'"
           class="absolute inset-0 flex items-center justify-center font-mono font-bold"
           :class="g.kind === 'failed' ? 'text-status-danger' : 'text-status-warning'"
           :style="{ fontSize: size === 'lg' ? '14px' : '11px' }"

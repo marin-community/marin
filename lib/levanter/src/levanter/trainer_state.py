@@ -59,13 +59,6 @@ class TrainerState(eqx.Module, Generic[M]):
     model_averaging: ModelAveraging[M]
 
     @property
-    def int_step(self) -> int:
-        """
-        Returns the step as an int. On multinode, doing
-        """
-        return int(self.step)
-
-    @property
     def trainable_model(self) -> M:
         return trainables_only(self.model, self.is_trainable)
 

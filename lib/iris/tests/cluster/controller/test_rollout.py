@@ -1,240 +1,173 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the controller startup DB restore/reuse decision.
+"""Behavior tests for controller startup state selection and rollback."""
 
-Covers _prepare_local_db_dir and _apply_requested_rollback, which choose between
-reusing the on-VM local DB, applying a requested rollback (restore the pre-deploy
-checkpoint over the local DB and self-clear the rollout record), and restoring the
-latest remote checkpoint on start.
-"""
-
+import sqlite3
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller import main as controller_main
-from iris.cluster.controller.checkpoint import DatabaseProbe
-from iris.cluster.controller.rollout import RolloutPhase, RolloutRecord
+from iris.cluster.controller.checkpoint import write_checkpoint
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.main import prepare_controller_state
+from iris.cluster.controller.rollout import (
+    RolloutPhase,
+    RolloutRecord,
+    read_rollout_record,
+    write_rollout_record,
+)
+from iris.cluster.controller.writes import meta_value_set
+from rigging.filesystem import prefix_join
+
+_MARKER_KEY = "test_rollout_marker"
 
 
-def _seed_db(db_dir: Path, marker: str) -> None:
-    db_dir.mkdir(parents=True, exist_ok=True)
-    (db_dir / "controller.sqlite3").write_text(marker)
+def _remote_state(tmp_path: Path) -> str:
+    path = tmp_path / "remote"
+    path.mkdir(exist_ok=True)
+    return f"file://{path}"
 
 
-def _no_rollout_record(monkeypatch) -> None:
-    monkeypatch.setattr(controller_main, "read_rollout_record", lambda _remote: None)
+def _seed_database(db_dir: Path, marker: int) -> None:
+    db = ControllerDB(db_dir=db_dir)
+    with db.transaction() as tx:
+        meta_value_set(tx, _MARKER_KEY, marker)
+    db.close()
 
 
-def _database_probe(
-    *, exists: bool = True, healthy: bool = True, checkpoint_epoch_ms: int | None = None
-) -> DatabaseProbe:
-    return DatabaseProbe(
-        exists=exists,
-        healthy=healthy,
-        checkpoint_epoch_ms=checkpoint_epoch_ms,
-        detail="ok" if healthy else "database disk image is malformed",
-    )
+def _database_marker(db_dir: Path) -> int:
+    connection = sqlite3.connect(db_dir / ControllerDB.DB_FILENAME)
+    try:
+        row = connection.execute("SELECT value FROM meta WHERE key = ?", (_MARKER_KEY,)).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    return int(row[0])
 
 
-def test_fresh_wipes_local_and_skips_restore(tmp_path, monkeypatch):
+def _checkpoint(db_dir: Path, remote_state_dir: str, marker: int) -> str:
+    _seed_database(db_dir, marker)
+    db = ControllerDB(db_dir=db_dir)
+    try:
+        path, _ = write_checkpoint(db, remote_state_dir)
+    finally:
+        db.close()
+    return path
+
+
+def test_prepare_controller_state_fresh_removes_existing_database(tmp_path: Path) -> None:
     db_dir = tmp_path / "db"
-    _seed_db(db_dir, "stale")
-    restores = []
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: restores.append(k) or True)
+    _seed_database(db_dir, 1)
 
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=True, checkpoint_path=None)
+    prepare_controller_state(db_dir, _remote_state(tmp_path), fresh=True, checkpoint_path=None)
 
-    assert db_dir.exists() and not (db_dir / "controller.sqlite3").exists()
-    assert restores == []
+    assert db_dir.exists()
+    assert not (db_dir / ControllerDB.DB_FILENAME).exists()
+    assert not (db_dir / ControllerDB.AUTH_DB_FILENAME).exists()
 
 
-def test_rollback_requested_restores_checkpoint_and_marks_rolled_back(tmp_path, monkeypatch):
+def test_prepare_controller_state_applies_requested_rollback_once(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    checkpoint = _checkpoint(tmp_path / "checkpoint-source", remote_state_dir, marker=1)
     db_dir = tmp_path / "db"
-    _seed_db(db_dir, "migrated")
-    ckpt = "gs://b/state/controller-state/123"
-    monkeypatch.setattr(
-        controller_main,
-        "read_rollout_record",
-        lambda _remote: RolloutRecord(
+    _seed_database(db_dir, 2)
+    write_rollout_record(
+        remote_state_dir,
+        RolloutRecord(
             phase=RolloutPhase.ROLLBACK_REQUESTED,
-            image="img:old",
-            rollback_checkpoint=ckpt,
+            image="controller:old",
+            previous_image="controller:new",
+            rollback_checkpoint=checkpoint,
         ),
     )
 
-    def fake_restore(remote, dbdir, checkpoint_dir=None):
-        Path(dbdir).mkdir(parents=True, exist_ok=True)
-        (Path(dbdir) / "controller.sqlite3").write_text("restored")
-        return True
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
-    captured = {}
-    monkeypatch.setattr(
-        controller_main,
-        "download_checkpoint_to_local",
-        lambda remote, dbdir, checkpoint_dir=None: captured.update(checkpoint_dir=checkpoint_dir)
-        or fake_restore(remote, dbdir, checkpoint_dir),
-    )
-    written = []
-    monkeypatch.setattr(controller_main, "write_rollout_record", lambda remote, record: written.append(record))
-    # Local reuse checks must not run on the rollback path, or the migrated DB
-    # could win and defeat the rollback.
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: pytest.fail("local DB probed on the rollback path"),
-    )
-
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
-
-    assert captured["checkpoint_dir"] == ckpt
-    assert (db_dir / "controller.sqlite3").read_text() == "restored"
-    assert len(written) == 1
-    assert written[0].phase is RolloutPhase.ROLLED_BACK
-    assert written[0].rollback_checkpoint is None
+    assert _database_marker(db_dir) == 1
+    record = read_rollout_record(remote_state_dir)
+    assert record is not None
+    assert record.phase is RolloutPhase.ROLLED_BACK
+    assert record.previous_image is None
+    assert record.rollback_checkpoint is None
 
 
-def test_rollback_requested_missing_checkpoint_falls_through(tmp_path, monkeypatch):
+def test_prepare_controller_state_rollback_without_checkpoint_reuses_local_database(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
     db_dir = tmp_path / "db"
-    db_dir.mkdir()
-    monkeypatch.setattr(
-        controller_main,
-        "read_rollout_record",
-        lambda _remote: RolloutRecord(
-            phase=RolloutPhase.ROLLBACK_REQUESTED,
-            image="img:old",
-            rollback_checkpoint=None,
-        ),
+    _seed_database(db_dir, 7)
+    requested = RolloutRecord(
+        phase=RolloutPhase.ROLLBACK_REQUESTED,
+        image="controller:old",
+        rollback_checkpoint=None,
     )
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(checkpoint_epoch_ms=100),
-    )
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda _remote: 100)
-    written = []
-    monkeypatch.setattr(controller_main, "write_rollout_record", lambda remote, record: written.append(record))
-    restores = []
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: restores.append(1) or True)
+    write_rollout_record(remote_state_dir, requested)
 
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
-    # No checkpoint recorded: reuse the local DB, leave the record untouched.
-    assert restores == []
-    assert written == []
+    assert _database_marker(db_dir) == 7
+    assert read_rollout_record(remote_state_dir) == requested
 
 
-def test_local_db_reused_when_healthy_and_checkpoint_matches_remote(tmp_path, monkeypatch):
+def test_prepare_controller_state_reuses_local_database_at_latest_checkpoint(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
     db_dir = tmp_path / "db"
-    db_dir.mkdir()
-    _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(checkpoint_epoch_ms=100),
-    )
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda _remote: 100)
-    restores = []
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: restores.append(1) or True)
+    _checkpoint(db_dir, remote_state_dir, marker=11)
 
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
-    assert restores == []
+    assert _database_marker(db_dir) == 11
 
 
-def test_local_db_with_different_checkpoint_restores_latest_remote(tmp_path, monkeypatch):
+def test_prepare_controller_state_restores_latest_when_local_ancestry_differs(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    _checkpoint(tmp_path / "checkpoint-source", remote_state_dir, marker=20)
     db_dir = tmp_path / "db"
-    db_dir.mkdir()
-    _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(checkpoint_epoch_ms=100),
-    )
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda _remote: 200)
-    captured = {}
-    monkeypatch.setattr(
-        controller_main,
-        "download_checkpoint_to_local",
-        lambda remote, dbdir, checkpoint_dir=None: captured.update(checkpoint_dir=checkpoint_dir) or True,
-    )
+    _seed_database(db_dir, 10)
 
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
-    assert captured["checkpoint_dir"] is None
+    assert _database_marker(db_dir) == 20
 
 
-def test_checkpoint_path_restores_when_local_absent(tmp_path, monkeypatch):
+def test_prepare_controller_state_restores_requested_checkpoint_when_local_absent(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    checkpoint = _checkpoint(tmp_path / "checkpoint-source", remote_state_dir, marker=30)
     db_dir = tmp_path / "db"
-    _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(exists=False, healthy=False),
-    )
-    captured = {}
-    monkeypatch.setattr(
-        controller_main,
-        "download_checkpoint_to_local",
-        lambda remote, dbdir, checkpoint_dir=None: captured.update(checkpoint_dir=checkpoint_dir) or True,
-    )
 
-    ckpt = "gs://b/state/controller-state/123"
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=ckpt)
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=checkpoint)
 
-    assert captured["checkpoint_dir"] == ckpt
+    assert _database_marker(db_dir) == 30
 
 
-def test_checkpoint_path_not_found_raises(tmp_path, monkeypatch):
-    db_dir = tmp_path / "db"
-    _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(exists=False, healthy=False),
-    )
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: False)
+def test_prepare_controller_state_rejects_missing_checkpoint(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    checkpoint_root = prefix_join(remote_state_dir, "controller-state")
+    missing = prefix_join(checkpoint_root, "999")
 
     with pytest.raises(ValueError, match="Checkpoint not found"):
-        controller_main._prepare_local_db_dir(
-            db_dir, "gs://b/state", fresh=False, checkpoint_path="gs://b/state/controller-state/999"
-        )
+        prepare_controller_state(tmp_path / "db", remote_state_dir, fresh=False, checkpoint_path=missing)
 
 
-def test_checkpoint_path_requires_numeric_epoch(tmp_path, monkeypatch):
+def test_prepare_controller_state_rejects_checkpoint_without_numeric_epoch(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    checkpoint_root = prefix_join(remote_state_dir, "controller-state")
+    malformed = prefix_join(checkpoint_root, "not-an-epoch")
+
+    with pytest.raises(ValueError, match="numeric epoch"):
+        prepare_controller_state(tmp_path / "db", remote_state_dir, fresh=False, checkpoint_path=malformed)
+
+
+def test_prepare_controller_state_quarantines_corrupt_database_before_restore(tmp_path: Path) -> None:
+    remote_state_dir = _remote_state(tmp_path)
+    _checkpoint(tmp_path / "checkpoint-source", remote_state_dir, marker=40)
     db_dir = tmp_path / "db"
-    _no_rollout_record(monkeypatch)
+    _seed_database(db_dir, 10)
+    corrupt_bytes = b"not a sqlite database"
+    (db_dir / ControllerDB.DB_FILENAME).write_bytes(corrupt_bytes)
 
-    with pytest.raises(ValueError):
-        controller_main._prepare_local_db_dir(
-            db_dir,
-            "gs://b/state",
-            fresh=False,
-            checkpoint_path="gs://b/state/controller-state/not-an-epoch",
-        )
+    prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
-
-def test_corrupt_local_db_is_preserved_before_remote_restore(tmp_path, monkeypatch):
-    db_dir = tmp_path / "db"
-    _seed_db(db_dir, "corrupt")
-    _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(
-        controller_main,
-        "probe_database_dir",
-        lambda _db_dir: _database_probe(healthy=False),
-    )
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda _remote: 200)
-
-    def restore(_remote, target, **_kwargs):
-        target.mkdir()
-        (target / "controller.sqlite3").write_text("restored")
-        return True
-
-    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", restore)
-
-    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
-
-    assert (db_dir / "controller.sqlite3").read_text() == "restored"
+    assert _database_marker(db_dir) == 40
     quarantined = list(tmp_path.glob("db.corrupt-*"))
     assert len(quarantined) == 1
-    assert (quarantined[0] / "controller.sqlite3").read_text() == "corrupt"
+    assert (quarantined[0] / ControllerDB.DB_FILENAME).read_bytes() == corrupt_bytes

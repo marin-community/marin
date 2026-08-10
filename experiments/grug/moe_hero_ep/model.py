@@ -190,8 +190,10 @@ class GrugModelConfig:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
             raise ValueError("num_experts_per_token must be positive")
-        if self.num_experts_per_token > self.num_experts:
-            raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.num_experts_per_token >= self.num_experts:
+            # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
+            # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
+            raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:

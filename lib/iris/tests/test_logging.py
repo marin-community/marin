@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
+import subprocess
+import sys
 
 import pytest
-import rigging.log_setup as log_setup
 from rigging.log_setup import (
     BufferedLogRecord,
     LevelPrefixFormatter,
@@ -93,20 +95,19 @@ def test_slow_log_silent_when_fast(caplog):
 
 
 def test_configure_logging_captures_records():
-    log_setup._configured = False
-    old_handlers = logging.getLogger().handlers[:]
-    try:
-        buf = log_setup.configure_logging(level=logging.DEBUG)
-        logger = logging.getLogger("iris.test.configure_test")
-        logger.debug("cfg-test-msg")
-        results = buf.query(prefix="iris.test.configure_test")
-        assert len(results) >= 1
-        assert "cfg-test-msg" in results[-1].message
-    finally:
-        log_setup._configured = False
-        root = logging.getLogger()
-        root.handlers.clear()
-        root.handlers.extend(old_handlers)
+    script = """
+import json
+import logging
+from rigging.log_setup import configure_logging
+
+buffer = configure_logging(level=logging.DEBUG)
+logging.getLogger("iris.test.configure_test").debug("cfg-test-msg")
+print(json.dumps([record.message for record in buffer.query(prefix="iris.test.configure_test")]))
+"""
+    result = subprocess.run([sys.executable, "-c", script], check=True, text=True, capture_output=True)
+    messages = json.loads(result.stdout)
+    assert len(messages) == 1
+    assert messages[0].endswith("iris.test.configure_test cfg-test-msg")
 
 
 @pytest.mark.parametrize(
@@ -155,33 +156,14 @@ def test_level_prefix_formatter_produces_expected_format():
 
 def test_configure_logging_uses_level_prefix_format():
     """configure_logging produces log lines with single-letter level prefix."""
+    script = """
+import logging
+from rigging.log_setup import configure_logging
 
-    log_setup._configured = False
-    old_handlers = logging.getLogger().handlers[:]
-    try:
-        log_setup.configure_logging(level=logging.DEBUG)
-        root = logging.getLogger()
-        # Find the stderr handler and capture its output
-        for h in root.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, RingBufferHandler):
-                record = logging.LogRecord(
-                    name="test.fmt",
-                    level=logging.WARNING,
-                    pathname="",
-                    lineno=0,
-                    msg="test-msg",
-                    args=(),
-                    exc_info=None,
-                )
-                output = h.format(record)
-                assert output.startswith("W"), f"Expected 'W' prefix, got: {output}"
-                assert "test.fmt" in output
-                assert "test-msg" in output
-                break
-        else:
-            pytest.fail("No StreamHandler found after configure_logging")
-    finally:
-        log_setup._configured = False
-        root = logging.getLogger()
-        root.handlers.clear()
-        root.handlers.extend(old_handlers)
+configure_logging(level=logging.DEBUG)
+logging.getLogger("test.fmt").warning("test-msg")
+"""
+    result = subprocess.run([sys.executable, "-c", script], check=True, text=True, capture_output=True)
+    assert result.stderr.startswith("W")
+    assert "test.fmt" in result.stderr
+    assert "test-msg" in result.stderr

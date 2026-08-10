@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 
 import pyarrow as pa
 import yaml
-from config import ClusterTarget
+from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
@@ -39,6 +39,26 @@ def _stitched_dashboards() -> dict[str, dict]:
     it's been extracted behind a panelRef.
     """
     return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
+
+
+def _all_panels(dashboard: dict) -> list[dict]:
+    """Every panel including those nested inside collapsed rows."""
+    return [nested for panel in dashboard["panels"] for nested in (panel, *panel.get("panels", []))]
+
+
+def _panel_sql(dashboard: dict) -> list[str]:
+    """Every SQL string a dashboard sends, panels and template variables alike."""
+    queries = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
+    for variable in dashboard.get("templating", {}).get("list", []):
+        query = variable.get("query")
+        if isinstance(query, dict) and query.get("queryType") == "infinity":
+            queries.append(query["infinityQuery"])
+    return [
+        param["value"]
+        for query in queries
+        for param in query.get("url_options", {}).get("params", [])
+        if param["key"] == "sql"
+    ]
 
 
 def _load(path: Path) -> dict:
@@ -185,16 +205,21 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_critical_contact_point_reaches_email_slack_and_loom():
+def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
+    """The bridge posts every Slack alert, not Grafana. For critical alerts that is
+    load-bearing — an incoming webhook never reveals the message ts that Loom needs
+    to route the thread — and routing the fallback the same way keeps one channel,
+    one credential, and one rendering."""
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
-    critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack", "webhook"}
-    for point in points.values():
-        for receiver in point["receivers"]:
-            if receiver["type"] == "slack":
-                assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+    assert {receiver["type"] for receiver in points["ops-critical"]["receivers"]} == {"email", "webhook"}
+    assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"webhook"}
+    slack_receivers = [r for point in points.values() for r in point["receivers"] if r["type"] == "slack"]
+    assert slack_receivers == [], "a Slack receiver would post a second message Loom cannot route"
+
     (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
     assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
+    (fallback,) = points["ops-slack"]["receivers"]
+    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/slack", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():
@@ -219,11 +244,10 @@ def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
 
 
-def test_k8s_dashboard_shows_finelog_fleet_health():
-    dashboard = _stitched_dashboards()["k8s.json"]
+def test_clusters_dashboard_shows_finelog_fleet_health():
     (panel,) = [
         panel
-        for panel in dashboard["panels"]
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
         if any(target.get("url") == "/fleet_health" for target in panel.get("targets", []))
     ]
     assert panel["datasource"]["uid"] == "finelog-marin"
@@ -231,10 +255,12 @@ def test_k8s_dashboard_shows_finelog_fleet_health():
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
 
 
-def test_k8s_dashboard_shows_node_deadlock_and_reboot_state():
-    dashboard = _stitched_dashboards()["k8s.json"]
+def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
     (target,) = [
-        target for panel in dashboard["panels"] for target in panel.get("targets", []) if target.get("url") == "/nodes"
+        target
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
+        for target in panel.get("targets", [])
+        if target.get("url") == "/nodes"
     ]
     selectors = {column["selector"] for column in target["columns"]}
     assert {
@@ -249,14 +275,13 @@ def test_k8s_dashboard_shows_node_deadlock_and_reboot_state():
     } <= selectors
 
 
-def test_finelog_dashboard_shows_health_pods_storage_and_events():
-    dashboard = _stitched_dashboards()["finelog.json"]
-    targets = [target for panel in dashboard["panels"] for target in panel.get("targets", [])]
+def test_clusters_dashboard_shows_finelog_pods_storage_and_events():
+    targets = [
+        target for panel in _all_panels(_stitched_dashboards()["clusters.json"]) for target in panel.get("targets", [])
+    ]
 
-    assert {(target["url"], target.get("parser")) for target in targets} == {
-        ("/fleet_health", "backend"),
-        ("/finelog", "backend"),
-        ("/finelog_events", "backend"),
+    assert {("/fleet_health", "backend"), ("/finelog", "backend"), ("/finelog_events", "backend")} <= {
+        (target["url"], target.get("parser")) for target in targets
     }
     pod_target = next(target for target in targets if target["url"] == "/finelog")
     selectors = {column["selector"] for column in pod_target["columns"]}
@@ -282,7 +307,7 @@ def test_dashboard_filter_expressions_reference_selected_columns():
     # `columns`, so every field a filter references must also be selected.
     literals = {"true", "false", "null"}
     for name, dashboard in _stitched_dashboards().items():
-        for panel in dashboard["panels"]:
+        for panel in _all_panels(dashboard):
             for target in panel.get("targets", []):
                 expression = target.get("filterExpression")
                 if not expression:
@@ -297,7 +322,7 @@ def test_dashboard_filter_expressions_reference_selected_columns():
 def test_dashboard_datasource_uids_are_provisioned():
     uids = set(_datasources())
     for name, dashboard in _stitched_dashboards().items():
-        for panel in dashboard["panels"]:
+        for panel in _all_panels(dashboard):
             uid = (panel.get("datasource") or {}).get("uid")
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
@@ -379,9 +404,83 @@ def test_provisioning_render_fixture_routes_metric_query_to_region_series():
 
 def test_stat_panels_use_grafana_reduce_options_schema():
     for name, dashboard in _stitched_dashboards().items():
-        for panel in dashboard["panels"]:
+        for panel in _all_panels(dashboard):
             if panel.get("type") != "stat":
                 continue
             reduce_options = panel.get("options", {}).get("reduceOptions", {})
             assert "calc" not in reduce_options, f"{name} panel {panel['id']}: use calcs, not calc"
             assert reduce_options.get("calcs"), f"{name} panel {panel['id']}: missing reduction"
+
+
+def test_telemetry_queries_bound_their_window_with_foldable_macros():
+    # telemetry_v1 is sorted on timestamp_ms alone, so the boundary has to fold to a
+    # constant for segment pruning to happen at all. `timestamp_ms >= {{from}}` compares
+    # a bigint against a timestamp and turns every panel into a full namespace scan.
+    for name, dashboard in _stitched_dashboards().items():
+        for sql in _panel_sql(dashboard):
+            if '"telemetry_v1"' not in sql:
+                continue
+            assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" in sql, name
+            assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
+            assert "timestamp_ms >= {{from}}" not in sql, name
+
+
+def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
+    # finelog's SQL parser rejects a bare `cluster` identifier anywhere but the first
+    # select-list position -- `SELECT ts AS t, cluster FROM ...` fails to parse. Quoting
+    # it sidesteps the keyword entirely.
+    bare = re.compile(r'(?<![\w"])cluster(?![\w"])')
+    for name, dashboard in _stitched_dashboards().items():
+        for sql in _panel_sql(dashboard):
+            interpolated = re.sub(r"\$\{[^}]*\}", "?", sql)
+            for match in bare.finditer(interpolated):
+                preceding = interpolated[: match.start()].rstrip()
+                assert preceding.endswith(" AS"), f"{name}: unquoted `cluster` in {sql[:160]!r}"
+
+
+def test_every_sql_selector_has_a_matching_variable():
+    # A selector interpolated into SQL but never declared reaches finelog as literal
+    # `${name:sqlstring}` and the panel fails to parse. Shared fragments make this easy
+    # to hit: a dashboard adopting one inherits its filters.
+    for name, dashboard in _stitched_dashboards().items():
+        variables = {variable["name"] for variable in dashboard.get("templating", {}).get("list", [])}
+        for sql in _panel_sql(dashboard):
+            for variable in re.findall(r"\$\{(\w+):sqlstring\}", sql):
+                assert variable in variables, f"{name}: ${variable} used but not declared"
+
+
+def test_dashboard_links_point_at_provisioned_dashboards():
+    # Deleting a dashboard silently strands every nav link that named it.
+    uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}
+    for name, dashboard in _stitched_dashboards().items():
+        for link in dashboard.get("links", []):
+            url = link["url"]
+            if not url.startswith("/d/"):
+                continue
+            assert url.removeprefix("/d/").split("/")[0] in uids, f"{name}: dead link {url}"
+
+
+def test_cluster_variable_lists_every_configured_cluster():
+    # A cluster missing from the dropdown is invisible on every dashboard, so the list
+    # tracks the clusters the bridge actually serves.
+    expected = {cluster.name for cluster in CLUSTERS} | {cluster.name for cluster in K8S_CLUSTERS}
+    for name, dashboard in _stitched_dashboards().items():
+        variables = {v["name"]: v for v in dashboard.get("templating", {}).get("list", [])}
+        if "cluster" not in variables:
+            continue
+        assert set(variables["cluster"]["query"].split(",")) == expected, name
+
+
+def test_cluster_series_keep_one_colour_across_dashboards():
+    # Colour follows the entity, not its rank: a cluster filtered out of one panel must
+    # not repaint the survivors, and the same cluster reads the same on every dashboard.
+    colours: dict[str, str] = {}
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            for override in panel.get("fieldConfig", {}).get("overrides", []):
+                series = override["matcher"].get("options")
+                if series not in {cluster.name for cluster in CLUSTERS} | {c.name for c in K8S_CLUSTERS}:
+                    continue
+                (colour,) = [p["value"]["fixedColor"] for p in override["properties"] if p["id"] == "color"]
+                assert colours.setdefault(series, colour) == colour, f"{name}: {series} changes colour"
+    assert len(colours) >= len(CLUSTERS)

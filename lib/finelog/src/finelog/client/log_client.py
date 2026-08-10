@@ -79,9 +79,9 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Send zstd; accept both zstd and gzip. gzip is kept only as a fallback.
-_SEND_COMPRESSION = ZstdCompression()
-_ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
+_FINELOG_ZSTD_LEVEL = 1
+_SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
+_ACCEPT_COMPRESSIONS = (_SEND_COMPRESSION, GzipCompression())
 
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0

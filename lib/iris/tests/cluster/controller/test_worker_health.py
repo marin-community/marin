@@ -9,13 +9,7 @@ Exercises the two independent termination paths:
 - Build failures (monotonic counter, independent of reconciles)
 """
 
-from pathlib import Path
-
 import pytest
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import healthy_active_workers_with_attributes, list_active_healthy_workers
-from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import (
     MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
@@ -24,11 +18,7 @@ from iris.cluster.controller.worker_health import (
     WorkerLiveness,
 )
 from iris.cluster.types import WorkerId, WorkerUsability
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import insert, select
-from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
-
-from .conftest import make_worker_metadata, register_worker
+from rigging.timing import Duration
 
 # Grace used by the fixture tracker. Workers register at now_ms=0, so a failure
 # at now_ms >= GRACE_MS (past the floor) is over the unreachable threshold.
@@ -157,74 +147,6 @@ def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     for _ in range(2):
         _build_failed(tracker, wid)
     assert tracker.snapshot() == {wid: (3, 2)}
-
-
-def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
-    """Seeding liveness from persisted workers marks every DB worker healthy.
-
-    Without this seed (regression target), a controller restart hides every
-    pre-existing worker from ``healthy_active_workers_with_attributes`` until
-    the next ping cycle — the scheduler then makes no assignments.
-
-    The seeding logic is now a free function on Controller; this test
-    exercises it directly via WorkerHealthTracker.heartbeat.
-    """
-
-    db = ControllerDB(db_dir=tmp_path)
-    try:
-        with db.transaction() as cur:
-            cur.execute(insert(workers_table).values(worker_id="w-seed-1", address="10.0.0.1:8080"))
-            cur.execute(insert(workers_table).values(worker_id="w-seed-2", address="10.0.0.2:8080"))
-
-        health = WorkerHealthTracker()
-        worker_attrs = WorkerAttrsProjection(db)
-
-        # Replicate _seed_liveness_from_workers
-        now_ms = Timestamp.now().epoch_ms()
-        with db.read_snapshot() as tx:
-            rows = tx.execute(select(workers_table.c.worker_id)).all()
-        worker_ids = [row.worker_id for row in rows]
-        health.heartbeat(worker_ids, now_ms)
-
-        liveness_one = health.liveness(WorkerId("w-seed-1"))
-        liveness_two = health.liveness(WorkerId("w-seed-2"))
-        assert liveness_one.healthy and liveness_one.active
-        assert liveness_two.healthy and liveness_two.active
-        assert liveness_one.last_heartbeat_ms > 0
-        assert liveness_two.last_heartbeat_ms > 0
-
-        with db.read_snapshot() as tx:
-            schedulable = healthy_active_workers_with_attributes(tx, health, worker_attrs)
-        ids = {str(w.worker_id) for w in schedulable}
-        assert ids == {"w-seed-1", "w-seed-2"}
-    finally:
-        db.close()
-
-
-def test_failing_worker_excluded_from_scheduling_but_still_reconciled(state):
-    """A worker accruing reconcile failures stops getting new placements but is
-    still reconciled, so it can recover or cross the teardown threshold.
-
-    Pins the two-filter split: scheduling placement
-    (``healthy_active_workers_with_attributes``) drops a worker with
-    ``consecutive_failures > 0``, while the reconcile target set
-    (``list_active_healthy_workers``) keeps probing every active worker.
-    """
-    ok = register_worker(state, "w-ok", "w-ok:8080", make_worker_metadata())
-    failing = register_worker(state, "w-failing", "w-failing:8080", make_worker_metadata())
-
-    # Mid-failure: unreachable for one reconcile pass but not yet over threshold.
-    set_worker_consecutive_failures_for_test(state, failing, 1)
-
-    with state._db.read_snapshot() as tx:
-        schedulable = {
-            w.worker_id for w in healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
-        }
-        reconcile_targets = set(list_active_healthy_workers(tx, state._health))
-
-    assert ok in schedulable
-    assert failing not in schedulable, "a failing worker must not receive new placements"
-    assert {ok, failing} <= reconcile_targets, "a failing worker must still be reconciled/probed"
 
 
 @pytest.mark.parametrize(

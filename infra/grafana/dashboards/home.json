@@ -1,44 +1,85 @@
 {
   "uid": "marin-home",
   "title": "Home",
-  "description": "Landing page for grafana.oa.dev: currently firing/pending Grafana alerts, GCP (Iris) and CoreWeave k8s health at a glance, and links to the per-domain dashboards. Provisioned as the default home dashboard (GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH) — everyone who opens the site without a specific dashboard in mind lands here first.",
+  "description": "The landing page: what is firing, what the fleet is drawing, what is queued, and whether the CoreWeave control planes and GB200 racks are whole. Everything here is fleet-wide; the linked dashboards add cluster, job and run selectors.",
   "tags": [
     "marin",
     "generated"
   ],
   "timezone": "utc",
   "editable": false,
-  "schemaVersion": 42,
+  "schemaVersion": 39,
   "refresh": "1m",
   "time": {
     "from": "now-3h",
     "to": "now"
   },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "description": "The clusters the bridge serves (infra/grafana/src/config.py). A custom list rather than a query so a cluster that has gone silent -- exactly when you want to select it -- is still in the dropdown.",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "options": [
+          {
+            "selected": false,
+            "text": "cw-rno2a",
+            "value": "cw-rno2a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-02a",
+            "value": "cw-us-east-02a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-08a",
+            "value": "cw-us-east-08a"
+          },
+          {
+            "selected": false,
+            "text": "marin",
+            "value": "marin"
+          },
+          {
+            "selected": false,
+            "text": "marin-dev",
+            "value": "marin-dev"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "multi": true,
+        "hide": 2,
+        "refresh": 0
+      }
+    ]
+  },
   "links": [
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Infra",
+      "title": "Accelerators",
       "type": "link",
-      "url": "/d/infra"
+      "url": "/d/marin-accel"
     },
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Fleet",
-      "type": "link",
-      "url": "/d/marin-fleet"
-    },
-    {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
       "title": "Jobs",
@@ -48,37 +89,27 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Iris",
+      "title": "Runs",
       "type": "link",
-      "url": "/d/marin-iris"
+      "url": "/d/marin-runs"
     },
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Finelog",
+      "title": "Clusters",
       "type": "link",
-      "url": "/d/marin-finelog"
+      "url": "/d/marin-clusters"
     },
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "K8s",
-      "type": "link",
-      "url": "/d/marin-k8s"
-    },
-    {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
       "title": "Pipelines",
@@ -88,153 +119,266 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Training",
+      "title": "Inference",
       "type": "link",
-      "url": "/d/marin-training"
+      "url": "/d/marin-inference"
     },
     {
       "asDropdown": false,
-      "icon": "external link",
-      "includeVars": false,
-      "keepTime": false,
-      "targetBlank": true,
-      "title": "GitHub Actions",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
       "type": "link",
-      "url": "https://github.com/marin-community/marin/actions"
+      "url": "/d/infra"
     }
   ],
   "panels": [
     {
       "id": 1,
       "type": "alertlist",
-      "title": "Firing / pending alerts",
-      "description": "Every Grafana alert rule currently Alerting or Pending. Critical alerts notify operators; warnings remain on this dashboard without notifications.",
+      "title": "Firing and pending alerts",
+      "description": "Every rule currently Alerting or Pending. Critical rules also page; warning rules stay here without notifying.",
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 24,
         "x": 0,
         "y": 0
       },
       "options": {
-        "viewMode": "list",
-        "groupMode": "default",
+        "alertInstanceLabelFilter": "",
+        "alertName": "",
+        "dashboardAlerts": false,
         "groupBy": [],
+        "groupMode": "default",
         "maxItems": 20,
         "sortOrder": 3,
-        "dashboardAlerts": false,
-        "alertName": "",
-        "alertInstanceLabelFilter": "",
         "stateFilter": {
-          "alerting": true,
-          "pending": true,
+          "error": true,
+          "firing": true,
           "noData": false,
           "normal": false,
-          "error": true
-        }
+          "pending": true
+        },
+        "viewMode": "list"
       }
     },
     {
       "id": 2,
-      "panelRef": "iris_controller_up",
+      "type": "stat",
+      "title": "Fleet GPU power",
+      "description": "Every reporting GPU's current power draw, summed. The pulse: it tracks how much of the fleet is actually working. Latest sample per GPU over the last 10 minutes, so a cluster that reports in bursts still counts once.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
       "gridPos": {
-        "h": 3,
-        "w": 4,
+        "h": 4,
+        "w": 3,
         "x": 0,
-        "y": 8
-      }
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatt",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT SUM(value) / 1000.0 AS value FROM ( SELECT value, ROW_NUMBER() OVER (PARTITION BY \"cluster\", json_get(attributes_json, 'gpu_uuid') ORDER BY timestamp_ms DESC) AS rn FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) WHERE rn = 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "timeFrom": "10m"
     },
     {
       "id": 3,
-      "panelRef": "k8s_apis_unreachable",
       "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 4,
-        "y": 8
-      }
+        "h": 4,
+        "w": 3,
+        "x": 3,
+        "y": 7
+      },
+      "panelRef": "gpus_reporting_count"
     },
     {
       "id": 4,
-      "panelRef": "healthy_workers_count",
       "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 8,
-        "y": 8
-      }
+        "h": 4,
+        "w": 3,
+        "x": 6,
+        "y": 7
+      },
+      "panelRef": "fleet_tasks_inflight"
     },
     {
       "id": 5,
-      "panelRef": "tpu_chips_count",
       "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 12,
-        "y": 8
-      }
+        "h": 4,
+        "w": 3,
+        "x": 9,
+        "y": 7
+      },
+      "panelRef": "fleet_jobs_stuck"
     },
     {
       "id": 6,
-      "panelRef": "pending_pods_count",
       "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 16,
-        "y": 8
-      }
+        "h": 4,
+        "w": 3,
+        "x": 12,
+        "y": 7
+      },
+      "panelRef": "iris_controller_up"
     },
     {
       "id": 7,
-      "panelRef": "crashloops_count",
       "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 20,
-        "y": 8
-      }
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 7
+      },
+      "panelRef": "k8s_apis_unreachable"
     },
     {
       "id": 8,
-      "panelRef": "control_plane_components",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 18,
+        "y": 7
+      },
+      "panelRef": "pending_pods_count"
+    },
+    {
+      "id": 9,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 21,
+        "y": 7
+      },
+      "panelRef": "crashloops_count"
+    },
+    {
+      "id": 10,
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 11
+      },
+      "panelRef": "gpu_power_by_cluster"
+    },
+    {
+      "id": 11,
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
+      "panelRef": "gpu_utilization_by_cluster"
+    },
+    {
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "panelRef": "queue_depth_by_cluster"
+    },
+    {
+      "id": 13,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "panelRef": "warning_events_by_reason"
+    },
+    {
+      "id": 14,
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 11
-      }
+        "y": 28
+      },
+      "panelRef": "control_plane_components"
     },
     {
-      "id": 9,
-      "panelRef": "gpu_rack_tray_inventory",
+      "id": 15,
       "gridPos": {
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 19
-      }
-    },
-    {
-      "id": 10,
-      "panelRef": "fleet_tasks_inflight",
-      "gridPos": {
-        "h": 4,
-        "w": 16,
-        "x": 0,
-        "y": 28
-      }
-    },
-    {
-      "id": 11,
-      "panelRef": "fleet_jobs_stuck",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 28
-      }
+        "y": 36
+      },
+      "panelRef": "gpu_rack_tray_inventory"
     }
   ]
 }

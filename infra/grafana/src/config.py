@@ -86,8 +86,6 @@ class K8sClusterTarget:
 
     name: str  # iris cluster name, e.g. "cw-us-east-08a"
     api_server: str  # public CKS API server URL
-    iris_namespace: str = "iris"
-    finelog_expected: bool = True
 
 
 # All requests authenticate with the single org-wide CW read-role token from the
@@ -96,12 +94,6 @@ K8S_CLUSTERS: tuple[K8sClusterTarget, ...] = (
     K8sClusterTarget("cw-us-east-02a", "https://208261-34513e48.k8s.us-east-02a.coreweave.com"),
     K8sClusterTarget("cw-us-east-08a", "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com"),
     K8sClusterTarget("cw-rno2a", "https://208261-6670debc.k8s.rno2a.coreweave.com"),
-    K8sClusterTarget(
-        "cw-us-west-04a",
-        "https://208261-52d9a2cc.k8s.us-west-04a.coreweave.com",
-        iris_namespace="iris-ci",
-        finelog_expected=False,
-    ),
 )
 
 
@@ -178,13 +170,29 @@ FERRY_GROUPS: tuple[FerryGroup, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
+class SlackAlertConfig:
+    """Where the bridge announces critical alerts.
+
+    A bot token rather than an incoming webhook because only `chat.postMessage`
+    returns the message timestamp, and that timestamp is the thread Loom routes
+    to the triage session.
+    """
+
+    bot_token: str
+    # A Slack channel id (`C…`), not a `#name`: Loom validates the id it is given.
+    channel: str
+
+
+@dataclasses.dataclass(frozen=True)
 class LoomAlertConfig:
-    """Identity-federated Loom destination for critical alerts."""
+    """The identity-federated Loom destination for critical alerts, and the Slack
+    channel every alert is announced in."""
 
     url: str
     profile: str
     repository: str
     http_timeout: float
+    slack: SlackAlertConfig
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,11 +231,24 @@ class BridgeConfig:
             repository = os.environ.get("LOOM_ALERT_REPOSITORY")
             if not profile or not repository:
                 raise ValueError("LOOM_ALERT_PROFILE and LOOM_ALERT_REPOSITORY are required when LOOM_ALERT_URL is set")
+            # The bridge is the only thing that announces critical alerts now that
+            # Grafana's own Slack receiver is gone, so a missing token would take
+            # alerting down silently. Fail the boot instead.
+            # Both are stripped: a secret payload created from a shell pipeline
+            # usually carries a trailing newline, and it would otherwise reach an
+            # Authorization header and a request body verbatim.
+            bot_token = (os.environ.get("SLACK_ALERTS_BOT_TOKEN") or "").strip()
+            channel = (os.environ.get("SLACK_ALERTS_CHANNEL") or "").strip()
+            if not bot_token or not channel:
+                raise ValueError(
+                    "SLACK_ALERTS_BOT_TOKEN and SLACK_ALERTS_CHANNEL are required when LOOM_ALERT_URL is set"
+                )
             loom_alerts = LoomAlertConfig(
                 url=loom_url.rstrip("/"),
                 profile=profile,
                 repository=repository,
                 http_timeout=http_timeout,
+                slack=SlackAlertConfig(bot_token=bot_token, channel=channel),
             )
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),

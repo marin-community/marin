@@ -183,6 +183,25 @@ def test_long_string_workaround_matches_whole_encoding_across_many_chunks(local_
     assert split_tok(batch) == whole_tok(batch)
 
 
+def test_batch_tokenizer_mixed_lengths_matches_individual_encoding(local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
+    texts = [f"ordinary document {index} with a few words" for index in range(70)]
+    texts.insert(17, "long document with safe boundaries " * 200)
+    texts.insert(53, "")
+    batch_tokenizer = BatchTokenizer(
+        tokenizer,
+        enforce_bos=False,
+        enforce_eos=False,
+        _workaround_len=500,
+        long_string_workaround=True,
+    )
+
+    actual = batch_tokenizer([{"text": text} for text in texts])
+    expected = [{"input_ids": tokenizer.encode(text, add_special_tokens=False)} for text in texts]
+
+    assert actual == expected
+
+
 # ---------------------------------------------------------------------------
 # BOS / EOS handling — regression tests for #5034
 # ---------------------------------------------------------------------------

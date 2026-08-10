@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import pytest
 import requests
+import zstandard
 from rigging import telemetry
 
 
@@ -27,11 +28,11 @@ class FakeResponse:
 TransportOutcome = Callable[[str], FakeResponse]
 
 
-def status_outcome(status_code: int) -> TransportOutcome:
+def status_outcome(status_code: int, *, headers: dict[str, str] | None = None) -> TransportOutcome:
     return lambda batch_id: FakeResponse(
         status_code,
         {"batch_id": batch_id, "status": "accepted"} if status_code == 200 else {"error": {"code": "rejected"}},
-        {},
+        headers or {},
     )
 
 
@@ -68,6 +69,29 @@ class RecordingTransport:
 
     def close(self) -> None:
         self.closed.set()
+
+
+class RecordingSession:
+    def __init__(self, outcomes: list[TransportOutcome] | None = None) -> None:
+        self.outcomes = deque(outcomes or [status_outcome(200)])
+        self.requests: list[tuple[str, bytes, dict[str, str], tuple[float, float]]] = []
+        self.closed = False
+
+    def post(
+        self,
+        endpoint: str,
+        *,
+        data: bytes,
+        headers: dict[str, str],
+        timeout: tuple[float, float],
+    ) -> FakeResponse:
+        self.requests.append((endpoint, data, headers, timeout))
+        batch_id = headers["Idempotency-Key"]
+        outcome = self.outcomes.popleft() if self.outcomes else status_outcome(200)
+        return outcome(batch_id)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class BlockingTransport(RecordingTransport):
@@ -115,6 +139,43 @@ def test_unconfigured_instruments_are_noops() -> None:
     telemetry.event("ready", telemetry.serialization.EventBody({"worker": 3}))
 
     assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
+
+
+def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = RecordingSession(
+        [
+            status_outcome(400),
+            status_outcome(200),
+            status_outcome(200, headers={"Accept-Encoding": "gzip, zstd"}),
+            status_outcome(200, headers={"Accept-Encoding": "gzip, zstd"}),
+            status_outcome(400),
+            status_outcome(200),
+            status_outcome(200),
+        ]
+    )
+    monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
+    transport = telemetry._RequestsTransport()
+    body = b'{"records":[{"name":"worker_cpu","value":1}]}'
+
+    transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-2", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-3", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-4", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-5", (1.0, 2.0))
+
+    assert [request[2].get("Content-Encoding") for request in session.requests] == [
+        "zstd",
+        None,
+        None,
+        "zstd",
+        "zstd",
+        None,
+        None,
+    ]
+    for index in (0, 3, 4):
+        assert zstandard.ZstdDecompressor().decompress(session.requests[index][1]) == body
+    for index in (1, 2, 5, 6):
+        assert session.requests[index][1] == body
 
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:
@@ -403,6 +464,37 @@ def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pyt
 
     assert elapsed < 0.2
     assert telemetry.runtime_status().configured is False
+
+
+def test_flush_drains_records_without_disabling_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, max_batch_records=1)
+    counter = telemetry.counter("flushed_record")
+
+    counter.add(1)
+    assert telemetry.flush(1.0)
+    assert telemetry.runtime_status().configured
+    counter.add(2)
+    assert telemetry.flush(1.0)
+
+    records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
+    assert [record["value"] for record in records] == [1, 2]
+
+
+def test_flush_timeout_leaves_exporter_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = BlockingTransport()
+    configure(monkeypatch, transport)
+    telemetry.counter("stuck_record").add()
+    assert transport.started.wait(1)
+
+    started = time.monotonic()
+    assert not telemetry.flush(0.03)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    assert telemetry.runtime_status().configured
+    transport.release.set()
+    assert telemetry.flush(1.0)
 
 
 def test_shutdown_drains_multiple_queued_batches_after_success(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -168,8 +168,9 @@ shard = path[len(output_path.rstrip("/")) + 1 :]           # string-prefix conta
 bypass the guarded factory in `rigging.filesystem`, so the read never charges the
 cross-region transfer budget, `mirror://` is not resolved, and S3/R2 filesystems
 build without the finite timeouts that stop a dead socket from wedging a shard
-(#6487). Each `fs, path = url_to_fs(url); fs.<op>(path)` also re-derives the
-protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
+(#6487). Code that never imports the guarded factory also misses Marin's zero-expiry
+GCS/S3 listing-cache default. Each `fs, path = url_to_fs(url); fs.<op>(path)` also
+re-derives the protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
 `isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `expand_glob`, `mkdirs`, `rm`,
 `rmtree`, `rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
 `download_to`/`upload_from` — so a path opens, lists, and stats through one type.

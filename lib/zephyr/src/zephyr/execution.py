@@ -10,20 +10,21 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import cloudpickle
 import humanfriendly
-from fray.actor import ActorGroup, ActorHandle
+from fray.actor import ActorFuture, ActorGroup, ActorHandle, ActorUnavailableError
 from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.client.client import get_iris_ctx
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
 
@@ -40,6 +41,14 @@ from zephyr.coordinator import (
     _try_read_coordinator_result,
 )
 from zephyr.dataset import Dataset
+from zephyr.memory_store import (
+    MemoryStore,
+    MemoryStoreActorStats,
+    MemoryTableRegistration,
+    actor_result_with_recovery,
+    memory_store_plan,
+    start_actor_calls,
+)
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_checkpoint import ZephyrStageCheckpoint, checkpoint_execution_id, plan_fingerprint
@@ -54,7 +63,12 @@ from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKERS_PER_JOB = 1_024
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
+
+# Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
+# ceiling. Additional shards are pulled by these long-lived replicas.
+MAX_IRIS_WORKER_REPLICAS = 1_000
 
 
 def _generate_execution_id() -> str:
@@ -176,32 +190,39 @@ class _OwnedPool:
 
     coordinator_group: ActorGroup
     coordinator: ActorHandle
-    worker_group: ActorGroup
+    worker_count: int
 
-    def shutdown(self, client: Client) -> None:
-        """Stop the workers before the coordinator."""
+    def shutdown(self) -> None:
+        """Stop the workers, then the coordinator that owns them."""
         with suppress(Exception):
-            self.coordinator.stop_workers.remote().result(timeout=10.0)
-
-        with suppress(Exception):
-            if isinstance(client, LocalClient):
-                for worker in self.worker_group.wait_ready():
-                    worker.shutdown.remote().result(timeout=10.0)
-                self.worker_group.shutdown()
-            else:
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    if self.worker_group.is_done():
-                        break
-                    time.sleep(0.1)
-                else:
-                    logger.warning("Workers did not exit naturally, terminating")
-                    self.worker_group.shutdown()
-
+            self.coordinator.stop_workers.remote().result(timeout=30.0)
         with suppress(Exception):
             self.coordinator.shutdown.remote().result(timeout=10.0)
         with suppress(Exception):
             self.coordinator_group.shutdown()
+
+
+def _require_resolvable_worker_handles(client: Client) -> None:
+    """Reject a memory-store load whose worker handles could never resolve.
+
+    The coordinator owns the worker group, so the driver receives worker handles over
+    an actor response. Serializing an ``IrisActorHandle`` drops its resolver, and the
+    handle rebinds through the ambient Iris context -- which a driver outside a job
+    does not have. Without this check the load fails later, inside ``load_pass``, as a
+    bare "requires IrisContext" from deep in fray.
+    """
+    if isinstance(client, LocalClient) or get_iris_ctx() is not None:
+        return
+    raise RuntimeError(
+        "load_memory_store requires a driver running inside an Iris job: worker handles "
+        "arrive from the coordinator and resolve through the ambient Iris context. "
+        "Run this driver as an Iris job, or use a LocalClient pool."
+    )
+
+
+def _distributed_worker_limit(configured: int | None) -> int:
+    requested = configured or MAX_IRIS_WORKER_REPLICAS
+    return min(requested, MAX_IRIS_WORKER_REPLICAS)
 
 
 @dataclass
@@ -218,7 +239,9 @@ class ZephyrContext:
 
     Args:
         client: Fray client. Zephyr selects the current client when this is not set.
-        max_workers: Worker limit for a dedicated pool or an owned shared pool.
+        max_workers: Worker limit for a dedicated or owned shared pool. Distributed
+            pools are capped at 1,000 replicas; additional shards multiplex through
+            the existing workers. Local execution is uncapped.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
@@ -312,6 +335,124 @@ class ZephyrContext:
         current = self._shared_data.get() or {}
         self._shared_data.set({**current, name: obj})
 
+    def load_memory_store(
+        self,
+        dataset: Dataset[tuple[K, V]],
+        *,
+        name: str,
+        hash_key: Callable[[K], int],
+        recovery_timeout: float,
+        ready_timeout: float = 900.0,
+    ) -> MemoryStore[K, V]:
+        """Load an existing partitioned Dataset into the shared worker pool.
+
+        The Dataset must contain only shard-local operations and yield `(key,
+        value)` tuples. `hash_key(key) % num_source_partitions` must equal the
+        physical source shard containing that key. Construction validates this
+        contract for every row and never inserts a shuffle.
+
+        This context must own an entered worker pool with explicit
+        `max_workers`. The returned table reference is picklable and remains
+        valid across executions until it is destroyed or the context exits.
+
+        Args:
+            dataset: Shard-local Dataset yielding `(key, value)` tuples.
+            name: Descriptive table name used in logs and errors.
+            hash_key: Stable, picklable key hash used by the existing partitioning.
+            recovery_timeout: Overall deadline for a lookup, stats, or destroy
+                operation, including ordinary responses and worker recovery.
+            ready_timeout: Seconds to wait for every worker to validate and load the table.
+
+        Tables share each worker's process memory. Size the worker resource
+        request for the tables and pipeline tasks it will host.
+        """
+        if not name:
+            raise ValueError("memory store name must not be empty")
+        if recovery_timeout <= 0:
+            raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
+        if ready_timeout <= 0:
+            raise ValueError(f"ready_timeout must be positive, got {ready_timeout}")
+        with self._state_lock:
+            if self._state is not _ContextState.OWNER:
+                raise RuntimeError("load_memory_store requires an entered ZephyrContext that owns its worker pool")
+            if self.max_workers is None:
+                raise ValueError("load_memory_store requires explicit max_workers")
+            pool = self._pool
+            coordinator = self._coordinator
+        assert pool is not None
+        assert coordinator is not None
+
+        table_id = uuid.uuid4().hex
+        registration = MemoryTableRegistration(
+            table_id=table_id,
+            name=name,
+            plan=memory_store_plan(dataset),
+            hash_key=hash_key,
+            worker_count=pool.worker_count,
+        )
+
+        _require_resolvable_worker_handles(self.client)
+
+        deadline = time.monotonic() + ready_timeout
+        handles = coordinator.worker_handles.remote(pool.worker_count, ready_timeout).result(timeout=ready_timeout)
+
+        def load_pass() -> list[MemoryStoreActorStats]:
+            calls = {
+                position: lambda handle=handle: handle.load_memory_table.submit(registration)
+                for position, handle in enumerate(handles)
+            }
+            futures = start_actor_calls(calls)
+            return [
+                actor_result_with_recovery(
+                    calls[position],
+                    futures[position],
+                    position,
+                    ready_timeout,
+                    deadline,
+                )
+                for position in range(len(handles))
+            ]
+
+        try:
+            load_pass()
+            coordinator.register_memory_table.remote(registration).result(timeout=max(0.0, deadline - time.monotonic()))
+            stats_by_position = load_pass()
+            actors_by_index: list[ActorHandle | None] = [None] * pool.worker_count
+            for handle, stats in zip(handles, stats_by_position, strict=True):
+                if actors_by_index[stats.actor_index] is not None:
+                    raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
+                actors_by_index[stats.actor_index] = handle
+            if any(handle is None for handle in actors_by_index):
+                raise RuntimeError("memory-store actor group did not report every actor index")
+            actors = tuple(handle for handle in actors_by_index if handle is not None)
+        except BaseException:
+            try:
+                coordinator.unregister_memory_table.remote(table_id).result(timeout=10.0)
+            except Exception:
+                logger.warning("Failed to unregister memory table %s after load failure", table_id, exc_info=True)
+            destroy_futures: list[tuple[int, ActorFuture]] = []
+            for worker_index, handle in enumerate(handles):
+                try:
+                    destroy_futures.append((worker_index, handle.destroy_memory_table.remote(table_id)))
+                except ActorUnavailableError:
+                    logger.warning("Worker %d unavailable while cleaning up memory table %s", worker_index, table_id)
+            for worker_index, future in destroy_futures:
+                try:
+                    future.result(timeout=10.0)
+                except Exception:
+                    logger.warning("Worker %d failed to clean up memory table %s", worker_index, table_id, exc_info=True)
+            raise
+
+        return MemoryStore(
+            table_id=table_id,
+            name=name,
+            actors=actors,
+            coordinator=coordinator,
+            hash_key=hash_key,
+            num_source_partitions=registration.plan.num_source_partitions,
+            recovery_timeout=recovery_timeout,
+        )
+
     def _upload_shared_data(self, execution_id: str) -> None:
         """Write the current logical shared-data view for one execution."""
         for name, obj in dict(self._shared_data.get() or {}).items():
@@ -330,11 +471,18 @@ class ZephyrContext:
 
     def _worker_limit(self) -> int:
         assert self.client is not None
-        if self.max_workers is not None:
-            return self.max_workers
         if isinstance(self.client, LocalClient):
-            return os.cpu_count() or 1
-        return MAX_WORKERS_PER_JOB
+            return self.max_workers or os.cpu_count() or 1
+
+        limit = _distributed_worker_limit(self.max_workers)
+        if self.max_workers is not None and limit != self.max_workers:
+            logger.warning(
+                "Capping max_workers=%d at the Iris worker replica limit of %d; "
+                "remaining shards will be multiplexed through the worker pool",
+                self.max_workers,
+                limit,
+            )
+        return limit
 
     def _start_pool(
         self,
@@ -368,31 +516,27 @@ class ZephyrContext:
             actor_config=ActorConfig(max_concurrency=100),
         )
         coordinator: ActorHandle | None = None
-        worker_group: ActorGroup | None = None
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
-            worker_name = f"zephyr-{self.name}-workers-{pool_id}"
-            worker_group = self.client.create_actor_group(
+            # The coordinator creates the workers so they land in a child job of its
+            # own and Iris cascading termination retires them with it.
+            coordinator.start_workers.remote(
                 ZephyrWorker,
-                coordinator,
+                worker_count,
                 self.stage_runner_factory,
                 ZephyrTaskResources.from_resource_config(self.resources),
-                name=worker_name,
-                count=worker_count,
-                resources=self.resources,
-                actor_config=ActorConfig(max_task_retries=10),
-            )
+                self.resources,
+                ActorConfig(max_concurrency=100, max_task_retries=10),
+            ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
-            worker_group.wait_ready(count=1, timeout=ready_wait)
-            coordinator.set_worker_group.remote(worker_group).result()
-            return _OwnedPool(coordinator_group, coordinator, worker_group)
+            coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)
+            return _OwnedPool(coordinator_group, coordinator, worker_count)
         except Exception:
             if coordinator is not None:
                 with suppress(Exception):
-                    coordinator.shutdown.remote().result(timeout=10.0)
-            if worker_group is not None:
+                    coordinator.stop_workers.remote().result(timeout=30.0)
                 with suppress(Exception):
-                    worker_group.shutdown()
+                    coordinator.shutdown.remote().result(timeout=10.0)
             with suppress(Exception):
                 coordinator_group.shutdown()
             raise
@@ -547,7 +691,7 @@ class ZephyrContext:
             finally:
                 if pool is not None:
                     assert self.client is not None
-                    pool.shutdown(self.client)
+                    pool.shutdown()
                 if checkpoint is None or succeeded:
                     _cleanup_execution(self.chunk_storage_prefix, execution_id)
                 else:
@@ -570,7 +714,7 @@ class ZephyrContext:
             self._state = _ContextState.CLOSED
 
         assert self.client is not None
-        pool.shutdown(self.client)
+        pool.shutdown()
 
     def __enter__(self) -> "ZephyrContext":
         return self.start()
