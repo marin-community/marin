@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -197,6 +198,9 @@ class RunnerConfig:
     artifact_directory: Path
     tools: ToolPaths
     require_jax_version: str
+    source_tree: str | None = None
+    source_capsule_manifest: Path | None = None
+    source_capsule_manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +222,8 @@ class PreflightEvidence:
     compute_capability: str
     architecture: str
     tools: tuple[ToolIdentity, ...]
+    source_tree: str | None
+    source_capsule_manifest_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -343,6 +349,128 @@ def cuda_sass_kernel_names(sass: str) -> tuple[str, ...]:
     return names
 
 
+def _load_source_capsule_manifest(config: RunnerConfig) -> dict[str, Any]:
+    manifest_path = config.source_capsule_manifest
+    manifest_sha256 = config.source_capsule_manifest_sha256
+    source_tree = config.source_tree
+    if manifest_path is None or manifest_sha256 is None or source_tree is None:
+        raise ValueError("capsule source preflight requires manifest path, manifest SHA-256, and source tree")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+        raise ValueError("source capsule manifest SHA-256 must be full lowercase hex")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_tree):
+        raise ValueError("source tree must be a full lowercase Git SHA")
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("source capsule manifest must be a regular file")
+    raw = manifest_path.read_bytes()
+    if len(raw) > 4 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != manifest_sha256:
+        raise ValueError("source capsule manifest differs from the trusted launch identity")
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("source capsule manifest is not valid JSON") from error
+    if not isinstance(manifest, dict) or set(manifest) != {"archive", "members", "schema_version", "source"}:
+        raise ValueError("source capsule manifest must use the closed schema")
+    canonical = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if raw != canonical:
+        raise ValueError("source capsule manifest must use canonical JSON encoding")
+    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
+        raise ValueError("source capsule schema_version must be 1")
+    if manifest["source"] != {"commit": config.source_sha, "tree": source_tree}:
+        raise ValueError("source capsule commit or tree differs from runner configuration")
+    archive = manifest["archive"]
+    if (
+        not isinstance(archive, dict)
+        or set(archive) != {"filename", "sha256"}
+        or archive["filename"] != "h100-evidence-source-capsule.zip"
+        or not isinstance(archive["sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive["sha256"]) is None
+    ):
+        raise ValueError("source capsule archive identity is malformed")
+    members = manifest["members"]
+    if not isinstance(members, list) or not members or len(members) > 10_000:
+        raise ValueError("source capsule members must be a bounded nonempty list")
+    records: dict[str, dict[str, Any]] = {}
+    total_size = 0
+    for record in members:
+        if not isinstance(record, dict) or set(record) != {"mode", "path", "sha256", "size", "type"}:
+            raise ValueError("source capsule member must use the closed schema")
+        source_path = record["path"]
+        if not isinstance(source_path, str):
+            raise ValueError("source capsule path must be a string")
+        path = Path(source_path)
+        if not source_path or path.is_absolute() or path.as_posix() != source_path or ".." in path.parts:
+            raise ValueError(f"source capsule path is not normalized and relative: {source_path!r}")
+        if source_path in records:
+            raise ValueError(f"source capsule repeats path: {source_path}")
+        if record["type"] == "file" and record["mode"] not in {"100644", "100755"}:
+            raise ValueError(f"source capsule file has invalid mode: {record}")
+        if record["type"] == "symlink" and record["mode"] != "120000":
+            raise ValueError(f"source capsule symlink has invalid mode: {record}")
+        if record["type"] not in {"file", "symlink"}:
+            raise ValueError(f"source capsule member has invalid type: {record}")
+        if type(record["size"]) is not int or not 0 <= record["size"] <= 8 * 1024 * 1024:
+            raise ValueError(f"source capsule member has invalid size: {record}")
+        if not isinstance(record["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None:
+            raise ValueError(f"source capsule member has invalid SHA-256: {record}")
+        total_size += record["size"]
+        if total_size > 32 * 1024 * 1024:
+            raise ValueError("source capsule expands beyond the reviewed bound")
+        records[source_path] = record
+    if list(records) != sorted(records):
+        raise ValueError("source capsule members must be in canonical path order")
+    actual_paths = {
+        path.relative_to(config.source_root).as_posix()
+        for path in config.source_root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if actual_paths != set(records):
+        raise ValueError("source capsule file set differs from its manifest")
+    for source_path, record in records.items():
+        path = config.source_root / source_path
+        if record["type"] == "symlink":
+            if not path.is_symlink():
+                raise ValueError(f"source capsule member is not the required symlink: {source_path}")
+            contents = os.readlink(path).encode()
+            target = Path(os.readlink(path))
+            resolved = Path(os.path.normpath(path.parent / target))
+            if target.is_absolute() or not resolved.is_relative_to(config.source_root):
+                raise ValueError(f"source capsule symlink escapes source root: {source_path}")
+        else:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"source capsule member is not a regular file: {source_path}")
+            expected_mode = 0o755 if record["mode"] == "100755" else 0o644
+            if stat.S_IMODE(path.stat().st_mode) != expected_mode:
+                raise ValueError(f"source capsule member mode differs from manifest: {source_path}")
+            contents = path.read_bytes()
+        if len(contents) != record["size"] or hashlib.sha256(contents).hexdigest() != record["sha256"]:
+            raise ValueError(f"source capsule member content differs from manifest: {source_path}")
+    return manifest
+
+
+def audit_imported_local_modules(config: RunnerConfig, modules: Mapping[str, Any] | None = None) -> None:
+    """Require every imported Marin-local module to match a capsule member."""
+    if config.source_capsule_manifest is None:
+        return
+    manifest = _load_source_capsule_manifest(config)
+    records = {record["path"]: record for record in manifest["members"]}
+    local_prefixes = ("tile_lifetime", "lib.tile_lifetime")
+    imported_modules = sys.modules if modules is None else modules
+    for name, module in tuple(imported_modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if not isinstance(module_file, str):
+            continue
+        path = Path(module_file).resolve()
+        try:
+            relative = path.relative_to(config.source_root).as_posix()
+        except ValueError:
+            if name in local_prefixes or name.startswith(tuple(f"{prefix}." for prefix in local_prefixes)):
+                raise ValueError(f"local module {name} loaded outside the source capsule: {path}") from None
+            continue
+        record = records.get(relative)
+        if record is None or record["type"] != "file" or file_sha256(path) != record["sha256"]:
+            raise ValueError(f"imported local module {name} is not an exact source capsule member: {relative}")
+
+
 def require_clean_h100_preflight(
     config: RunnerConfig,
     *,
@@ -366,17 +494,23 @@ def require_clean_h100_preflight(
     if config.tools.ptxas.parent != toolkit_bin or config.tools.cuobjdump.parent != toolkit_bin:
         raise ValueError("nvcc, ptxas, and cuobjdump must come from one CUDA toolkit bin directory")
 
-    head = _checked_output(run, (str(config.tools.git), "rev-parse", "HEAD"), cwd=config.source_root)
-    if head != config.source_sha:
-        raise ValueError(f"source SHA mismatch: checkout is {head}, required {config.source_sha}")
-    dirty = _checked_output(
-        run,
-        (str(config.tools.git), "status", "--porcelain", "--untracked-files=all"),
-        cwd=config.source_root,
-        allow_empty=True,
-    )
-    if dirty:
-        raise ValueError("source worktree must have no modifications or untracked files")
+    if config.source_capsule_manifest is None:
+        if config.source_tree is not None or config.source_capsule_manifest_sha256 is not None:
+            raise ValueError("capsule source preflight arguments must be supplied together")
+        head = _checked_output(run, (str(config.tools.git), "rev-parse", "HEAD"), cwd=config.source_root)
+        if head != config.source_sha:
+            raise ValueError(f"source SHA mismatch: checkout is {head}, required {config.source_sha}")
+        dirty = _checked_output(
+            run,
+            (str(config.tools.git), "status", "--porcelain", "--untracked-files=all"),
+            cwd=config.source_root,
+            allow_empty=True,
+        )
+        if dirty:
+            raise ValueError("source worktree must have no modifications or untracked files")
+    else:
+        _load_source_capsule_manifest(config)
+        head = config.source_sha
 
     gpu_lines = _checked_output(
         run,
@@ -416,6 +550,8 @@ def require_clean_h100_preflight(
         compute_capability=fields[1],
         architecture=_ARCHITECTURE,
         tools=identities,
+        source_tree=config.source_tree,
+        source_capsule_manifest_sha256=config.source_capsule_manifest_sha256,
     )
 
 
@@ -745,6 +881,9 @@ def _run_retained(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
 
 def run_worker(args: argparse.Namespace) -> None:
     """Run one isolated JAX process role and write its structured result."""
+    source_config = _worker_source_config(args)
+    if source_config.source_capsule_manifest is not None:
+        _load_source_capsule_manifest(source_config)
     # These optional accelerator imports must observe worker-specific cache and
     # XLA dump environment variables set before process startup.
     import jax  # noqa: PLC0415
@@ -763,6 +902,7 @@ def run_worker(args: argparse.Namespace) -> None:
         raise RuntimeError(f"worker requires exactly one visible H100, found {devices}")
 
     context = _worker_case_context(args, jax=jax, jnp=jnp)
+    audit_imported_local_modules(source_config)
     if args.worker is WorkerMode.COMPILE:
         result = _run_compile_worker(args, context, jax=jax)
     elif args.worker is WorkerMode.CASE:
@@ -771,8 +911,33 @@ def run_worker(args: argparse.Namespace) -> None:
         result = _run_profile_worker(args, context, jax=jax)
     else:
         raise ValueError(f"unsupported worker mode: {args.worker}")
+    audit_imported_local_modules(source_config)
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.json_output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+
+
+def _worker_source_config(args: argparse.Namespace) -> RunnerConfig:
+    source_root = _required_argument(args.source_root, "--source-root").resolve()
+    nvcc = args.nvcc.resolve()
+    tools = ToolPaths(
+        git=nvcc,
+        nvidia_smi=nvcc,
+        nvcc=nvcc,
+        ptxas=nvcc,
+        cuobjdump=nvcc,
+        ncu=nvcc,
+        nsys=nvcc,
+    )
+    return RunnerConfig(
+        source_root=source_root,
+        source_sha=_required_argument(args.source_sha, "--source-sha"),
+        artifact_directory=args.json_output.parent,
+        tools=tools,
+        require_jax_version=args.require_jax_version,
+        source_tree=args.source_tree,
+        source_capsule_manifest=args.source_capsule_manifest,
+        source_capsule_manifest_sha256=args.source_capsule_manifest_sha256,
+    )
 
 
 @dataclass(frozen=True)
@@ -1376,11 +1541,13 @@ def run_coordinator(config: RunnerConfig) -> Path:
     )
 
     training = importlib.import_module("lib.tile_lifetime.benchmarks.h100_contract_map_backend_training")
+    audit_imported_local_modules(config)
     config.artifact_directory.mkdir(parents=True)
     (config.artifact_directory / "preflight.json").write_text(
         json.dumps(asdict(preflight), indent=2, sort_keys=True) + "\n"
     )
     generated_artifacts = compile_generated_candidates(config)
+    audit_imported_local_modules(config)
     generated_manifest = config.artifact_directory / "generated_manifest.json"
     generated_manifest.write_text(json.dumps([asdict(record) for record in generated_artifacts], indent=2) + "\n")
     artifacts_by_identity = {(record.case_id, record.backend): record for record in generated_artifacts}
@@ -1481,6 +1648,8 @@ def run_coordinator(config: RunnerConfig) -> Path:
                         },
                         "compiler_flags": backend_artifacts["compiler_flags"],
                         "source_sha": config.source_sha,
+                        "source_tree": config.source_tree,
+                        "source_capsule_manifest_sha256": config.source_capsule_manifest_sha256,
                         "persistent_cache_identity": compiled["persistent_cache_identity"],
                     },
                     "numerical": case_result["numerical"][backend.value],
@@ -1494,10 +1663,13 @@ def run_coordinator(config: RunnerConfig) -> Path:
     decisions = tuple(comparator_decision(comparator, plan.features) for comparator in ExternalComparator)
     if any(decision.admitted for decision in decisions):
         raise AssertionError("dense Contract/Map execution must not admit FA4 or Grug comparators")
+    audit_imported_local_modules(config)
     bundle = {
         "schema": "shuttle.h100_contract_map_executed_bundle.v2",
         "architecture_status": ArchitectureStatus.NONCONFORMING.value,
         "source_sha": config.source_sha,
+        "source_tree": config.source_tree,
+        "source_capsule_manifest_sha256": config.source_capsule_manifest_sha256,
         "preflight": asdict(preflight),
         "external_comparators": [asdict(decision) for decision in decisions],
         "case_manifests": case_manifests,
@@ -1560,12 +1732,30 @@ def _worker_base_command(
         str(generated_manifest),
         "--json-output",
         str(json_output),
+        "--source-root",
+        str(config.source_root),
+        "--source-sha",
+        config.source_sha,
         "--nvcc",
         str(config.tools.nvcc),
         "--require-jax-version",
         config.require_jax_version,
         "--cache-kind",
         cache_kind,
+        *(
+            (
+                "--source-tree",
+                config.source_tree,
+                "--source-capsule-manifest",
+                str(config.source_capsule_manifest),
+                "--source-capsule-manifest-sha256",
+                config.source_capsule_manifest_sha256,
+            )
+            if config.source_capsule_manifest is not None
+            and config.source_tree is not None
+            and config.source_capsule_manifest_sha256 is not None
+            else ()
+        ),
     )
 
 
@@ -2240,6 +2430,9 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true", help="Run the reviewed H100 evidence protocol.")
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-sha")
+    parser.add_argument("--source-tree")
+    parser.add_argument("--source-capsule-manifest", type=Path)
+    parser.add_argument("--source-capsule-manifest-sha256")
     parser.add_argument("--artifact-directory", type=Path)
     parser.add_argument("--require-jax-version", required=True)
     parser.add_argument("--git", type=Path)
@@ -2300,6 +2493,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             artifact_directory=artifact_directory,
             tools=tools,
             require_jax_version=args.require_jax_version,
+            source_tree=args.source_tree,
+            source_capsule_manifest=(
+                args.source_capsule_manifest.resolve() if args.source_capsule_manifest is not None else None
+            ),
+            source_capsule_manifest_sha256=args.source_capsule_manifest_sha256,
         )
     )
     print(output)
