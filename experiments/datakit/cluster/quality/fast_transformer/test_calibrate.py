@@ -16,6 +16,7 @@ import numpy as np
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
+    MIN_PER_LEVEL,
     apply_calibration,
     calibration_knots,
     per_type_knots,
@@ -111,3 +112,43 @@ def test_apply_calibration_accepts_a_global_calibration_unchanged():
     raw = _raw_from(levels, rng, scale=1.0, offset=0.0)
     knots = calibration_knots(raw, levels)
     assert np.allclose(apply_calibration(raw, None, knots), np.interp(raw, knots["xk"], knots["yk"]))
+
+
+def test_a_thin_oracle_level_does_not_place_a_cutpoint():
+    """A type can be large while one of its levels is not, and one thin level is enough.
+
+    Math carried 5,179 labels but only 20 at level 1. Its bottom cutpoint, a median
+    over those 20, landed above the 10th percentile of math's own scores and sent
+    half of all math — worked geometry, algebra tutorials — to the bottom bucket.
+    The type-level count never showed it, because the type was not small.
+    """
+    rng = np.random.default_rng(7)
+    # A type skewed high, exactly like math: almost no low-quality examples.
+    skewed = _levels(rng, 4000, [1, 20, 60, 200, 400])
+    broad = _levels(rng, 4000, [1, 1, 1, 1, 1])
+    raw = np.concatenate([_raw_from(skewed, rng, scale=1.0, offset=0.0), _raw_from(broad, rng, scale=1.0, offset=0.0)])
+    levels = np.concatenate([skewed, broad])
+    types = np.array(["skewed"] * 4000 + ["broad"] * 4000)
+
+    knots = per_type_knots(raw, levels, types, min_per_type=400)
+    share = _top_share(raw, types, knots)
+    assert share["skewed"] > 0.30, "a type that is mostly excellent must not be dumped in low buckets"
+
+    # The thin bottom level must borrow the global cutpoint rather than fit its own.
+    thin = int((skewed == 1).sum())
+    assert thin < MIN_PER_LEVEL, "precondition: level 1 is thin for the skewed type"
+    assert np.isclose(knots["types"]["skewed"]["xk"][1], knots["default"]["xk"][1], atol=1e-9)
+
+
+def test_bottom_bucket_is_not_where_a_high_quality_type_lands():
+    """The failure as a user would see it: correctly typed excellent work scoring zero."""
+    rng = np.random.default_rng(8)
+    skewed = _levels(rng, 3000, [1, 20, 60, 200, 400])
+    broad = _levels(rng, 3000, [1, 1, 1, 1, 1])
+    raw = np.concatenate([_raw_from(skewed, rng, scale=1.0, offset=0.0), _raw_from(broad, rng, scale=1.0, offset=0.0)])
+    levels = np.concatenate([skewed, broad])
+    types = np.array(["skewed"] * 3000 + ["broad"] * 3000)
+    cal = apply_calibration(raw, types, per_type_knots(raw, levels, types, min_per_type=400))
+    buckets = np.digitize(cal, BUCKET_EDGES)
+    bottom = float((buckets[(types == "skewed") & (levels >= 4)] == 0).mean())
+    assert bottom < 0.02, f"{bottom:.1%} of the skewed type's good work landed in the bottom bucket"

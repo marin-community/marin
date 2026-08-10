@@ -43,6 +43,11 @@ DEFAULT_MIN_PER_TYPE = 400
 # The rubric's catch-all. It is not a content type with its own standard of
 # excellence, so it is held to the quality scale but not to cross-type parity.
 RESIDUAL_TYPE = "other"
+# Documents a cutpoint needs on BOTH adjacent oracle levels before it is fitted from
+# the type's own data. A type can be large while one of its levels is not: math has
+# 5,179 labels and 20 at level 1, and that one thin level placed a cutpoint above the
+# 10th percentile of math's own scores, dumping half of it in the bottom bucket.
+MIN_PER_LEVEL = 100
 
 
 def apply_calibration(raw: np.ndarray, types: np.ndarray | None, knots: dict) -> np.ndarray:
@@ -66,22 +71,56 @@ def apply_calibration(raw: np.ndarray, types: np.ndarray | None, knots: dict) ->
     return out
 
 
-def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float], list[float]]:
+def fit_cutpoints(
+    raw: np.ndarray,
+    levels: np.ndarray,
+    *,
+    fallback_cuts: list[float] | None = None,
+    min_per_level: int = 0,
+) -> tuple[dict[int, float], list[float]]:
     """Return (per-level medians, cutpoints). The cutpoint between level k and k+1 is
     the midpoint of the two level medians; the cutpoints are enforced non-decreasing.
-    All five oracle levels must be present -- a missing level would make the bucket
-    boundaries ambiguous, so fail loudly rather than KeyError."""
-    present = {int(v) for v in np.unique(levels)}
-    missing = {1, 2, 3, 4, 5} - present
-    if missing:
-        raise ValueError(f"calibration labels missing oracle level(s) {sorted(missing)}; all of 1..5 required")
-    med = {level: float(np.median(raw[levels == level])) for level in (1, 2, 3, 4, 5)}
-    cuts = [(med[k] + med[k + 1]) / 2 for k in (1, 2, 3, 4)]
+
+    A cutpoint is only as good as the two levels it sits between. Within a type those
+    levels can be very thin even when the type itself is large: math carries 5,179
+    labels but only 20 at level 1, so its bottom cutpoint was a median over 20 noisy
+    scores. That single number landed at 0.596 — above the 10th percentile of math's
+    own score distribution — and sent half of all math to the bottom bucket, including
+    worked geometry and algebra. The type-level count never revealed it, because the
+    type was not small; only one of its levels was.
+
+    So each cutpoint requires ``min_per_level`` documents on both sides, and falls
+    back to the corresponding global cutpoint when it does not have them. The fit
+    stays per-type exactly where the evidence is, and defers to the whole corpus
+    where it is not — rather than the type being all-or-nothing.
+    """
+    counts = {level: int((levels == level).sum()) for level in (1, 2, 3, 4, 5)}
+    if fallback_cuts is None:
+        missing = [level for level, n in counts.items() if n == 0]
+        if missing:
+            raise ValueError(f"calibration labels missing oracle level(s) {missing}; all of 1..5 required")
+    med = {level: float(np.median(raw[levels == level])) if counts[level] else float("nan") for level in (1, 2, 3, 4, 5)}
+
+    cuts: list[float] = []
+    for i, k in enumerate((1, 2, 3, 4)):
+        supported = counts[k] >= max(min_per_level, 1) and counts[k + 1] >= max(min_per_level, 1)
+        if supported:
+            cuts.append((med[k] + med[k + 1]) / 2)
+        elif fallback_cuts is not None:
+            cuts.append(float(fallback_cuts[i]))
+        else:
+            raise ValueError(f"cutpoint {k}->{k + 1} has {counts[k]}/{counts[k + 1]} labels and no fallback")
     return med, [float(c) for c in np.maximum.accumulate(cuts)]
 
 
-def calibration_knots(raw: np.ndarray, levels: np.ndarray) -> dict:
-    _, cuts = fit_cutpoints(raw, levels)
+def calibration_knots(
+    raw: np.ndarray,
+    levels: np.ndarray,
+    *,
+    fallback_cuts: list[float] | None = None,
+    min_per_level: int = 0,
+) -> dict:
+    _, cuts = fit_cutpoints(raw, levels, fallback_cuts=fallback_cuts, min_per_level=min_per_level)
     xk = [float(raw.min()) - 1e-6, *cuts, float(raw.max()) + 1e-6]
     return {"xk": xk, "yk": YK}
 
@@ -108,17 +147,29 @@ def per_type_knots(raw: np.ndarray, levels: np.ndarray, types: np.ndarray, *, mi
     A type with fewer than ``min_per_type`` labels cannot place five cutpoints
     stably, so it falls back to the global remap rather than to a noisy one.
     """
-    knots = {"default": calibration_knots(raw, levels), "types": {}}
+    default = calibration_knots(raw, levels)
+    fallback_cuts = list(default["xk"][1:-1])
+    knots = {"default": default, "types": {}}
     for name in sorted(set(types.tolist())):
         mask = types == name
         if int(mask.sum()) < min_per_type:
             logger.info("calibrate: %-14s n=%-5d below floor, using the default remap", name, int(mask.sum()))
             continue
-        try:
-            knots["types"][name] = calibration_knots(raw[mask], levels[mask])
-        except ValueError as e:
-            # A type missing an oracle level entirely has ambiguous boundaries.
-            logger.info("calibrate: %-14s n=%-5d %s", name, int(mask.sum()), e)
+        knots["types"][name] = calibration_knots(
+            raw[mask], levels[mask], fallback_cuts=fallback_cuts, min_per_level=MIN_PER_LEVEL
+        )
+        borrowed = [
+            k
+            for k, cut in enumerate(knots["types"][name]["xk"][1:-1], start=1)
+            if int((levels[mask] == k).sum()) < MIN_PER_LEVEL or int((levels[mask] == k + 1).sum()) < MIN_PER_LEVEL
+        ]
+        if borrowed:
+            logger.info(
+                "calibrate: %-14s n=%-5d cutpoint(s) %s fitted on too few labels, taken from the default remap",
+                name,
+                int(mask.sum()),
+                borrowed,
+            )
     return knots
 
 
