@@ -10,7 +10,6 @@ import warnings
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Generic, TypeVar
 
 import haliax.partitioning
@@ -38,6 +37,7 @@ from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.py_utils import per_instance_lru_cache
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 
 Ex = TypeVar("Ex")
@@ -198,7 +198,7 @@ class DataLoader(Iterable[Ex]):
 
         return out
 
-    @lru_cache
+    @per_instance_lru_cache()
     def compute_local_device_indices_for_bs(self, bs) -> dict[jax.Device, range]:
         """Return the local indices for each device for a given batch size and sharding."""
         rounded_bs = self._round_batch_size(bs)

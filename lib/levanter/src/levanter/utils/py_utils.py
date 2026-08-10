@@ -6,14 +6,48 @@ import contextlib
 import datetime
 import decimal
 import enum
+import functools
 import json
 import os
 import pathlib
 import random
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass
+from typing import TypeVar
 
 import numpy as np
+
+F = TypeVar("F", bound=Callable)
+
+
+def per_instance_lru_cache(maxsize: int | None = 128) -> Callable[[F], F]:
+    """Memoizes a method, giving each instance its own LRU cache.
+
+    `functools.lru_cache` applied to a method stores `self` in a single cache owned by the
+    function object, so instances are pinned in memory for the lifetime of the process and
+    `maxsize` becomes a budget shared by every live instance (which then evict each other's
+    entries). This decorator instead installs a separate cache in each instance's `__dict__`
+    the first time the method is called, so the cache dies with the instance.
+
+    The cache participates in a reference cycle with its instance, so collection happens on a
+    `gc` pass rather than when the last reference drops. Arguments must be hashable.
+    """
+
+    def decorator(method: F) -> F:
+        cache_attr = f"_per_instance_cache_{method.__name__}"
+
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            cache = self.__dict__.get(cache_attr)
+            if cache is None:
+                cache = functools.lru_cache(maxsize=maxsize)(functools.partial(method, self))
+                self.__dict__[cache_attr] = cache
+            return cache(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
 
 
 def logical_cpu_core_count() -> int:

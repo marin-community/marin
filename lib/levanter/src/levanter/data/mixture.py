@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import functools
 import logging
 import warnings
 from typing import List, Mapping, Sequence, Tuple, TypeVar
@@ -17,6 +16,7 @@ from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.data.dataset import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
+from levanter.utils.py_utils import per_instance_lru_cache
 from levanter.utils.thread_utils import blocking_wait, future_from_value
 
 logger = logging.getLogger(__name__)
@@ -206,11 +206,9 @@ class MixtureDataset(AsyncDataset[T]):
         return self._is_finite_cache
 
     def _get_stage_for_block(self, block_id: int) -> int:
-        block_start = block_id * self.block_size
-        stage_starts = np.array([start for start, _ in self.weight_stages])
-        return int(max(0, np.searchsorted(stage_starts, block_start, side="right") - 1))
+        return int(max(0, np.searchsorted(self._stage_start_blocks, block_id, side="right") - 1))
 
-    @functools.lru_cache(maxsize=32)
+    @per_instance_lru_cache(maxsize=32)
     def _get_block(self, index: int) -> np.ndarray:
         stage = self._get_stage_for_block(index)
         if not self.randomize_blocks:

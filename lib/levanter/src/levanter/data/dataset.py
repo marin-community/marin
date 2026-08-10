@@ -4,7 +4,6 @@
 import abc
 import logging
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
 
 import jax.random
@@ -14,6 +13,7 @@ from jaxtyping import PRNGKeyArray
 from levanter.data._prp import PermType, Permutation
 from levanter.utils import thread_utils
 from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.py_utils import per_instance_lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -536,7 +536,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             raise RuntimeError("BlockShufflingDataset is not initialized")
         return self._state
 
-    @lru_cache(maxsize=4)
+    @per_instance_lru_cache(maxsize=4)
     def _window_layout(self, window_id: int) -> _WindowLayout:
         state = self._state_or_error()
         if window_id < 0 or window_id >= state.num_windows:
@@ -563,7 +563,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             full_blocks=tuple(physical_full_blocks), full_region_size=full_region_size, tail_size=tail_size
         )
 
-    @lru_cache(maxsize=4)
+    @per_instance_lru_cache(maxsize=4)
     def _window_full_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.full_region_size <= 1:
@@ -571,7 +571,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         key = _fold_in_on_local_cpu(self._window_full_key, window_id)
         return Permutation.make(self._perm_type, layout.full_region_size, key)
 
-    @lru_cache(maxsize=4)
+    @per_instance_lru_cache(maxsize=4)
     def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.tail_size <= 1:
