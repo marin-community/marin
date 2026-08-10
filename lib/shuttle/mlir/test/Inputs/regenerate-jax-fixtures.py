@@ -23,6 +23,12 @@ JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
 PINNED_XLA_REVISION = "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
 FINGERPRINT_PATTERN = re.compile(r"(?m)^([0-9A-Fa-f]{64})$")
+ACCEPTANCE_FIXTURE_FILENAMES = frozenset(
+    {
+        "jax-0.10.1-tanh-dot-forward.mlir",
+        "jax-0.10.1-tanh-dot-vjp.mlir",
+    }
+)
 
 
 def reference_function(x, w0, w1):
@@ -130,26 +136,32 @@ def audited_fixture(fixture: Fixture, normalizer: Path) -> str:
     payload = export_stablehlo(fixture)
     raw_digest = hashlib.sha256(payload.encode()).hexdigest().upper()
     normalized_digest = normalized_fingerprint(payload, normalizer)
-    hook_boundary_payload = xla_hook_boundary_stablehlo(payload)
-    hook_boundary_digest = hashlib.sha256(hook_boundary_payload.encode()).hexdigest().upper()
-    hook_boundary_normalized_digest = normalized_fingerprint(hook_boundary_payload, normalizer)
+    hook_boundary_header = ()
+    if fixture.filename in ACCEPTANCE_FIXTURE_FILENAMES:
+        hook_boundary_payload = xla_hook_boundary_stablehlo(payload)
+        hook_boundary_digest = hashlib.sha256(hook_boundary_payload.encode()).hexdigest().upper()
+        hook_boundary_normalized_digest = normalized_fingerprint(hook_boundary_payload, normalizer)
+        hook_boundary_header = (
+            "// XLA hook-boundary preprocessing: stablehlo-complex-math-expander",
+            f"// XLA hook-boundary StableHLO SHA-256: {hook_boundary_digest}",
+            f"// XLA hook-boundary normalized StableHLO SHA-256: {hook_boundary_normalized_digest}",
+        )
     shapes = ", ".join(f"{shape}:f32" for shape in fixture.shapes)
-    header = f"""// Copyright The Marin Authors
-// SPDX-License-Identifier: Apache-2.0
-
-// Ordinary-JAX export audit
-// Generator: {Path(__file__).name} ({fixture.filename})
-// Export: jax.jit(fixture.function).lower(*f32_shape_structs).compiler_ir(dialect=\"stablehlo\")
-// Expression: {fixture.expression}
-// Inputs: {shapes}
-// JAX: {JAX_VERSION}; jaxlib: {JAXLIB_VERSION}; XLA: {PINNED_XLA_REVISION}
-// Raw StableHLO SHA-256: {raw_digest}
-// Normalized StableHLO SHA-256: {normalized_digest}
-// XLA hook-boundary preprocessing: stablehlo-complex-math-expander
-// XLA hook-boundary StableHLO SHA-256: {hook_boundary_digest}
-// XLA hook-boundary normalized StableHLO SHA-256: {hook_boundary_normalized_digest}
-
-"""
+    header_lines = (
+        "// Copyright The Marin Authors",
+        "// SPDX-License-Identifier: Apache-2.0",
+        "",
+        "// Ordinary-JAX export audit",
+        f"// Generator: {Path(__file__).name} ({fixture.filename})",
+        '// Export: jax.jit(fixture.function).lower(*f32_shape_structs).compiler_ir(dialect="stablehlo")',
+        f"// Expression: {fixture.expression}",
+        f"// Inputs: {shapes}",
+        f"// JAX: {JAX_VERSION}; jaxlib: {JAXLIB_VERSION}; XLA: {PINNED_XLA_REVISION}",
+        f"// Raw StableHLO SHA-256: {raw_digest}",
+        f"// Normalized StableHLO SHA-256: {normalized_digest}",
+        *hook_boundary_header,
+    )
+    header = "\n".join(header_lines) + "\n\n"
     return header + payload
 
 
