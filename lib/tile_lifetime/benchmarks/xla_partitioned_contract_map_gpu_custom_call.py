@@ -9,7 +9,6 @@ import argparse
 import gzip
 import hashlib
 import json
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -55,6 +54,7 @@ def run_benchmark(
     architecture: str,
     artifact_directory: Path,
     seed: int,
+    shuttle_revision: str,
     warmup: int,
     iterations: int,
     samples: int,
@@ -148,7 +148,7 @@ def run_benchmark(
         "reason": (
             "bounded one-CTA scalar mainloop is a correctness skeleton; QuACK/CuTe remains the throughput candidate"
         ),
-        "revision": _git_revision(),
+        "revision": shuttle_revision,
         "device": str(devices[0]),
         "architecture": architecture,
         "seed": seed,
@@ -183,15 +183,6 @@ def _array_digest(value: np.ndarray) -> str:
     return hashlib.sha256(value.tobytes()).hexdigest()
 
 
-def _git_revision() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hlo-gzip", type=Path, default=_DEFAULT_HLO)
@@ -199,6 +190,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--architecture", default="sm_90a")
     parser.add_argument("--artifact-directory", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--shuttle-revision", required=True)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--samples", type=int, default=30)
@@ -214,6 +206,7 @@ def main() -> None:
         architecture=arguments.architecture,
         artifact_directory=arguments.artifact_directory,
         seed=arguments.seed,
+        shuttle_revision=arguments.shuttle_revision,
         warmup=arguments.warmup,
         iterations=arguments.iterations,
         samples=arguments.samples,
