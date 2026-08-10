@@ -3,9 +3,9 @@
 
 """Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536.
 
-Downsized copies of the ``moe_hero_ep`` hero shape (128 experts, top-4, two shared, SConv,
-hybrid GQA, ``fixed_all_to_all`` EP MoE) at the three small sweep widths, each trained to its 60x
-token budget (60 tokens per active parameter). The architecture, data (datakit two-phase mixture),
+Downsized copies of the ``moe_hero_ep`` hero shape (hidden-wide routed experts, top-4, two shared,
+SConv, hybrid GQA, ``fixed_all_to_all`` EP MoE) at the small sweep widths, each trained to 750 tokens
+per active parameter (the EP sweep budget). The architecture, data (datakit two-phase mixture),
 evals (paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid
 (issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
 width/depth/head split and the token budget shrink relative to the d6144 shape.
@@ -201,7 +201,8 @@ def _small_model(
     return GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=shape.hidden_dim,
-        intermediate_dim=intermediate_dim if intermediate_dim is not None else shape.hidden_dim // 2,
+        # Routed experts default hidden-wide, matching the EP hero; only the shared expert is hidden/2.
+        intermediate_dim=intermediate_dim if intermediate_dim is not None else shape.hidden_dim,
         shared_expert_intermediate_dim=shape.hidden_dim // 2,
         num_shared_experts=2,
         num_experts=num_experts,
@@ -253,7 +254,7 @@ def build_small_run(
     latent_dim: int | None = None,
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
-    tokens_per_active_param: int = 60,
+    tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
     watch_interval: int = 0,
     dp_racks: int = 1,
