@@ -30,7 +30,12 @@ PACKAGE_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(PACKAGE_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_SOURCE_ROOT))
 
+from tile_lifetime.cuda_expert_parallel_training_codegen import (  # noqa: E402
+    expert_training_scalar_program_from_pair_map,
+    verify_cuda_expert_training_include,
+)
 from tile_lifetime.cuda_map_fold_codegen import (  # noqa: E402
+    default_map_fold_semantics,
     shuttle_map_fold_program,
     verify_cuda_map_fold_include,
 )
@@ -134,6 +139,10 @@ def _build_extension(mok_root: Path, build_dir: Path, nvcc: str) -> Path:
     verify_cuda_map_fold_include(
         _probe_root() / "generated_map_fold.inc",
         shuttle_map_fold_program(),
+    )
+    verify_cuda_expert_training_include(
+        _probe_root() / "generated_training.inc",
+        expert_training_scalar_program_from_pair_map(default_map_fold_semantics().pair_map),
     )
     verify_sm100_grouped_contract_event_include(
         _probe_root() / "generated_event_schedule.inc",
