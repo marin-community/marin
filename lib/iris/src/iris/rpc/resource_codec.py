@@ -59,7 +59,8 @@ def device_to_proto(value: CpuDevice | GpuDevice | TpuDevice) -> resource_pb2.De
     )
 
 
-def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice | TpuDevice:
+def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice | TpuDevice | None:
+    """Decode a device, treating an empty message as no device."""
     match value.WhichOneof("device"):
         case "cpu":
             return CpuDevice(variant=value.cpu.variant)
@@ -68,7 +69,7 @@ def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice
         case "tpu":
             return TpuDevice(variant=value.tpu.variant, topology=value.tpu.topology, count=value.tpu.count)
         case _:
-            raise ValueError("device has no selected kind")
+            return None
 
 
 def resource_spec_to_proto(value: ResourceSpec) -> resource_pb2.ResourceSpecProto:
@@ -87,7 +88,7 @@ def resource_spec_from_proto(value: resource_pb2.ResourceSpecProto) -> ResourceS
         cpu=value.cpu_millicores / 1_000,
         memory=value.memory_bytes,
         disk=value.disk_bytes,
-        device=device_from_proto(value.device) if value.HasField("device") else None,
+        device=device_from_proto(value.device),
     )
 
 

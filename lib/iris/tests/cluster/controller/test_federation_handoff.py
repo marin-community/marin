@@ -1167,6 +1167,20 @@ def test_a_handoff_the_peer_could_not_authenticate_stays_pending(tmp_path, log_c
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
 
 
+def test_federation_sync_with_present_empty_device_decodes_device_less_job():
+    response = controller_pb2.Controller.FederationSyncResponse(next_cursor="7")
+    delta = response.deltas.add(job_id=JobName.root(_USER, "cpu-job").to_wire())
+    delta.summary.state = job_pb2.JOB_STATE_RUNNING
+    delta.summary.resources.cpu_millicores = 8_000
+    delta.summary.resources.device.SetInParent()
+
+    batch = federation_batch_from_legacy(response)
+    summary = batch.deltas[0].summary
+
+    assert summary is not None
+    assert summary.resources == ResourceSpec(cpu=8.0)
+
+
 # ---------------------------------------------------------------------------
 # admission + incremental tombstone
 # ---------------------------------------------------------------------------

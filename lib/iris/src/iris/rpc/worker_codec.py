@@ -106,7 +106,7 @@ def worker_metadata_from_proto(value: job_pb2.WorkerMetadata) -> WorkerMetadata:
         cpu_count=value.cpu_count,
         memory_bytes=value.memory_bytes,
         disk_bytes=value.disk_bytes,
-        device=device_from_proto(value.device) if value.HasField("device") else None,
+        device=device_from_proto(value.device),
         tpu_name=value.tpu_name,
         tpu_worker_hostnames=value.tpu_worker_hostnames,
         tpu_worker_id=value.tpu_worker_id,

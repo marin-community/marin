@@ -30,7 +30,12 @@ def device_to_proto(value: Device) -> job_pb2.DeviceConfig:
     return job_pb2.DeviceConfig(tpu=tpu)
 
 
-def device_from_proto(value: job_pb2.DeviceConfig) -> Device:
+def device_from_proto(value: job_pb2.DeviceConfig) -> Device | None:
+    """Decode a device, treating an empty message as no device.
+
+    A persisted device-less resource can reconstitute as a present ``DeviceConfig``
+    with no oneof selected. That is the legacy wire encoding of no device.
+    """
     match value.WhichOneof("device"):
         case "cpu":
             return CpuDevice(value.cpu.variant)
@@ -39,7 +44,7 @@ def device_from_proto(value: job_pb2.DeviceConfig) -> Device:
         case "tpu":
             return TpuDevice(value.tpu.variant, value.tpu.topology, value.tpu.count)
         case _:
-            raise ValueError("device has no selected kind")
+            return None
 
 
 def gpu_count_from_proto(value: job_pb2.DeviceConfig) -> int:
@@ -72,7 +77,7 @@ def resource_spec_from_proto(value: job_pb2.ResourceSpecProto) -> ResourceSpec:
         cpu=value.cpu_millicores / 1_000,
         memory=value.memory_bytes,
         disk=value.disk_bytes,
-        device=device_from_proto(value.device) if value.HasField("device") else None,
+        device=device_from_proto(value.device),
     )
 
 

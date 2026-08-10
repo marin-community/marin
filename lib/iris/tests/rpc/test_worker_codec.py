@@ -73,6 +73,13 @@ def test_worker_metadata_wire_round_trip_preserves_typed_attributes_and_provenan
     assert worker_metadata_from_proto(worker_metadata_to_proto(native)) == native
 
 
+def test_worker_metadata_with_present_empty_device_decodes_device_less() -> None:
+    wire = job_pb2.WorkerMetadata(hostname="cpu-worker")
+    wire.device.SetInParent()
+
+    assert worker_metadata_from_proto(wire).device is None
+
+
 def test_worker_reconcile_run_without_repeated_spec_remains_run_intent() -> None:
     wire = worker_pb2.Worker.ReconcileRequest(
         worker_id="worker-1",

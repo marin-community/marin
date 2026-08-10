@@ -55,11 +55,15 @@ from iris.rpc.legacy.job_codec import (
 from iris.rpc.legacy.job_codec import (
     device_from_proto as legacy_device_from_proto,
 )
+from iris.rpc.legacy.job_codec import (
+    resource_spec_from_proto as legacy_resource_spec_from_proto,
+)
 from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request, job_spec_to_legacy_request
 from iris.rpc.resource_codec import (
     device_from_proto,
     job_spec_from_proto,
     job_spec_to_proto,
+    resource_spec_from_proto,
 )
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select, update
@@ -309,3 +313,13 @@ def test_omitted_gpu_count_defaults_once_across_wires_and_storage(state, mock_co
 
     assert detail.spec.resources.device == GpuDevice(variant="H100", count=1)
     assert reconstructed.resources.device == GpuDevice(variant="H100", count=1)
+
+
+def test_resource_spec_with_present_empty_device_decodes_device_less_across_wires() -> None:
+    legacy = job_pb2.ResourceSpecProto(cpu_millicores=2_000)
+    legacy.device.SetInParent()
+    resource = resource_pb2.ResourceSpecProto(cpu_millicores=2_000)
+    resource.device.SetInParent()
+
+    assert legacy_resource_spec_from_proto(legacy) == ResourceSpec(cpu=2.0)
+    assert resource_spec_from_proto(resource) == ResourceSpec(cpu=2.0)

@@ -345,7 +345,12 @@ class FederationManager:
     def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
-            step()
+            try:
+                step()
+            except Exception:
+                # Maintenance loops are retrying processes. Preserve the traceback
+                # as the operator signal and retry on the next normal cadence.
+                logger.exception("Federation maintenance step failed")
             stop_event.wait(timeout=interval)
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
@@ -427,6 +432,15 @@ class FederationManager:
             response = peer.federation_sync(self._cluster_id, cursor)
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
+            return
+        except Exception:
+            # Response decoding happens inside the peer adapter. Isolate a wire
+            # version or codec gap to this peer and retain its cursor for retry.
+            logger.exception(
+                "Federation sync batch from peer %s at cursor %r could not be decoded",
+                peer.peer_id,
+                cursor,
+            )
             return
         try:
             self._store.apply_sync_batch(

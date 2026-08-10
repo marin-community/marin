@@ -148,6 +148,23 @@ class _SyncConnection(_StubConnection):
         )
 
 
+class _TransientUndecodableSyncConnection(_SyncConnection):
+    """A peer adapter that cannot decode its first sync response."""
+
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
+        self.cursors.append(cursor)
+        if len(self.cursors) == 1:
+            raise ValueError("device has no selected kind")
+        if len(self.cursors) > 2:
+            raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer unavailable after recovery")
+        return FederationSyncBatch(
+            deltas=(),
+            next_cursor=f"{self.peer_id}-{len(self.cursors)}",
+            cursor_stale=False,
+            endpoints=(),
+        )
+
+
 class _RejectingSyncStore:
     def __init__(self) -> None:
         self.cursors: dict[str, str] = {}
@@ -299,6 +316,33 @@ def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync(caplog):
     assert store.cursors == {"bad": "bad-2", "good": "good-2"}
     assert bad_connection.cursors == ["", ""]
     assert good_connection.cursors == ["", "good-1"]
+
+
+def test_sync_loop_with_undecodable_peer_response_retries_without_losing_cursor(caplog):
+    connection = _TransientUndecodableSyncConnection("cw")
+    store = _RejectingSyncStore()
+    store.reject_peer = ""
+    with thread_container_scope() as threads:
+        manager = FederationManager(
+            [_peer("cw", connection)],
+            threads=threads,
+            store=cast(FederationStore, store),
+            cluster_id="parent",
+            heartbeat_interval=Duration.from_seconds(60),
+            sync_interval=Duration.from_seconds(0.02),
+        )
+        manager.start()
+        try:
+            reached = ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+                lambda: store.cursors.get("cw") == "cw-2",
+                timeout=Duration.from_seconds(3),
+            )
+            assert reached
+        finally:
+            manager.stop()
+
+    assert connection.cursors[:2] == ["", ""]
+    assert any(record.exc_info is not None and "peer cw" in record.getMessage() for record in caplog.records)
 
 
 def test_manager_without_peers_is_inert():

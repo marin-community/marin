@@ -374,7 +374,7 @@ def federation_batch_from_legacy(
                     cpu=wire.resources.cpu_millicores / 1_000,
                     memory=wire.resources.memory_bytes,
                     disk=wire.resources.disk_bytes,
-                    device=device_from_proto(wire.resources.device) if wire.resources.HasField("device") else None,
+                    device=device_from_proto(wire.resources.device),
                 ),
             )
         tasks = []
