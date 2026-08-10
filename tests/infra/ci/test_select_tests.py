@@ -6,6 +6,8 @@
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from infra.ci.select_tests import (
     MIN_FILES_PER_SHARD,
     SCOPES,
@@ -214,36 +216,34 @@ def test_evaldash_source_emits_both_dotted_and_bare_modules(tmp_path: Path) -> N
     }
 
 
-def _evaldash_workspace(repo_root: Path) -> None:
+def _write_evaldash_workspace(repo_root: Path) -> None:
     """The two ways evaldash's tests reach its out-of-package sources."""
     write(repo_root, "infra/evaldash/src/metrics.py", "def build_matrix():\n    pass\n")
     write(repo_root, "infra/evaldash/src/samples.py", "def fetch_samples():\n    pass\n")
     write(repo_root, "infra/evaldash/src/fixtures.py", "def build_fixtures():\n    pass\n")
     write(repo_root, "infra/evaldash/src/server.py", "import samples\nfrom metrics import build_matrix\n")
-    # marin-tree tests import through the dotted package path...
+    # Marin-tree tests import through the dotted package path.
     write(
         repo_root, "tests/evaluation/test_evaldash_metrics.py", "from infra.evaldash.src.metrics import build_matrix\n"
     )
-    # ...while the local-store test mirrors the deployed image and imports the modules bare.
+    # The local-store test mirrors the deployed image and imports the modules bare.
     write(repo_root, "tests/evaluation/test_evaldash_local_store.py", "import server\nimport fixtures\n")
 
 
-def test_evaldash_dotted_import_change_selects_the_dotted_test(tmp_path: Path) -> None:
-    _evaldash_workspace(tmp_path)
+@pytest.mark.parametrize(
+    ("changed_file", "selected_test"),
+    [
+        ("infra/evaldash/src/metrics.py", "tests/evaluation/test_evaldash_metrics.py"),
+        ("infra/evaldash/src/server.py", "tests/evaluation/test_evaldash_local_store.py"),
+    ],
+    ids=["dotted-import", "bare-import"],
+)
+def test_evaldash_change_selects_importing_test(tmp_path: Path, changed_file: str, selected_test: str) -> None:
+    _write_evaldash_workspace(tmp_path)
 
-    matrix = select_matrix(["infra/evaldash/src/metrics.py"], tmp_path)
+    matrix = select_matrix([changed_file], tmp_path)
 
-    assert "tests/evaluation/test_evaldash_metrics.py" in leg_paths(matrix, "marin")
-
-
-def test_evaldash_bare_import_change_selects_the_local_store_test(tmp_path: Path) -> None:
-    """A change to a server module the local-store test imports bare must still select it, even
-    though the dotted-import graph never sees the bare name."""
-    _evaldash_workspace(tmp_path)
-
-    matrix = select_matrix(["infra/evaldash/src/server.py"], tmp_path)
-
-    assert "tests/evaluation/test_evaldash_local_store.py" in leg_paths(matrix, "marin")
+    assert selected_test in leg_paths(matrix, "marin")
 
 
 def test_extra_suites_follow_the_owning_package_directory() -> None:

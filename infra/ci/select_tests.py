@@ -43,6 +43,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
 )
+EVALDASH_SOURCE_DIR = "infra/evaldash/src"
 
 
 @dataclass(frozen=True)
@@ -63,8 +64,8 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     # while test_evaldash_local_store.py mirrors the deployed image and imports the
     # modules bare (``import server``; import root = the src dir). Registering both
     # roots ties each test style to the same files so either kind of change selects it.
-    SourceRoot("infra/evaldash/src", "."),
-    SourceRoot("infra/evaldash/src", "infra/evaldash/src"),
+    SourceRoot(EVALDASH_SOURCE_DIR, "."),
+    SourceRoot(EVALDASH_SOURCE_DIR, EVALDASH_SOURCE_DIR),
 )
 
 # Files whose change triggers running every package's full test suite. The Rust
