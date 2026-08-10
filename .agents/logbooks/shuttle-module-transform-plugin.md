@@ -123,3 +123,33 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-bytecode/README.md`
+
+### 2026-08-10 - Native dialect compile after DenseSet correction
+
+- Hypothesis: correcting the pinned LLVM DenseSet includes allows the ordered
+  native target matrix to compile both Shuttle libraries, then reach
+  `shuttle-opt`, lit, and the four patched XLA tests.
+- Commit Hash: `d245bc23c181beb08c4b865044ab0d8aaf1279b0` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-denseset/`, requesting
+  24 CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; LLVM
+  `9a4faee1068c09efbf837cfb7b0f5693b24635f4`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: `@shuttle_mlir//:shuttle_ops_inc_gen` passed. The following
+  `@shuttle_mlir//:ShuttleDialect` target failed compiling
+  `ShuttleDialect.cc` because generated attribute and operation definitions
+  instantiate `mlir::Builder`, `mlir::OpBuilder`, and
+  `mlir::ImplicitLocOpBuilder` while only forward declarations were visible.
+  `@shuttle_mlir//:ShuttlePasses`, `shuttle-opt`, lit, and all four XLA tests
+  did not run.
+- Interpretation: the DenseSet include blocker is closed. The ordered run now
+  exposes an incomplete-type failure at the generated-definition include
+  boundary.
+- Next action: review the exact pinned MLIR generated-code include contract
+  before any new native run. This checkpoint does not authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-denseset/README.md`

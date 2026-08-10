@@ -1,0 +1,169 @@
+[09:35:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Analyzed target @@shuttle_mlir//:shuttle_ops_inc_gen (84 packages loaded, 14124 targets configured).
+[09:35:16] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Found 1 target...
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Elapsed time: 18.586s, Critical Path: 0.03s
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: 1 process: 1 internal.
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Build completed successfully, 1 total action
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | + run_native_preflight.sh:129: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:ShuttleDialect
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | + run_native_preflight.sh:131: tee /app/logs/bazel-build-shuttle-dialect.log
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | WARNING: Option 'local_cpu_resources' is deprecated: --local_cpu_resources is deprecated, please use --local_resources=cpu= instead.
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | WARNING: Option 'local_ram_resources' is deprecated: --local_ram_resources is deprecated, please use --local_resources=memory= instead.
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Reading 'startup' options from /app/sources/xla/tensorflow.bazelrc: --windows_enable_symlinks
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Options provided by the client:
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   Inherited 'common' options: --isatty=0 --terminal_columns=80
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Reading rc options for 'build' from /app/sources/xla/.bazelrc:
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   Inherited 'common' options: --noenable_bzlmod --incompatible_enable_cc_toolchain_resolution --repo_env USE_HERMETIC_CC_TOOLCHAIN=1
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Reading rc options for 'build' from /app/sources/xla/tensorflow.bazelrc:
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   Inherited 'common' options: --define framework_shared_object=true --define tsl_protobuf_header_only=true --define=allow_oversize_protos=true --spawn_strategy=standalone -c opt --repo_env=USE_PYWRAP_RULES=True --copt=-DGRPC_BAZEL_BUILD --host_copt=-DGRPC_BAZEL_BUILD --action_env=GRPC_BAZEL_RUNTIME=1 --repo_env=PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb --action_env=PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=upb --@rules_python//python/config_settings:precompile=force_disabled --@rules_python//python/config_settings:bootstrap_impl=script --repo_env=RULES_PYTHON_ENABLE_PIPSTAR=0 --incompatible_default_to_explicit_init_py --announce_rc --define=grpc_no_ares=true --noincompatible_remove_legacy_whole_archive --features=-force_no_whole_archive --enable_platform_specific_config --config=short_logs --@rules_python//python/config_settings:precompile=force_disabled --experimental_cc_shared_library --experimental_link_static_libraries_once=false --incompatible_enforce_config_setting_visibility --experimental_repo_remote_exec
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Reading rc options for 'build' from /app/sources/xla/.bazelrc:
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   'build' options: --config=warnings
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Found applicable config definition common:short_logs in file /app/sources/xla/tensorflow.bazelrc: --output_filter=DONT_MATCH_ANYTHING
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Found applicable config definition build:warnings in file /app/sources/xla/warnings.bazelrc: --copt=-Werror --host_copt=-Werror --per_file_copt=external/.*@-w --host_per_file_copt=external/.*@-w --copt=-Wall --copt=-Werror --copt=-Wno-address-of-packed-member --copt=-Wno-defaulted-function-deleted --copt=-Wno-deprecated-builtins --copt=-Wno-enum-compare-switch --copt=-Wno-expansion-to-defined --copt=-Wno-ignored-attributes --copt=-Wno-ignored-qualifiers --copt=-Wno-inconsistent-missing-override --copt=-Wno-nontrivial-memaccess --copt=-Wno-nullability-completeness --copt=-Wno-potentially-evaluated-expression --copt=-Wno-range-loop-analysis --copt=-Wno-return-type-c-linkage --copt=-Wno-tautological-undefined-compare --copt=-Wno-unused-but-set-variable --copt=-Wno-unused-lambda-capture --copt=-Wno-unused-local-typedef --copt=-Wno-deprecated-volatile --copt=-Wno-deprecated-anon-enum-enum-conversion --copt=-Wno-deprecated-enum-compare --copt=-Wno-deprecated-enum-enum-conversion --copt=-Wno-deprecated-enum-compare-conditional --copt=-Wno-deprecated-enum-float-conversion --copt=-Wno-deprecated-this-capture --copt=-Wno-strict-prototypes --copt=-Wno-tautological-type-limit-compare --copt=-Wno-tautological-unsigned-enum-zero-compare --copt=-Wno-tautological-unsigned-zero-compare --copt=-Wno-thread-safety-reference --copt=-Wno-undefined-func-template --copt=-Wno-bitfield-constant-conversion --copt=-Wno-bitwise-instead-of-logical --copt=-Wno-comment --copt=-Wno-compound-token-split --copt=-Wno-deprecated-non-prototype --copt=-Wno-misleading-indentation --copt=-Wno-psabi --copt=-Wno-unqualified-std-cast-call --copt=-Wno-deprecated-literal-operator --copt=-Wno-ambiguous-member-template --copt=-Wno-char-subscripts --copt=-Wno-deprecated-declarations --copt=-Wno-deprecated-pragma --copt=-Wno-extern-c-compat --copt=-Wno-gnu-alignof-expression --copt=-Wno-gnu-variable-sized-type-not-at-end --copt=-Wno-implicit-int-float-conversion --copt=-Wno-invalid-source-encoding --copt=-Wno-pointer-sign --copt=-Wno-private-header --copt=-Wno-sign-compare --copt=-Wno-strict-overflow --copt=-Wno-unknown-pragmas --copt=-Wno-unused-command-line-argument --copt=-Wno-unused-const-variable --copt=-Wno-unused-function --copt=-Wno-unused-private-field --copt=-Wno-user-defined-warnings --copt=-Wno-mismatched-tags --copt=-Wfloat-overflow-conversion --copt=-Wfloat-zero-conversion --copt=-Wfor-loop-analysis --copt=-Wgnu-redeclared-enum --copt=-Winfinite-recursion --copt=-Wself-assign --copt=-Wno-self-assign-overloaded --copt=-Wstring-conversion --copt=-Wtautological-overlap-compare --copt=-Wunused-but-set-parameter --copt=-Wunused-comparison --copt=-Wvla --copt=-Wctad-maybe-unsupported --copt=-Wthread-safety-analysis --copt=-Wno-trigraphs --copt=-Woverloaded-virtual --copt=-Wno-invalid-offsetof --copt=-Wno-final-dtor-non-final-class --copt=-Wnon-virtual-dtor --copt=-Wimplicit-fallthrough --copt=-Wno-builtin-macro-redefined --copt=-Wno-macro-redefined --copt=-Wno-deprecated-register --copt=-Wno-register
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Found applicable config definition common:linux in file /app/sources/xla/tensorflow.bazelrc: --host_copt=-w --define=PREFIX=/usr --define=LIBDIR=$(PREFIX)/lib --define=INCLUDEDIR=$(PREFIX)/include --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include --cxxopt=-std=c++17 --host_cxxopt=-std=c++17 --experimental_guard_against_concurrent_changes
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | WARNING: Option 'local_cpu_resources' is deprecated: --local_cpu_resources is deprecated, please use --local_resources=cpu= instead.
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | WARNING: Option 'local_ram_resources' is deprecated: --local_ram_resources is deprecated, please use --local_resources=memory= instead.
+[09:35:17] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Analyzed target @@shuttle_mlir//:ShuttleDialect (0 packages loaded, 1577 targets configured).
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:75:11: Compiling lib/IR/ShuttleDialect.cc failed: (Exit 1): clang failed: error executing CppCompile command (from target @@shuttle_mlir//:ShuttleDialect) external/rules_ml_toolchain/cc/impls/linux_x86_64_linux_x86_64/wrappers/clang -MD -MF bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/ShuttleDialect/ShuttleDialect.d ... (remaining 212 arguments skipped)
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:26:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_attrs_inc_gen/shuttle/IR/ShuttleAttrs.cc.inc:84:19: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    84 |   ::mlir::Builder odsBuilder(odsParser.getContext());
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                   ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:26:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_attrs_inc_gen/shuttle/IR/ShuttleAttrs.cc.inc:114:19: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   114 |   ::mlir::Builder odsBuilder(getContext());
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                   ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:26:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_attrs_inc_gen/shuttle/IR/ShuttleAttrs.cc.inc:167:19: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   167 |   ::mlir::Builder odsBuilder(odsParser.getContext());
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                   ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:26:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_attrs_inc_gen/shuttle/IR/ShuttleAttrs.cc.inc:224:19: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   224 |   ::mlir::Builder odsBuilder(getContext());
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                   ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:395:21: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   395 |     ::mlir::Builder odsBuilder{ctx};
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                     ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:624:31: error: '::mlir::Builder' is an incomplete type
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   624 |   getProperties().algorithm = ::mlir::Builder((*this)->getContext()).getStringAttr(attrValue);
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                               ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:624:69: error: member access into incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   624 |   getProperties().algorithm = ::mlir::Builder((*this)->getContext()).getStringAttr(attrValue);
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                                     ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:641:54: error: member access into incomplete type '::mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   641 |   auto __res__ = ::llvm::dyn_cast<ContractOp>(builder.create(__state__));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                      ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/Dialect.h:24:7: note: forward declaration of 'mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    24 | class OpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:647:33: error: member access into incomplete type '::mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   647 |   return create(builder, builder.getLoc(), std::forward<decltype(results)>(results), std::forward<decltype(inputs)>(inputs), std::forward<decltype(indexing_maps)>(indexing_maps), std::forward<decltype(iterator_kinds)>(iterator_kinds), std::forward<decltype(accumulator_types)>(accumulator_types), std::forward<decltype(precision)>(precision), std::forward<decltype(algorithm)>(algorithm), std::forward<decltype(source)>(source));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                 ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/OpDefinition.h:33:7: note: forward declaration of 'mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    33 | class ImplicitLocOpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:656:67: error: member access into incomplete type '::mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   656 |   odsState.getOrAddProperties<Properties>().algorithm = odsBuilder.getStringAttr(algorithm);
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                                   ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/Dialect.h:24:7: note: forward declaration of 'mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    24 | class OpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:664:54: error: member access into incomplete type '::mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   664 |   auto __res__ = ::llvm::dyn_cast<ContractOp>(builder.create(__state__));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                      ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/Dialect.h:24:7: note: forward declaration of 'mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    24 | class OpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:670:33: error: member access into incomplete type '::mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   670 |   return create(builder, builder.getLoc(), std::forward<decltype(results)>(results), std::forward<decltype(inputs)>(inputs), std::forward<decltype(indexing_maps)>(indexing_maps), std::forward<decltype(iterator_kinds)>(iterator_kinds), std::forward<decltype(accumulator_types)>(accumulator_types), std::forward<decltype(precision)>(precision), std::forward<decltype(algorithm)>(algorithm), std::forward<decltype(source)>(source));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                 ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/OpDefinition.h:33:7: note: forward declaration of 'mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    33 | class ImplicitLocOpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:692:54: error: member access into incomplete type '::mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   692 |   auto __res__ = ::llvm::dyn_cast<ContractOp>(builder.create(__state__));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                      ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/Dialect.h:24:7: note: forward declaration of 'mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    24 | class OpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:698:33: error: member access into incomplete type '::mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   698 |   return create(builder, builder.getLoc(), std::forward<decltype(resultTypes)>(resultTypes), std::forward<decltype(operands)>(operands), std::forward<decltype(attributes)>(attributes));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                 ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/OpDefinition.h:33:7: note: forward declaration of 'mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    33 | class ImplicitLocOpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:711:54: error: member access into incomplete type '::mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   711 |   auto __res__ = ::llvm::dyn_cast<ContractOp>(builder.create(__state__));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                      ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/Dialect.h:24:7: note: forward declaration of 'mlir::OpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    24 | class OpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:717:33: error: member access into incomplete type '::mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |   717 |   return create(builder, builder.getLoc(), std::forward<decltype(resultTypes)>(resultTypes), std::forward<decltype(operands)>(operands), std::forward<decltype(properties)>(properties), std::forward<decltype(discardableAttributes)>(discardableAttributes));
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                 ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/OpDefinition.h:33:7: note: forward declaration of 'mlir::ImplicitLocOpBuilder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    33 | class ImplicitLocOpBuilder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1119:21: error: variable has incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |  1119 |     ::mlir::Builder odsBuilder{ctx};
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                     ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1342:42: error: '::mlir::Builder' is an incomplete type
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |  1342 |   getProperties().reduction_dimensions = ::mlir::Builder((*this)->getContext()).getDenseI64ArrayAttr(attrValue);
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                          ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1342:80: error: member access into incomplete type '::mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |  1342 |   getProperties().reduction_dimensions = ::mlir::Builder((*this)->getContext()).getDenseI64ArrayAttr(attrValue);
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |                                                                                ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |    37 | class Builder;
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 |       |       ^
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | fatal error: too many errors emitted, stopping now [-ferror-limit=]
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | 20 errors generated.
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | Use --verbose_failures to see the command lines of failed build steps.
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: Elapsed time: 38.225s, Critical Path: 13.15s
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | INFO: 855 processes: 145 internal, 710 local.
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | ERROR: Build did NOT complete successfully
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | + run_native_preflight.sh:1: finish
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | + run_native_preflight.sh:27: local status=1
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | + run_native_preflight.sh:28: set +x
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | preflight_exit_code=1
+[09:35:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-denseset/0 | preflight_finished_utc=2026-08-10T09:35:55Z

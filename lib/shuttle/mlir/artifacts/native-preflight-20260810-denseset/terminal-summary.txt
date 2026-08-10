@@ -1,0 +1,40 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-denseset (/dlwh/shuttle-native-mlir-preflight-20260810-denseset)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: .cc:29:
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1119:21: error: variable has incomplete type '::mlir::Builder'
+ 1119 |     ::mlir::Builder odsBuilder{ctx};
+      |                     ^
+external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+   37 | class Builder;
+      |       ^
+In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1342:42: error: '::mlir::Builder' is an incomplete type
+ 1342 |   getProperties().reduction_dimensions = ::mlir::Builder((*this)->getContext()).getDenseI64ArrayAttr(attrValue);
+      |                                          ^
+external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+   37 | class Builder;
+      |       ^
+In file included from external/shuttle_mlir/lib/IR/ShuttleDialect.cc:29:
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc:1342:80: error: member access into incomplete type '::mlir::Builder'
+ 1342 |   getProperties().reduction_dimensions = ::mlir::Builder((*this)->getContext()).getDenseI64ArrayAttr(attrValue);
+      |                                                                                ^
+external/llvm-project/mlir/include/mlir/IR/AffineMap.h:37:7: note: forward declaration of 'mlir::Builder'
+   37 | class Builder;
+      |       ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 38.225s, Critical Path: 13.15s
+INFO: 855 processes: 145 internal, 710 local.
+ERROR: Build did NOT complete successfully
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T09:35:55Z
+
+
+  TASK  STATE      EXIT  DURATION                    PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 38.53 seconds  -           -          .cc:29:
+                                                                            bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.cc.inc...
