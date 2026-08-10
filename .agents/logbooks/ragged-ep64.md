@@ -1084,3 +1084,10 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Controlled comparison: S33's CuTe/Pallas-Wgrad control averaged 19.4428557 seconds, 53,939.6848 tokens/s, and 19.6290902% MFU. The cuDNN Wgrad adapter reduced duration by 3.411%, raised throughput by 3.516%, and gained 0.6902 MFU points. It beat the 20% threshold by 0.3193 MFU points and landed only 0.0352 seconds behind the standalone-kernel projection.
 - W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s43-exact-ep16-e48-split32-cudnn-cute-perf-20260810
 - Next arms: isolate the step-boundary optimizer-state copies by keeping state resident in HBM, then use the accepted 2.5% assignment-drop budget to test a lower receiver capacity on the winning backend. Serialize both arms and retain the same-rack acceptance rule.
+
+## 2026-08-10: S44 HBM optimizer-state control does not fit
+
+- Run: `ra2a-s44-exact-ep16-e48-split32-cute-hbm-opt-perf-20260810`; child `/power/ra2a-s44-exact-cute-hbm-opt-perf-20260810-coord/grug-train-ra2a-s44-exact-ep16-e48-split32-cute-hbm-opt-perf-20260810`.
+- Controlled change: relative to S33, disable optimizer-state offload while retaining the CuTe/Pallas expert backend, exact d6144/L48/E48 shape, capacity 1.33, split-32 ragged transport, safe XLA flags, process-per-GPU topology, and disabled periodic work.
+- Result: `jit_train_step` failed before step zero on every sampled rank while attempting a 120,573,717,720-byte (112.29 GiB) allocation. The CUDA async allocator reported `CUDA_ERROR_OUT_OF_MEMORY`; the later coordination failures were consequences of rank zero exiting.
+- Decision: keep optimizer state in pinned host memory. The approximately 0.5-second step-boundary host-copy bubble cannot be removed by placing the full state in HBM at this model shape.
