@@ -3,9 +3,8 @@ name = "marin-external-harbor"
 version = "0"
 requires-python = "==3.12.*"
 dependencies = [
-    "daytona==0.200.2",
     "gcsfs",
-    "harbor",
+    "harbor[daytona]",
     # LiteLLM imports this at module initialization but does not declare it.
     "pydantic-settings",
     "s3fs",
@@ -16,4 +15,4 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
-harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }
+harbor = { git = "https://github.com/harbor-framework/harbor.git", branch = "main" }
