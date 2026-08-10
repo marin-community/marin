@@ -1,0 +1,115 @@
+{
+  "ad_owner": "JAX VJP over ordinary router Contract, top-k values, and normalized route weights",
+  "collective_all_to_all_count": 2,
+  "collective_boundaries": [
+    {
+      "direction": "source owners -> destination owners",
+      "mechanism": "jax.lax.all_to_all",
+      "name": "output_adjoint_transport",
+      "payload_shape_per_rank": [
+        4,
+        2,
+        32
+      ],
+      "semantics": "payload_permutation_only"
+    },
+    {
+      "direction": "destination owners -> source owners",
+      "mechanism": "jax.lax.all_to_all",
+      "name": "input_adjoint_return_transport",
+      "payload_shape_per_rank": [
+        10,
+        32
+      ],
+      "semantics": "payload_permutation_only"
+    },
+    {
+      "direction": "destination owners -> source owners",
+      "mechanism": "jax.lax.all_to_all",
+      "name": "route_weight_return_transport",
+      "payload_shape_per_rank": [
+        8,
+        2
+      ],
+      "semantics": "payload_permutation_only"
+    }
+  ],
+  "collective_roundtrip_exact": true,
+  "deterministic": {
+    "down_weight_cotangent": true,
+    "gate_weight_cotangent": true,
+    "input_cotangent": true,
+    "output": true,
+    "router_weight_cotangent": true,
+    "up_weight_cotangent": true
+  },
+  "devices": [
+    "cpu",
+    "cpu",
+    "cpu",
+    "cpu"
+  ],
+  "handler_custom_call_count": 5,
+  "handler_occurrences": {
+    "shuttle.distributed_expert_cpu.edge.rank0.edge_reverse": 1,
+    "shuttle.distributed_expert_cpu.input_adjoint": 1,
+    "shuttle.distributed_expert_cpu.source_fold": 1,
+    "shuttle.distributed_expert_cpu.weight_gradient.w13": 1,
+    "shuttle.distributed_expert_cpu.weight_gradient.w2": 1
+  },
+  "input_adjoint_weight_abi": {
+    "generated_down_input_adjoint": [
+      64,
+      32
+    ],
+    "generated_gate_up_input_adjoint": [
+      128,
+      32
+    ],
+    "stored_down": [
+      2,
+      32,
+      32
+    ],
+    "stored_gate_up": [
+      2,
+      32,
+      32
+    ],
+    "transformation": "transpose each forward Contract weight, concatenate gate/up, then reshape"
+  },
+  "kind": "fixed_capacity_distributed_expert_jax_module_cpu",
+  "maximum_absolute_error": {
+    "down_weight_cotangent": 0.000622674822807312,
+    "gate_weight_cotangent": 0.00030914321541786194,
+    "input_cotangent": 0.0007162485271692276,
+    "output": 0.0003302246332168579,
+    "router_weight_cotangent": 6.103515625e-05,
+    "up_weight_cotangent": 0.0002546999603509903
+  },
+  "mean_absolute_error": {
+    "down_weight_cotangent": 9.100455827137921e-06,
+    "gate_weight_cotangent": 9.431998478248715e-06,
+    "input_cotangent": 0.00013302169099915773,
+    "output": 7.943704258650541e-05,
+    "router_weight_cotangent": 7.662689313292503e-06,
+    "up_weight_cotangent": 9.695035259937868e-06
+  },
+  "natural_frontend": "ordinary JAX router/top-k/normalized weights and selected expert tensor algebra",
+  "relation": {
+    "capacity_per_destination": 5,
+    "destination_rows": 40,
+    "destinations": 8,
+    "exchange_rows": 32,
+    "ranks": 4,
+    "route_slots": 2,
+    "sources": 8
+  },
+  "router_vjp_dot_count": 3,
+  "runtime_dependencies": [
+    "JAX/XLA typed FFI",
+    "CUDA runtime",
+    "cuBLAS"
+  ],
+  "torch_free": true
+}
