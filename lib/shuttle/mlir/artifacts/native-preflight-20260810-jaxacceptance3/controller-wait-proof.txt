@@ -1,0 +1,4 @@
+I20260810 15:10:45 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 15:10:45 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 15:10:46 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10001 -> iris-controller-svc:10000
+failed

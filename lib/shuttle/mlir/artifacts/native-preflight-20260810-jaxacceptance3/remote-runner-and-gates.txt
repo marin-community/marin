@@ -1,0 +1,60 @@
+Remote runner proof and gate summary
+
+source=ba31d47e354746543bdc179277071de25c48eaed
+jax=619764c15117fbefc4ba13ab941871cb514c23f6
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+llvm=9a4faee1068c09efbf837cfb7b0f5693b24635f4
+xla_patch_order=0001,0002
+jax_patch_order=0001,0002
+apply_check=PASS_ALL_FOUR
+reverse_apply_check=PASS_ALL_FOUR
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+configured_cquery_verifier=PASS
+pure_acceptance_and_verifier_tests=PASS_43_OF_43
+fixture_oracle=PASS
+bundled_shuttle_source_files=82
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=18.423s
+@shuttle_mlir//:ShuttleDialect PASS elapsed=58.477s
+@shuttle_mlir//:ShuttlePasses PASS elapsed=76.472s
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=5.857s
+@shuttle_mlir//:ShuttleXlaRegistryAdapter PASS elapsed=2.624s
+@shuttle_mlir//:ShuttleObserverTestBridge PASS elapsed=1.863s
+@shuttle_mlir//:shuttle-opt PASS elapsed=68.518s
+
+@shuttle_mlir//:xla_registration_test PASS_UNCACHED elapsed=41.751s tests=1/1
+@shuttle_mlir//:xla_registry_adapter_test PASS_UNCACHED elapsed=14.265s tests=1/1
+@shuttle_mlir//:pipeline_observer_test PASS_UNCACHED elapsed=5.256s tests=1/1
+@shuttle_mlir//:observer_test_bridge_test PASS_UNCACHED elapsed=4.100s tests=1/1
+
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=39.881s
+bazel test @shuttle_mlir//:mlir_tests PASS_UNCACHED elapsed=1.239s tests=17/17
+
+//xla/pjrt:stablehlo_module_transform_test PASS_UNCACHED elapsed=282.402s
+//xla/pjrt:mlir_to_hlo_test PASS_UNCACHED elapsed=13.871s
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS_UNCACHED elapsed=12.864s
+//xla/pjrt:pjrt_executable_test PASS_UNCACHED elapsed=11.906s
+xla_tests=PASS_4_OF_4_UNCACHED
+
+//jaxlib/tools:jaxlib_wheel PASS elapsed=1949.548s actions=25078
+wheel_path=/app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+wheel_sha256=21c30fd5403fa11f6894cb8e845ff43f34d61594e71203751b02e8762e0a4357
+isolated_install=PASS
+pip_check=PASS
+jax_version=0.10.1.dev20260518+619764c
+jaxlib_version=0.10.1
+shuttle_import=PASS
+acceptance_disabled_baseline=PASS
+acceptance_concurrency_lifetime=FAIL_SELECTED_REGION_MEMBERSHIP
+acceptance_cache_populate=NOT_RUN
+acceptance_cache_reuse=NOT_RUN
+observer_diagnostic_event_count=3
+observer_diagnostic_invocation_id=2
+observer_diagnostic_policy=source_ordered
+observer_diagnostic_region_membership_length=373
+observer_diagnostic_region_membership_sha256=cc8a395018a9866e14fa882137009717ca604c13ce48ccc6044bac5d5a154df3
+observer_diagnostic_coverage_manifest_length=2843
+observer_diagnostic_coverage_manifest_sha256=a626b0c7df55bf83154a5697de85eb3c99989bff0cc77b8f3bf469310db0238d
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T22:07:11Z
