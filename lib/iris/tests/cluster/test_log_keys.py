@@ -40,6 +40,21 @@ def test_parsed_prefix_overrides_stream_default(source, data, expected):
 
 
 @pytest.mark.parametrize(
+    "source,data,expected",
+    [
+        # The multi-GPU supervisor tags each child line with its rank; the glog
+        # prefix behind the tag still decides the level.
+        ("stdout", "[rank0] E20260102 12:44:05 something blew up", LogLevel.ERROR),
+        ("stderr", "[rank12] I20260102 12:34:56 worker starting up", LogLevel.INFO),
+        # An untagged-looking bracket is not a rank tag, so the line keeps its default.
+        ("stdout", "[rank] E20260102 12:44:05 something blew up", LogLevel.INFO),
+    ],
+)
+def test_rank_tag_does_not_hide_the_level_prefix(source, data, expected):
+    assert classify_log_level(source, data) == expected
+
+
+@pytest.mark.parametrize(
     "data",
     [
         " 45%|####5     | 450/1000 [00:12<00:15,  3.21it/s]",

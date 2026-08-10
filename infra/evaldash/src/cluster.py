@@ -108,7 +108,7 @@ class ClusterGateway:
         """Return the dashboard's live status shape for one Iris Job resource."""
 
         def fetch(address: str):
-            client = ResourceRpcClient(address=address, timeout_ms=self._timeout_ms)
+            client = ResourceRpcClient(controller_address=address, timeout_ms=self._timeout_ms)
             try:
                 job = _find_job(client, job_path)
                 tasks = _job_tasks(client, job)

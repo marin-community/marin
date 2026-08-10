@@ -89,7 +89,7 @@ def _backfill_one(results_path: str) -> SweepOutcome:
     # partway would read as current and never be retried. The seal is what says it finished.
     if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
         return SweepOutcome("already_current", "current")
-    written = export_lm_eval_samples(results_path)
+    written = export_lm_eval_samples(results_path).samples
     return SweepOutcome("exported", f"{written} sample(s)")
 
 
