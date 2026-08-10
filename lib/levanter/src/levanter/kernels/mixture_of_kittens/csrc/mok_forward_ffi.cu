@@ -327,26 +327,6 @@ __global__ void BackwardEpilogueKernel(
   d_x[static_cast<size_t>(token) * hidden_dim + hidden] = __float2bfloat16_rn(value);
 }
 
-__global__ void ZeroEmptyRoutedWeightGradients(
-    uint16_t* d_w_routed_gate,
-    uint16_t* d_w_routed_up,
-    uint16_t* d_w_routed_down,
-    const int32_t* tokens_per_expert,
-    int64_t elements_per_expert) {
-  const int expert = blockIdx.y;
-  if (tokens_per_expert[expert] != 0) {
-    return;
-  }
-  const int64_t offset = static_cast<int64_t>(expert) * elements_per_expert;
-  for (int64_t index = blockIdx.x * blockDim.x + threadIdx.x;
-       index < elements_per_expert;
-       index += gridDim.x * blockDim.x) {
-    d_w_routed_gate[offset + index] = 0;
-    d_w_routed_up[offset + index] = 0;
-    d_w_routed_down[offset + index] = 0;
-  }
-}
-
 template <typename GL, typename T>
 GL MakeGl(T* pointer, int batch, int depth, int rows, int columns) {
   return kittens::make_gl<GL>(
@@ -537,9 +517,9 @@ ffi::Error BackwardBf16(
     int32_t minibatch_size,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_x,
     ffi::Result<ffi::Buffer<ffi::F32, 2>> d_router_weights,
-    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_gate,
-    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_up,
-    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_down,
+    ffi::Result<ffi::Buffer<ffi::F32, 4>> d_w_routed_gate,
+    ffi::Result<ffi::Buffer<ffi::F32, 4>> d_w_routed_up,
+    ffi::Result<ffi::Buffer<ffi::F32, 4>> d_w_routed_down,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_gate,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_up,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_down,
@@ -581,6 +561,7 @@ ffi::Error BackwardBf16(
         schedule_capacity % minibatch_size != 0) {
       return ffi::Error::InvalidArgument("backward batch sizes do not meet the kernel rules");
     }
+    const int num_macrobatches = (schedule_capacity + macrobatch_size - 1) / macrobatch_size;
     if (x_routed.dimensions()[0] != macrobatch_size || x_routed.dimensions()[1] != hidden_dim ||
         gate_shared.dimensions()[0] != local_tokens || gate_shared.dimensions()[1] != intermediate_dim ||
         gate_routed.dimensions()[0] != macrobatch_size || gate_routed.dimensions()[1] != intermediate_dim ||
@@ -588,6 +569,17 @@ ffi::Error BackwardBf16(
         hidden_shared.dimensions() != gate_shared.dimensions() ||
         hidden_routed.dimensions() != gate_routed.dimensions()) {
       return ffi::Error::InvalidArgument("backward forward-context shape mismatch");
+    }
+    if (d_w_routed_gate->dimensions()[0] != num_macrobatches ||
+        d_w_routed_gate->dimensions()[1] != local_experts ||
+        d_w_routed_gate->dimensions()[2] != intermediate_dim ||
+        d_w_routed_gate->dimensions()[3] != hidden_dim ||
+        d_w_routed_up->dimensions() != d_w_routed_gate->dimensions() ||
+        d_w_routed_down->dimensions()[0] != num_macrobatches ||
+        d_w_routed_down->dimensions()[1] != local_experts ||
+        d_w_routed_down->dimensions()[2] != hidden_dim ||
+        d_w_routed_down->dimensions()[3] != intermediate_dim) {
+      return ffi::Error::InvalidArgument("backward routed weight-gradient shape mismatch");
     }
 
     const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
@@ -616,6 +608,9 @@ ffi::Error BackwardBf16(
     clear(replayed_gate_up_ready, "memset(replayed gate/up ready)");
     clear(replayed_hidden_ready, "memset(replayed hidden ready)");
     clear(routed_buffers_done, "memset(routed buffers done)");
+    clear(d_w_routed_gate, "memset(routed gate gradient partials)");
+    clear(d_w_routed_up, "memset(routed up gradient partials)");
+    clear(d_w_routed_down, "memset(routed down gradient partials)");
     LaunchPeerBarrier(runtime, stream);
 
     MoK::activation_bf16_pgl x_pointer_data;
@@ -690,11 +685,11 @@ ffi::Error BackwardBf16(
         .w_routed_down_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
         .w_routed_down_T_sc = {},
         .d_w_shared_gate = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_gate->typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .d_w_routed_gate = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_gate->typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_routed_gate = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_gate->typed_data(), 1, num_macrobatches * local_experts, intermediate_dim, hidden_dim),
         .d_w_shared_up = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_up->typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .d_w_routed_up = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_up->typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_routed_up = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_up->typed_data(), 1, num_macrobatches * local_experts, intermediate_dim, hidden_dim),
         .d_w_shared_down = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_down->typed_data()), 1, 1, hidden_dim, intermediate_dim),
-        .d_w_routed_down = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_down->typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
+        .d_w_routed_down = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_down->typed_data(), 1, num_macrobatches * local_experts, hidden_dim, intermediate_dim),
         .schedule_peer_rank = MakeGl<MoK::index_gl>(schedule_peer_rank.typed_data(), 1, 1, 1, schedule_capacity),
         .schedule_peer_token_idx = MakeGl<MoK::index_gl>(schedule_peer_token_idx.typed_data(), 1, 1, 1, schedule_capacity),
         .num_tokens = MakeGl<MoK::index_gl>(num_tokens.typed_data(), 1, 1, 1, 1),
@@ -717,15 +712,6 @@ ffi::Error BackwardBf16(
     LaunchKernel<MoK::config, MoK::globals_bwd, MoK::dispatch_mlp_swiglu_combine_bwd_kernel<false>>(
         globals,
         stream);
-
-    const int64_t elements_per_expert = static_cast<int64_t>(intermediate_dim) * hidden_dim;
-    ZeroEmptyRoutedWeightGradients<<<dim3(128, local_experts), 256, 0, stream>>>(
-        reinterpret_cast<uint16_t*>(d_w_routed_gate->typed_data()),
-        reinterpret_cast<uint16_t*>(d_w_routed_up->typed_data()),
-        reinterpret_cast<uint16_t*>(d_w_routed_down->typed_data()),
-        tokens_per_expert.typed_data(),
-        elements_per_expert);
-    ThrowOnCuda(cudaGetLastError(), "ZeroEmptyRoutedWeightGradients");
     LaunchPeerBarrier(runtime, stream);
 
     constexpr int kThreads = 256;
@@ -812,9 +798,9 @@ auto BackwardBinding() {
       .Attr<int32_t>("minibatch_size")
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 2>>()
-      .Ret<ffi::Buffer<ffi::BF16, 3>>()
-      .Ret<ffi::Buffer<ffi::BF16, 3>>()
-      .Ret<ffi::Buffer<ffi::BF16, 3>>()
+      .Ret<ffi::Buffer<ffi::F32, 4>>()
+      .Ret<ffi::Buffer<ffi::F32, 4>>()
+      .Ret<ffi::Buffer<ffi::F32, 4>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()

@@ -35,7 +35,7 @@ _BACKWARD_TARGET = "levanter_mok_backward_bf16_4"
 _INIT_SYMBOL = "levanter_mok_init_runtime"
 _SHUTDOWN_SYMBOL = "levanter_mok_shutdown_runtime"
 _LAST_ERROR_SYMBOL = "levanter_mok_last_error"
-_BUILD_SCHEMA = "mok_forward_backward_ffi_v2"
+_BUILD_SCHEMA = "mok_forward_backward_ffi_v3"
 _NUM_DEVICES = 4
 _TILE_ROWS = 256
 _CLUSTER_SIZE = 2
@@ -163,6 +163,58 @@ def _prepared_source_bytes(source_root: Path) -> tuple[bytes, bytes, bytes]:
     mok_text = mok_text.replace("#include <ATen/ops/empty.h>\n", "")
     mok_text = mok_text.replace("#include <ATen/ops/empty_like.h>\n", "")
     mok_text = mok_text.replace("#include <ATen/ops/zeros.h>\n", "")
+    source_edits = (
+        (
+            "using d_weight_bf16_gl = gl<bf16, 1, -1, -1, -1, mlp_bf16_d_tile>;",
+            """using d_weight_bf16_gl = gl<bf16, 1, -1, -1, -1, mlp_bf16_d_tile>;
+using mlp_f32_d_tile = st_fl<config::MLP_Mb / 2, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH>;
+using d_routed_weight_f32_gl = gl<float, 1, -1, -1, -1, mlp_f32_d_tile>;""",
+        ),
+        ("d_weight_bf16_gl d_w_routed_gate;", "d_routed_weight_f32_gl d_w_routed_gate;"),
+        ("d_weight_bf16_gl d_w_routed_up;", "d_routed_weight_f32_gl d_w_routed_up;"),
+        ("d_weight_bf16_gl d_w_routed_down;", "d_routed_weight_f32_gl d_w_routed_down;"),
+        (
+            "const std::conditional_t<IS_WGRAD, d_weight_bf16_gl, epi_bf16_gl> &d_gmem,",
+            """const std::conditional_t<IS_WGRAD,
+        std::conditional_t<IS_SHARED, d_weight_bf16_gl, d_routed_weight_f32_gl>, epi_bf16_gl> &d_gmem,""",
+        ),
+        (
+            """        auto store_bf16 = [&]() {
+            rt_bf<config::MLP_Mb / 8, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH> d_reg[config::MLP_EPI_PIPE_DEPTH];""",
+            """        auto store_output = [&]() {
+            if constexpr (IS_WGRAD && !IS_SHARED) {
+                auto &d_f32_smem = *reinterpret_cast<mlp_f32_d_tile *>(&d_bf16_smem[0]);
+                #pragma unroll
+                for (int i = 0; i < config::MLP_EPI_PIPE_DEPTH; ++i) {
+                    rt_fl<config::MLP_Mb / 8, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH> d_reg;
+                    warpgroup::load_async(d_reg, d_tt.template subtile<tt<float, config::MLP_Mb / 2, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH>>(0, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH * i));
+                    tensor_load_wait();
+                    warpgroup::sync(1);
+                    warpgroup::store(d_f32_smem, d_reg);
+                    warpgroup::sync(1);
+                    const int output_expert = macrobatch_idx * tokens_per_expert.cols() + tile_coord.z;
+                    warpgroup::tma::store_async<dim::ROW, cache_policy::EVICT_FIRST>(d_gmem, d_f32_smem, {output_expert, 2 * tile_coord.x + cta_rank, config::MLP_EPI_PIPE_DEPTH * tile_coord.y + i});
+                    warpgroup::tma::store_async_read_wait();
+                }
+                warpgroup::tma::cluster::arrive(gemm_outputs_finished, 0);
+            } else {
+            rt_bf<config::MLP_Mb / 8, config::MLP_Nb / config::MLP_EPI_PIPE_DEPTH> d_reg[config::MLP_EPI_PIPE_DEPTH];""",
+        ),
+        (
+            """            warpgroup::tma::store_async_read_wait();
+        };
+        if constexpr (USE_ROUTED_MXFP8) {""",
+            """            warpgroup::tma::store_async_read_wait();
+            }
+        };
+        if constexpr (USE_ROUTED_MXFP8) {""",
+        ),
+        ("store_bf16();", "store_output();"),
+    )
+    for old, new in source_edits:
+        if old not in mok_text:
+            raise RuntimeError("The pinned Mixture-of-Kittens source changed at a Marin kernel edit")
+        mok_text = mok_text.replace(old, new)
     mok_text += "\n};  // struct dispatch_mlp_swiglu_combiner\n"
 
     mxfp8_lines = (source_root / "csrc" / "mxfp8.cuh").read_text().splitlines(keepends=True)
@@ -480,9 +532,9 @@ def backward_bf16_local(
     result_shapes = (
         jax.ShapeDtypeStruct((num_tokens, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, top_k), jnp.float32),
-        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((local_experts, hidden_dim, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_macrobatches, local_experts, intermediate_dim, hidden_dim), jnp.float32),
+        jax.ShapeDtypeStruct((num_macrobatches, local_experts, intermediate_dim, hidden_dim), jnp.float32),
+        jax.ShapeDtypeStruct((num_macrobatches, local_experts, hidden_dim, intermediate_dim), jnp.float32),
         jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((hidden_dim, intermediate_dim), jnp.bfloat16),
@@ -531,4 +583,5 @@ def backward_bf16_local(
         macrobatch_size=np.int32(config.macrobatch_size),
         minibatch_size=np.int32(config.minibatch_size),
     )
-    return tuple(results[:8])
+    routed_weight_gradients = tuple(jnp.sum(gradient, axis=0).astype(jnp.bfloat16) for gradient in results[2:5])
+    return tuple(results[:2]) + routed_weight_gradients + tuple(results[5:8])

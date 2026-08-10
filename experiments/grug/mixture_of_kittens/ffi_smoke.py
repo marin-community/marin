@@ -27,7 +27,7 @@ WORLD_SIZE = 4
 NUM_TOKENS = 512
 HIDDEN_DIM = 256
 INTERMEDIATE_DIM = 256
-TOP_K = 1
+TOP_K = 4
 NUM_LOCAL_EXPERTS = 1
 BF16_ATOL = 0.5
 BF16_RTOL = 0.01
@@ -54,9 +54,10 @@ def _random_inputs() -> tuple[np.ndarray, ...]:
 
 
 def _routes() -> np.ndarray:
-    source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None]
-    token_indices = np.arange(NUM_TOKENS, dtype=np.int32)[None, :]
-    return ((source_ranks + token_indices) % WORLD_SIZE)[..., None]
+    source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None, None]
+    token_indices = np.arange(NUM_TOKENS, dtype=np.int32)[None, :, None]
+    route_indices = np.arange(TOP_K, dtype=np.int32)[None, None, :]
+    return (source_ranks + token_indices + route_indices) % WORLD_SIZE
 
 
 def _schedules(top_experts: np.ndarray, config: MoKForwardConfig) -> tuple[np.ndarray, ...]:
@@ -130,7 +131,7 @@ def main() -> None:
     if len(devices) != WORLD_SIZE:
         raise RuntimeError(f"The smoke test requires {WORLD_SIZE} visible GPUs, got {len(devices)}")
 
-    config = MoKForwardConfig(minibatch_size=256, macrobatch_size=512)
+    config = MoKForwardConfig(minibatch_size=256, macrobatch_size=256)
     inputs = _random_inputs()
     top_experts = _routes()
     peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)

@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. A raw JAX FFI path now passes fused BF16 forward and backward checks on four GB200 GPUs. Recomputing the forward context reduced the full-model runtime allocation from 378.61 GiB to 143.86 GiB, which is 5.64 GiB above the allocator limit. A 32K macro-buffer is now the full-model memory treatment; its two-pass ring replay passed the four-GPU gradient gate.
+The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. A raw JAX FFI path now passes fused BF16 forward and backward checks on four GB200 GPUs. A 32K macro-buffer lets the full model fit, but two 25-step screens became non-finite after 16 to 24 steps. A corrected top-4 test found that the source backward kernel reduces routed weight gradients in BF16 between macro-buffers. The kernel now writes FP32 partials for each macro-buffer, and JAX reduces them before the BF16 output cast. This treatment passes an eight-macro gradient gate and one full E8 training step.
 
 Both measured arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
@@ -272,3 +272,33 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The smaller ring reduced the rematerialized compiler estimate from 216.05 GiB to 209.29 GiB and removed the runtime allocation failure. The first run then found that the epilogue used 65,536 CUDA grid rows, one more than the grid-Y limit. A flat one-dimensional epilogue grid fixed the launch. The terminal run `/rav/mok-fused-ring32k-grid-1n-1-20260810-1112-coord` completed one training step without a retry. It reported loss 11.8 and 98,932 dropped route assignments.
 - Interpretation: The fused forward and native backward now run at the complete training shape. The ring-memory change and the flat grid are both required for this shape.
 - Next action: Run 25 steps with an XProf capture, measure steady MFU, and tune the fused configuration if it is below 25%.
+
+### 2026-08-10 12:17 UTC - Long fused screens found a numerical failure
+
+- Hypothesis: The 32K fused path can train for 25 steps and remove enough transfer and launch cost to reach 25% MFU.
+- Commit Hash: `f521d5fee`.
+- Commands: Two 25-step four-GPU GB200 Iris runs, W&B history queries, and one five-step XProf capture for each run.
+- Config: E8, top-4, global batch 64, BF16 compute, 48 layers, fused forward and native backward, a 32,768-row macro-buffer, and saved MoE output rematerialization in the second run.
+- Result: The first run became non-finite at state step 24. The saved-output run became non-finite at state step 16. Both runs reached about 20.3% MFU before the failure. The first profile showed three fused forward calls and one backward call per layer and step. Saving the MoE output did not change the best step time enough to reach the target.
+- Interpretation: The fused path is faster than the one-update XLA arm, but it is not yet a correct training implementation. The non-finite result must be fixed before more throughput tuning.
+- Next action: Increase the gradient gate from top-1 to top-4 and require more than one real macro-buffer.
+
+### 2026-08-10 12:36 UTC - Corrected ring test isolated routed weight gradients
+
+- Hypothesis: The earlier ring gate exercised more than one real macro-buffer.
+- Commit Hash: `f521d5fee` plus diagnostic smoke-test changes.
+- Commands: Four top-4 four-GPU GB200 gradient jobs with one, two, and eight real macro-buffers.
+- Config: 512 tokens per GPU, hidden and intermediate dimensions 256, all four expert routes per token, 256-row minibatches, and 256- to 2,048-row macro-buffers.
+- Result: The earlier gate had one real macro-buffer because only 512 scheduled rows were valid. The corrected one-buffer top-4 case passed. Two macro-buffers caused routed gate and down gradient mismatches. Eight macro-buffers increased routed weight-gradient mean error from about 0.083 to about 0.113. Forward output, input gradient, router gradient, and shared gradients continued to pass.
+- Interpretation: The source kernel stores each macro-buffer's routed weight gradient in BF16 and adds later contributions in BF16. The split changes only routed weight gradients and is a concrete cause for long-run numerical drift.
+- Next action: Keep the memory-bounded 32K ring. Write each routed weight-gradient partial in FP32 and reduce the partials in JAX.
+
+### 2026-08-10 12:58 UTC - FP32 routed partials passed correctness and memory gates
+
+- Hypothesis: FP32 routed weight-gradient partials remove the macro-buffer split error without the memory cost of a full schedule buffer.
+- Commit Hash: `f521d5fee` plus the FP32-partial change.
+- Commands: Two- and eight-macro four-GPU GB200 gradient jobs; one full E8 training step; focused tests; repository checks.
+- Config: The corrected top-4 smoke shape and the full E8, top-4, global-batch-64 training shape. The training run kept the 32,768-row macro-buffer and wrote nine FP32 partial sets at the static schedule capacity.
+- Result: Both gradient jobs passed with zero mismatches. Routed weight-gradient mean errors returned to about 0.083, the same result as the one-macro gate. The full run `/rav/mok-fused-fp32-wgrad-1n-1-20260810-1305-coord` completed one step at loss 11.8 without a retry or memory failure. Fifteen focused tests and all checks for the changed files passed.
+- Interpretation: The backward kernel can keep the small routed-activation ring and preserve one-macro gradient quality. The next long run can test whether this correction removes the non-finite result.
+- Next action: Run 25 steps with XProf, require finite completion, and measure steady MFU against the 25% gate.
