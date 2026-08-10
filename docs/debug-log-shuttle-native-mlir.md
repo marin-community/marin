@@ -612,3 +612,41 @@ checks conversion and serialized-options forwarding through the public path.
 - The retained evidence is under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-mainfixture/`.
 - This run used one submission with zero retries. No relaunch occurred.
+
+## Hypothesis 17
+
+The transform callback writes `test.forwarded_options` as an unknown
+discardable module attribute. `StablehloModuleTransformRegistry::Run` commits
+that attribute to the caller's module, but the successful conversion continues
+through `ConvertStablehloToHloWithOptions`. At the pinned revision, that path
+runs `StablehloSanitizeDiscardableAttributesPass`, whose module rewrite removes
+every discardable attribute outside XLA's 14-name allowlist. The test attribute
+is not in that allowlist, so its absence after conversion is expected and does
+not show that option forwarding failed.
+
+Observe the callback outside the mutable MLIR module. A process-lifetime test
+observer should record every options string under a mutex, clear its state
+before conversion, and require the observation vector to contain exactly the
+expected JSON string. This distinguishes no callback, duplicate callbacks, and
+incorrect data without a summary boolean or a transient module attribute.
+
+## Results 17
+
+- The test transform now records received options in a mutex-protected vector.
+  `ElementsAre("{\"numerics\":\"source_ordered\"}")` requires exactly one
+  callback with the exact serialized options.
+- The observer uses `absl::NoDestructor`, matching the global registry's process
+  lifetime. The test resets the vector before conversion, so repeated test
+  execution cannot reuse a prior observation.
+- `mlir_to_hlo_test` contains the only enabled global-transform conversion in
+  its test executable. Registration still occurs before the registry's first
+  `Run`; the registry's cached registration status remains valid after sealing
+  for repeated execution of the same test.
+- The conversion-success assertion and the fast-math override deferral checks
+  are unchanged. The callback no longer mutates the MLIR module for test
+  observation.
+- Patch `0001` was regenerated from exact XLA commit `9b635916ecc6`. Its applied
+  files byte-match the audited source. Patches `0001` and `0002` apply in order,
+  pass `diff --check`, reverse in order, and leave a clean exact-pin tree.
+- Native execution of the observer-based test remains pending. No remote build
+  was launched for this source-only fix.

@@ -1,5 +1,5 @@
 diff --git a/xla/pjrt/BUILD b/xla/pjrt/BUILD
-index ef7d2a5..2cbb6e1 100644
+index ef7d2a5..bbf86d4 100644
 --- a/xla/pjrt/BUILD
 +++ b/xla/pjrt/BUILD
 @@ -940,2 +940,36 @@ xla_cc_test(
@@ -44,7 +44,7 @@ index ef7d2a5..2cbb6e1 100644
 +        ":pjrt_executable",
 +        ":stablehlo_module_transform",
          "//xla:util",
-@@ -994,3 +1030,7 @@ xla_cc_test(
+@@ -994,4 +1030,9 @@ xla_cc_test(
          ":mlir_to_hlo",
 +        ":pjrt_executable",
 +        ":stablehlo_module_transform",
@@ -52,7 +52,13 @@ index ef7d2a5..2cbb6e1 100644
          "//xla/hlo/testlib:test",
 +        "//xla/tsl/lib/core:status_test_util",
          "//xla/tsl/platform:statusor",
-@@ -1006,2 +1046,19 @@ xla_cc_test(
++        "@com_google_absl//absl/base:no_destructor",
+         "@com_google_absl//absl/status",
+@@ -1000,2 +1041,3 @@ xla_cc_test(
+         "@com_google_absl//absl/strings:string_view",
++        "@com_google_absl//absl/synchronization",
+         "@com_google_googletest//:gtest_main",
+@@ -1006,2 +1048,19 @@ xla_cc_test(
 
 +xla_cc_test(
 +    name = "mlir_to_hlo_unregistered_transform_test",
@@ -185,14 +191,22 @@ index f21c0c2..908620d 100644
 +
  // Converts an MHLO/CHLO module string to an XLA computation.
 diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
-index 4a560ef..a3e1487 100644
+index 4a560ef..360ac33 100644
 --- a/xla/pjrt/mlir_to_hlo_test.cc
 +++ b/xla/pjrt/mlir_to_hlo_test.cc
-@@ -25,2 +25,3 @@ limitations under the License.
+@@ -18,2 +18,3 @@ limitations under the License.
+ #include <string>
++#include <vector>
+
+@@ -21,2 +22,3 @@ limitations under the License.
+ #include <gtest/gtest.h>
++#include "absl/base/no_destructor.h"
+ #include "absl/status/status.h"
+@@ -25,2 +27,3 @@ limitations under the License.
  #include "absl/strings/string_view.h"
-+#include "mlir/IR/BuiltinAttributes.h"
++#include "absl/synchronization/mutex.h"
  #include "mlir/IR/BuiltinOps.h"
-@@ -29,3 +30,7 @@ limitations under the License.
+@@ -29,3 +32,7 @@ limitations under the License.
  #include "stablehlo/api/PortableApi.h"
 +#include "xla/hlo/builder/xla_computation.h"
  #include "xla/hlo/testlib/test.h"
@@ -200,22 +214,51 @@ index 4a560ef..a3e1487 100644
 +#include "xla/pjrt/stablehlo_module_transform.h"
 +#include "xla/tsl/lib/core/status_test_util.h"
  #include "xla/tsl/platform/statusor.h"
-@@ -47,2 +52,14 @@ MATCHER_P(IsVhloArtifact, version, "") {
+@@ -36,2 +43,3 @@ namespace {
+ using ::absl_testing::StatusIs;
++using ::testing::ElementsAre;
+ using ::testing::HasSubstr;
+@@ -47,2 +55,39 @@ MATCHER_P(IsVhloArtifact, version, "") {
 
++class OptionForwardingTestObserver {
++ public:
++  void Reset() {
++    absl::MutexLock lock(&mutex_);
++    forwarded_options_.clear();
++  }
++
++  void Observe(absl::string_view options) {
++    absl::MutexLock lock(&mutex_);
++    forwarded_options_.push_back(std::string(options));
++  }
++
++  std::vector<std::string> ForwardedOptions() {
++    absl::MutexLock lock(&mutex_);
++    return forwarded_options_;
++  }
++
++ private:
++  absl::Mutex mutex_;
++  std::vector<std::string> forwarded_options_ ABSL_GUARDED_BY(mutex_);
++};
++
++OptionForwardingTestObserver& GetOptionForwardingTestObserver() {
++  static absl::NoDestructor<OptionForwardingTestObserver> observer;
++  return *observer;
++}
++
 +const absl::Status& RegisterOptionForwardingTestTransform() {
 +  static const absl::Status status =
 +      StablehloModuleTransformRegistry::Global().Register(
-+          "shuttle", [](mlir::ModuleOp module, absl::string_view options) {
-+            module->setAttr(
-+                "test.forwarded_options",
-+                mlir::StringAttr::get(module.getContext(), options));
++          "shuttle", [](mlir::ModuleOp, absl::string_view options) {
++            GetOptionForwardingTestObserver().Observe(options);
 +            return absl::OkStatus();
 +          });
 +  return status;
 +}
 +
  TEST(MlirToHloTest, StablehloTest) {
-@@ -65,2 +82,39 @@ TEST(MlirToHloTest, StablehloTest) {
+@@ -65,2 +110,38 @@ TEST(MlirToHloTest, StablehloTest) {
 
 +TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
 +  constexpr absl::string_view kProgram =
@@ -228,6 +271,8 @@ index 4a560ef..a3e1487 100644
 +  mlir::MLIRContext context;
 +  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
 +                          ParseMlirModuleString(kProgram, context));
++  OptionForwardingTestObserver& observer = GetOptionForwardingTestObserver();
++  observer.Reset();
 +  TF_ASSERT_OK(RegisterOptionForwardingTestTransform());
 +  CompileOptions compile_options;
 +  compile_options.executable_build_options.mutable_debug_options()
@@ -241,11 +286,8 @@ index 4a560ef..a3e1487 100644
 +  TF_EXPECT_OK(MlirToXlaComputationWithPjRtOptions(
 +      *module, computation, /*use_tuple_args=*/false,
 +      /*return_tuple=*/false, compile_options));
-+  auto forwarded_options =
-+      module->getOperation()->getAttrOfType<mlir::StringAttr>(
-+          "test.forwarded_options");
-+  ASSERT_TRUE(forwarded_options);
-+  EXPECT_EQ(forwarded_options.getValue(), "{\"numerics\":\"source_ordered\"}");
++  EXPECT_THAT(observer.ForwardedOptions(),
++              ElementsAre("{\"numerics\":\"source_ordered\"}"));
 +  EXPECT_TRUE(compile_options.executable_build_options.debug_options()
 +                  .xla_cpu_enable_fast_math());
 +
