@@ -197,6 +197,7 @@ def test_run_grug_pins_the_xla_nightly_for_training(monkeypatch):
         train.run_grug(config)
 
     assert dispatch.call_args.kwargs["pip_packages"] == train.MOK_JAX_PACKAGES
+    assert dispatch.call_args.kwargs["max_retries_failure"] == 0
     assert all("0.11.1.dev20260809" in package for package in train.MOK_JAX_PACKAGES)
     assert all("#sha256=" in package for package in train.MOK_JAX_PACKAGES)
 

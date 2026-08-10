@@ -701,6 +701,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_mok_local,
         resources=config.resources,
+        max_retries_failure=0,
         processes_per_task=config.processes_per_task,
         pip_packages=config.pip_packages,
     )
