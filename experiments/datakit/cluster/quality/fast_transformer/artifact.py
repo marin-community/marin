@@ -25,7 +25,7 @@ class QualityScores(BaseModel):
 
     Attributes:
         main_output_dir: Directory of lean scored parquet
-            (``source``/``id``/``score``/``quality_bucket``), one file per input
+            (``source``/``id``/``score``/``quality_bucket``/``content_type``), one file per input
             shard, co-partitioned with the source ``NormalizedData`` by basename
             and row order.
         samples_output_dir: Directory of the ~``sample_pct`` systematic sample

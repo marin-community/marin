@@ -12,7 +12,8 @@ content types.
 
 Writes two outputs via a split-writer (like normalize's main/dups): the lean
 scored records (``source``, ``id``, ``score`` calibrated in ``[0, 1]``,
-``quality_bucket`` 0..4) to ``<output>/outputs/main/``, and a ~``sample_pct``
+``quality_bucket`` 0..4, and the ``content_type`` the calibration was routed
+through) to ``<output>/outputs/main/``, and a ~``sample_pct``
 systematic sample *with text* to ``<output>/outputs/samples/`` that the stage
 report reads directly. Each input file maps 1:1 to one output file (named after
 the input), so the output is co-partitioned with the source ``NormalizedData``
@@ -46,7 +47,9 @@ from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
+from experiments.datakit.cluster.quality.fast_transformer import content_type
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import apply_calibration
 from experiments.datakit.cluster.quality.fast_transformer.scorer import (
     PooledScorer,
     load_pooled_scorer,
@@ -62,34 +65,53 @@ BATCH_SIZE = 512
 # 8g covers the spike with margin; packing is CPU-bound (cpu=2), so the extra RAM is free.
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
+MODEL_TYPE_CLASSIFIER = "content_type.npz"  # required only by a per-type calibration
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
 SAMPLE_PCT = 0.02  # fraction of each shard emitted (with text) as the samples side output
 _SHARD_FILE = "__shard_file"  # internal: input basename carried to the writer to name the output
 
 
 @functools.cache
-def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
-    """Load the scorer + calibration once per worker process."""
+def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, dict, dict | None]:
+    """Load the scorer, its calibration, and the type classifier the calibration needs.
+
+    A per-type calibration routes each document to its own remap, so it only works
+    with a content type at scoring time. The calibration artifact declares which kind
+    it is, and the classifier is loaded only when it says per-type — so a model dir
+    carrying a global calibration needs no classifier and scores exactly as before.
+    """
     scorer = load_pooled_scorer(model_dir)
-    with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
-        calib = json.loads(fh.read())
-    logger.info("loaded FT scorer + calibration (%s) from %s", calib_file, model_dir)
-    return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
+    root = model_dir.rstrip("/")
+    with open_url(f"{root}/{calib_file}", "r") as fh:
+        calibration = json.loads(fh.read())
+    type_model = None
+    if "types" in calibration:
+        type_model = content_type.load(f"{root}/{MODEL_TYPE_CLASSIFIER}")
+        logger.info("loaded FT scorer + per-type calibration (%d types) from %s", len(calibration["types"]), model_dir)
+    else:
+        logger.info("loaded FT scorer + global calibration (%s) from %s", calib_file, model_dir)
+    return scorer, calibration, type_model
 
 
 def _predict_batch(records: list[dict], *, source: str, model_dir: str, calib_file: str) -> Iterator[dict]:
     """Score a batch of records with bme; carry source/id/score/quality_bucket + text.
     ``text`` is dropped for the lean main output and kept for the samples side
     output; ``_SHARD_FILE`` names the output file after the input file."""
-    scorer, xk, yk = _load_scorer(model_dir, calib_file)
-    cal = np.interp(score_bme(scorer, [r["text"] for r in records]), xk, yk)
+    scorer, calibration, type_model = _load_scorer(model_dir, calib_file)
+    texts = [r["text"] for r in records]
+    types = np.array(content_type.predict(type_model, texts)) if type_model else None
+    cal = apply_calibration(score_bme(scorer, texts), types, calibration)
     buckets = np.digitize(cal, BUCKET_EDGES)
-    for r, c, b in zip(records, cal, buckets, strict=True):
+    # The predicted type is carried so per-type parity stays auditable on the real
+    # corpus rather than only on the labeled set the calibration was fitted to.
+    kinds = types if types is not None else [None] * len(records)
+    for r, c, b, kind in zip(records, cal, buckets, kinds, strict=True):
         yield {
             "source": source,
             "id": r["id"],
             "score": float(c),
             "quality_bucket": int(b),
+            "content_type": kind,
             "text": r["text"][:SAMPLE_TEXT_CHARS],
             _SHARD_FILE: posixpath.basename(r[DEFAULT_FILE_PATH_COLUMN]),
         }
