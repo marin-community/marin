@@ -10,7 +10,7 @@ import sys
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import cast
 
 import numpy as np
@@ -253,6 +253,21 @@ class ParamsBase:
         return [self.value]
 """
     )
+    msa_source_root = tmp_path / "msa_cute"
+    (msa_source_root / "src" / "common").mkdir(parents=True)
+    (msa_source_root / "src" / "__init__.py").write_text("")
+    (msa_source_root / "src" / "common" / "__init__.py").write_text("")
+    (msa_source_root / "src" / "common" / "cute_dsl_utils.py").write_text(
+        """
+import torch
+
+def assume_strides_aligned(t):
+    return t.stride
+
+def assume_tensor_aligned(t):
+    return t
+"""
+    )
 
     class Distribution:
         version = torch_free_physical_support.QUACK_VERSION
@@ -262,10 +277,16 @@ class ParamsBase:
             assert name == "quack"
             return source_root
 
-    fake_cutlass = SimpleNamespace(Constexpr=type("Constexpr", (), {}))
-    fake_dsl = SimpleNamespace(NumericMeta=type("NumericMeta", (), {}))
+    fake_cutlass = ModuleType("cutlass")
+    fake_cutlass.Constexpr = type("Constexpr", (), {})
+    fake_cute = ModuleType("cutlass.cute")
+    fake_cutlass.cute = fake_cute
+    fake_dsl = ModuleType("cutlass.cutlass_dsl")
+    fake_dsl.NumericMeta = type("NumericMeta", (), {})
     monkeypatch.setitem(sys.modules, "cutlass", fake_cutlass)
+    monkeypatch.setitem(sys.modules, "cutlass.cute", fake_cute)
     monkeypatch.setitem(sys.modules, "cutlass.cutlass_dsl", fake_dsl)
+    monkeypatch.syspath_prepend(str(msa_source_root))
     monkeypatch.setattr(
         torch_free_physical_support.importlib.metadata,
         "distribution",
@@ -277,10 +298,13 @@ class ParamsBase:
         "quack.copy_utils",
         "quack.layout_utils",
         "quack.cute_dsl_utils",
+        "src",
+        "src.common",
+        "src.common.cute_dsl_utils",
     ):
         monkeypatch.delitem(sys.modules, name, raising=False)
 
-    support = torch_free_physical_support.install_torch_free_physical_support()
+    support = torch_free_physical_support.install_torch_free_physical_support(msa_source_root)
 
     assert support.version == torch_free_physical_support.QUACK_VERSION
     assert support.loaded_modules == (
@@ -288,12 +312,13 @@ class ParamsBase:
         "quack.copy_utils",
         "quack.layout_utils",
         "quack.cute_dsl_utils",
+        "src.common.cute_dsl_utils",
     )
     assert dict(support.source_sha256)["quack.activation"] == sha256(safe_source.encode()).hexdigest()
     assert "torch" not in sys.modules
     assert sys.modules["quack.activation"].VALUE == 3
     assert sys.modules["quack.cute_dsl_utils"].ParamsBase(7).__extract_mlir_values__() == [7]
-    for name in ("quack", *support.loaded_modules):
+    for name in ("quack", *support.loaded_modules, "src.common", "src"):
         sys.modules.pop(name, None)
 
 

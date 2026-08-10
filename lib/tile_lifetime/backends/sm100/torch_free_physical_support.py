@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib
 import importlib.metadata
 import importlib.util
 import sys
@@ -17,6 +18,7 @@ from types import ModuleType
 QUACK_DISTRIBUTION = "quack-kernels"
 QUACK_VERSION = "0.2.10"
 SAFE_QUACK_MODULES = ("activation", "copy_utils", "layout_utils")
+MSA_ALIGNMENT_FUNCTIONS = ("assume_strides_aligned", "assume_tensor_aligned")
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,7 @@ class TorchFreePhysicalSupport:
     distribution: str
     version: str
     source_root: Path
+    msa_source_root: Path
     source_sha256: tuple[tuple[str, str], ...]
     loaded_modules: tuple[str, ...]
 
@@ -80,14 +83,35 @@ def _params_base_module(source_path: Path) -> tuple[ModuleType, str]:
     return module, _source_hash(extracted)
 
 
-def install_torch_free_physical_support() -> TorchFreePhysicalSupport:
+def _msa_alignment_module(source_path: Path) -> tuple[ModuleType, str]:
+    """Extract generic CuTe alignment assumptions without MSA's Torch adapters."""
+    source = source_path.read_text()
+    parsed = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in parsed.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in MSA_ALIGNMENT_FUNCTIONS
+    }
+    if tuple(functions) != MSA_ALIGNMENT_FUNCTIONS:
+        raise ValueError(f"missing generic alignment functions in {source_path}: {tuple(functions)}")
+    extracted = "\n".join(("import cutlass.cute as cute", *(ast.unparse(functions[name]) for name in functions), ""))
+    name = "src.common.cute_dsl_utils"
+    module = ModuleType(name)
+    module.__file__ = str(source_path)
+    module.__package__ = "src.common"
+    sys.modules[name] = module
+    exec(compile(extracted, f"<{name}:alignment>", "exec"), module.__dict__)
+    return module, _source_hash(extracted)
+
+
+def install_torch_free_physical_support(msa_source_root: Path) -> TorchFreePhysicalSupport:
     """Install only generic QuACK CuTe helpers without importing its package.
 
-    The upstream ``quack`` package initializer imports Torch-facing RMSNorm,
-    softmax, and cross-entropy wrappers. The extracted SM100 skeleton needs only
-    three architecture-generic CuTe helper modules and ``ParamsBase``. Loading
-    those files directly keeps the JAX runtime free of Torch while retaining
-    their pinned low-level implementation.
+    The upstream ``quack`` package initializer and MSA's general runtime helper
+    import Torch-facing wrappers. The extracted SM100 skeleton needs only three
+    architecture-generic QuACK modules, ``ParamsBase``, and two MSA alignment
+    functions. Loading those definitions directly keeps the JAX runtime free of
+    Torch while retaining their pinned low-level implementation.
     """
     if "torch" in sys.modules:
         raise RuntimeError("Torch was loaded before physical support installation")
@@ -97,11 +121,14 @@ def install_torch_free_physical_support() -> TorchFreePhysicalSupport:
     source_root = Path(distribution.locate_file("quack")).resolve()
     if not source_root.is_dir():
         raise ValueError(f"QuACK source root does not exist: {source_root}")
+    if not msa_source_root.is_dir():
+        raise ValueError(f"MSA CuTe source root does not exist: {msa_source_root}")
 
     module_names = (
         "quack",
         *(f"quack.{name}" for name in SAFE_QUACK_MODULES),
         "quack.cute_dsl_utils",
+        "src.common.cute_dsl_utils",
     )
     existing = {name: sys.modules.get(name) for name in module_names}
     package = ModuleType("quack")
@@ -124,6 +151,12 @@ def install_torch_free_physical_support() -> TorchFreePhysicalSupport:
         package.cute_dsl_utils = params
         hashes.append(("quack.cute_dsl_utils:ParamsBase", extracted_hash))
         loaded.append("quack.cute_dsl_utils")
+        common_package = importlib.import_module("src.common")
+        alignment_source = msa_source_root / "src" / "common" / "cute_dsl_utils.py"
+        alignment, alignment_hash = _msa_alignment_module(alignment_source)
+        common_package.cute_dsl_utils = alignment
+        hashes.append(("src.common.cute_dsl_utils:alignment", alignment_hash))
+        loaded.append("src.common.cute_dsl_utils")
         if "torch" in sys.modules:
             raise RuntimeError("Torch was imported while loading physical support")
     except BaseException:
@@ -132,12 +165,19 @@ def install_torch_free_physical_support() -> TorchFreePhysicalSupport:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = prior
+        common_package = sys.modules.get("src.common")
+        prior_alignment = existing["src.common.cute_dsl_utils"]
+        if common_package is not None and prior_alignment is None:
+            common_package.__dict__.pop("cute_dsl_utils", None)
+        elif common_package is not None:
+            common_package.cute_dsl_utils = prior_alignment
         raise
 
     return TorchFreePhysicalSupport(
         distribution=QUACK_DISTRIBUTION,
         version=distribution.version,
         source_root=source_root,
+        msa_source_root=msa_source_root,
         source_sha256=tuple(hashes),
         loaded_modules=tuple(loaded),
     )
