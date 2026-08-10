@@ -47,6 +47,7 @@ from tile_lifetime.quack_partitioned_mainloop import (
     QUACK_0_5_0_WHEEL_SHA256,
     QUACK_PARTITIONED_SM90_PATCH_SHA256,
     audit_quack_partitioned_extension_patch,
+    generate_quack_partitioned_mainloop,
     plan_quack_partitioned_mainloop,
 )
 from tile_lifetime.xla_low_rank_gated_product_ffi import (
@@ -383,12 +384,67 @@ def test_quack_partitioned_extension_patch_is_pinned_and_workload_independent() 
         "partition_accumulator_groups",
         "gemm_groups_w_idx",
         "round_group_to_bf16_rne",
+        "PartitionedGemmSm90",
     )
     assert audit.missing_symbols == ()
     assert audit.forbidden_tokens == ()
     assert audit.creates_one_module
     assert audit.syntax_compiles
     assert audit.clean
+
+
+def test_quack_partitioned_authoring_source_uses_one_generic_executor() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+
+    generated = generate_quack_partitioned_mainloop(family.program)
+
+    compile(generated.source, generated.module_name, "exec")
+    assert generated.rhs_mma_ns == (32, 32, 8)
+    assert generated.output_count == 2
+    assert generated.source.count("PartitionedGemmSm90(") == 1
+    assert "_executor(lhs, (rhs0, rhs1, rhs2), (output0, output1), stream)" in generated.source
+    assert "cute.math.exp" in generated.source
+    assert "fastmath=False" in generated.source
+    assert "boundaries[2][local_m, feature]" in generated.source
+    assert "swiglu" not in generated.source.lower()
+    assert "router" not in generated.source.lower()
+
+
+def test_quack_partitioned_authoring_mutation_preserves_executor_abi() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    original = plan_attached_partitioned_contract_maps(hlo, target_prefix=_TARGET_PREFIX).families[0]
+    mutated = plan_attached_partitioned_contract_maps(_tanh_gate_mutation(hlo), target_prefix=_TARGET_PREFIX).families[0]
+
+    original_generated = generate_quack_partitioned_mainloop(original.program)
+    mutated_generated = generate_quack_partitioned_mainloop(mutated.program)
+
+    assert original_generated.rhs_mma_ns == mutated_generated.rhs_mma_ns
+    assert original_generated.output_count == mutated_generated.output_count
+    assert original_generated.source_digest != mutated_generated.source_digest
+    assert "cute.math.exp" in original_generated.source
+    assert "cute.math.tanh" in mutated_generated.source
+    assert "cute.math.exp" not in mutated_generated.source
+
+
+def test_quack_partitioned_natural_program_passes_cpu_and_jax_reference_gate() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+    rng = np.random.default_rng(194)
+    operands = (
+        np.asarray(rng.normal(size=(2, 4, 32)), dtype=ml_dtypes.bfloat16),
+        np.asarray(rng.normal(size=(32, 32)), dtype=ml_dtypes.bfloat16),
+        np.asarray(rng.normal(size=(32, 32)), dtype=ml_dtypes.bfloat16),
+        np.asarray(rng.normal(size=(4, 32)), dtype=ml_dtypes.bfloat16),
+    )
+
+    expected = evaluate_partitioned_gemm_reference(family.program, operands)
+    actual = evaluate_partitioned_gemm_jax(family.program, tuple(jnp.asarray(operand) for operand in operands))
+
+    for jax_output, reference_output in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(np.asarray(jax_output), reference_output)
 
 
 def test_partitioned_contract_reference_preserves_ordered_bf16_partition_boundaries() -> None:

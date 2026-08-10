@@ -1,19 +1,26 @@
 diff --git a/quack/partitioned_sm90.py b/quack/partitioned_sm90.py
 new file mode 100644
-index 0000000..089e001
+index 0000000..745b37e
 --- /dev/null
 +++ b/quack/partitioned_sm90.py
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,338 @@
 +# Copyright (c) 2026, QuACK team.
 +
 +"""Generic SM90 helpers for one Contract with static RHS N segments."""
 +
-+from typing import Tuple
++from typing import Callable, Tuple
 +
 +import cutlass
 +import cutlass.cute as cute
++import cutlass.pipeline as pipeline
 +from cutlass import Boolean
++from cutlass.cute.nvgpu import cpasync, warp
++from cutlass.pipeline import pipeline_init_arrive, pipeline_init_wait
++from cutlass.utils import LayoutEnum
 +
++from quack import copy_utils, layout_utils
++from quack.gemm_base import GemmTmaBase
++from quack.pipeline import make_pipeline_state
 +from quack import sm90_utils
 +
 +
@@ -72,3 +79,266 @@ index 0000000..089e001
 +def round_group_to_bf16_rne(group: cute.Tensor) -> cute.Tensor:
 +    """Apply the declared BF16 round-to-nearest-even partition boundary."""
 +    return group.to(cutlass.BFloat16).to(cutlass.Float32)
++
++
++class PartitionedGemmSm90(GemmTmaBase):
++    """One nonpersistent SM90 mainloop over independently allocated RHS groups.
++
++    ``finalizer`` is a constexpr compiler-generated object. Its ``store``
++    method receives BF16 shared-memory boundary tensors and output tensors; it
++    owns only generic scalar-AST evaluation and output indexing.
++    """
++
++    arch = 90
++
++    def __init__(
++        self,
++        rhs_mma_ns: Tuple[int, ...],
++        *,
++        tile_m: int = 64,
++        tile_k: int = 64,
++        stages: int = 3,
++        finalizer: Callable,
++    ):
++        assert rhs_mma_ns and all(n > 0 and n % 8 == 0 for n in rhs_mma_ns)
++        assert tile_m == 64
++        assert tile_k > 0 and tile_k % 16 == 0
++        assert stages > 0
++        self.rhs_mma_ns = rhs_mma_ns
++        self.tile_m = tile_m
++        self.tile_k = tile_k
++        self.ab_stage = stages
++        self.finalizer = finalizer
++        self.acc_dtype = cutlass.Float32
++        self.cluster_shape_mnk = (1, 1, 1)
++        self.num_mcast_ctas_a = 1
++        self.num_mcast_ctas_b = 1
++        self.gather_A = False
++        self.pingpong = False
++        self.fp8_slow_accum = False
++        self.ab_load_warp_id = 4
++        self.num_ab_load_warps = 1
++        self.num_threads_per_warp_group = 128
++        self.threads_per_cta = 256
++        self.buffer_align_bytes = 1024
++
++    @cute.jit
++    def __call__(
++        self,
++        mA: cute.Tensor,
++        mBs: Tuple[cute.Tensor, ...],
++        mDs: Tuple[cute.Tensor, ...],
++        stream,
++    ) -> None:
++        assert len(mBs) == len(self.rhs_mma_ns)
++        assert len(mDs) == self.finalizer.output_count
++        mA = self.permute_batch_last(mA, append_batch_if_2d=True)
++        mBs = tuple(self.permute_batch_last(mB, append_batch_if_2d=True) for mB in mBs)
++        mDs = tuple(self.permute_batch_last(mD, append_batch_if_2d=True) for mD in mDs)
++        validate_rhs_segments(mBs, sum(cute.size(mB, mode=[0]) for mB in mBs))
++
++        self.a_dtype = mA.element_type
++        self.b_dtype = mBs[0].element_type
++        assert self.a_dtype == self.b_dtype == cutlass.BFloat16
++        a_layout = LayoutEnum.from_tensor(mA)
++        b_layouts = tuple(LayoutEnum.from_tensor(mB) for mB in mBs)
++        assert all(layout == b_layouts[0] for layout in b_layouts)
++
++        tiled_mmas = tuple(
++            sm90_utils.make_tiled_mma(
++                self.a_dtype,
++                "K" if a_layout.sm90_mma_major_mode() == cute.nvgpu.OperandMajorMode.K else "MN",
++                "K" if b_layout.sm90_mma_major_mode() == cute.nvgpu.OperandMajorMode.K else "MN",
++                mma_n,
++            )
++            for mma_n, b_layout in zip(self.rhs_mma_ns, b_layouts)
++        )
++        tile_shapes = tuple((self.tile_m, mma_n, self.tile_k) for mma_n in self.rhs_mma_ns)
++        a_smem_layout = sm90_utils.make_smem_layout(
++            self.a_dtype, a_layout, (self.tile_m, self.tile_k), self.ab_stage
++        )
++        b_smem_layouts = tuple(
++            sm90_utils.make_smem_layout(
++                self.b_dtype, b_layout, (mma_n, self.tile_k), self.ab_stage
++            )
++            for mma_n, b_layout in zip(self.rhs_mma_ns, b_layouts)
++        )
++        boundary_layouts = tuple(
++            sm90_utils.make_smem_layout_epi(
++                cutlass.BFloat16, LayoutEnum.ROW_MAJOR, (self.tile_m, mma_n)
++            )
++            for mma_n in self.rhs_mma_ns
++        )
++
++        tma_atom_a, tma_tensor_a = self._make_tma_atoms_and_tensors(
++            mA,
++            cute.slice_(a_smem_layout, (None, None, 0)),
++            (self.tile_m, self.tile_k),
++            1,
++        )
++        b_tmas = tuple(
++            self._make_tma_atoms_and_tensors(
++                mB,
++                cute.slice_(layout, (None, None, 0)),
++                (mma_n, self.tile_k),
++                1,
++            )
++            for mB, layout, mma_n in zip(mBs, b_smem_layouts, self.rhs_mma_ns)
++        )
++        tma_atoms_b = tuple(item[0] for item in b_tmas)
++        tma_tensors_b = tuple(item[1] for item in b_tmas)
++        self.num_tma_load_bytes = cute.size_in_bytes(
++            self.a_dtype, cute.slice_(a_smem_layout, (None, None, 0))
++        )
++        self.num_tma_load_bytes += sum(
++            cute.size_in_bytes(self.b_dtype, cute.slice_(layout, (None, None, 0)))
++            for layout in b_smem_layouts
++        )
++        grid = (
++            cute.ceil_div(cute.size(mA, mode=[0]), self.tile_m),
++            1,
++            cute.size(mA, mode=[2]),
++        )
++        self.kernel(
++            tiled_mmas,
++            tile_shapes,
++            tma_atom_a,
++            tma_tensor_a,
++            tma_atoms_b,
++            tma_tensors_b,
++            mDs,
++            a_smem_layout,
++            b_smem_layouts,
++            boundary_layouts,
++        ).launch(grid=grid, block=[self.threads_per_cta, 1, 1], stream=stream)
++
++    @cute.kernel
++    def kernel(
++        self,
++        tiled_mmas: Tuple[cute.TiledMma, ...],
++        tile_shapes: Tuple[cute.Shape, ...],
++        tma_atom_a: cute.CopyAtom,
++        mA_mkl: cute.Tensor,
++        tma_atoms_b: Tuple[cute.CopyAtom, ...],
++        mBs_nkl: Tuple[cute.Tensor, ...],
++        mDs_mnl: Tuple[cute.Tensor, ...],
++        a_smem_layout: cute.ComposedLayout,
++        b_smem_layouts: Tuple[cute.ComposedLayout, ...],
++        boundary_layouts: Tuple[cute.ComposedLayout, ...],
++    ) -> None:
++        tidx, _, _ = cute.arch.thread_idx()
++        warp_idx = cute.arch.make_warp_uniform(cute.arch.warp_idx())
++        block_m, _, batch_idx = cute.arch.block_idx()
++        if warp_idx == self.ab_load_warp_id:
++            cute.arch.setmaxregister_decrease(40)
++            cpasync.prefetch_descriptor(tma_atom_a)
++            for atom in tma_atoms_b:
++                cpasync.prefetch_descriptor(atom)
++
++        smem = cutlass.utils.SmemAllocator()
++        sA = smem.allocate_tensor(self.a_dtype, a_smem_layout, byte_alignment=1024)
++        sBs = tuple(
++            smem.allocate_tensor(self.b_dtype, layout, byte_alignment=1024)
++            for layout in b_smem_layouts
++        )
++        boundaries = tuple(
++            smem.allocate_tensor(cutlass.BFloat16, layout, byte_alignment=128)
++            for layout in boundary_layouts
++        )
++        ab_pipeline = self.make_ab_pipeline(
++            tiled_mmas[0], cute.make_layout((1, 1, 1, 1))
++        )
++        pipeline_init_arrive(cluster_shape_mn=(1, 1), is_relaxed=True)
++        pipeline_init_wait(cluster_shape_mn=(1, 1))
++
++        gA = cute.local_tile(
++            mA_mkl[None, None, batch_idx],
++            (self.tile_m, self.tile_k),
++            (block_m, None),
++        )
++        gBs = tuple(
++            cute.local_tile(mB[None, None, batch_idx], (mma_n, self.tile_k), (0, None))
++            for mB, mma_n in zip(mBs_nkl, self.rhs_mma_ns)
++        )
++        copy_A = copy_utils.tma_get_block_copy_fn(tma_atom_a, src_tensor=gA, dst_tensor=sA)
++        copy_Bs = tuple(
++            copy_utils.tma_get_block_copy_fn(atom, src_tensor=gB, dst_tensor=sB)
++            for atom, gB, sB in zip(tma_atoms_b, gBs, sBs)
++        )
++        k_tile_cnt = cute.ceil_div(cute.size(mA_mkl, mode=[1]), self.tile_k)
++
++        if warp_idx == self.ab_load_warp_id:
++            producer_state = make_pipeline_state(pipeline.PipelineUserType.Producer, self.ab_stage)
++            producer_state = self.load_tma(
++                ab_pipeline, producer_state, (copy_A, *copy_Bs), k_tile_cnt
++            )
++            ab_pipeline.producer_tail(producer_state)
++
++        groups = None
++        if warp_idx < 4:
++            cute.arch.setmaxregister_increase(224)
++            warp_group_layout = cute.make_layout(1, stride=self.num_threads_per_warp_group)
++            thr_mmas = tuple(tiled_mma.get_slice(warp_group_layout(0)) for tiled_mma in tiled_mmas)
++            groups = partition_accumulator_groups(thr_mmas, tile_shapes, sA, sBs)
++            consumer_state = make_pipeline_state(pipeline.PipelineUserType.Consumer, self.ab_stage)
++            release_state = consumer_state.clone()
++            zero_init = Boolean(True)
++            for _ in cutlass.range(k_tile_cnt, unroll=1):
++                ab_pipeline.consumer_wait(
++                    consumer_state, ab_pipeline.consumer_try_wait(consumer_state)
++                )
++                gemm_groups_w_idx(
++                    tiled_mmas, groups, zero_init=zero_init, stage_idx=consumer_state.index
++                )
++                zero_init = Boolean(False)
++                ab_pipeline.consumer_release(release_state)
++                consumer_state.advance()
++                release_state.advance()
++
++        cute.arch.sync_threads()
++        if warp_idx < 4:
++            for tiled_mma, group, boundary, mma_n in zip(
++                tiled_mmas, groups, boundaries, self.rhs_mma_ns
++            ):
++                self._store_boundary_group(
++                    tiled_mma, group[0], boundary, (self.tile_m, mma_n), tidx
++                )
++        cute.arch.sync_threads()
++        m_extent = cute.size(mA_mkl, mode=[0])
++        self.finalizer.store(
++            boundaries,
++            mDs_mnl,
++            block_m * self.tile_m,
++            m_extent,
++            batch_idx,
++            tidx,
++            self.threads_per_cta,
++        )
++
++    @cute.jit
++    def _store_boundary_group(
++        self,
++        tiled_mma: cute.TiledMma,
++        acc: cute.Tensor,
++        boundary: cute.Tensor,
++        tile_shape: cute.Shape,
++        tidx,
++    ) -> None:
++        copy_atom = cute.make_copy_atom(
++            warp.StMatrix8x8x16bOp(False, num_matrices=4 if tile_shape[1] % 16 == 0 else 2),
++            cutlass.Float16,
++        )
++        tiled_copy_c = cute.make_tiled_copy_C_atom(copy_atom, tiled_mma)
++        copy_r2s = cute.make_tiled_copy_S(
++            cutlass.utils.hopper_helpers.sm90_get_smem_store_op(
++                LayoutEnum.ROW_MAJOR,
++                elem_ty_d=cutlass.BFloat16,
++                elem_ty_acc=self.acc_dtype,
++            ),
++            tiled_copy_c,
++        )
++        thr_copy = copy_r2s.get_slice(tidx)
++        r_acc = copy_r2s.retile(layout_utils.reshape_acc_to_frgA(acc))
++        r_boundary = cute.make_rmem_tensor_like(thr_copy.partition_S(boundary), cutlass.BFloat16)
++        r_boundary.store(r_acc.load().to(cutlass.BFloat16))
++        cute.copy(copy_r2s, r_boundary, thr_copy.partition_D(boundary))

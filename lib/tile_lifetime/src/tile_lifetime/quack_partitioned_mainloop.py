@@ -11,6 +11,7 @@ import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from tile_lifetime.cast_scalar_program import CastScalarDType, CastScalarExpression, CastScalarKind
 from tile_lifetime.partitioned_gemm_program import PartitionedGemmProgram, generate_partitioned_gemm_finalization
 from tile_lifetime.quack_partitioned_gemm_adapter import (
     QUACK_PARTITION_ADAPTER_BASE_REVISION,
@@ -19,7 +20,7 @@ from tile_lifetime.quack_partitioned_gemm_adapter import (
 )
 
 QUACK_0_5_0_WHEEL_SHA256 = "08821ebfb8e638cc20308d5c59410c6dbb3b637ccc7b07bd57c7a9261a06af74"
-QUACK_PARTITIONED_SM90_PATCH_SHA256 = "07749c9aa93339d5a91b412c649bbbbe2e35ae76feb6220afdc4cad50486b357"
+QUACK_PARTITIONED_SM90_PATCH_SHA256 = "79e276d3e2b60f53fd117277c3f0cb0a0ebf689f7feddd000d7398f4611f5e47"
 _SM90_MMA_N_QUANTUM = 8
 _SM90_MMA_N_MAX = 256
 _REQUIRED_EXTENSION_SYMBOLS = (
@@ -27,6 +28,7 @@ _REQUIRED_EXTENSION_SYMBOLS = (
     "partition_accumulator_groups",
     "gemm_groups_w_idx",
     "round_group_to_bf16_rne",
+    "PartitionedGemmSm90",
 )
 _FORBIDDEN_EXTENSION_TOKENS = (
     "swiglu",
@@ -139,6 +141,18 @@ class QuackPartitionedExtensionAudit:
         )
 
 
+@dataclass(frozen=True)
+class GeneratedQuackPartitionedMainloop:
+    """CuTe authoring module generated from a partitioned Contract."""
+
+    module_name: str
+    source: str
+    semantic_digest: str
+    source_digest: str
+    rhs_mma_ns: tuple[int, ...]
+    output_count: int
+
+
 def audit_quack_partitioned_extension_patch(patch_path: Path) -> QuackPartitionedExtensionAudit:
     """Check the pinned extension artifact without importing CUDA packages."""
     source = patch_path.read_text()
@@ -152,7 +166,11 @@ def audit_quack_partitioned_extension_patch(patch_path: Path) -> QuackPartitione
     except SyntaxError:
         syntax_compiles = False
     lowered = added_source.lower()
-    missing = tuple(symbol for symbol in _REQUIRED_EXTENSION_SYMBOLS if f"def {symbol}(" not in added_source)
+    missing = tuple(
+        symbol
+        for symbol in _REQUIRED_EXTENSION_SYMBOLS
+        if f"def {symbol}(" not in added_source and f"class {symbol}(" not in added_source
+    )
     forbidden = tuple(token for token in _FORBIDDEN_EXTENSION_TOKENS if token in lowered)
     return QuackPartitionedExtensionAudit(
         sha256=digest,
@@ -182,8 +200,8 @@ def plan_quack_partitioned_mainloop(
     in ``GemmSm90``. ``requires_external_quack_extension`` remains true until
     that reusable primitive exists and is compiled on SM90.
     """
-    if tile_m <= 0 or tile_m % 64:
-        raise ValueError("SM90 partitioned mainloop tile M must be a positive multiple of 64")
+    if tile_m != 64:
+        raise ValueError("the first SM90 partitioned mainloop executor requires tile M 64")
     if tile_k <= 0 or tile_k % 16:
         raise ValueError("SM90 partitioned mainloop tile K must be a positive multiple of 16")
     adapter = plan_quack_partitioned_gemm_adapter(program)
@@ -237,12 +255,72 @@ def plan_quack_partitioned_mainloop(
         shared_a_stage=True,
         requires_external_quack_extension=True,
         extension_sites=(
-            "quack/gemm_sm90.py: accept a static RHS tensor tuple in __call__ and kernel",
-            "quack/gemm_sm90.py: stage one A tile and one B tile per RHS group under one AB barrier",
-            "quack/gemm_sm90.py: issue all group WGMMA operations inside the same ordered K loop",
-            "quack/gemm_base.py: carry multiple direct output tensors through the existing epilogue store driver",
-            "quack/epilogue/visit.py: invoke generated scalar Maps on congruent accumulator-group coordinates",
+            "quack/partitioned_sm90.py: accept a static RHS tensor tuple in __call__ and kernel",
+            "quack/partitioned_sm90.py: stage one A tile and one B tile per RHS group under one AB barrier",
+            "quack/partitioned_sm90.py: issue all group WGMMA operations inside the same ordered K loop",
+            "quack/partitioned_sm90.py: carry multiple direct output tensors through the generated finalizer",
+            "quack/partitioned_sm90.py: invoke generated scalar Maps on congruent accumulator-group coordinates",
         ),
+    )
+
+
+def generate_quack_partitioned_mainloop(
+    program: PartitionedGemmProgram,
+    *,
+    tile_m: int = 64,
+    tile_k: int = 64,
+) -> GeneratedQuackPartitionedMainloop:
+    """Render the static finalizer and generic QuACK executor instantiation."""
+    plan = plan_quack_partitioned_mainloop(program, tile_m=tile_m, tile_k=tile_k)
+    scalar_methods = "\n\n".join(
+        _render_cute_scalar_method(index, finalization.program.expression)
+        for index, finalization in enumerate(program.scalar_finalizations)
+    )
+    store_body = _render_cute_store_body(program, tile_m=tile_m)
+    rhs_names = tuple(f"rhs{index}" for index in range(len(plan.rhs_groups)))
+    output_names = tuple(f"output{index}" for index in range(len(plan.stores)))
+    parameters = ", ".join(("lhs", *rhs_names, *output_names, "stream"))
+    source = f"""# Generated from PartitionedGemmProgram {program.semantic_digest}; do not edit.
+from typing import Tuple
+
+import cutlass
+import cutlass.cute as cute
+
+from quack.partitioned_sm90 import PartitionedGemmSm90
+
+
+class GeneratedPartitionFinalizer:
+    output_count = {len(plan.stores)}
+
+{scalar_methods}
+
+    @cute.jit
+    def store(self, boundaries, outputs, m_start, m_extent, batch_idx, tidx, threads):
+{store_body}
+
+
+_executor = PartitionedGemmSm90(
+    {tuple(group.mma_n for group in plan.rhs_groups)!r},
+    tile_m={tile_m},
+    tile_k={tile_k},
+    finalizer=GeneratedPartitionFinalizer(),
+)
+
+
+@cute.jit
+def run({parameters}):
+    _executor(lhs, {rhs_names!r}, {output_names!r}, stream)
+"""
+    for name in (*rhs_names, *output_names):
+        source = source.replace(repr(name), name)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    return GeneratedQuackPartitionedMainloop(
+        module_name=f"shuttle_partitioned_sm90_{digest[:16]}",
+        source=source,
+        semantic_digest=program.semantic_digest,
+        source_digest=digest,
+        rhs_mma_ns=tuple(group.mma_n for group in plan.rhs_groups),
+        output_count=len(plan.stores),
     )
 
 
@@ -251,3 +329,102 @@ def _mma_n(valid_n: int) -> int:
     if padded > _SM90_MMA_N_MAX:
         raise ValueError(f"one SM90 RHS group exceeds the supported MMA N extent: {valid_n}")
     return padded
+
+
+def _render_cute_scalar_method(index: int, expression: CastScalarExpression) -> str:
+    inputs = _scalar_inputs(expression)
+    arguments = ", ".join(value.input_name for value in inputs)
+    body = _render_cute_expression(expression)
+    return f"    @cute.jit\n    def scalar_{index}(self, {arguments}):\n        return {body}\n"
+
+
+def _render_cute_store_body(program: PartitionedGemmProgram, *, tile_m: int) -> str:
+    lines: list[str] = []
+    for output_index, finalization in enumerate(program.scalar_finalizations):
+        extent = program.partitions[finalization.source_partitions[0]].extent
+        lines.extend(
+            (
+                f"        for linear in cutlass.range(tidx, {tile_m} * {extent}, threads):",
+                f"            local_m = linear // {extent}",
+                f"            feature = linear - local_m * {extent}",
+                "            global_m = m_start + local_m",
+                "            if global_m < m_extent:",
+            )
+        )
+        arguments: list[str] = []
+        for partition_index, scalar_input in zip(
+            finalization.source_partitions, finalization.program.inputs, strict=True
+        ):
+            assert scalar_input.input_index is not None
+            arguments.append(
+                "cutlass.Float32(boundaries["
+                f"{partition_index}][local_m + {scalar_input.input_index.row_offset}, "
+                f"feature + {scalar_input.input_index.feature_offset}])"
+            )
+        lines.append(f"                value = self.scalar_{output_index}({', '.join(arguments)})")
+        lines.append(f"                outputs[{output_index}][global_m, feature, batch_idx] = cutlass.BFloat16(value)")
+    output_index = len(program.scalar_finalizations)
+    for finalization in program.passthrough_finalizations:
+        extent = program.partitions[finalization.source_partition].extent
+        lines.extend(
+            (
+                f"        for linear in cutlass.range(tidx, {tile_m} * {extent}, threads):",
+                f"            local_m = linear // {extent}",
+                f"            feature = linear - local_m * {extent}",
+                "            global_m = m_start + local_m",
+                "            if global_m < m_extent:",
+                f"                outputs[{output_index}][global_m, feature, batch_idx] = "
+                f"boundaries[{finalization.source_partition}][local_m, feature]",
+            )
+        )
+        output_index += 1
+    return "\n".join(lines)
+
+
+def _scalar_inputs(expression: CastScalarExpression) -> tuple[CastScalarExpression, ...]:
+    leaves: dict[str, CastScalarExpression] = {}
+
+    def visit(value: CastScalarExpression) -> None:
+        if value.kind is CastScalarKind.INPUT:
+            assert value.input_name is not None
+            leaves[value.input_name] = value
+        for operand in value.operands:
+            visit(operand)
+
+    visit(expression)
+    return tuple(leaves[name] for name in sorted(leaves))
+
+
+def _render_cute_expression(expression: CastScalarExpression) -> str:
+    if expression.kind is CastScalarKind.INPUT:
+        assert expression.input_name is not None
+        rendered = expression.input_name
+    elif expression.kind is CastScalarKind.CONSTANT:
+        assert expression.constant is not None
+        rendered = repr(expression.constant)
+    else:
+        operands = tuple(_render_cute_expression(operand) for operand in expression.operands)
+        if expression.kind is CastScalarKind.CONVERT:
+            rendered = operands[0]
+        elif expression.kind is CastScalarKind.NEGATE:
+            rendered = f"(-{operands[0]})"
+        elif expression.kind is CastScalarKind.ADD:
+            rendered = f"({operands[0]} + {operands[1]})"
+        elif expression.kind is CastScalarKind.SUBTRACT:
+            rendered = f"({operands[0]} - {operands[1]})"
+        elif expression.kind is CastScalarKind.MULTIPLY:
+            rendered = f"({operands[0]} * {operands[1]})"
+        elif expression.kind is CastScalarKind.DIVIDE:
+            rendered = f"({operands[0]} / {operands[1]})"
+        elif expression.kind is CastScalarKind.EXP:
+            rendered = f"cute.math.exp({operands[0]}, fastmath=False)"
+        elif expression.kind is CastScalarKind.TANH:
+            rendered = f"cute.math.tanh({operands[0]}, fastmath=False)"
+        else:
+            assert expression.kind is CastScalarKind.SELECT
+            rendered = f"({operands[1]} if {operands[0]} else {operands[2]})"
+    if expression.dtype is CastScalarDType.BF16:
+        return f"cutlass.Float32(cutlass.BFloat16({rendered}))"
+    if expression.dtype is CastScalarDType.F32:
+        return f"cutlass.Float32({rendered})"
+    return f"cutlass.Boolean({rendered})"

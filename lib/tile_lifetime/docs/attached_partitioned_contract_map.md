@@ -154,4 +154,7 @@ The follow-up [source-lineage audit](quack_partitioned_mainloop_lineage.md)
 also checks the locked `quack-kernels==0.5.0` package and narrows the first
 tiled implementation to one shared A stage plus coordinate-aligned WGMMA
 groups for each RHS segment. The newer package does not remove the segmented
-operand limitation.
+operand limitation. The isolated follow-up patch now contains a bounded
+nonpersistent executor and Shuttle-generated finalizer; its host-side
+syntax/reference/mutation gates pass, while CuTe import, device compilation,
+correctness, and component timing remain unmeasured.
