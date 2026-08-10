@@ -49,13 +49,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
 
+from marin.datakit.file_discovery import walk_data_files
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
@@ -254,45 +255,16 @@ def _paragraph_overlap_and_matches(
     return len(matched) / len(hashes), matched
 
 
-def _is_hidden_dir(root: str, resolved: str) -> bool:
-    """Return True if any path segment between *resolved* and *root* starts with a dot.
-
-    Skips ``.metrics/``, ``.executor_info/``, and other hidden sidecar directories
-    that show up routinely in normalize / executor outputs.
-    """
-    rel = os.path.relpath(root, resolved)
-    if rel == ".":
-        return False
-    return any(p.startswith(".") for p in rel.split(os.sep))
-
-
 def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str] = frozenset()) -> Iterator[str]:
     """Walk all *eval_paths* recursively and yield zephyr-readable data files.
 
-    Filters by ``zephyr.readers.SUPPORTED_EXTENSIONS`` so common sidecars
-    (``README``, ``_SUCCESS``, ``provenance.json``, ``.executor_info``, …)
-    that live alongside eval data don't kill the whole decon step when
-    ``load_file`` later rejects their extension. Mirrors ``normalize._discover_files``.
-
-    *exclude_dir_names* skips any file whose immediate parent directory name is
-    in the set (the eval-corpus layout is ``<root>/<split>/<task>/<file>``, so the
-    task name is the parent dir). This lets a caller drop specific eval tasks from
-    the bloom *at read time*, so an already-materialized eval corpus that still
-    contains those task dirs is excluded without regenerating it.
+    ``exclude_dir_names`` lets a caller drop specific eval tasks from the bloom *at read
+    time*, so an already-materialized eval corpus that still contains those task dirs is
+    excluded without regenerating it.
     """
     for source in eval_paths:
-        fs, resolved = url_to_fs(source)
-        protocol = source.split("://")[0] if "://" in source else ""
-        for root, _dirs, files in fs.walk(resolved):
-            if _is_hidden_dir(root, resolved):
-                continue
-            if os.path.basename(root.rstrip("/")) in exclude_dir_names:
-                continue
-            for fname in files:
-                if fname.startswith(".") or not fname.endswith(SUPPORTED_EXTENSIONS):
-                    continue
-                full = os.path.join(root, fname)
-                yield f"{protocol}://{full}" if protocol else full
+        for data_file in walk_data_files(source, exclude_dir_names=exclude_dir_names):
+            yield data_file.path
 
 
 _INDEX_SCHEMA = pa.schema([pa.field("hash", pa.uint64()), pa.field("eval_id", pa.string())])

@@ -305,8 +305,8 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
 
     Regression: _discover_eval_files previously yielded every non-dot file, then
     load_file rejected unsupported extensions and raised — killing the whole
-    decon step. The discovery now filters by zephyr.readers.SUPPORTED_EXTENSIONS
-    and skips hidden directories (mirrors normalize._discover_files).
+    decon step. Discovery now filters by zephyr.readers.SUPPORTED_EXTENSIONS and
+    skips hidden directories.
     """
     eval_dir = tmp_path / "eval"
     input_dir = tmp_path / "input"

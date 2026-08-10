@@ -28,7 +28,7 @@ import dupekit
 import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ValidationInfo, model_validator
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
@@ -36,6 +36,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
+from marin.datakit.file_discovery import DataFile, walk_data_files
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import ARTIFACT_LOAD_CONTEXT_KEY
 from marin.execution.step_spec import StepSpec
@@ -202,36 +203,19 @@ def _ferry_test_max_files() -> int | None:
 def _discover_files(
     input_path: str,
     file_extensions: tuple[str, ...] | None = None,
-) -> list[str]:
-    """Walk *input_path* recursively and return a sorted flat list of data files.
+) -> list[DataFile]:
+    """Walk *input_path* recursively and return its data files, sorted by path.
 
-    Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped. When the ``FERRY_TEST_MAX_FILES`` env var is set
-    to a positive integer, the sorted list is truncated to that many entries —
-    a smoke/test-only knob that bypasses any caller's intent, used by the
-    canary ferries to bound oversized staged dumps.
+    Each entry carries the size the walk already reported, so the caller can total the
+    input without a second metadata pass. When the ``FERRY_TEST_MAX_FILES`` env var is
+    set to a positive integer, the sorted list is truncated to that many entries — a
+    smoke/test-only knob that bypasses any caller's intent, used by the canary ferries
+    to bound oversized staged dumps.
     """
-    extensions = file_extensions or SUPPORTED_EXTENSIONS
-    fs, resolved = url_to_fs(input_path)
-    protocol = input_path.split("://")[0] if "://" in input_path else ""
-
-    def _full_path(p: str) -> str:
-        return f"{protocol}://{p}" if protocol else p
-
-    discovered: list[str] = []
-    for root, _dirs, files in fs.walk(resolved):
-        rel_root = os.path.relpath(root, resolved)
-        parts = [] if rel_root == "." else rel_root.split(os.sep)
-        if any(p.startswith(".") for p in parts):
-            continue
-        for fname in files:
-            if fname.startswith("."):
-                continue
-            if not fname.endswith(extensions):
-                continue
-            discovered.append(_full_path(os.path.join(root, fname)))
-
-    discovered.sort()
+    discovered = sorted(
+        walk_data_files(input_path, extensions=file_extensions or SUPPORTED_EXTENSIONS),
+        key=lambda data_file: data_file.path,
+    )
     cap = _ferry_test_max_files()
     if cap is not None and cap < len(discovered):
         logger.warning(
@@ -244,11 +228,6 @@ def _discover_files(
         )
         discovered = discovered[:cap]
     return discovered
-
-
-def _compute_total_bytes(file_paths: list[str]) -> int:
-    """Sum the byte sizes of all *file_paths*."""
-    return sum(StoragePath(path).size() for path in file_paths)
 
 
 def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -455,24 +434,24 @@ def normalize_to_parquet(
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
 
-    files = _discover_files(input_path, file_extensions=file_extensions)
-    if not files:
+    discovered = _discover_files(input_path, file_extensions=file_extensions)
+    if not discovered:
         raise FileNotFoundError(f"No data files found under {input_path}")
 
-    total_bytes = _compute_total_bytes(files)
+    total_bytes = sum(data_file.size for data_file in discovered)
     num_shards = max(1, total_bytes // target_partition_bytes)
 
     logger.info(
         "Normalizing %s → %s: %d files, %d bytes, %d shards",
         input_path,
         output_path,
-        len(files),
+        len(discovered),
         total_bytes,
         num_shards,
     )
 
     pipeline = _build_pipeline(
-        files,
+        [data_file.path for data_file in discovered],
         output_path,
         num_shards,
         text_field,
