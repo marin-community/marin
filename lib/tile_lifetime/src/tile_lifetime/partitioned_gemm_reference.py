@@ -73,6 +73,41 @@ def evaluate_partitioned_gemm_reference(
         partition = program.partitions[finalization.source_partition]
         output = boundary[:, partition.start : partition.limit]
         outputs.append(output.reshape(_shape_dimensions(finalization.output_shape)).copy())
+    for fold in program.auxiliary_folds:
+        partition = program.partitions[fold.source_partition]
+        input_shape = _shape_dimensions(fold.input_shape)
+        output_shape = _shape_dimensions(fold.output_shape)
+        if np.prod(input_shape, dtype=np.int64) != m * partition.extent:
+            raise ValueError("auxiliary Fold input view does not cover its source partition")
+        if tuple(input_shape[:-1]) != output_shape:
+            raise ValueError("auxiliary Fold output shape does not match its input leading axes")
+        source = boundary[:, partition.start : partition.limit].reshape(input_shape)
+        output = np.empty(output_shape, dtype=np.float32)
+        contribution_input = fold.contribution.inputs[0]
+        assert contribution_input.input_name is not None
+        reducer_inputs = fold.reducer.inputs
+        assert all(value.input_name is not None for value in reducer_inputs)
+        for output_index in np.ndindex(output_shape):
+            accumulator = np.float32(fold.initializer)
+            for feature in range(input_shape[-1]):
+                contribution = evaluate_cast_scalar_program(
+                    fold.contribution,
+                    {contribution_input.input_name: float(source[(*output_index, feature)])},
+                )
+                if isinstance(contribution, bool):
+                    raise ValueError("auxiliary Fold contribution cannot be a predicate")
+                reduced = evaluate_cast_scalar_program(
+                    fold.reducer,
+                    {
+                        reducer_inputs[0].input_name: float(accumulator),
+                        reducer_inputs[1].input_name: float(contribution),
+                    },
+                )
+                if isinstance(reduced, bool):
+                    raise ValueError("auxiliary Fold reducer cannot produce a predicate")
+                accumulator = np.float32(reduced)
+            output[output_index] = accumulator
+        outputs.append(output)
     return tuple(outputs)
 
 

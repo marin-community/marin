@@ -7,9 +7,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
+from enum import StrEnum
 
-from tile_lifetime.cast_scalar_program import CastScalarProgram, GeneratedCudaScalarBody, generate_cuda_scalar_body
+from tile_lifetime.cast_scalar_program import (
+    CastScalarDType,
+    CastScalarProgram,
+    GeneratedCudaScalarBody,
+    generate_cuda_scalar_body,
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,34 @@ class PassthroughPartitionFinalization:
     output_shape: str
 
 
+class PartitionFoldReassociation(StrEnum):
+    """Permitted reassociation of one auxiliary partition Fold."""
+
+    SOURCE_ORDERED = "source_ordered"
+    ALLOW_ROUNDING_REORDER = "allow_rounding_reorder"
+
+
+@dataclass(frozen=True)
+class AuxiliaryPartitionFold:
+    """A Map/Fold emitted alongside a retained raw accumulator partition.
+
+    ``input_shape`` is a logical view of the rounded partition. Its final axis
+    is folded, while all leading axes form the output domain. This permits a
+    physical Contract to retain its BF16 output for other consumers and emit a
+    derived statistic without materializing the pointwise contribution.
+    """
+
+    source_partition: int
+    input_shape: str
+    contribution: CastScalarProgram
+    reducer: CastScalarProgram
+    initializer: float
+    output_shape: str
+    accumulator_dtype: str
+    output_dtype: str
+    reassociation: PartitionFoldReassociation
+
+
 @dataclass(frozen=True)
 class PartitionedGemmProgram:
     """One shared GEMM mainloop with generated logical-partition outputs.
@@ -63,6 +98,7 @@ class PartitionedGemmProgram:
     partition_dtype: str
     output_dtype: str
     output_rounding: str
+    auxiliary_folds: tuple[AuxiliaryPartitionFold, ...] = ()
 
     def __post_init__(self) -> None:
         m, n, k = self.shape
@@ -111,20 +147,40 @@ class PartitionedGemmProgram:
             consumed.add(finalization.source_partition)
         if consumed != set(range(len(self.partitions))):
             raise ValueError("every accumulator partition must reach exactly one stored output")
+        for fold in self.auxiliary_folds:
+            if fold.source_partition < 0 or fold.source_partition >= len(self.partitions):
+                raise ValueError("auxiliary Fold references a missing partition")
+            if len(fold.contribution.inputs) != 1:
+                raise ValueError("auxiliary Fold contribution requires one partition scalar")
+            if len(fold.reducer.inputs) != 2:
+                raise ValueError("auxiliary Fold reducer requires accumulator and contribution scalars")
+            if fold.accumulator_dtype != "f32" or fold.output_dtype != "f32":
+                raise ValueError("the bounded auxiliary Fold requires FP32 accumulation and output")
+            if fold.contribution.inputs[0].dtype is not CastScalarDType.BF16:
+                raise ValueError("auxiliary Fold contribution must read the rounded BF16 partition boundary")
+            if fold.contribution.expression.dtype is not CastScalarDType.F32:
+                raise ValueError("auxiliary Fold contribution must produce FP32")
+            if any(value.dtype is not CastScalarDType.F32 for value in fold.reducer.inputs):
+                raise ValueError("auxiliary Fold reducer inputs must be FP32")
+            if fold.reducer.expression.dtype is not CastScalarDType.F32:
+                raise ValueError("auxiliary Fold reducer must produce FP32")
+            if not math.isfinite(fold.initializer):
+                raise ValueError("auxiliary Fold initializer must be finite")
 
     @property
     def output_shapes(self) -> tuple[str, ...]:
-        """Return scalar-Map outputs followed by passthrough outputs."""
+        """Return stored partition outputs followed by auxiliary Fold outputs."""
         return (
             *(finalization.output_shape for finalization in self.scalar_finalizations),
             *(finalization.output_shape for finalization in self.passthrough_finalizations),
+            *(fold.output_shape for fold in self.auxiliary_folds),
         )
 
     @property
     def semantic_digest(self) -> str:
         """Return a source-name-independent physical-program digest."""
         record = {
-            "template": "partitioned_gemm_scalar_finalization",
+            "template": _program_template(self),
             "shape": self.shape,
             "partitioned_operand": self.partitioned_operand,
             "operand_shapes": self.operand_shapes,
@@ -144,6 +200,20 @@ class PartitionedGemmProgram:
                 {"source": finalization.source_partition, "output_shape": finalization.output_shape}
                 for finalization in self.passthrough_finalizations
             ],
+            "auxiliary_folds": [
+                {
+                    "source": fold.source_partition,
+                    "input_shape": fold.input_shape,
+                    "contribution": fold.contribution.serialized,
+                    "reducer": fold.reducer.serialized,
+                    "initializer": fold.initializer,
+                    "output_shape": fold.output_shape,
+                    "accumulator_dtype": fold.accumulator_dtype,
+                    "output_dtype": fold.output_dtype,
+                    "reassociation": fold.reassociation.value,
+                }
+                for fold in self.auxiliary_folds
+            ],
             "numerical": {
                 "input_dtype": self.input_dtype,
                 "accumulation_dtype": self.accumulation_dtype,
@@ -162,6 +232,8 @@ class GeneratedPartitionedGemmFinalization:
     template: str
     semantic_digest: str
     scalar_bodies: tuple[GeneratedCudaScalarBody, ...]
+    auxiliary_contribution_bodies: tuple[GeneratedCudaScalarBody, ...]
+    auxiliary_reducer_bodies: tuple[GeneratedCudaScalarBody, ...]
     backend_requirement: str
 
 
@@ -171,13 +243,32 @@ def generate_partitioned_gemm_finalization(program: PartitionedGemmProgram) -> G
         generate_cuda_scalar_body(finalization.program, symbol=f"generated_partition_map_{index}")
         for index, finalization in enumerate(program.scalar_finalizations)
     )
+    contributions = tuple(
+        generate_cuda_scalar_body(fold.contribution, symbol=f"generated_partition_fold_contribution_{index}")
+        for index, fold in enumerate(program.auxiliary_folds)
+    )
+    reducers = tuple(
+        generate_cuda_scalar_body(fold.reducer, symbol=f"generated_partition_fold_reducer_{index}")
+        for index, fold in enumerate(program.auxiliary_folds)
+    )
     return GeneratedPartitionedGemmFinalization(
-        template="partitioned_gemm_scalar_finalization",
+        template=_program_template(program),
         semantic_digest=program.semantic_digest,
         scalar_bodies=bodies,
+        auxiliary_contribution_bodies=contributions,
+        auxiliary_reducer_bodies=reducers,
         backend_requirement=(
             "retain one shared-reduction GEMM mainloop; expose contiguous accumulator partitions; round each Map "
             "input partition from FP32 to BF16 RNE before invoking its generated scalar body; store scalar outputs "
-            "and passthrough partitions directly without a concatenated result"
+            "and passthrough partitions directly without a concatenated result; evaluate auxiliary Fold "
+            "contributions from the retained BF16 boundary and reduce them under their declared reassociation policy"
         ),
+    )
+
+
+def _program_template(program: PartitionedGemmProgram) -> str:
+    return (
+        "partitioned_gemm_auxiliary_fold_finalization"
+        if program.auxiliary_folds
+        else "partitioned_gemm_scalar_finalization"
     )
