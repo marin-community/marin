@@ -15,6 +15,13 @@ their placement is a deliberate choice and they hold the bulk data. Reads of any
 GCS bucket stay governed by the cumulative transfer budget in
 :mod:`rigging.filesystem.cross_region`, which charges bytes as they are read.
 
+That declared placement is why this does not reuse
+:func:`rigging.filesystem.check_gcs_paths_same_region`, which a training job runs over
+its own config: that one asks GCS where every ``gs://`` path actually lives, one live
+bucket lookup at a time. A step graph names thousands of paths and includes shared
+buckets like ``marin-data`` whose location is not a placement decision, so the guard
+compares only what a config places and does no I/O.
+
 A deliberate cross-region run sets ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` (or passes
 ``allow_cross_region=True`` to ``StepRunner.run``); each offending path is then logged
 and emitted as a telemetry event instead of failing the run.
@@ -144,13 +151,17 @@ def runtime_region() -> str | None:
     """
     job_info = get_job_info()
     worker_region = job_info.worker_region if job_info is not None else None
-    if worker_region is not None and _is_gcs_region(worker_region):
+    if worker_region is not None and _is_declared_gcs_region(worker_region):
         return worker_region
     return None
 
 
-def _is_gcs_region(region: str) -> bool:
-    """True when the active cluster config maps *region* to a GCS bucket."""
+def _is_declared_gcs_region(region: str) -> bool:
+    """True when the active cluster config serves *region* from a GCS bucket.
+
+    A GCP region the config does not declare is not comparable either: without a
+    declared bucket there, nothing in a step graph can name a path in it.
+    """
     spec = data_config().region_buckets.get(region)
     return spec is not None and spec.store is StoreType.GCS
 

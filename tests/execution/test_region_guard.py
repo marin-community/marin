@@ -15,6 +15,8 @@ from marin.execution.region_guard import (
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 
+from tests.execution.conftest import recording_step
+
 CENTRAL1_PREFIX = "gs://marin-us-central1/infra/datakit/ferry_perf"
 
 
@@ -33,16 +35,6 @@ def runs_in(region: str | None) -> None:
     if region is None:
         return
     set_job_info(JobInfo(task_id=JobName.from_wire("/test/ferry/0"), worker_region=region))
-
-
-def recording_step(name: str, output_path: str, ran: list[str]) -> StepSpec:
-    """A step that records its own execution, so a blocked launch is observable."""
-
-    def fn(path: str) -> Artifact:
-        ran.append(name)
-        return Artifact(path=path)
-
-    return StepSpec(name=name, override_output_path=output_path, fn=fn)
 
 
 # ---------------------------------------------------------------------------
