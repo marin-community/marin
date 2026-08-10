@@ -9,9 +9,11 @@ author: kaiyuew
 
 ## Current TL;DR
 
-Implementation and local validation are complete at commit
-`87426191277502d955b50806873435b43bcc8206`. Both Gate-1 v5p-8 children are
-running with verified W&B identities/configs and advancing finite losses.
+The d512 row-norm cell finished at Paloma macro loss 3.5934 and 344,365
+tokens/s, for 0.846 effective speedup against the July control; it fails Gate
+1. The d768 cell is still running. A matched rerun of the current canonical
+d512 baseline is ready at commit `768bdfaa3985d5cf6821572fb287c19f79da45ea`
+to distinguish a real regression from baseline drift.
 
 ## Scope
 
@@ -40,10 +42,10 @@ the older 4096-token May table, preserving the Gate-1 token/FLOP cells.
 
 ### Active
 
-- `MOE-ROW-NORM-H1`: decoupling each linear's output scale and direction
-  yields effective speedup greater than 1 at both Gate-1 widths. Evidence:
-  [implementation snapshot](https://github.com/marin-community/marin/commit/87426191277502d955b50806873435b43bcc8206).
-  Next test: `MOE-ROW-NORM-001` and `MOE-ROW-NORM-002`.
+- `MOE-ROW-NORM-CTRL-H1`: the current canonical d512 baseline materially
+  differs from the historical July control under the current stack. Evidence:
+  the row-norm d512 result is 0.75% worse in loss and 2.34% slower than the
+  historical control. Next test: `MOE-ROW-NORM-CTRL-001-d512`.
 
 ### Blocked
 
@@ -51,7 +53,11 @@ the older 4096-token May table, preserving the Gate-1 token/FLOP cells.
 
 ### Falsified / Dead End
 
-- None.
+- `MOE-ROW-NORM-H1` at d512: the row-norm variant reached Paloma macro loss
+  3.5934 at 344,365 tokens/s versus historical-control loss 3.5667 at 352,609
+  tokens/s, yielding 0.846 effective speedup. The d768 replication remains in
+  flight, but the proposed two-width Gate-1 promotion condition is already
+  unmet.
 
 ### Promoted
 
@@ -248,3 +254,26 @@ baseline when the two factors are constrained to their initial norms?
   speedup require terminal metrics.
 - Next action: monitor both cells to successful terminal state, verify final
   checkpoint metadata, and compute effective speedup at each width.
+
+### 2026-08-10 16:46 PDT - Matched d512 baseline-control snapshot
+
+- Hypothesis: rerunning the current canonical MoE stack at the exact d512
+  Gate-1 cell will determine whether the comparison to the July control is
+  confounded by implementation or infrastructure drift.
+- Commit Hash: `768bdfaa3985d5cf6821572fb287c19f79da45ea`.
+- Command:
+  - `uv run --package marin-core --group test pytest -q experiments/grug/moe_row_norm/test_baseline_control.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run python -m experiments.grug.moe_row_norm.baseline_control --version 2026.08.10`
+- Config: canonical `GrugModelConfig` and `GrugMoeMuonHConfig`, hidden width
+  512, batch 16, 10,980 steps, 8192-token context, scratch initialization,
+  z-loss 0, and v5p-8. The control keeps canonical AdamH/MuonH routing and has
+  no scale-vector factorization.
+- Result: the focused recipe-equivalence test passed, required lint and type
+  checks passed, and the dry run resolved exactly one intended checkpoint
+  artifact plus pinned dataset dependencies.
+- Interpretation: model architecture, data, batch, schedule, evaluation, and
+  scalar optimizer settings match the completed row-norm d512 cell; only the
+  parameterization and optimizer implementation differ.
+- Next action: launch `MOE-ROW-NORM-CTRL-001-d512`, verify its Iris child and
+  W&B identity, and compare its terminal quality and throughput to both runs.
