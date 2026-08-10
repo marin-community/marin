@@ -22,7 +22,9 @@ def ShuttleFormStructuralRegionsPass
 def ShuttleConvertStablehloToAlgebraPass
     : Pass<"shuttle-convert-stablehlo-to-algebra", "::mlir::ModuleOp"> {
   let summary = "Partially convert selected StableHLO to Shuttle algebra";
-  let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
+  let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::math::MathDialect",
+                           "::mlir::shuttle::ShuttleDialect"];
   let constructor = "createConvertStablehloToAlgebraPass()";
 }
 
@@ -46,7 +48,14 @@ def ShuttleCanonicalizePass : Pass<"shuttle-canonicalize", "::mlir::ModuleOp"> {
 def ShuttleLowerAlgebraToStablehloPass
     : Pass<"shuttle-lower-algebra-to-stablehlo", "::mlir::ModuleOp"> {
   let summary = "Lower all Shuttle algebra back to typed StableHLO";
+  let dependentDialects = ["::mlir::stablehlo::StablehloDialect"];
   let constructor = "createLowerAlgebraToStablehloPass()";
+}
+
+def ShuttleStripSourceProvenancePass
+    : Pass<"shuttle-strip-source-provenance", "::mlir::ModuleOp"> {
+  let summary = "Strip verified transient Shuttle provenance";
+  let constructor = "createStripSourceProvenancePass()";
 }
 
 def ShuttleVerifyNoShuttleOpsPass

@@ -4,6 +4,7 @@
 load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@xla//xla:lit.bzl", "lit_test_suite")
 
 package(
@@ -98,10 +99,30 @@ cc_library(
         ":ShuttleDialect",
         ":shuttle_passes_inc_gen",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AffineDialect",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "ShuttleTestPasses",
+    testonly = True,
+    srcs = ["test/TestPasses.cc"],
+    hdrs = ["test/TestPasses.h"],
+    deps = [
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
     ],
 )
 
@@ -111,24 +132,61 @@ cc_binary(
     deps = [
         ":ShuttleDialect",
         ":ShuttlePasses",
-        "@llvm-project//mlir:AllPassesAndDialects",
-        "@llvm-project//mlir:AllExtensions",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
         "@llvm-project//mlir:MlirOptLib",
-        "@llvm-project//mlir:RegisterAllDialects",
-        "@llvm-project//mlir:RegisterAllExtensions",
-        "@llvm-project//mlir:RegisterAllPasses",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:TensorDialect",
         "@stablehlo//:register",
-        "@stablehlo//:stablehlo_passes",
+    ],
+)
+
+cc_binary(
+    name = "shuttle-test-opt",
+    testonly = True,
+    srcs = ["tools/shuttle-test-opt.cc"],
+    deps = [
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        ":ShuttleTestPasses",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:TensorDialect",
+        "@stablehlo//:register",
+    ],
+)
+
+cc_test(
+    name = "pipeline_observer_test",
+    srcs = ["test/pipeline-observer-test.cc"],
+    deps = [
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@stablehlo//:register",
     ],
 )
 
 lit_test_suite(
     name = "mlir_tests",
-    srcs = glob(["test/**/*.mlir"]),
+    srcs = glob(
+        ["test/**/*.mlir"],
+        exclude = ["test/Inputs/**"],
+    ),
     cfg = "test/lit.cfg.py",
     tools = [
         ":shuttle-opt",
+        ":shuttle-test-opt",
         "@llvm-project//llvm:FileCheck",
         "@llvm-project//llvm:not",
     ],
