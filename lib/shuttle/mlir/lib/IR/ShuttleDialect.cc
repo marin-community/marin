@@ -147,7 +147,7 @@ LogicalResult verifyIndexingMaps(Operation *owner, ArrayAttr indexingMaps,
   if (indexingMaps.empty()) {
     return success();
   }
-  AffineMap first = cast<AffineMapAttr>(indexingMaps.front()).getValue();
+  AffineMap first = cast<AffineMapAttr>(indexingMaps[0]).getValue();
   for (auto [mapAttribute, indexedType] :
        llvm::zip_equal(indexingMaps, indexedTypes)) {
     AffineMap map = cast<AffineMapAttr>(mapAttribute).getValue();
@@ -174,7 +174,7 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     return map.emitOpError("requires at least one indexing map");
   }
 
-  AffineMap domain = cast<AffineMapAttr>(indexingMaps.front()).getValue();
+  AffineMap domain = cast<AffineMapAttr>(indexingMaps[0]).getValue();
   SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
   SmallVector<char> boundDimensions(domain.getNumDims(), 0);
   bool hasRankedTensor = false;
@@ -251,7 +251,7 @@ LogicalResult verifyContractMaps(ContractOp contract, TypeRange indexedTypes) {
     return contract.emitOpError("requires non-empty indexing maps");
   }
 
-  AffineMap domain = cast<AffineMapAttr>(indexingMaps.front()).getValue();
+  AffineMap domain = cast<AffineMapAttr>(indexingMaps[0]).getValue();
   SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
   SmallVector<char> boundDimensions(domain.getNumDims(), 0);
   for (auto [mapAttribute, indexedTypeValue] :
@@ -455,8 +455,7 @@ LogicalResult ContractOp::verify() {
     return failure();
   }
   if (!getIndexingMaps().empty()) {
-    AffineMap domain =
-        cast<AffineMapAttr>(getIndexingMaps().front()).getValue();
+    AffineMap domain = cast<AffineMapAttr>(getIndexingMaps()[0]).getValue();
     if (getIteratorKinds().size() != domain.getNumDims()) {
       return emitOpError(
           "requires one iterator kind per indexing-map dimension");

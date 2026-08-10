@@ -159,6 +159,30 @@ both headers. The existing `@llvm-project//mlir:IR` dependency already owns
 - Native compilation remains pending. This debugging task does not claim the
   generated attribute or operation code compiles after this source fix.
 
+## Hypothesis 5
+
+The handwritten verifier uses an `ArrayAttr` convenience method that is absent
+from the pinned MLIR API. Exact LLVM commit `9a4faee1068` gives `ArrayAttr`
+iterators, `size`, `empty`, and bounds-checked `operator[]`, but no `front`.
+
+Four verifier sites call `front()` on an `ArrayAttr`. Each site already proves
+the attribute is nonempty: the shared indexing-map verifier returns before the
+first access, the Map and Contract helpers reject empty maps, and the Contract
+verifier guards its access with `empty()`. Replace only those four calls with
+indexed access at zero.
+
+## Results 5
+
+- The exact-pin `ArrayAttr` declaration confirms `operator[]` is supported and
+  asserts that the index is in bounds.
+- All handwritten `front`, `back`, indexed-access, `empty`, and `size` calls in
+  the native slice were classified by container type. The four failing calls
+  were the only `ArrayAttr` front accesses; remaining front calls operate on
+  MLIR Region or LLVM SmallVector containers supported at the pin.
+- Repository formatting and lint gates run on the changed files.
+- Native compilation remains pending. This debugging task does not claim the
+  verifier compiles after this source fix.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
