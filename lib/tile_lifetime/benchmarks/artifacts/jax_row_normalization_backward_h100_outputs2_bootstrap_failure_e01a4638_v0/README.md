@@ -62,10 +62,9 @@ dev = []
 Linux-targeted `uv sync --all-packages --no-group dev --extra gpu --dry-run`
 resolves 32 packages and would install JAX/JAXLIB/CUDA plugin/PJRT 0.10.1,
 NVCC 13.3.73, and the local `marin-tile-lifetime` package. The corrected source
-archive is 3.2 MB before compression and has SHA-256
+tree is 3.2 MB before compression. Its compressed archive has SHA-256
 `f73c03383676a05fc4e7dc5f477458de5bab4a1dce2c964fa1e4cb735772e9ba`.
 The exact Iris workspace bundle is 521,060 bytes with SHA-256
 `d4b0feed249d63fbda60db0fa286683374857aa9c723e662f4bb0fe404ab7f58`.
 
 No corrected validation should be submitted without separate authorization.
-
