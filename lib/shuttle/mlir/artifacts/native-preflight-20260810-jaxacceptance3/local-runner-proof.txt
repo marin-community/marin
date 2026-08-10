@@ -1,0 +1,126 @@
++ readonly CANONICAL=/private/tmp/shuttle-jaxacceptance3-ba31
++ CANONICAL=/private/tmp/shuttle-jaxacceptance3-ba31
++ readonly PAYLOAD=/private/tmp/shuttle-native-jaxacceptance3-client-root/payload
++ PAYLOAD=/private/tmp/shuttle-native-jaxacceptance3-client-root/payload
++ readonly XLA=/private/tmp/shuttle-native-jaxacceptance3-proof/xla
++ XLA=/private/tmp/shuttle-native-jaxacceptance3-proof/xla
++ readonly JAX=/private/tmp/shuttle-native-jaxacceptance3-proof/jax
++ JAX=/private/tmp/shuttle-native-jaxacceptance3-proof/jax
++ readonly BAZEL=/private/tmp/bazel-7.7.0-darwin-arm64
++ BAZEL=/private/tmp/bazel-7.7.0-darwin-arm64
++ readonly OUTPUT_ROOT=/private/tmp/shuttle-native-jaxacceptance3-proof/bazel-output
++ OUTPUT_ROOT=/private/tmp/shuttle-native-jaxacceptance3-proof/bazel-output
++ readonly PYTHON_BIN=/Users/dlwh/src/marin/.venv/bin/python
++ PYTHON_BIN=/Users/dlwh/src/marin/.venv/bin/python
+++ git -C /private/tmp/shuttle-jaxacceptance3-ba31 rev-parse HEAD
++ test ba31d47e354746543bdc179277071de25c48eaed = ba31d47e354746543bdc179277071de25c48eaed
+++ git -C /private/tmp/shuttle-jaxacceptance3-ba31 status --short
++ test -z ''
+++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla rev-parse HEAD
++ test 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69 = 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax rev-parse HEAD
++ test 619764c15117fbefc4ba13ab941871cb514c23f6 = 619764c15117fbefc4ba13ab941871cb514c23f6
+++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla status --short
++ test -z ''
+++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax status --short
++ test -z ''
+++ find /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle -type f
+++ wc -l
+++ tr -d '[:space:]'
++ test 82 = 82
++ test '!' -e /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/artifacts
+++ find /private/tmp/shuttle-native-jaxacceptance3-client-root/payload -type f '(' -path '*/config/*' -o -name coreweave.yaml ')'
+++ wc -l
+++ tr -d '[:space:]'
++ test 0 = 0
++ test '!' -e /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/pyproject.toml
++ diff -ru --exclude=artifacts /private/tmp/shuttle-jaxacceptance3-ba31/lib/shuttle /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle
++ bash -n /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/run_jax_acceptance_preflight.sh
++ rg -n 'nvidia-smi|rocminfo|jax\.devices|jax\.local_devices|accelerator' /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/run_jax_acceptance_preflight.sh
++ XLA_PATCHES=("${PAYLOAD}/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch" "${PAYLOAD}/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch")
++ readonly -a XLA_PATCHES
++ JAX_PATCHES=("${PAYLOAD}/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch" "${PAYLOAD}/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch")
++ readonly -a JAX_PATCHES
++ for patch in '"${XLA_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ for patch in '"${XLA_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( index=2 - 1 ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply --reverse --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla apply --reverse --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/xla diff --check
++ for patch in '"${JAX_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ for patch in '"${JAX_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ (( index=2 - 1 ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply --reverse --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax apply --reverse --check /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance3-proof/jax diff --check
++ EXPECTED_LIT_RUNTIME_LABELS=('Label("//xla/backends/gpu/target_config:all_gpu_specs")' 'Label("//xla:lit.cfg.py")' 'Label("//xla:sh_test_with_runfiles.py")' 'Label("//xla/stream_executor/cuda:all_runtime")' 'Label("//xla/tsl/cuda:nvshmem_stub")' 'Label("//xla/tsl/cuda:nccl")' 'Label("//xla:lit_google_cfg.py")')
++ readonly -a EXPECTED_LIT_RUNTIME_LABELS
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla/backends/gpu/target_config:all_gpu_specs")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla:lit.cfg.py")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla:sh_test_with_runfiles.py")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla/stream_executor/cuda:all_runtime")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla/tsl/cuda:nvshmem_stub")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla/tsl/cuda:nccl")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
++ for label in '"${EXPECTED_LIT_RUNTIME_LABELS[@]}"'
+++ grep -Fc 'Label("//xla:lit_google_cfg.py")' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 1 = 1
+++ grep -Fc 'Label("//xla' /private/tmp/shuttle-native-jaxacceptance3-proof/xla/xla/lit.bzl
++ test 7 = 7
++ PYTHONPATH=/private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch
++ /Users/dlwh/src/marin/.venv/bin/python -m pytest -q /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/test_acceptance_contract.py /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/test_verify_acceptance_patch.py
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.0.3, pluggy-1.6.0
+rootdir: /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle
+configfile: pyproject.toml
+plugins: anyio-4.12.1, jaxtyping-0.3.5, playwright-0.7.2, xdist-3.8.0, timeout-2.4.0, flakefinder-1.1.0, asyncio-1.4.0, base-url-2.1.0
+timeout: 30.0s
+timeout method: thread
+timeout func_only: False
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 43 items
+
+../shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/test_acceptance_contract.py . [  2%]
+..............................                                           [ 72%]
+../shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/test_verify_acceptance_patch.py . [ 74%]
+...........                                                              [100%]
+
+============================= slowest 10 durations =============================
+
+(10 durations < 0.005s hidden.  Use -vv to show these durations.)
+============================== 43 passed in 0.04s ==============================
++ PYTHONPATH=/private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch
++ /Users/dlwh/src/marin/.venv/bin/python /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/verify_acceptance_fixture_oracles.py
++ HERMETIC_PYTHON_VERSION=3.12
++ /Users/dlwh/src/marin/.venv/bin/python /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir/jax_patch/verify_acceptance_patch.py --bazel /private/tmp/bazel-7.7.0-darwin-arm64 --jax-source /private/tmp/shuttle-native-jaxacceptance3-proof/jax --xla-source /private/tmp/shuttle-native-jaxacceptance3-proof/xla --shuttle-mlir /private/tmp/shuttle-native-jaxacceptance3-client-root/payload/lib/shuttle/mlir --output-user-root /private/tmp/shuttle-native-jaxacceptance3-proof/bazel-output
++ printf 'local_payload_proof=PASS\n'
+local_payload_proof=PASS

@@ -1,0 +1,50 @@
+I20260810 15:10:45 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 15:10:45 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 15:10:46 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10002 -> iris-controller-svc:10000
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance3/0
+State: failed  exit=1
+Resources: 24 cpu, 96 GiB, 250 GiB disk
+Error: test_bridge_test.log
+b2f28165ec3ec851b4dbe83441af0524e3172e949465f590b0e9db4134b55469  /app/logs/bazel-test-pipeline_observer_test.log
+1eaee75c925bbee91f5b0433d6ed48abccdc84b9eeb1ab48cc79111cd9334f51  /app/logs/bazel-test-shuttle-mlir.log
+ef554ca3fa6dc98356ea4b893a56b304d33d15bb09a4ab3ba63347328860e254  /app/logs/bazel-test-xla-mlir_to_hlo_test.log
+3a7b85b7fb3902aead07a9e1660706c795a8a1edaa0dcdae5db8f9aa0d96be21  /app/logs/bazel-test-xla-mlir_to_hlo_unregistered_transform_test.log
+48b86d3d38bc5a302746c73caf449abbdfe384a281ef97850d8abaeee76aa912  /app/logs/bazel-test-xla-pjrt_executable_test.log
+2a559047e4e6beacd8fd023fc18c3f4f1d6705102da5c91527d36984f8ac6c96  /app/logs/bazel-test-xla-stablehlo_module_transform_test.log
+0d692f24a81ff8f90882c795c640d5789dec9f1357aa5a66067422a0523817d5  /app/logs/bazel-test-xla_registration_test.log
+b143e85a8bdda5864a5f6ce5ab67afdf3965ed2612b99bf06b081a0878e3a5c8  /app/logs/bazel-test-xla_registry_adapter_test.log
+bbedcff8e22f48af0308ba7e1bc94f74d5866943fa33846ffbf967133eafedf1  /app/logs/bundled-source-sha256.txt
+725a7772f41e3640a8111c5669efe18f9c5ec8fb1cb37495ff7515ca2f64887e  /app/logs/jax-acceptance-cquery-proof.log
+e8b605a0fcf06cd0f3e5eae394455b4f77d5667150cd859957ee7194548a9851  /app/logs/jax-patch-sha256.txt
+d43cb1899f235d6490c5ff7baeadae1a62931dab94f33fb6ee45dc70572edc6c  /app/logs/jax-patch-stat.txt
+31cfb72db3b6384a8324bfb951e87d646b7a0c764899734c7aa8ffb9f193f088  /app/logs/jaxlib-acceptance.log
+25c3318348222eda4161f8e94a0d6ff60519299539cac9903899af6cd23edd9a  /app/logs/jaxlib-wheel-build.log
+52785d91eec8a9fba9a7243ad525eb793742c2a359cbf19a8dc4e68f763bfdd8  /app/logs/jaxlib-wheel-contents.txt
+7e9b738d96c6c4b794c461b4830f4786033bceab1c6680c929dd04f2e0c5407d  /app/logs/jaxlib-wheel-sha256.txt
+1e0b22f66ead7b9fc35b7787b3693cf1d8c90e353e510a87a90cc76ddd9c561d  /app/logs/lit-label-proof.txt
+858436d681258b3c97c6bccc4530fbf82439ddbc5c8c555c3239873332af2768  /app/logs/xla-patch-sha256.txt
+835786bd7f7cc0fb1188b402c9e60f8f5bc4ce274f3e29dec70211a9120d196a  /app/logs/xla-patch-stat.txt
+
+
+Attempts:
+  ATTEMPT  UID           STATE      EXIT  WORKER    REASON
+        0  dc1f6e54336b  failed        1  -         test_bridge_test.log
+                                                    b2f28165ec3ec851b4dbe83441af0524e3172e…
+
+Root cause:
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 456, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 446, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 381, in run_worker
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 271, in run_concurrency_worker
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 178, in grouped_event_evidence
+    File "/app/lib/shuttle/mlir/jax_patch/acceptance_contract.py", line 260, in match_fixture_contract
+      raise AssertionError("observer invocation did not match exactly one audited fixture contract: " + diagnostic)
+  AssertionError: observer invocation did not match exactly one audited fixture contract: {"contract_results":[{"fixture":"forward","reason":"forward: normalized selected-region membership changed","status":"mismatch"},{"fixture":"vjp","reason":"vjp: normalized selected-region membership changed","status":"mismatch"}],"event_count":3,"events":[{"event_index":0,"fields":{"coverage_manifest":{"length":2843,"sha256":"a626b0c7df55bf83154a5697de85eb3c99989bff0cc77b8f3bf469310db0238d"},"failure_pass":"","invocation_id":2,"no_shuttle_semantics":false,"normalized_module_fingerprint":"","phase":"algebra_coverage","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":{"length":373,"sha256":"cc8a395018a9866e14fa882137009717ca604c13ce48ccc6044bac5d5a154df3"},"tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":"1a9aad82650111cbc134fcc17d1afcb051f9ae729f6cdfd48105d1e8dc210201"}},{"event_index":1,"fields":{"coverage_manifest":{"length":2843,"sha256":"a626b0c7df55bf83154a5697de85eb3c99989bff0cc77b8f3bf469310db0238d"},"failure_pass":"","invocation_id":2,"no_shuttle_semantics":false,"normalized_module_fingerprint":"","phase":"lowered_coverage","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":{"length":373,"sha256":"cc8a395018a9866e14fa882137009717ca604c13ce48ccc6044bac5d5a154df3"},"tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":"1a9aad82650111cbc134fcc17d1afcb051f9ae729f6cdfd48105d1e8dc210201"}},{"event_index":2,"fields":{"coverage_manifest":"","failure_pass":"","invocation_id":2,"no_shuttle_semantics":true,"normalized_module_fingerprint":"d4dad86c0c4abf2f4a98bdd19879cbfb789c8d6cba8b18fa56decc4589a8ddb5","phase":"final_erasure","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":"","tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":""}}],"omitted_event_count":0}
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 456, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 450, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 402, in run_orchestrator
+    File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+      raise CalledProcessError(retcode, process.args,
+  subprocess.CalledProcessError: Command '['/app/acceptance-venv/bin/python', '/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py', '--worker', 'concurrency', '--baseline', '/app/acceptance-work/disabled-baseline.npz', '--cache-directory', '/app/acceptance-work/persistent-cache', '--key-map', '/app/acceptance-work/cache-keys.json', '--report', '/app/acceptance-work/concurrency.json']' returned non-zero exit status 1.

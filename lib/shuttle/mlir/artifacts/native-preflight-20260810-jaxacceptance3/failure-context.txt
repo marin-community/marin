@@ -1,0 +1,22 @@
+First failed gate: ordinary-JAX cache-disabled concurrency/lifetime acceptance worker
+Canonical Marin source: ba31d47e354746543bdc179277071de25c48eaed
+Wheel result: built, hashed, installed, and imported
+Wheel path: /app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+Wheel SHA-256: 21c30fd5403fa11f6894cb8e845ff43f34d61594e71203751b02e8762e0a4357
+Acceptance workers: baseline PASS; concurrency FAIL; populate NOT_RUN; reuse NOT_RUN
+
+AssertionError: observer invocation did not match exactly one audited fixture contract:
+{"contract_results":[{"fixture":"forward","reason":"forward: normalized selected-region membership changed","status":"mismatch"},{"fixture":"vjp","reason":"vjp: normalized selected-region membership changed","status":"mismatch"}],"event_count":3,"events":[{"event_index":0,"fields":{"coverage_manifest":{"length":2843,"sha256":"a626b0c7df55bf83154a5697de85eb3c99989bff0cc77b8f3bf469310db0238d"},"failure_pass":"","invocation_id":2,"no_shuttle_semantics":false,"normalized_module_fingerprint":"","phase":"algebra_coverage","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":{"length":373,"sha256":"cc8a395018a9866e14fa882137009717ca604c13ce48ccc6044bac5d5a154df3"},"tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":"1a9aad82650111cbc134fcc17d1afcb051f9ae729f6cdfd48105d1e8dc210201"}},{"event_index":1,"fields":{"coverage_manifest":{"length":2843,"sha256":"a626b0c7df55bf83154a5697de85eb3c99989bff0cc77b8f3bf469310db0238d"},"failure_pass":"","invocation_id":2,"no_shuttle_semantics":false,"normalized_module_fingerprint":"","phase":"lowered_coverage","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":{"length":373,"sha256":"cc8a395018a9866e14fa882137009717ca604c13ce48ccc6044bac5d5a154df3"},"tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":"1a9aad82650111cbc134fcc17d1afcb051f9ae729f6cdfd48105d1e8dc210201"}},{"event_index":2,"fields":{"coverage_manifest":"","failure_pass":"","invocation_id":2,"no_shuttle_semantics":true,"normalized_module_fingerprint":"d4dad86c0c4abf2f4a98bdd19879cbfb789c8d6cba8b18fa56decc4589a8ddb5","phase":"final_erasure","policy":"source_ordered","policy_digest":"710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359","region_membership":"","tuning_digest":"ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f","unsupported_fingerprint":""}}],"omitted_event_count":0}
+
+The orchestrator propagated:
+subprocess.CalledProcessError: Command '['/app/acceptance-venv/bin/python',
+'/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py', '--worker',
+'concurrency', '--baseline', '/app/acceptance-work/disabled-baseline.npz',
+'--cache-directory', '/app/acceptance-work/persistent-cache', '--key-map',
+'/app/acceptance-work/cache-keys.json', '--report',
+'/app/acceptance-work/concurrency.json']' returned non-zero exit status 1.
+
+The diagnostic exposes bounded lengths and hashes for structural values, not
+their contents. It localizes the failure to selected-region membership but does
+not yet determine whether the audited oracle is stale or pipeline semantics
+changed.

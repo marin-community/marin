@@ -1,0 +1,11 @@
+I20260810 15:10:47 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 15:10:47 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 15:10:48 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10003 -> iris-controller-svc:10000
+I20260810 15:10:49 8418467456 finelog.client.log_client LogClient resolved http://127.0.0.1:10003/proxy/system.log-server -> http://127.0.0.1:10003/proxy/system.log-server (stats)
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance3/0
+
+TIME (UTC)                          ATTEMPT  TYPE     SOURCE           ACTION             COUNT  MESSAGE
+2026-08-10T21:21:56.036000+00:00          0  Normal   k8s/kueue        SchedulingGated        1  Scheduling is blocked due to non-empty scheduling gates; Kueue workload pod-iris-dlwh-shuttle-nativ…
+2026-08-10T22:07:16.395000+00:00          0  Normal   k8s/container    Error                  1  test_bridge_test.log
+                                                                                                 b2f28165ec3ec851b4dbe83441af0524e3172e949465f590b0e9db4134b55469  /app/logs/ba…
+2026-08-10T22:07:32.613000+00:00          0  Warning  iris/controller  TaskTerminated         1  Backend reported FAILED; controller resolved the task as FAILED.
