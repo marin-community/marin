@@ -7,7 +7,8 @@
 # descriptor).
 #
 # Migrating a fork means rebasing our commits onto a newer upstream base, validating, and re-pinning.
-# MarinSkyRL is marin-native (no upstream), so its refresh only advances to its own latest main.
+# Some forks have drifted too far for a mechanical rebase (see their nuances); a refresh files a
+# blocker for those until a one-time manual catch-up brings them close to upstream again.
 #
 # The `refresh-fork` skill reads a section to drive one fork's refresh. A weekly coordinator that
 # walks all sections in `depends_on` order is planned but not yet built. Keep every section consistent
@@ -16,7 +17,7 @@
 #
 # A section's name is the fork; its pin source holds the fork's repository URL and pinned revision.
 # Fields:
-#   upstream         Repo we rebase onto. Omitted for marin-native forks with no upstream.
+#   upstream         Repo we rebase our commits onto. Every fork has one.
 #   group            Sections sharing a group refresh together and land in one atomic Marin PR (each
 #                    still rebases onto its own base). The vllm/tpu-inference pair must move together:
 #                    the TPU launcher installs both pins at once and vllm's base derives from the
@@ -25,8 +26,8 @@
 #   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
 #                    uv.lock, follows the fork's main branch) or "descriptor:<path>#<section>" (a SHA).
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
-#                    "latest_release", "derived" (with `derived_from`), or "fork_main" (marin-native:
-#                    no upstream, advance our own main).
+#                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
+#                    another fork, with `derived_from`).
 #   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
 #   depends_on       Forks resolved before this one (base/derivation order; the coordinator's DAG
 #                    edges). Within a group this orders the refresh, not a separate landing.
@@ -73,15 +74,17 @@ base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
-    "Fork main is hundreds of commits behind upstream, so the first rebase onto upstream will be large and conflict-heavy.",
+    "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
 ]
 
 [MarinSkyRL]
+upstream = "https://github.com/NovaSky-AI/SkyRL.git"
 pin = "isolated_project"
-base_select = "fork_main"
+base_select = "upstream_main"
 e2e = "experiments/post_training/iceball_micro.py"
 blocker_assignee = "yonromai"
 nuances = [
-    "Marin-native today: only the root marinskyrl distribution is tracked, not skyrl-train.",
-    "#7920 will give it an upstream (FSDP/Megatron/FlashAttention/vLLM); add upstream and switch base_select off fork_main then.",
+    "Shares history with NovaSky-AI/SkyRL (merge-base 8e132edc, Dec 2025), but NovaSky's later monolith->package restructure (skyrl-train/ -> skyrl/) moved or deleted 684 of the 718 files Marin touched, so a mechanical rebase is intractable.",
+    "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
+    "Marin consumes only the root marinskyrl package, not the forked skyrl-train; the GitHub compare API 404s because the repo was pushed standalone rather than forked, which does not affect git-level rebasing.",
 ]

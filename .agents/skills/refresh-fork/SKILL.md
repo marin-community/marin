@@ -14,9 +14,7 @@ Read first:
 Every fork Marin pins under `config/external/` is a `marin-community` fork: our
 commits on top of an upstream project. Refreshing one means rebasing our commits
 onto a newer upstream base, validating with the fork's e2e, and re-pinning Marin —
-or, if a real blocker remains, filing one "can't migrate" issue. `MarinSkyRL` is
-the exception: it is marin-native (no upstream), so its refresh only advances to
-its own latest `main`.
+or, if a real blocker remains, filing one "can't migrate" issue.
 
 Refresh one fork, or one atomic `group`, at a time. A `group` refreshes as a unit:
 its sections refresh together on one date-stamped run and re-pin in one PR (each
@@ -34,7 +32,7 @@ issue. Do not ask before the fork's required e2e.
 
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
-- `upstream` — the repo we rebase onto. Absent only for marin-native forks.
+- `upstream` — the repo we rebase onto. Every fork has one.
 - `group` — if present, refresh every section in the group together in one PR
   (read them all now); if absent, this fork refreshes alone.
 - `base_select` (+ `derived_from`) — how to choose the new upstream base.
@@ -73,17 +71,14 @@ revision.
 ```sh
 git clone <repository> <fork>
 git -C <fork> remote add upstream <upstream>
-git -C <fork> fetch --tags origin upstream
+git -C <fork> fetch --tags --multiple origin upstream   # --multiple: two remotes, not a refspec
+git -C <fork> remote set-head upstream -a                # so upstream/HEAD resolves
 ```
 
 - Keep working notes as you go — decisions, selected bases, branch SHAs, validation
   outcomes, and sharp edges (surprising failures, compatibility traps). They feed the
   PR body: base-selection evidence and the carry/drop/fix table in `<details>`, and
   the unresolved risks above the fold.
-
-A marin-native fork (no `upstream`, `base_select = fork_main`) has nothing to rebase
-onto: skip base selection and the rebase, advance to its own latest `main` (see
-Re-pin), and validate.
 
 ## Select the base
 
@@ -104,6 +99,12 @@ If the selected base matches the current one and no pin metadata needs repair, e
 no-op. Do not walk back to older releases when the latest eligible one fails; fix
 the refresh or file a blocker issue.
 
+For an isolated fork whose `upstream` base has not moved, there is nothing to rebase
+and the refresh is a no-op — even if Marin's pin lags the fork's own `main`. Adopting
+patches pushed to the fork since Marin last locked is the daily external-dependency
+bump's job (`ops-external-dependencies`), not this skill. refresh-fork runs only when
+there is a newer upstream base to rebase onto.
+
 ## Rebase the overlay
 
 Branch from the selected base as `auto-refresh/<YYYYMMDD>/<base-id>-<shortsha>`
@@ -112,13 +113,18 @@ SHA; same date prefix across a group). Never rewrite an existing remote refresh
 branch; on collision use the next `-rN` suffix.
 
 Find the base our commits currently sit on: `old_base` is the descriptor's
-`upstream_base` (descriptor pins) or `git merge-base <fork>/main <upstream>/HEAD`
-(isolated pins); `old_tip` is the current pin. Then, onto `new_base`:
+`upstream_base` (descriptor pins) or `git merge-base <fork>/main upstream/HEAD`
+(isolated pins). `old_tip` is the head of our patches: the fork's `main` for isolated
+pins — Marin's recorded pin may lag it, so rebase the full patch set, not the pin —
+or the pinned refresh branch for descriptor pins. Then, onto `new_base`:
 
-1. Inventory our commits in order: `git log --reverse old_base..old_tip`.
+1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
+   Merge commits (especially merges of `upstream` into a feature branch) are not
+   replayed — their content comes from the new base; drop them.
 2. Classify each meaningful delta: `carry` (still needed, not upstreamed), `drop`
    (upstream absorbed it, obsolete, or temporary), `fix` (intent needed,
-   implementation must change).
+   implementation must change — re-author against the current layout when upstream
+   moved or refactored the files it touches).
 3. Replay only `carry` and `fix` onto `new_base` in the old logical order: clean
    cherry-picks for carries; rewrite fixes as new commits referencing the original
    SHA(s).
@@ -129,8 +135,14 @@ Find the base our commits currently sit on: `old_base` is the descriptor's
 6. Keep history reviewable — no conflict artifacts, unrelated refactors, or
    preserved commits whose behavior is now `drop`.
 
-A fork far behind upstream (see `nuances`) makes the first rebase large and
-conflict-heavy; budget for it and record the sharp edges.
+Stop and file a blocker instead of forcing a PR when the rebase is not a mechanical
+replay: our overlay is non-linear (merge commits weaving upstream in), upstream
+renamed or refactored files our `fix` commits touch (so they need re-authoring, not a
+ported diff), or conflicts hit many core files at once. A fork hundreds of commits
+behind upstream is usually in this state. The weekly cadence keeps a fork from ever
+drifting this far; one that already has (see `nuances`) needs a one-time manual
+catch-up outside this skill before it can be auto-migrated. The blocker issue carries
+the carry/drop/fix inventory, the conflict map, and how far behind the fork is.
 
 ## Re-pin
 
@@ -152,8 +164,7 @@ pins change.
   external-dependency bump and this pin both follow `main`. Review the rebase from a
   compare link (`upstream_base..<new_tip>`) on the Marin PR before pushing. Then run
   `uv run config/update-external.py <fork>` to advance `config/external/<fork>/uv.lock`
-  to the new `main`. A marin-native fork has no rebase — `main` already carries the
-  change, so just re-lock.
+  to the new `main`.
 
 Respect the section's `nuances`. Manual fixed-base overlay changes are a separate
 workflow; see `docs/overlay-only-pr.md`.
@@ -187,8 +198,10 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 
   --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
 ```
 
-  `--dry-run` resolves the model, backend, and task plan without opening Iris for a
-  cheap pre-check.
+  `--dry-run` resolves the model, backend, and task plan — a wiring pre-check, not
+  fork validation. Depending on the eval it may not import the fork at all, or import
+  it without exercising it, so a green dry-run says nothing about whether the new pin
+  runs. Only the live run above validates the refreshed fork.
 
 - **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
   post-training e2e. `--version` is required and `--run` builds the handles
@@ -201,8 +214,9 @@ uv run python -m experiments.post_training.iceball_micro --stage evaluation --ve
 
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old stack
-and fail on the refreshed one. If the old stack is already broken, record it as a
-baseline failure; do not rewrite that workload as part of this refresh.
+and fail on the refreshed one. If the old stack is already broken, the fork's e2e
+cannot gate this refresh: do not open a PR on an unvalidated pin — file or link a
+blocker for the broken e2e and hold the refresh until it is fixed.
 
 ## Review and Open the PR
 
