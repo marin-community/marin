@@ -54,12 +54,12 @@ from iris.cluster.controller.persistence.schema import (
 )
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
+from iris.cluster.controller.snapshot import ControlSnapshot, ExecutionTimeoutRow
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
     ActiveTaskRow,
     AttemptRecord,
-    RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
@@ -68,17 +68,19 @@ from iris.cluster.federation.protocol import FederationDirection, HandoffState
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
-    AttemptUid,
-    EndpointAccess,
-    JobName,
     PendingTask,
-    WorkerId,
     WorkerUsability,
 )
-from iris.resources.attempt import AttemptCounts, AttemptLaunch, AttemptLaunchTemplate
+from iris.resources.attempt import AttemptCounts
+from iris.resources.endpoint import EndpointAccess
 from iris.resources.execution import ResourceSpec
-from iris.resources.job import ContainerProfile
-from iris.resources.state import PriorityBand, TaskState
+from iris.resources.job import ContainerProfile, JobListScope, JobSortField, SortDirection
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import JobState, PriorityBand, TaskState
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
@@ -526,6 +528,7 @@ class JobCoordinates:
     """Persisted coordinates needed to construct a canonical Job identity."""
 
     job_id: JobName
+    state: int
     submitted_at_ms: Timestamp
     direction: int | None
     peer_id: str | None
@@ -540,6 +543,7 @@ def job_coordinates(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, JobCoor
     rows = tx.execute(
         select(
             jobs_table.c.job_id,
+            jobs_table.c.state,
             jobs_table.c.submitted_at_ms,
             federated_jobs_table.c.direction,
             federated_jobs_table.c.peer_id,
@@ -554,6 +558,7 @@ def job_coordinates(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, JobCoor
     return {
         row.job_id: JobCoordinates(
             job_id=row.job_id,
+            state=int(row.state),
             submitted_at_ms=row.submitted_at_ms,
             direction=row.direction,
             peer_id=row.peer_id,
@@ -659,6 +664,7 @@ def list_resource_jobs(
     tx: Tx,
     *,
     owner_id: str | None,
+    resource_id: JobName | None,
     job_id_prefix: str | None,
     parent_job_id: JobName | None,
     states: Sequence[int],
@@ -688,6 +694,8 @@ def list_resource_jobs(
     )
     if owner_id is not None:
         stmt = stmt.where(jobs_table.c.user_id == owner_id)
+    if resource_id is not None:
+        stmt = stmt.where(jobs_table.c.job_id == resource_id)
     if job_id_prefix is not None:
         stmt = stmt.where(jobs_table.c.job_id.like(job_id_prefix, escape="\\"))
     if parent_job_id is not None:
@@ -699,6 +707,124 @@ def list_resource_jobs(
     if execution_cluster is not None:
         stmt = stmt.where(jobs_table.c.cluster == execution_cluster)
     return [_job_record(row, federation=True) for row in tx.execute(stmt).all()]
+
+
+_JOB_STATE_SORT_ORDER = {
+    JobState.RUNNING: 0,
+    JobState.BUILDING: 1,
+    JobState.PENDING: 2,
+    JobState.SUCCEEDED: 3,
+    JobState.FAILED: 4,
+    JobState.KILLED: 5,
+    JobState.WORKER_FAILED: 6,
+    JobState.UNSCHEDULABLE: 7,
+}
+
+
+def _inventory_job_filters(
+    stmt,
+    *,
+    scope: JobListScope,
+    parent_job_id: JobName | None,
+    states: Sequence[int],
+    name_contains: str | None,
+    job_id_prefix: str | None,
+    backend_id: str | None,
+    execution_cluster: str | None,
+):
+    if scope is JobListScope.ROOTS:
+        stmt = stmt.where(jobs_table.c.depth == 1)
+    elif scope is JobListScope.CHILDREN:
+        assert parent_job_id is not None
+        stmt = stmt.where(jobs_table.c.parent_job_id == parent_job_id)
+    if states:
+        stmt = stmt.where(jobs_table.c.state.in_(states))
+    if name_contains:
+        escaped = name_contains.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(func.lower(jobs_table.c.name).like(f"%{escaped}%", escape="\\"))
+    if job_id_prefix is not None:
+        stmt = stmt.where(jobs_table.c.job_id.like(job_id_prefix, escape="\\"))
+    if backend_id is not None:
+        stmt = stmt.where(jobs_table.c.backend_id == backend_id)
+    if execution_cluster is not None:
+        stmt = stmt.where(jobs_table.c.cluster == execution_cluster)
+    return stmt
+
+
+def list_inventory_jobs(
+    tx: Tx,
+    *,
+    scope: JobListScope,
+    parent_job_id: JobName | None,
+    states: Sequence[int],
+    name_contains: str | None,
+    job_id_prefix: str | None,
+    backend_id: str | None,
+    execution_cluster: str | None,
+    sort_field: JobSortField,
+    sort_direction: SortDirection,
+    offset: int,
+    limit: int,
+) -> tuple[list[JobRecord], int]:
+    """Read one bounded inventory page and its filtered total."""
+    failures = failure_count_expr().label("failure_count")
+    preemptions = preemption_count_expr().label("preemption_count")
+    state_order = case(_JOB_STATE_SORT_ORDER, value=jobs_table.c.state, else_=99)
+    sort_columns = {
+        JobSortField.DATE: jobs_table.c.submitted_at_ms,
+        JobSortField.NAME: jobs_table.c.name,
+        JobSortField.STATE: state_order,
+        JobSortField.FAILURES: failures,
+        JobSortField.PREEMPTIONS: preemptions,
+    }
+    aggregate_sort = sort_field in {JobSortField.FAILURES, JobSortField.PREEMPTIONS}
+    from_clause = jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id).outerjoin(
+        federated_jobs_table,
+        federated_jobs_table.c.job_id == jobs_table.c.root_job_id,
+    )
+    if aggregate_sort:
+        from_clause = from_clause.outerjoin(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id).outerjoin(
+            task_attempts_table,
+            task_attempts_table.c.task_id == tasks_table.c.task_id,
+        )
+    stmt = select(
+        *JOB_RECORD_COLS,
+        federated_jobs_table.c.direction,
+        federated_jobs_table.c.peer_id,
+        federated_jobs_table.c.handoff_state,
+        federated_jobs_table.c.handoff_nonce,
+        func.count().over().label("total_count"),
+    ).select_from(from_clause)
+    stmt = _inventory_job_filters(
+        stmt,
+        scope=scope,
+        parent_job_id=parent_job_id,
+        states=states,
+        name_contains=name_contains,
+        job_id_prefix=job_id_prefix,
+        backend_id=backend_id,
+        execution_cluster=execution_cluster,
+    )
+    if aggregate_sort:
+        stmt = stmt.group_by(jobs_table.c.job_id)
+    ordering = sort_columns[sort_field]
+    ordering = ordering.desc() if sort_direction is SortDirection.DESCENDING else ordering.asc()
+    stmt = stmt.order_by(ordering, jobs_table.c.job_id.asc()).offset(offset).limit(limit)
+    rows = tx.execute(stmt).all()
+    if rows:
+        return [_job_record(row, federation=True) for row in rows], int(rows[0].total_count)
+
+    count_stmt = _inventory_job_filters(
+        select(func.count()).select_from(jobs_table),
+        scope=scope,
+        parent_job_id=parent_job_id,
+        states=states,
+        name_contains=name_contains,
+        job_id_prefix=job_id_prefix,
+        backend_id=backend_id,
+        execution_cluster=execution_cluster,
+    )
+    return [], int(tx.execute(count_stmt).scalar() or 0)
 
 
 def resource_job_states(tx: Tx, resource_ids: Sequence[str]) -> dict[str, int]:
@@ -2257,15 +2383,6 @@ _EXECUTION_TIMEOUT_STMT = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class ExecutionTimeoutRow:
-    """Persisted execution-deadline fields consumed by the control loop."""
-
-    task_id: JobName
-    started_at_ms: Timestamp
-    timeout_ms: int
-
-
 def scan_execution_timeout_rows(tx: Tx) -> Sequence[ExecutionTimeoutRow]:
     """Return ``(task_id, started_at_ms, timeout_ms)`` for executing tasks that declare a timeout.
 
@@ -2340,39 +2457,6 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
         for row in rows
         if row.worker_id in target_ids
     ]
-
-
-@dataclass(frozen=True, slots=True)
-class ControlSnapshot:
-    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
-
-    One snapshot type feeds all three uniform backend methods; each control loop
-    populates the section its phase needs and leaves the rest empty (the
-    ``scan_timeouts`` flag is the pattern). The backend reads its section and
-    never touches the database.
-
-    * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
-    * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
-      workers (see :func:`load_reconcile_rows`).
-    * ``timeout_rows`` — executing tasks past their declared deadline; empty
-      unless the caller requested the timeout sweep this tick.
-    * ``launch_templates`` — per-Job native launch templates for ASSIGNED reconcile
-      rows, so a worker-daemon backend can build its per-worker reconcile plans.
-    * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
-      backend that owns placement (built only when that backend reconciles).
-
-    Worker liveness is never persisted and never read off the snapshot: the
-    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
-    backend-observed health events into it. The tracker is passed to
-    :func:`load_control_snapshot` only to select the live worker set.
-    """
-
-    worker_addresses: dict[WorkerId, str]
-    reconcile_rows: list[ReconcileRow]
-    timeout_rows: Sequence[ExecutionTimeoutRow]
-    launch_templates: dict[JobName, AttemptLaunchTemplate] = field(default_factory=dict)
-    tasks_to_run: list[AttemptLaunch] = field(default_factory=list)
-    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
 def load_control_snapshot(
@@ -2718,7 +2802,7 @@ class ReceivedEndpointRow:
     name: str
     address: str
     task_id: JobName
-    access: int
+    access: EndpointAccess
     metadata: dict
     lease_deadline: Timestamp | None
 
@@ -2764,7 +2848,7 @@ def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> l
                 name=r.name,
                 address=r.address,
                 task_id=r.task_id,
-                access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE if r.access is None else int(r.access),
+                access=EndpointAccess.from_storage(r.access),
                 metadata=r.metadata_json,
                 lease_deadline=deadline,
             )

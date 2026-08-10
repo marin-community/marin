@@ -22,7 +22,10 @@ from iris.cluster.constraints import AttributeValue, WellKnownAttribute, acceler
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.provenance import provenance_from_env
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import AcceleratorType, CapacityType
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
 from iris.resources.execution import CpuDevice, Device, GpuDevice, TpuDevice
 from iris.resources.worker import WorkerMetadata, WorkerResourceSnapshot
 

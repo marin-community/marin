@@ -30,7 +30,6 @@ from iris.cluster.controller.slice import SliceResources
 from iris.cluster.controller.task import TaskResources
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
-    JobName,
     UserBudgetDefaults,
 )
 from iris.resources.action import ActionReceipt
@@ -56,12 +55,15 @@ from iris.resources.identity import (
 )
 from iris.resources.job import (
     JobDetail,
+    JobInventoryPage,
+    JobInventoryQuery,
     JobObservation,
     JobQuery,
     JobSpec,
     JobSummary,
 )
 from iris.resources.log import LogPage, LogQuery, LogReader
+from iris.resources.names import JobName
 from iris.resources.node import (
     NodeDetail,
     NodeQuery,
@@ -146,6 +148,12 @@ class Controller:
 
     def job_states(self, resource_ids: Sequence[str]) -> dict[str, JobState]:
         return self._jobs.job_states(resource_ids)
+
+    def job_state(self, identity: JobIdentity) -> JobState:
+        return self._jobs.job_state(identity)
+
+    def list_job_inventory(self, query: JobInventoryQuery) -> JobInventoryPage:
+        return self._jobs.list_job_inventory(query)
 
     def observe_jobs(self, summaries: Sequence[JobSummary]) -> tuple[JobObservation, ...]:
         return self._jobs.observe_jobs(summaries)

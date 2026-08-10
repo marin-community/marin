@@ -20,8 +20,9 @@ from iris.backends.k8s.tasks import _sanitize_label_value
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 from iris.cluster.controller.autoscaler.provisioning import STOCKOUT_MARKER
-from iris.cluster.types import JobName, is_job_finished
+from iris.cluster.types import is_job_finished
 from iris.resources.job import JobQuery, JobSummary
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff

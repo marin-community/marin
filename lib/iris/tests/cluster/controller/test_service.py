@@ -29,14 +29,22 @@ from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.job import CLIENT_FRESHNESS_WINDOW
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
-from iris.cluster.controller.persistence.operations.task import Assignment, finalize
+from iris.cluster.controller.persistence.operations.task import finalize
 from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.redaction import REDACTED_VALUE
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+)
 from iris.resources.endpoint import ProfileResult
 from iris.resources.execution import tpu_device
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.legacy.controller_service import MAX_LIST_JOBS_OFFSET
@@ -699,6 +707,20 @@ def test_get_job_status_returns_status(service):
     assert response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_preserves_resources_and_exit_code(service, state):
+    job_id = JobName.from_wire(service.launch_job(make_job_request("status-fields", cpu=3), None).job_id)
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(exit_code=17))
+
+    response = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    assert response.job.exit_code == 17
+    assert response.job.resources.cpu_millicores == 3_000
+
+
 def test_get_job_status_reports_has_children(service):
     """GetJobStatus sets has_children so the dashboard can render the expand toggle."""
     service.launch_job(make_job_request("parent-job"), None)
@@ -1018,6 +1040,30 @@ def test_list_jobs_aggregates_a_page_with_fixed_queries(service, state, job_coun
     assert len(statements) == 6
 
 
+def test_list_jobs_reads_one_bounded_page_when_more_than_500_jobs_exist(service, state):
+    for index in range(501):
+        service.launch_job(make_job_request(f"bounded-{index:03d}"), None)
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith(("SELECT", "WITH")):
+            statements.append(statement)
+
+    event.listen(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+    try:
+        response = service.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(limit=10)),
+            None,
+        )
+    finally:
+        event.remove(state._db.sa_read_engine, "before_cursor_execute", capture_select)
+
+    assert len(response.jobs) == 10
+    assert response.total_count == 501
+    assert response.has_more
+    assert len(statements) == 5
+
+
 def test_get_job_state_accepts_the_public_federation_bind_ceiling(service, state):
     first = service.launch_job(make_job_request("state-a"), None).job_id
     second = service.launch_job(make_job_request("state-b"), None).job_id
@@ -1084,6 +1130,41 @@ def test_list_jobs_sql_pagination(service):
 
     assert len(response3.jobs) == 1
     assert response3.has_more is False
+
+
+@pytest.mark.parametrize(
+    "sort_field,terminal_state",
+    [
+        pytest.param(
+            controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
+            job_pb2.TASK_STATE_FAILED,
+            id="failures",
+        ),
+        pytest.param(
+            controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS,
+            job_pb2.TASK_STATE_PREEMPTED,
+            id="preemptions",
+        ),
+    ],
+)
+def test_list_jobs_sorts_by_persisted_attempt_counts(service, state, sort_field, terminal_state):
+    service.launch_job(make_job_request("zero-attempts"), None)
+    counted_id = JobName.from_wire(service.launch_job(make_job_request("counted-attempt"), None).job_id)
+    worker_id = WorkerId(f"worker-{sort_field}")
+    _register_worker(state, worker_id)
+    _assign_and_transition(state, counted_id.task(0), worker_id, terminal_state)
+
+    response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(
+            query=controller_pb2.Controller.JobQuery(
+                sort_field=sort_field,
+                sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
+            )
+        ),
+        None,
+    )
+
+    assert [job.job_id for job in response.jobs] == [counted_id.to_wire(), "/test-user/zero-attempts"]
 
 
 def test_list_jobs_rejects_deep_offset(service):

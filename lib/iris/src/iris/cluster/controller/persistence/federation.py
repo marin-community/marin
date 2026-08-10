@@ -39,8 +39,8 @@ from iris.cluster.federation.protocol import (
     SyncedJob,
     SyncedTask,
 )
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName
-from iris.resources.endpoint import EndpointAccess
+from iris.cluster.types import TERMINAL_JOB_STATES
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 # stale mirror keeps forwarding after the peer goes silent — short enough to stop
 # routing to a lost peer, long enough to ride out sync jitter.
 FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
-_STORED_ENDPOINT_ACCESS = {EndpointAccess.PRIVATE: 0, EndpointAccess.LINK: 2}
 
 
 def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
@@ -110,7 +109,7 @@ def _endpoint_rows(peer_id: str, endpoints: tuple[SyncedEndpoint, ...], now: Tim
                 metadata=dict(endpoint.metadata),
                 registered_at=now,
                 lease_deadline=now.add_ms(remaining_ms),
-                access=_STORED_ENDPOINT_ACCESS[endpoint.access],
+                access=endpoint.access,
                 peer_id=peer_id,
             )
         )

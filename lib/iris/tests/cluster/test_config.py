@@ -48,7 +48,13 @@ from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
-from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    LOCAL_CLUSTER,
+    AcceleratorType,
+    CapacityType,
+    GcpSliceMode,
+)
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff

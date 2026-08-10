@@ -43,7 +43,7 @@ from iris.backends.status import AutoscalerStatus, BackendStatus, WorkerFleetSta
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.status import overlay_worker_usability
-from iris.cluster.controller.persistence.operations.worker import apply_reconcile
+from iris.cluster.controller.reconcile.apply import apply_worker_reconcile
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
@@ -52,8 +52,9 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import WellKnownAttribute, WorkerId
+from iris.cluster.types import WellKnownAttribute
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import WorkerId
 from iris.resources.system import ProcessInfo
 
 logger = logging.getLogger(__name__)
@@ -308,7 +309,7 @@ class RpcTaskBackend:
         # through the SAME shared tracker reached via the worker store, so the
         # startup seed and reopen hook are preserved.
         now = Timestamp.now()
-        effects = apply_reconcile(self._store, observation.worker_results, now=now)
+        effects = apply_worker_reconcile(self._store, observation.worker_results, now=now)
         events = observation.transport_events + [
             WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
         ]

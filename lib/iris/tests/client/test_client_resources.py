@@ -5,10 +5,10 @@ from dataclasses import replace
 from unittest.mock import MagicMock
 
 from iris.client import IrisClient
-from iris.cluster.types import JobName
 from iris.resources.execution import Entrypoint, EnvironmentSpec, GpuDevice, ResourceSpec
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
-from iris.resources.job import JobSummary
+from iris.resources.job import JobQuery, JobSummary
+from iris.resources.names import JobName
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskSummary
@@ -32,18 +32,33 @@ def _job(job_id: str, uid: str) -> JobSummary:
     )
 
 
-def test_current_job_finds_exact_job_beyond_first_prefix_page() -> None:
+def test_current_job_uses_an_exact_resource_query() -> None:
     exact = _job("/alice/train", "exact-uid")
     cluster = MagicMock()
-    cluster.list_jobs.side_effect = (
-        Page(tuple(_job(f"/alice/train/child-{index}", f"child-{index}") for index in range(500)), "next", ()),
-        Page((exact,), None, ()),
-    )
+    cluster.list_jobs.return_value = Page((exact,), None, ())
     client = IrisClient(cluster)
 
     job = client.current_job(JobName.from_wire("/alice/train"))
 
     assert job.identity == exact.identity
+    assert cluster.list_jobs.call_args.args == (JobQuery(resource_id="/alice/train", page_size=1),)
+
+
+def test_job_state_and_wait_use_state_only_reads_until_terminal(monkeypatch) -> None:
+    running = _job("/alice/train", "exact-uid")
+    succeeded = replace(running, state=JobState.SUCCEEDED)
+    cluster = MagicMock()
+    cluster.list_jobs.return_value = Page((running,), None, ())
+    cluster.job_state.side_effect = (JobState.RUNNING, JobState.SUCCEEDED)
+    cluster.describe_job.return_value = MagicMock(summary=succeeded)
+    monkeypatch.setattr("iris.client.client.time.sleep", lambda _seconds: None)
+    job = IrisClient(cluster).current_job(JobName.from_wire("/alice/train"))
+
+    status = job.wait(timeout=1, poll_interval=0)
+
+    assert status == succeeded
+    assert cluster.job_state.call_args_list[0].args == (running.identity,)
+    assert cluster.describe_job.call_args_list[0].args == (running.identity.key,)
 
 
 def test_current_task_resolves_a_task_handle_from_its_wire_id() -> None:

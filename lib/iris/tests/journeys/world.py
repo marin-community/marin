@@ -20,7 +20,7 @@ from iris.cluster.controller.process import ControllerProcess
 from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import ThreadContainer
 from iris.resources.action import ActionReceipt, ActionState
 from iris.resources.attempt import AttemptDetail
@@ -44,6 +44,10 @@ from iris.resources.job import (
     JobSpec,
     JobSummary,
     PriorityBand,
+)
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
 )
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState

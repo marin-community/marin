@@ -3,7 +3,7 @@
 
 """Typed Job specifications, queries, and read records."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 
 from rigging.timing import Duration, Timestamp
@@ -75,6 +75,7 @@ class JobSpec:
 
 @dataclass(frozen=True, slots=True)
 class JobQuery:
+    resource_id: str | None = None
     owner_id: str | None = None
     parent: ResourceKey | None = None
     job_id_prefix: str | None = None
@@ -83,6 +84,42 @@ class JobQuery:
     execution_cluster_id: str | None = None
     page_size: int = 50
     page_token: str | None = None
+
+
+class JobListScope(StrEnum):
+    ALL = "all"
+    ROOTS = "roots"
+    CHILDREN = "children"
+
+
+class JobSortField(StrEnum):
+    DATE = "date"
+    NAME = "name"
+    STATE = "state"
+    FAILURES = "failures"
+    PREEMPTIONS = "preemptions"
+
+
+class SortDirection(StrEnum):
+    ASCENDING = "ascending"
+    DESCENDING = "descending"
+
+
+@dataclass(frozen=True, slots=True)
+class JobInventoryQuery:
+    """Bounded offset query retained for inventory-style clients."""
+
+    scope: JobListScope = JobListScope.ALL
+    parent_resource_id: str | None = None
+    name_contains: str | None = None
+    states: frozenset[JobState] = frozenset()
+    sort_field: JobSortField = JobSortField.DATE
+    sort_direction: SortDirection = SortDirection.DESCENDING
+    offset: int = 0
+    limit: int = 500
+    job_id_prefix: str | None = None
+    backend_id: str | None = None
+    execution_cluster_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +136,8 @@ class JobSummary:
     finished_at: Timestamp | None
     error_message: str
     pending_reason: str
+    exit_code: int | None = None
+    resources: ResourceSpec = field(default_factory=ResourceSpec)
 
 
 class FederationPosture(StrEnum):
@@ -134,6 +173,12 @@ class JobObservation:
     tasks: JobTaskAggregate
     has_children: bool
     federation_posture: FederationPosture
+
+
+@dataclass(frozen=True, slots=True)
+class JobInventoryPage:
+    items: tuple[JobObservation, ...]
+    total_count: int
 
 
 @dataclass(frozen=True, slots=True)

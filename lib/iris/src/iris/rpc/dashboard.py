@@ -7,7 +7,7 @@ The dashboard serves:
 - Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /worker/{id} (worker detail page)
-- Connect RPC at /iris.cluster.ControllerService/* and /iris.cluster.EndpointService/*
+- Connect RPC for the resource service and retained legacy services
   (called directly by JS)
 - Health check at /health
 
@@ -72,7 +72,7 @@ from iris.cluster.dashboard_common import (
     on_shutdown,
     static_files_mount,
 )
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -554,6 +554,11 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.EndpointService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/iris.resource.ResourceService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.resource.ResourceService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),

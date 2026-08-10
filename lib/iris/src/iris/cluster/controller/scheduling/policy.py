@@ -61,11 +61,13 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
-    JobName,
     PendingTask,
     UserBudgetDefaults,
-    WorkerId,
     is_job_finished,
+)
+from iris.resources.names import (
+    JobName,
+    WorkerId,
 )
 from iris.resources.state import PriorityBand
 

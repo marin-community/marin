@@ -32,7 +32,10 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceStatus,
 )
-from iris.cluster.types import AcceleratorType, WorkerStatus
+from iris.cluster.types import (
+    AcceleratorType,
+    WorkerStatus,
+)
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.platforms.conftest import (

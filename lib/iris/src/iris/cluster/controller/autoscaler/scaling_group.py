@@ -50,7 +50,11 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+    WorkerStatusMap,
+)
 from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
 
 logger = logging.getLogger(__name__)

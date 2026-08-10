@@ -77,8 +77,6 @@ from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.persistence.database import ControllerDB
-from iris.cluster.controller.persistence.operations.task import Assignment
-from iris.cluster.controller.persistence.operations.worker import apply_reconcile
 from iris.cluster.controller.persistence.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.persistence.reads import (  # noqa: F401
@@ -97,6 +95,7 @@ from iris.cluster.controller.persistence.schema import (
     workers_table,
 )
 from iris.cluster.controller.process import _CONTROLLER_KEEPALIVE
+from iris.cluster.controller.reconcile.apply import apply_worker_reconcile
 from iris.cluster.controller.reconcile.worker import (
     KeepAttempt,
     ReconcileInputs,
@@ -107,11 +106,12 @@ from iris.cluster.controller.reconcile.worker import (
     build_reconcile_plans,
 )
 from iris.cluster.controller.runtime import ControllerConfig
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, UserBudgetDefaults
 from iris.managed_thread import ThreadContainer
 from iris.resources.attempt import AttemptLaunchTemplate, AttemptObservation
 from iris.resources.execution import CommandEntrypoint, CpuDevice, Environment, ResourceSpec, RuntimeEntrypoint
@@ -122,6 +122,7 @@ from iris.resources.job import (
     JobSpec,
     PriorityBand,
 )
+from iris.resources.names import AttemptUid, JobName, WorkerId
 from iris.resources.state import TaskState
 from iris.resources.worker import WorkerMetadata
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
@@ -225,7 +226,7 @@ class _FakeProvider:
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         now = Timestamp.now()
-        effects = apply_reconcile(self._store, worker_results, now=now)
+        effects = apply_worker_reconcile(self._store, worker_results, now=now)
         events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
@@ -589,7 +590,7 @@ def _build_reconcile_inputs(
 ) -> list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]:
     """Per active worker: a (plan, result) pair where the plan lists the worker's
     attempts as desired and the result reports each RUNNING. Drives the
-    production reconcile-observation verb (``ops.worker.apply_reconcile``).
+    production reconcile-observation verb (``controller.reconcile.apply.apply_worker_reconcile``).
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
@@ -1756,7 +1757,7 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_reconcile on a victim thread while configurable
+    """Run apply_worker_reconcile on a victim thread while configurable
     write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
@@ -1781,7 +1782,7 @@ def _run_apply_under_contention(
                 t0 = time.perf_counter()
                 with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
-                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    effects = apply_worker_reconcile(CursorTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -1858,7 +1859,7 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_reconcile contends
+    """Reproduce the production tail when apply_worker_reconcile contends
     with provider-sync failure storms and other write RPCs.
     """
     plan_results = _build_reconcile_inputs(db)
@@ -2396,7 +2397,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #     3. ``RpcTaskBackend.reconcile(ControlSnapshot)`` (builds the per-worker
 #        plans via ``plans_from_snapshot``, then async fanout over Connect RPC
 #        to a single in-process fake worker that echoes observations back).
-#     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
+#     4. ``apply_worker_reconcile`` (one DB transaction fanning all per-worker
 #        results in as a single batched apply).
 #
 # A single uvicorn-backed fake worker is mounted on localhost; every
@@ -2800,7 +2801,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:
-        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        effects = apply_worker_reconcile(CursorTransitionReader(cur), worker_results, now=now)
         commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000

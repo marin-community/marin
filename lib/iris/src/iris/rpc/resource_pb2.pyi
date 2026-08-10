@@ -615,7 +615,7 @@ class SubmitJobResponse(_message.Message):
     def __init__(self, job: _Optional[_Union[JobIdentity, _Mapping]] = ...) -> None: ...
 
 class JobQuery(_message.Message):
-    __slots__ = ("owner_id", "parent", "job_id_prefix", "states", "backend_id", "execution_cluster_id", "page")
+    __slots__ = ("owner_id", "parent", "job_id_prefix", "states", "backend_id", "execution_cluster_id", "page", "resource_id")
     OWNER_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -623,6 +623,7 @@ class JobQuery(_message.Message):
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     EXECUTION_CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_ID_FIELD_NUMBER: _ClassVar[int]
     owner_id: str
     parent: ResourceKey
     job_id_prefix: str
@@ -630,10 +631,11 @@ class JobQuery(_message.Message):
     backend_id: str
     execution_cluster_id: str
     page: PageRequest
-    def __init__(self, owner_id: _Optional[str] = ..., parent: _Optional[_Union[ResourceKey, _Mapping]] = ..., job_id_prefix: _Optional[str] = ..., states: _Optional[_Iterable[_Union[JobState, str]]] = ..., backend_id: _Optional[str] = ..., execution_cluster_id: _Optional[str] = ..., page: _Optional[_Union[PageRequest, _Mapping]] = ...) -> None: ...
+    resource_id: str
+    def __init__(self, owner_id: _Optional[str] = ..., parent: _Optional[_Union[ResourceKey, _Mapping]] = ..., job_id_prefix: _Optional[str] = ..., states: _Optional[_Iterable[_Union[JobState, str]]] = ..., backend_id: _Optional[str] = ..., execution_cluster_id: _Optional[str] = ..., page: _Optional[_Union[PageRequest, _Mapping]] = ..., resource_id: _Optional[str] = ...) -> None: ...
 
 class JobSummary(_message.Message):
-    __slots__ = ("identity", "owner_id", "parent", "state", "execution_cluster_id", "backend_id", "num_tasks", "submitted_at", "started_at", "finished_at", "error_message", "pending_reason")
+    __slots__ = ("identity", "owner_id", "parent", "state", "execution_cluster_id", "backend_id", "num_tasks", "submitted_at", "started_at", "finished_at", "error_message", "pending_reason", "exit_code", "resources")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     OWNER_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_FIELD_NUMBER: _ClassVar[int]
@@ -646,6 +648,8 @@ class JobSummary(_message.Message):
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     PENDING_REASON_FIELD_NUMBER: _ClassVar[int]
+    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
     identity: JobIdentity
     owner_id: str
     parent: JobIdentity
@@ -658,7 +662,9 @@ class JobSummary(_message.Message):
     finished_at: _time_pb2.Timestamp
     error_message: str
     pending_reason: str
-    def __init__(self, identity: _Optional[_Union[JobIdentity, _Mapping]] = ..., owner_id: _Optional[str] = ..., parent: _Optional[_Union[JobIdentity, _Mapping]] = ..., state: _Optional[_Union[JobState, str]] = ..., execution_cluster_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error_message: _Optional[str] = ..., pending_reason: _Optional[str] = ...) -> None: ...
+    exit_code: int
+    resources: ResourceSpecProto
+    def __init__(self, identity: _Optional[_Union[JobIdentity, _Mapping]] = ..., owner_id: _Optional[str] = ..., parent: _Optional[_Union[JobIdentity, _Mapping]] = ..., state: _Optional[_Union[JobState, str]] = ..., execution_cluster_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., error_message: _Optional[str] = ..., pending_reason: _Optional[str] = ..., exit_code: _Optional[int] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ...) -> None: ...
 
 class JobDetail(_message.Message):
     __slots__ = ("summary", "spec")
@@ -693,6 +699,18 @@ class DescribeJobResponse(_message.Message):
     JOB_FIELD_NUMBER: _ClassVar[int]
     job: JobDetail
     def __init__(self, job: _Optional[_Union[JobDetail, _Mapping]] = ...) -> None: ...
+
+class GetJobStateRequest(_message.Message):
+    __slots__ = ("job",)
+    JOB_FIELD_NUMBER: _ClassVar[int]
+    job: JobIdentity
+    def __init__(self, job: _Optional[_Union[JobIdentity, _Mapping]] = ...) -> None: ...
+
+class GetJobStateResponse(_message.Message):
+    __slots__ = ("state",)
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    state: JobState
+    def __init__(self, state: _Optional[_Union[JobState, str]] = ...) -> None: ...
 
 class TaskQuery(_message.Message):
     __slots__ = ("job", "job_id_prefix", "states", "backend_id", "authority_cluster_id", "execution_cluster_id", "page")

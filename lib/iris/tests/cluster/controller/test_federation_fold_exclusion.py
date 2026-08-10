@@ -23,7 +23,11 @@ from iris.cluster.controller.persistence.reconcile.loader import load_closed_sna
 from iris.cluster.controller.persistence.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    TERMINAL_JOB_STATES,
+)
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import insert as sa_insert

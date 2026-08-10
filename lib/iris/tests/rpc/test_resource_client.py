@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from iris.client.resolver import ClusterResolver
-from iris.cluster.types import Namespace
 from iris.resources.action import ActionResult, ActionState
 from iris.resources.endpoint import ThreadsProfileConfiguration
 from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.identity import AttemptIdentity, AttemptLocator, JobIdentity, ResourceKey, ResourceKind
 from iris.resources.job import ContainerProfile, ExistingJobPolicy, JobPreemptionPolicy, JobSpec, PriorityBand
+from iris.resources.names import Namespace
 from iris.resources.node import NodeQuery
 from iris.resources.task import TaskQuery
 from iris.rpc import job_pb2, resource_pb2, time_pb2
@@ -80,6 +80,10 @@ class _ResourceRpc:
                 ]
             ),
         )
+
+    def get_job_state(self, request: resource_pb2.GetJobStateRequest) -> resource_pb2.GetJobStateResponse:
+        self.requests.append(request)
+        return resource_pb2.GetJobStateResponse(state=resource_pb2.JOB_STATE_RUNNING)
 
     def batch_describe_tasks(
         self, request: resource_pb2.BatchDescribeTasksRequest
@@ -292,6 +296,21 @@ def test_list_tasks_returns_rows_alongside_unavailable_source(monkeypatch) -> No
     request = rpc.requests[0]
     assert request.query.backend_id == "east"
     assert request.query.page.page_size == 17
+
+
+def test_job_state_addresses_one_exact_job_incarnation(monkeypatch) -> None:
+    client, rpc = _client(monkeypatch)
+    identity = JobIdentity(
+        ResourceKey("prod", ResourceKind.JOB, "/alice/train"),
+        "job-uid",
+    )
+
+    state = client.job_state(identity)
+
+    assert state.name == "RUNNING"
+    request = rpc.requests[0]
+    assert request.job.key.resource_id == "/alice/train"
+    assert request.job.job_uid == "job-uid"
 
 
 def test_batch_describe_tasks_preserves_requested_order(monkeypatch) -> None:

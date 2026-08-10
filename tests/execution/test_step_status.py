@@ -7,7 +7,7 @@ from pathlib import Path
 import marin.execution.step_status as step_status
 import pytest
 from iris.client.job_info import JobInfo, set_job_info
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from marin.execution.step_status import STATUS_RUNNING, StatusFile, should_run, worker_id
 
 

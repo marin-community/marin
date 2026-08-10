@@ -42,11 +42,11 @@ from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     AcceleratorType,
     CapacityType,
-    JobName,
 )
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory

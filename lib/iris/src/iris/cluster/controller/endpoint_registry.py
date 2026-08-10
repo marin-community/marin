@@ -21,7 +21,8 @@ from iris.cluster.controller.persistence.projections.endpoints import (
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ class EndpointRegistry:
         task_id: JobName,
         attempt_id: int,
         metadata: dict[str, str],
-        access: int,
+        access: EndpointAccess,
         requested_lease: Duration | None,
     ) -> tuple[str, Duration]:
         resolved_endpoint_id = endpoint_id or str(uuid.uuid4())
@@ -276,7 +277,7 @@ class EndpointRegistry:
             endpoint_id=row.endpoint_id,
             name=row.name,
             address=row.address,
-            link_access=row.access == EndpointAccess.ENDPOINT_ACCESS_LINK,
+            link_access=row.access is EndpointAccess.LINK,
             peer_id=row.peer_id,
             task_id=row.task_id.to_wire(),
             timeout_seconds=parse_proxy_timeout(row.metadata),

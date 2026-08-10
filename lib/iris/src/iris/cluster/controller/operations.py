@@ -24,9 +24,12 @@ from iris.cluster.federation.protocol import (
     SyncedJob,
     SyncedTask,
 )
-from iris.cluster.types import JobName, PendingTask, WorkerId
-from iris.resources.endpoint import EndpointAccess
+from iris.cluster.types import PendingTask
 from iris.resources.execution import ResourceSpec
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import JobState
 from iris.resources.worker import WorkerMetadata
 
@@ -266,7 +269,7 @@ class FederationOperations:
                     name=endpoint.name,
                     address=endpoint.address,
                     task_id=endpoint.task_id,
-                    access=EndpointAccess.from_storage(endpoint.access),
+                    access=endpoint.access,
                     metadata=dict(endpoint.metadata),
                     lease_remaining=remaining,
                 )

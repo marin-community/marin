@@ -33,11 +33,7 @@ from iris.cluster.controller.source_status import (
 from iris.cluster.controller.task_state import AttemptRecord, TaskDetailRow
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.protocol import FederationDirection
-from iris.cluster.types import (
-    DEFAULT_BACKEND_ID,
-    JobName,
-    WorkerId,
-)
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.resources.attempt import AttemptSummary
 from iris.resources.errors import (
     ActionPolicyRejected,
@@ -51,6 +47,10 @@ from iris.resources.identity import (
     ResourceKey,
     ResourceKind,
     SliceIdentity,
+)
+from iris.resources.names import (
+    JobName,
+    WorkerId,
 )
 from iris.resources.node import (
     NodeAttribute,
@@ -542,7 +542,7 @@ class NodeResources:
                 authority,
                 row.job_id,
                 row.submitted_at_ms,
-                handoff_nonce=str(getattr(row, "handoff_nonce", "") or ""),
+                handoff_nonce=str(row.handoff_nonce or ""),
             ),
         )
 
@@ -555,8 +555,7 @@ class NodeResources:
         return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
 
     def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        direction = getattr(row, "direction", None)
-        if direction == int(FederationDirection.RECEIVED):
+        if row.direction == int(FederationDirection.RECEIVED):
             return str(row.peer_id)
         return self._dependencies.cluster_id
 

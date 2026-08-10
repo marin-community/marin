@@ -3,7 +3,7 @@
 
 """Resource lifecycle values independent of generated RPC modules."""
 
-from enum import IntEnum, StrEnum
+from enum import IntEnum
 
 
 class JobState(IntEnum):
@@ -41,17 +41,3 @@ class PriorityBand(IntEnum):
     PRODUCTION = 1
     INTERACTIVE = 2
     BATCH = 3
-
-
-class EndpointAccess(StrEnum):
-    PRIVATE = "private"
-    LINK = "link"
-
-    @classmethod
-    def from_storage(cls, value: int | None) -> "EndpointAccess":
-        """Decode the stable controller persistence representation."""
-        if value in (None, 0):
-            return cls.PRIVATE
-        if value == 2:
-            return cls.LINK
-        raise ValueError(f"Unknown stored endpoint access value: {value!r}")

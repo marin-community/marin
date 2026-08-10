@@ -15,7 +15,10 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from iris.cluster.constraints import Constraint, ConstraintJson
-from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 
 logger = logging.getLogger(__name__)
 

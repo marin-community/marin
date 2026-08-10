@@ -26,6 +26,9 @@ class ResourceService(Protocol):
     async def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_job_state(self, request: resource__pb2.GetJobStateRequest, ctx: RequestContext) -> resource__pb2.GetJobStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def list_tasks(self, request: resource__pb2.ListTasksRequest, ctx: RequestContext) -> resource__pb2.ListTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -121,6 +124,16 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.describe_job,
+                ),
+                "/iris.resource.ResourceService/GetJobState": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetJobState",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.GetJobStateRequest,
+                        output=resource__pb2.GetJobStateResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_job_state,
                 ),
                 "/iris.resource.ResourceService/ListTasks": Endpoint.unary(
                     method=MethodInfo(
@@ -389,6 +402,26 @@ class ResourceServiceClient(ConnectClient):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.DescribeJobRequest,
                 output=resource__pb2.DescribeJobResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_job_state(
+        self,
+        request: resource__pb2.GetJobStateRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.GetJobStateResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetJobState",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.GetJobStateRequest,
+                output=resource__pb2.GetJobStateResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -803,6 +836,8 @@ class ResourceServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_job_state(self, request: resource__pb2.GetJobStateRequest, ctx: RequestContext) -> resource__pb2.GetJobStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_tasks(self, request: resource__pb2.ListTasksRequest, ctx: RequestContext) -> resource__pb2.ListTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_task(self, request: resource__pb2.DescribeTaskRequest, ctx: RequestContext) -> resource__pb2.DescribeTaskResponse:
@@ -878,6 +913,16 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.describe_job,
+                ),
+                "/iris.resource.ResourceService/GetJobState": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetJobState",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.GetJobStateRequest,
+                        output=resource__pb2.GetJobStateResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_job_state,
                 ),
                 "/iris.resource.ResourceService/ListTasks": EndpointSync.unary(
                     method=MethodInfo(
@@ -1146,6 +1191,26 @@ class ResourceServiceClientSync(ConnectClientSync):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.DescribeJobRequest,
                 output=resource__pb2.DescribeJobResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_job_state(
+        self,
+        request: resource__pb2.GetJobStateRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.GetJobStateResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetJobState",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.GetJobStateRequest,
+                output=resource__pb2.GetJobStateResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

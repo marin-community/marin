@@ -10,7 +10,6 @@ from rigging.server_auth import ANONYMOUS_ADMIN, get_verified_identity
 
 from iris.cluster.controller.controller import Controller
 from iris.cluster.federation.protocol import PeerCallError
-from iris.cluster.types import JobName
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptSummary
@@ -43,6 +42,7 @@ from iris.resources.identity import (
 )
 from iris.resources.job import JobQuery, JobSummary
 from iris.resources.log import LogEntry, LogLevel, LogQuery
+from iris.resources.names import JobName
 from iris.resources.node import NodeAttribute, NodeAttributeKind, NodeHealth, NodeQuery, NodeSummary
 from iris.resources.slice import MembershipState, SliceLifecycle, SliceMember, SliceQuery, SliceSummary
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
@@ -55,6 +55,7 @@ from iris.rpc.resource_codec import (
     job_spec_from_proto,
     job_spec_to_proto,
     profile_configuration_from_proto,
+    resource_spec_to_proto,
 )
 from iris.time_proto import duration_from_proto, timestamp_from_proto, timestamp_to_proto
 
@@ -289,7 +290,10 @@ def _job_summary_to_proto(value: JobSummary) -> resource_pb2.JobSummary:
         submitted_at=timestamp_to_proto(value.submitted_at),
         error_message=value.error_message,
         pending_reason=value.pending_reason,
+        resources=resource_spec_to_proto(value.resources),
     )
+    if value.exit_code is not None:
+        result.exit_code = value.exit_code
     if value.parent is not None:
         result.parent.CopyFrom(_job_identity_to_proto(value.parent))
     if value.started_at is not None:
@@ -472,6 +476,7 @@ class ResourceServiceImpl:
             owner_id = _authorized_owner(query.owner_id or None)
             page = self._resources.list_jobs(
                 JobQuery(
+                    resource_id=query.resource_id or None,
                     owner_id=owner_id,
                     parent=_resource_key_from_proto(query.parent) if query.HasField("parent") else None,
                     job_id_prefix=query.job_id_prefix or None,
@@ -505,6 +510,21 @@ class ResourceServiceImpl:
                 summary=_job_summary_to_proto(detail.summary), spec=job_spec_to_proto(detail.spec)
             )
         )
+
+    def get_job_state(
+        self, request: resource_pb2.GetJobStateRequest, _ctx: RequestContext
+    ) -> resource_pb2.GetJobStateResponse:
+        try:
+            identity = _job_identity_from_proto(request.job)
+            _authorize_key_owner(identity.key)
+            state = self._resources.job_state(identity)
+        except (InvalidResourceKey, ValueError) as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        except ResourceNotFound as exc:
+            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
+        except ResourceReplaced as exc:
+            raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        return resource_pb2.GetJobStateResponse(state=state)
 
     def list_tasks(self, request: resource_pb2.ListTasksRequest, _ctx: RequestContext) -> resource_pb2.ListTasksResponse:
         query = request.query

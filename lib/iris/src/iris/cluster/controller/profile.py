@@ -9,9 +9,6 @@ from iris.backends.protocol import BackendCapability, TaskBackend, TaskTarget
 from iris.cluster.controller.attempt import AttemptResources
 from iris.cluster.controller.dependencies import ResourceDependencies
 from iris.cluster.controller.persistence import reads
-from iris.cluster.types import (
-    JobName,
-)
 from iris.resources.endpoint import (
     ExecRequest,
     ExecResult,
@@ -30,6 +27,7 @@ from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
 )
+from iris.resources.names import JobName
 
 
 class ProfileResources:

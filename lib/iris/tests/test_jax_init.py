@@ -19,8 +19,8 @@ import iris.runtime.jax_init as jax_init_module
 import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.job_info import JobInfo
-from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resources
+from iris.resources.names import JobName
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800

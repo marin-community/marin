@@ -26,9 +26,6 @@ from iris.cluster.controller.source_status import (
 )
 from iris.cluster.controller.task import TaskResources
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.types import (
-    JobName,
-)
 from iris.resources.action import ActionReceipt, ActionState
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.errors import (
@@ -53,6 +50,7 @@ from iris.resources.log import (
     TaskEventKey,
     TaskEventQuery,
 )
+from iris.resources.names import JobName
 from iris.resources.source import (
     Page,
     ResourceSourceStatus,

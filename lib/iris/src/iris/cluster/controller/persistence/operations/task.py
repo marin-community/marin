@@ -6,18 +6,13 @@
 The glues here are small per-tick wrappers around the transition kernel: load
 a closed snapshot covering the affected tasks, call the matching
 ``ReconcileState`` verb, return the effects. ``finalize`` wraps the kernel's
-``finalize_tasks`` against the caller's write transaction and commits; the
-backend-facing ``apply_dispatch_updates`` wraps ``record_updates`` against the
-backend's read snapshot and returns the effects uncommitted (the controller
-commits them via ``commit_effects``). ``assign`` is the only scheduler-driven
-write that doesn't go through the kernel — PENDING → ASSIGNED is a direct-write
-transition with no cascade semantics.
+``finalize_tasks`` against the caller's write transaction and commits. ``assign``
+is the only scheduler-driven write that doesn't go through the kernel — PENDING
+→ ASSIGNED is a direct-write transition with no cascade semantics.
 
-Worker-reported task states are authored through ``ops.worker.apply_reconcile``
-(the reconcile loop), not here.
+Backend observations enter the database-neutral transition kernel through
+``controller.reconcile.apply``; this module owns only persistence commands.
 """
-
-from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
@@ -26,36 +21,13 @@ from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.reconcile.commit import commit_effects
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile import (
-    ControllerEffects,
-    ReconcileState,
-    TaskUpdate,
-    TerminalDecision,
-)
-from iris.cluster.controller.reconcile.reader import TransitionReader
+from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState, TerminalDecision
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
-from iris.resources.state import TaskState
-
-
-@dataclass(frozen=True)
-class Assignment:
-    """Scheduler assignment decision.
-
-    ``priority_band`` is the effective band computed at scheduling time
-    (after applying any over-budget downgrade). Stamped onto ``tasks.priority_band``
-    when the row transitions to ASSIGNED so that the preemption pass uses a
-    fixed, point-in-time band rather than re-evaluating against current spend
-    on every tick. Re-evaluating caused mutual preemption between two
-    same-band users sitting at the budget cliff. ``None`` leaves the column
-    unchanged (used by call sites that do not run the budget computation,
-    e.g. K8s direct-provider promotions and manual reassignment).
-    """
-
-    task_id: JobName
-    worker_id: WorkerId
-    priority_band: int | None = None
+from iris.resources.names import (
+    JobName,
+)
 
 
 def assign(
@@ -117,31 +89,6 @@ def assign(
             )
         )
     writes.mark_jobs_running(cur, jobs_to_update, now_ms)
-
-
-def apply_dispatch_updates(
-    source: TransitionReader,
-    updates: list[TaskUpdate],
-    *,
-    now: Timestamp,
-) -> ControllerEffects:
-    """Author effects for direct-provider updates from a read snapshot (no commit).
-
-    The cluster backend's reconcile glue: load a snapshot covering the updated
-    tasks through the backend's own read surface, run the direct-dispatch state
-    machine, and return the effects for the controller to commit. ``now`` stamps
-    the snapshot, which ``record_updates`` reads for its transition timestamps.
-    """
-    relevant_task_ids = [
-        update.task_id for update in updates if update.new_state not in (TaskState.UNSPECIFIED, TaskState.PENDING)
-    ]
-    attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
-    snapshot = source.transition_snapshot(
-        now=now,
-        seed_task_ids=relevant_task_ids,
-        extra_attempt_keys=attempt_keys,
-    )
-    return ReconcileState.open(snapshot).record_updates(updates)
 
 
 def finalize(

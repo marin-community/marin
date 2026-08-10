@@ -10,7 +10,6 @@ from typing import Protocol
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import AttemptUid, JobName
 from iris.resources.execution import Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.identity import (
     AttemptIdentity as AttemptIdentity,
@@ -22,6 +21,10 @@ from iris.resources.identity import (
     NodeIdentity,
 )
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.source import ResourceSourceStatus
 from iris.resources.state import TaskState
 

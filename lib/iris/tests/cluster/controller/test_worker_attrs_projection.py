@@ -13,7 +13,7 @@ from iris.cluster.controller.persistence import writes
 from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import WorkerId
+from iris.resources.names import WorkerId
 from sqlalchemy import insert, select
 
 

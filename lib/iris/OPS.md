@@ -161,13 +161,17 @@ curl -sf http://localhost:10000/health && echo " controller healthy"
 ```bash
 iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
-iris job logs /user/job-name -f         # follow job + child logs
-iris job stop /user/job-name            # exact job name + its children
-iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
-iris job summary /user/job-name         # per-task state, exit, duration, peak memory
+iris job describe /user/job-name        # exact Job incarnation and current state
+iris job logs /user/job-name --tail     # follow job + child logs
+iris job cancel /user/job-name          # cancel one exact Job incarnation
+iris task list --job /user/job-name     # bounded Task inventory for one Job
+iris task describe /user/job-name/0     # state, Attempt chain, and root cause
 ```
 
-For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
+Use `job describe` when the Job ID is known. `job list --prefix` is an inventory
+search and can also return descendants or similarly prefixed Jobs. For
+machine-readable job data, use the native Iris Python client (`IrisClient`);
+`Job.state` and `Job.wait()` poll the exact submitted Job identity.
 
 ### `job run` gotchas
 
@@ -186,50 +190,40 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 
 ```bash
 iris task describe /user/job/0                 # state, attempts, backend object, root cause
-iris task events /user/job/0                   # retained backend + controller action timeline
-iris task events /user/job/0:2                 # one attempt only
-iris task exec /user/job/0 -- bash             # shell into running container
-iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
+iris task activity /user/job/0                 # retained Task action timeline
+iris attempt activity /user/job/0:2            # one Attempt only
+iris attempt exec /user/job/0 -- bash           # current Attempt
+iris attempt exec /user/job/0:2 -- python -c "import jax; print(jax.devices())"
 ```
 
-`task events` is the first stop when a pod or Kubernetes Event has already been
-garbage-collected. It queries `iris.task_event` across every retained attempt in
-the task's current job incarnation in one call and shows both backend
-observations (`k8s/kueue`, `k8s/container`) and controller decisions
-(`iris/controller`) in chronological order. Events are retained for up to seven
-days.
+`task activity` is the first stop when a pod or Kubernetes Event has already
+been garbage-collected. It shows retained backend observations and controller
+actions for the Task. Use `attempt activity TASK_ID:ATTEMPT_NUMBER` to isolate
+one Attempt.
 
-Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
+The default exec timeout is 60 seconds. Use `--timeout 300` for a slow command.
 
 The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
 
 ```bash
-iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
-iris task exec /user/job/0 -- cat /tmp/out.log   # check later
+iris attempt exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
+iris attempt exec /user/job/0 -- cat /tmp/out.log   # check later
 ```
 
-### Kicking a wedged task (emergency override)
+### Retrying or terminating a wedged task
 
 When a scheduling bug or stuck node strands a task on a machine, force its
 current attempt terminal without touching the rest of the job:
 
 ```bash
-iris job kick /user/job/0                       # preempt task 0 (reschedules if budget remains)
-iris job kick /user/job/0 --state failed        # fail task 0 with no retry
-iris job kick /user/job/0:3                      # only if attempt 3 is still current (guards against a race)
-iris job kick /user/job --reason "stuck node"   # kick every active task in the job
+iris task retry /user/job/0             # preempt the exact current Attempt and retry
+iris attempt terminate /user/job/0:3    # terminate Attempt 3 and disable retry
 ```
 
-The kick is queued on the controller and applied on the next control tick
-through the same finalization path the scheduler's preemptions use, so it shares
-one write transaction with the scheduler instead of racing it. Only tasks
-running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
-already-terminal tasks are rejected with a reason. `preempted` charges the
-preemption budget; `failed` is terminal with no retry.
-
-`kick`, `stop`, and `kill` also read ids from **stdin** (`--stdin`, or a literal
-`-` target) and take `--dry-run`. This is the query→act bridge: select the
-targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
+Both commands resolve the current resource identity before acting and send an
+idempotent action request. `task retry` includes the observed Attempt UID, so a
+replacement between the read and action is rejected instead of terminating the
+new Attempt.
 
 ### Recovering a stuck terminating Kubernetes pod
 
@@ -256,7 +250,7 @@ iris process logs --level WARNING           # filter by level
 iris process profile threads                # thread dump (prints to stdout)
 iris process profile cpu -d 10              # 10s CPU profile (writes .speedscope.json)
 iris process profile mem                    # memory flamegraph (writes .html)
-iris process profile cpu -t /user/job/0     # profile a running task container
+iris attempt profile /user/job/0 --type cpu # profile the current Task Attempt
 ```
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
@@ -268,7 +262,7 @@ GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0
 For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
 
 ```bash
-iris --cluster=<cluster> task exec <task-id> --timeout 15 -- \
+iris --cluster=<cluster> attempt exec <task-id> --timeout 15 -- \
   python -m rigging.telemetry.probes.nccl_client --timeout 8
 ```
 
@@ -354,31 +348,13 @@ exactly which higher-priority job evicted it.
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
-### Bulk actions: query → act
+### Selecting tasks before an action
 
-`iris query` is admin-only and read-only, so it is the safe surface for *finding*
-the exact set of tasks/jobs you want to act on. `iris job kick`, `iris job stop`,
-and `iris job kill` read ids from **stdin** (`--stdin`, or a literal `-`), so a
-query pipes straight into an action — no hand-copying ids. Stdin parsing is
-CSV-tolerant: it takes the first field of each line and keeps only ids (leading
-`/`), so a `-f csv` header row and trailing columns are dropped automatically.
-
-**Always `--dry-run` first** to confirm the set, then re-run without it:
-
-```bash
-# Drain everything EXCEPT one protected job off a slice, so it can bind its ports.
-SLICE=marin-tpu-v4-reserved-2048-us-central2-b-...
-SEL="SELECT t.task_id FROM tasks t JOIN workers w ON t.current_worker_id=w.worker_id
-     WHERE w.slice_id='$SLICE' AND t.state IN (2,3,9) AND t.job_id NOT LIKE '/larry/%'"
-
-iris query -f csv "$SEL" | iris job kick --stdin --dry-run          # preview
-iris query -f csv "$SEL" | iris job kick --stdin --reason "drain slice for /larry"
-```
-
-`--state preempted` (default) reschedules the kicked tasks elsewhere; `--state
-failed` does not retry. Prefer kicking **tasks** (`t.task_id`, task index kept)
-over whole jobs when you only need to clear specific workers — a job target
-kicks *all* its active tasks, including ones on other slices.
+`iris query` is admin-only and read-only, so it is the safe surface for finding
+tasks. Resource actions are deliberately exact and do not consume bulk IDs from
+stdin. Inspect each selected Task with `iris task describe`, then use
+`iris task retry TASK_ID`, `iris attempt terminate TASK_ID:ATTEMPT_NUMBER`, or
+`iris job cancel JOB_ID` as appropriate.
 
 Canonical joins (the schema doesn't pre-wire these, so keep them here):
 
@@ -401,8 +377,8 @@ WHERE w.worker_id IN (
 ) AND t.job_id NOT LIKE '/larry/%' AND t.state IN (2,3,9);
 ```
 
-To *dump* rather than act, feed the same selection to `iris job logs` /
-`iris job summary` per id, or read the task rows directly with a wider `SELECT`.
+To dump rather than act, use `iris task logs` or `iris task describe` per ID, or
+read the task rows directly with a wider `SELECT`.
 
 ### Offline checkpoint analysis
 
@@ -429,7 +405,7 @@ Namespaces:
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
 - `iris.task_event` — up to seven days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
-  `iris task events /user/job/0`, or directly:
+  `iris task activity /user/job/0`, or directly:
 
   ```sql
   SELECT attempt_id, ts, type, reason, message, source, count
@@ -526,8 +502,8 @@ subpath and does not reach the controller's finelog server.
 | Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
-| Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
-| Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
+| Task retrying | `iris task list --job /user/job`, then `iris task describe /user/job/N` for the Attempt chain and root cause; use `iris task logs` for output. |
+| Task failed with exit 137 / suspected OOM | `iris task describe /user/job/N` for the exit and root cause. Check `iris.task` stats for peak memory before raising `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
 | `ArchMismatchImageExecuted` alert, or tasks die instantly with exit 255 | See [Image architecture mismatch](#image-architecture-mismatch). |
 
@@ -693,7 +669,7 @@ kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
 env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
 ```
 
-`cluster status`, `list-backends`, `task describe`, `task events`, logs, and
+`cluster status`, `list-backends`, `task describe`, `task activity`, logs, and
 plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
 mutate the cluster, but it can print literal environment values; avoid it on
 task Pods. Starting, stopping, or restarting a cluster or controller changes

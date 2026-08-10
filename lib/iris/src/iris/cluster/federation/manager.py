@@ -47,9 +47,9 @@ from iris.cluster.federation.protocol import (
     PeerErrorCode,
 )
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
-from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.resources.job import JobSpec
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 
@@ -428,13 +428,23 @@ class FederationManager:
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
             return
-        self._store.apply_sync_batch(
-            peer.peer_id,
-            response.deltas,
-            next_cursor=response.next_cursor,
-            cursor_stale=response.cursor_stale,
-            endpoints=response.endpoints,
-        )
+        try:
+            self._store.apply_sync_batch(
+                peer.peer_id,
+                response.deltas,
+                next_cursor=response.next_cursor,
+                cursor_stale=response.cursor_stale,
+                endpoints=response.endpoints,
+            )
+        except Exception:
+            # A rejected batch is durable input from one peer. Keep its cursor in
+            # place for retry, but do not let that peer stop sync for every other
+            # peer or kill the only sync thread.
+            logger.exception(
+                "Federation sync batch from peer %s at cursor %r was rejected",
+                peer.peer_id,
+                cursor,
+            )
 
     # -- helpers -------------------------------------------------------------
 

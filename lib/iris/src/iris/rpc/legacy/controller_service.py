@@ -59,16 +59,28 @@ from iris.cluster.stats.tables import (
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
-    JobName,
-    TaskAttempt,
     UserBudgetDefaults,
-    WorkerId,
 )
 from iris.resources.endpoint import EndpointQuery, ProfileRequest
 from iris.resources.errors import ResourceNotFound
 from iris.resources.identity import AttemptLocator, ResourceKey
-from iris.resources.job import FederationPosture, JobObservation, JobQuery, JobSummary
+from iris.resources.job import (
+    FederationPosture,
+    JobInventoryQuery,
+    JobListScope,
+    JobObservation,
+    JobQuery,
+    JobSortField,
+    JobSummary,
+    SortDirection,
+)
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+    WorkerId,
+)
 from iris.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
+from iris.resources.state import JobState
 from iris.resources.task import TaskQuery, TaskSummary
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
@@ -94,17 +106,20 @@ from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
-_LEGACY_JOB_STATE_SORT_ORDER = {
-    job_pb2.JOB_STATE_RUNNING: 0,
-    job_pb2.JOB_STATE_BUILDING: 1,
-    job_pb2.JOB_STATE_PENDING: 2,
-    job_pb2.JOB_STATE_SUCCEEDED: 3,
-    job_pb2.JOB_STATE_FAILED: 4,
-    job_pb2.JOB_STATE_KILLED: 5,
-    job_pb2.JOB_STATE_WORKER_FAILED: 6,
-    job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
-}
 _LEGACY_RESOURCE_PAGE_SIZE = 500
+
+_JOB_SCOPE_FROM_LEGACY = {
+    controller_pb2.Controller.JOB_QUERY_SCOPE_ALL: JobListScope.ALL,
+    controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS: JobListScope.ROOTS,
+    controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN: JobListScope.CHILDREN,
+}
+_JOB_SORT_FROM_LEGACY = {
+    controller_pb2.Controller.JOB_SORT_FIELD_DATE: JobSortField.DATE,
+    controller_pb2.Controller.JOB_SORT_FIELD_NAME: JobSortField.NAME,
+    controller_pb2.Controller.JOB_SORT_FIELD_STATE: JobSortField.STATE,
+    controller_pb2.Controller.JOB_SORT_FIELD_FAILURES: JobSortField.FAILURES,
+    controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: JobSortField.PREEMPTIONS,
+}
 
 # Return type of a proxied on-demand RPC (a unary controller response).
 _T = TypeVar("_T")
@@ -705,17 +720,10 @@ class LegacyControllerService:
                 return tuple(items)
 
     def _resource_job_summary(self, wire_id: str) -> JobSummary:
-        page_token = None
-        while True:
-            page = self._controller.list_jobs(
-                JobQuery(job_id_prefix=wire_id, page_size=_LEGACY_RESOURCE_PAGE_SIZE, page_token=page_token)
-            )
-            for summary in page.items:
-                if summary.identity.key.resource_id == wire_id:
-                    return summary
-            page_token = page.next_page_token
-            if page_token is None:
-                raise ResourceNotFound(wire_id)
+        page = self._controller.list_jobs(JobQuery(resource_id=wire_id, page_size=1))
+        if not page.items:
+            raise ResourceNotFound(wire_id)
+        return page.items[0]
 
     def _resource_task_summary(self, wire_id: str) -> TaskSummary:
         job_id, _ = JobName.from_wire(wire_id).require_task()
@@ -799,58 +807,41 @@ class LegacyControllerService:
         state_ids = _resolve_state_filter(query.state_filter)
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse()
-        parent = None
+        parent_resource_id = None
         if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
             if not query.parent_job_id:
                 raise ConnectError(Code.INVALID_ARGUMENT, "parent_job_id is required for child scope")
-            parent = self._resource_job_summary(query.parent_job_id).identity.key
+            parent_resource_id = query.parent_job_id
         execution_cluster_id = None
         if query.cluster:
             execution_cluster_id = self._controller.cluster_id if query.cluster == LOCAL_CLUSTER else query.cluster
-        summaries = []
-        page_token = None
-        while True:
-            page = self._controller.list_jobs(
-                JobQuery(
-                    parent=parent,
-                    job_id_prefix=query.job_id_prefix or None,
-                    states=frozenset(state_ids),
-                    backend_id=query.backend_id or None,
-                    execution_cluster_id=execution_cluster_id,
-                    page_size=_LEGACY_RESOURCE_PAGE_SIZE,
-                    page_token=page_token,
-                )
-            )
-            summaries.extend(page.items)
-            page_token = page.next_page_token
-            if page_token is None:
-                break
-        if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
-            summaries = [summary for summary in summaries if summary.parent is None]
-        if query.name_filter:
-            needle = query.name_filter.casefold()
-            summaries = [summary for summary in summaries if needle in summary.identity.key.resource_id.casefold()]
-        descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-        sort_field = query.sort_field or controller_pb2.Controller.JOB_SORT_FIELD_DATE
-        if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_NAME:
-            summaries.sort(key=lambda summary: summary.identity.key.resource_id, reverse=descending)
-        elif sort_field == controller_pb2.Controller.JOB_SORT_FIELD_STATE:
-            summaries.sort(
-                key=lambda summary: _LEGACY_JOB_STATE_SORT_ORDER.get(summary.state, 99),
-                reverse=descending,
-            )
+        sort_field = _JOB_SORT_FROM_LEGACY.get(query.sort_field, JobSortField.DATE)
+        if query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
+            sort_direction = SortDirection.DESCENDING if sort_field is JobSortField.DATE else SortDirection.ASCENDING
+        elif query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC:
+            sort_direction = SortDirection.DESCENDING
         else:
-            if query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
-                descending = True
-            summaries.sort(key=lambda summary: summary.submitted_at.epoch_ms(), reverse=descending)
-        total_count = len(summaries)
-        selected = summaries[query.offset : query.offset + query.limit]
-        observations = self._controller.observe_jobs(selected)
-        statuses = [self._legacy_job_status(observation) for observation in observations]
+            sort_direction = SortDirection.ASCENDING
+        page = self._controller.list_job_inventory(
+            JobInventoryQuery(
+                scope=_JOB_SCOPE_FROM_LEGACY.get(query.scope, JobListScope.ALL),
+                parent_resource_id=parent_resource_id,
+                name_contains=query.name_filter or None,
+                states=frozenset(JobState(state) for state in state_ids),
+                sort_field=sort_field,
+                sort_direction=sort_direction,
+                offset=query.offset,
+                limit=query.limit,
+                job_id_prefix=query.job_id_prefix or None,
+                backend_id=query.backend_id or None,
+                execution_cluster_id=execution_cluster_id,
+            )
+        )
+        statuses = [self._legacy_job_status(observation) for observation in page.items]
         return controller_pb2.Controller.ListJobsResponse(
             jobs=statuses,
-            total_count=total_count,
-            has_more=query.offset + len(selected) < total_count,
+            total_count=page.total_count,
+            has_more=query.offset + len(statuses) < page.total_count,
         )
 
     def get_task_status(

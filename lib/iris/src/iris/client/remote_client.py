@@ -16,11 +16,11 @@ from rigging.timing import Duration
 from iris.client.bundle import create_workspace_zip
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
-from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
 from iris.resources.action import ActionReceipt
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail
 from iris.resources.endpoint import (
+    EndpointAccess,
     EndpointDetail,
     EndpointQuery,
     EndpointSummary,
@@ -40,9 +40,14 @@ from iris.resources.identity import (
 )
 from iris.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
 from iris.resources.log import LogEntry, LogPage, LogQuery
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 from iris.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.resources.source import Page
+from iris.resources.state import JobState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
@@ -108,6 +113,9 @@ class RemoteClusterClient:
 
     def describe_job(self, key: ResourceKey) -> JobDetail:
         return self._resources.describe_job(key)
+
+    def job_state(self, identity: JobIdentity) -> JobState:
+        return self._resources.job_state(identity)
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         return self._resources.list_tasks(query)
@@ -230,7 +238,7 @@ class RemoteClusterClient:
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         return self._endpoint_client.register(name, address, task_attempt, metadata, access)
 

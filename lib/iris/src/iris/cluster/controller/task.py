@@ -35,9 +35,6 @@ from iris.cluster.controller.task_state import TaskDetailRow
 from iris.cluster.federation.protocol import FederationDirection
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.types import (
-    JobName,
-)
 from iris.resources.attempt import AttemptCounts, AttemptSummary
 from iris.resources.errors import (
     BackendIdentityUnknown,
@@ -53,6 +50,7 @@ from iris.resources.identity import (
     TaskIdentity,
 )
 from iris.resources.log import LogQuery, LogReadError
+from iris.resources.names import JobName
 from iris.resources.source import (
     Page,
     ResourceSourceStatus,
@@ -258,9 +256,7 @@ class TaskResources:
             attempt_identity = AttemptIdentity(
                 task_key, int(current_attempt.attempt_id), str(current_attempt.attempt_uid)
             )
-            node_id = str(
-                current_attempt.node_name or current_attempt.worker_id or getattr(row, "peer_worker_label", "") or ""
-            )
+            node_id = str(current_attempt.node_name or current_attempt.worker_id or row.peer_worker_label or "")
             if node_id and backend_id:
                 node_identity = self._current_node_identity(execution, backend_id, node_id)
         return TaskSummary(
@@ -317,7 +313,7 @@ class TaskResources:
                 authority,
                 row.job_id,
                 row.submitted_at_ms,
-                handoff_nonce=str(getattr(row, "handoff_nonce", "") or ""),
+                handoff_nonce=str(row.handoff_nonce or ""),
             ),
         )
 
@@ -330,8 +326,7 @@ class TaskResources:
         return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
 
     def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        direction = getattr(row, "direction", None)
-        if direction == int(FederationDirection.RECEIVED):
+        if row.direction == int(FederationDirection.RECEIVED):
             return str(row.peer_id)
         return self._dependencies.cluster_id
 

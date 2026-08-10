@@ -39,7 +39,12 @@ from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar, Protocol, TypedDict
 
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
+from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
+    AcceleratorType,
+    CapacityType,
+    WellKnownAttribute,
+)
 from iris.resources.execution import Device, GpuDevice, ResourceSpec, TpuDevice
 
 # ---------------------------------------------------------------------------

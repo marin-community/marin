@@ -390,6 +390,7 @@ message JobQuery {
   string backend_id = 5;
   string execution_cluster_id = 6;
   PageRequest page = 7;
+  string resource_id = 8;
 }
 
 message JobSummary {
@@ -405,6 +406,8 @@ message JobSummary {
   iris.time.Timestamp finished_at = 10;
   string error_message = 11;
   string pending_reason = 12;
+  int32 exit_code = 13;
+  ResourceSpecProto resources = 14;
 }
 
 message JobDetail {
@@ -427,6 +430,14 @@ message DescribeJobRequest {
 
 message DescribeJobResponse {
   JobDetail job = 1;
+}
+
+message GetJobStateRequest {
+  JobIdentity job = 1;
+}
+
+message GetJobStateResponse {
+  JobState state = 1;
 }
 
 message TaskQuery {
@@ -817,6 +828,7 @@ service ResourceService {
   rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
   rpc DescribeJob(DescribeJobRequest) returns (DescribeJobResponse);
+  rpc GetJobState(GetJobStateRequest) returns (GetJobStateResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc DescribeTask(DescribeTaskRequest) returns (DescribeTaskResponse);
   rpc BatchDescribeTasks(BatchDescribeTasksRequest) returns (BatchDescribeTasksResponse);

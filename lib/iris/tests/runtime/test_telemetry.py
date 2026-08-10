@@ -13,8 +13,8 @@ import zstandard
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.client.job_info import JobInfo, set_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.types import JobName
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.resources.names import JobName
 from iris.runtime import telemetry
 from rigging import telemetry as rigging_telemetry
 

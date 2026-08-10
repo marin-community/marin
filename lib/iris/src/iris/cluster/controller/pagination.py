@@ -8,9 +8,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 
-from iris.cluster.types import (
-    LOCAL_CLUSTER,
-)
+from iris.cluster.types import LOCAL_CLUSTER
 from iris.resources.errors import (
     InvalidPageToken,
 )

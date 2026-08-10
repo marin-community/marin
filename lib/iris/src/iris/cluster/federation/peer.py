@@ -19,10 +19,10 @@ from iris.cluster.federation.protocol import (
     PeerConnectFactory,
     PeerConnection,
 )
-from iris.cluster.types import JobName
 from iris.resources.action import ActionReceipt
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
+from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
 
 logger = logging.getLogger(__name__)

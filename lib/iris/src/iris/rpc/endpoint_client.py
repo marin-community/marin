@@ -19,7 +19,8 @@ from typing import Any, Protocol
 
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
-from iris.cluster.types import EndpointAccess, TaskAttempt
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.names import TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.errors import call_with_retry
 from iris.time_proto import duration_from_proto, duration_to_proto
@@ -92,7 +93,7 @@ class EndpointClient:
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         """Register an endpoint and renew its lease until ``unregister`` or ``close``.
 
@@ -109,7 +110,7 @@ class EndpointClient:
             metadata=metadata or {},
             endpoint_id=endpoint_id,
             lease_duration=duration_to_proto(self._requested_lease),
-            access=int(access),
+            access=access.to_storage(),
         )
         response = call_with_retry("register_endpoint", lambda: self._stub.register_endpoint(request))
         self._renewer.track(request, duration_from_proto(response.lease_duration))

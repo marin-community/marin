@@ -19,11 +19,11 @@ from iris.cluster.federation.protocol import (
     PeerCallError,
     PeerErrorCode,
 )
-from iris.cluster.types import JobName
 from iris.resources.action import ActionReceipt
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.resources.job import JobDetail
+from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
 from iris.resources.task import TaskSummary
 from iris.rpc import controller_pb2, resource_pb2

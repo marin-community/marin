@@ -32,7 +32,10 @@ flowchart LR
 `ResourceRpcClient` exposes native inputs and results. `resource_client_codec`,
 `resource_codec`, and `ResourceServiceImpl` own the protobuf translation.
 `Controller` accepts and returns native records and dispatches to the noun
-services in `iris.cluster.controller`.
+services in `iris.cluster.controller`. Exact Job polling uses `GetJobState` and
+the Job identity, so a replacement cannot be mistaken for the incarnation a
+client submitted. Inventory reads use bounded `JobQuery` pages; an exact lookup
+sets `JobQuery.resource_id` instead of scanning a prefix.
 
 ## Retained legacy requests
 
@@ -58,6 +61,10 @@ queries, budgets, scheduler diagnostics, and federation transport remain
 operational methods on `LegacyControllerService`; they use typed
 `OperationalServices` or `ControllerRuntime` entry points.
 
+The retained `ListJobs` request becomes a `JobInventoryQuery`. Filtering,
+sorting, counting, and offset/limit selection happen in one bounded persistence
+query; the adapter does not drain every resource page and sort it in Python.
+
 Generated `controller_pb2`, `job_pb2`, and their Connect modules remain at the
 `iris.rpc` root. Worker and legacy protocol generation share those generated
 modules: `worker.proto` imports the old `job.proto`, and `controller.proto`
@@ -72,7 +79,7 @@ effects in one transaction.
 
 ```mermaid
 flowchart LR
-    Snapshot[ControllerDB control read snapshot] --> Inputs[ControllerRuntime tick inputs]
+    Snapshot[ControllerDB control read snapshot] --> Inputs[controller.snapshot.ControlSnapshot]
     Inputs --> Route[backend routing and scheduling]
     Inputs --> Reconcile[reconcile requests]
     Route --> Backend[iris.backends.protocol.TaskBackend]
@@ -80,7 +87,7 @@ flowchart LR
     Backend --> Results[ScheduleResult / ReconcileResult / AutoscaleResult]
     Results --> Merge[ControllerRuntime._commit_tick]
     Merge --> Commit[one ControllerDB write transaction]
-    Commit --> Effects[persistence operations and reconcile.commit_effects]
+    Commit --> Effects[persistence writes and reconcile effect commit]
 ```
 
 The tick runs schedule, reconcile, and autoscale phases when their cadences are
@@ -163,12 +170,21 @@ ControllerService, EndpointService, HTTP routes, and the dashboard assets.
 `composition.py` is allowed to depend on both native and transport modules;
 controller noun services and decision kernels are not.
 
+The Connect mounts use these exact prefixes on both the controller dashboard
+and its local proxy:
+
+| Service | Route prefix |
+|---|---|
+| ResourceService | `/iris.resource.ResourceService/` |
+| ControllerService | `/iris.cluster.ControllerService/` |
+| EndpointService | `/iris.cluster.EndpointService/` |
+
 ## Package ownership
 
 | Package | Owns |
 |---|---|
 | `iris.client` | `IrisClient`, resource handles, client context, bundle creation, and remote-cluster composition |
-| `iris.resources` | Native Job, Task, Attempt, Endpoint, Node, Slice, action, activity, log, worker, and system records |
+| `iris.resources` | Native Job, Task, Attempt, Endpoint, Node, Slice, action, activity, log, worker, and system records; `names.py` owns `JobName`, `TaskAttempt`, and compact runtime IDs |
 | `iris.rpc` | Protobuf schemas and generated code, Connect clients and services, authentication, and wire/native codecs |
 | `iris.rpc.legacy` | The retained ControllerService implementation and old Job/Task wire translation |
 | `iris.cluster.controller` | Resource behavior, process composition, control loops, routing, scheduling, reconciliation, and persistence |
@@ -176,6 +192,11 @@ controller noun services and decision kernels are not.
 | `iris.cluster.platforms` | Controller and worker machine lifecycle for GCP, Kubernetes, local, and manual providers |
 | `iris.cluster.worker` | Native worker-daemon behavior and task runtime ownership |
 | `iris.cluster.runtime` | Docker and subprocess task execution |
+
+`iris.cluster.types` contains cluster topology and scheduling values only.
+Canonical resource names and IDs belong in `iris.resources.names`; resource
+enums belong with their noun, such as `EndpointAccess` in
+`iris.resources.endpoint`. Protobuf codecs belong in `iris.rpc`.
 
 Persistence stays in `iris.cluster.controller.persistence`:
 
@@ -185,6 +206,11 @@ Persistence stays in `iris.cluster.controller.persistence`:
 - `reads.py`, `writes.py`, and `operations/` expose typed reads and mutations.
 - `projections/` maintains derived state.
 - `backends.py` implements the worker-state port used by `RpcTaskBackend`.
+
+Persistence constructs `controller.snapshot.ControlSnapshot` and implements
+the `BackendWorkerStore` port. `controller.reconcile.apply` turns backend
+observations into database-neutral effects. Code under `iris.backends` may use
+those native contracts but does not import `controller.persistence`.
 
 ## Transport rules and exceptions
 

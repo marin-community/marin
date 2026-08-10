@@ -5,9 +5,9 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.federation.protocol import PeerCallError, PeerErrorCode
-from iris.cluster.types import JobName
 from iris.resources.endpoint import ExecRequest
 from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, resource_pb2
 from iris.rpc import federation_client as federation_transport
 from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT

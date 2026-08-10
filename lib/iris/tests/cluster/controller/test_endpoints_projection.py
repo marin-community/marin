@@ -13,7 +13,7 @@ from iris.cluster.controller.persistence.projections.endpoints import (
     EndpointsProjection,
 )
 from iris.cluster.controller.persistence.schema import tasks_table
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update

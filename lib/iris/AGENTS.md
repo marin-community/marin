@@ -19,12 +19,12 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/resources/` — immutable native resource records used by clients and controller behavior
+- `src/iris/resources/` — immutable native resource records used by clients and controller behavior; canonical hierarchical names and compact IDs live in `names.py`
 - `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `admin.py` (typed operational behavior), `composition.py` (process composition root), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `scheduling/`, and `autoscaler/`
 - `src/iris/backends/` — the native `TaskBackend` contract and status records plus implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
-- `src/iris/rpc/` — protobuf definitions/generated code plus RPC clients, codecs, and server adapters
+- `src/iris/rpc/` — protobuf definitions/generated code plus RPC clients, codecs, and server adapters; retained ControllerService translation is isolated under `legacy/`
 - `dashboard/` — Vue 3 frontend (Vite + Tailwind)
 
 ## Development
@@ -68,11 +68,18 @@ design notes:
 - `controller/persistence/reads.py` / `controller/persistence/writes.py` — shared read/write helpers.
 - `controller/persistence/projections/` — write-through caches; do not write projection
   tables from outside their owning projection.
+- `controller/snapshot.py` and `controller/reconcile/apply.py` — database-neutral
+  records and effect planning consumed by backends. Backends must not import a
+  persistence implementation.
 
 Prefer existing `reads.py`/`writes.py` helpers before adding new query code.
 Use SQLAlchemy result APIs directly (`.first()`, `.all()`, `.scalar()`); do
 not add wrapper methods that duplicate SQLAlchemy. Define row protocols or
 dataclasses at the usage boundary when a caller needs a typed shape.
+
+`cluster/types.py` is limited to cluster topology and scheduling values. Put
+Job/Task names and runtime identifiers in `resources/names.py`, resource enums
+in their noun module, and all protobuf conversion in `rpc/`.
 
 ## Code Conventions
 

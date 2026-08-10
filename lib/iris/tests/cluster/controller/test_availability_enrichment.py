@@ -22,7 +22,11 @@ from iris.cluster.controller.scheduling.policy import (
     enrich_workers_with_availability,
 )
 from iris.cluster.controller.scheduling.scheduler import WorkerSnapshot
-from iris.cluster.types import JobName, PendingTask, WorkerId
+from iris.cluster.types import PendingTask
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from rigging.timing import Timestamp
 
 

@@ -9,8 +9,8 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from iris.cluster.types import JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.resources.names import JobName
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.worker_dashboard import WorkerDashboard
 from iris.rpc.worker_service import WorkerServiceImpl

@@ -49,25 +49,19 @@ attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capa
 
 ## Architecture
 
-```
-Controller Process (in Docker container):
-├── gRPC service (job dispatch, worker registration)
-├── HTTP dashboard (monitoring, status)
-├── Scheduler thread (task→worker matching)
-├── Autoscaler thread (VM lifecycle management)
-└── WorkerVm threads (per-VM state machines)
+The controller exposes the native `ResourceService`, the retained
+`ControllerService`, and `EndpointService` through one Connect/HTTP process.
+`ControllerService` is a compatibility boundary: its old Job and Task messages
+are converted to native `iris.resources` records before controller behavior runs.
 
-Worker Process (on each VM):
-├── Task executor (runs jobs in containers)
-└── Heartbeat reporter (health monitoring)
-```
+The control loop reads a database-neutral snapshot, asks each `TaskBackend` to
+schedule, reconcile, and autoscale, then commits the returned decisions and
+effects. `RpcTaskBackend` talks to Iris worker daemons; `K8sTaskProvider` talks
+to Kubernetes and lets Kueue place Pods. Backends consume native records and do
+not import controller persistence or protobuf messages.
 
-The controller drives task execution through a single `TaskBackend` contract with
-two placements: `Placement.IRIS` (Iris schedules task→worker and fans reconcile
-RPCs to worker daemons — the diagram above) and `Placement.BACKEND` (the backend,
-e.g. Kubernetes via Kueue, places tasks itself). See
-[`docs/architecture.md`](docs/architecture.md#the-taskbackend-contract) for the
-contract and how the controller dispatches by placement.
+See [`docs/architecture.md`](docs/architecture.md) for the package boundaries,
+RPC paths, and control-flow diagrams.
 
 ## Actor System
 
@@ -330,17 +324,20 @@ iris --config cluster.yaml job run --no-wait -- python long_job.py
 # Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
-iris --config cluster.yaml job logs /my-job
-iris --config cluster.yaml job logs /my-job --follow
-iris --config cluster.yaml job logs /my-job --since-seconds 300
+# Inspect one exact Job and its Tasks
+iris --config cluster.yaml job describe /user/my-job
+iris --config cluster.yaml task list --job /user/my-job
+iris --config cluster.yaml task describe /user/my-job/0
+
+# Read or stream logs for one exact Job incarnation
+iris --config cluster.yaml job logs /user/my-job
+iris --config cluster.yaml job logs /user/my-job --tail
 
 # Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
-iris --config cluster.yaml job wait /my-job
+iris --config cluster.yaml job wait /user/my-job
 
-# Stop one or more jobs
-iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop --prefix /my-job-prefix
+# Cancel one exact Job incarnation
+iris --config cluster.yaml job cancel /user/my-job
 ```
 
 ## Smoke Test

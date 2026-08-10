@@ -13,7 +13,10 @@ controller resolves at startup.
 Idempotent: re-run from scratch if the controller crashes mid-migration.
 """
 
-from iris.cluster.types import DEFAULT_BACKEND_ID, BackendStatus
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    BackendStatus,
+)
 
 _BACKEND_ID_TABLES = ("jobs", "tasks", "task_attempts")
 

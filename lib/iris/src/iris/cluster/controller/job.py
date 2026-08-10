@@ -51,6 +51,7 @@ from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.json_codec import (
     reconstruct_job_spec,
+    resource_spec_from_scalars,
 )
 from iris.cluster.controller.persistence.operations import job as job_ops
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
@@ -65,7 +66,6 @@ from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, Su
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
-    JobName,
     UserBudgetDefaults,
     is_job_finished,
 )
@@ -90,6 +90,9 @@ from iris.resources.job import (
     ExistingJobPolicy,
     FederationPosture,
     JobDetail,
+    JobInventoryPage,
+    JobInventoryQuery,
+    JobListScope,
     JobObservation,
     JobQuery,
     JobSpec,
@@ -98,6 +101,7 @@ from iris.resources.job import (
     PriorityBand,
     TaskStateCount,
 )
+from iris.resources.names import JobName
 from iris.resources.source import (
     Page,
 )
@@ -567,6 +571,7 @@ class JobService:
         fingerprint = _query_fingerprint(
             "jobs",
             {
+                "resource_id": query.resource_id,
                 "owner_id": query.owner_id,
                 "parent": query.parent.resource_id if query.parent else None,
                 "job_id_prefix": query.job_id_prefix,
@@ -579,6 +584,7 @@ class JobService:
         position = _decode_page_token(query.page_token, fingerprint)
         offset = int(position["offset"]) if position is not None else 0
         parent_job_id = None
+        resource_id = JobName.from_wire(query.resource_id) if query.resource_id is not None else None
         if query.parent is not None:
             _require_kind(query.parent, ResourceKind.JOB)
             parent_job_id = JobName.from_wire(query.parent.resource_id)
@@ -586,6 +592,7 @@ class JobService:
             rows = reads.list_resource_jobs(
                 tx,
                 owner_id=query.owner_id,
+                resource_id=resource_id,
                 job_id_prefix=_escaped_prefix(query.job_id_prefix) if query.job_id_prefix is not None else None,
                 parent_job_id=parent_job_id,
                 states=[int(state) for state in query.states],
@@ -648,6 +655,18 @@ class JobService:
             states = reads.resource_job_states(tx, normalized)
         return {resource_id: JobState(state) for resource_id, state in states.items()}
 
+    def job_state(self, identity: JobIdentity) -> JobState:
+        """Return the state of one exact Job without loading its specification."""
+        _require_kind(identity.key, ResourceKind.JOB)
+        job_id = JobName.from_wire(identity.key.resource_id)
+        with self._dependencies.db.read_snapshot() as tx:
+            coordinates = reads.job_coordinates(tx, {job_id}).get(job_id)
+        if coordinates is None:
+            raise ResourceNotFound(identity.key.resource_id)
+        if self._job_identity(coordinates) != identity:
+            raise ResourceReplaced(identity.key.resource_id)
+        return JobState(coordinates.state)
+
     def observe_jobs(self, summaries: Sequence[JobSummary]) -> tuple[JobObservation, ...]:
         """Read bounded Task, child, and federation aggregates for Jobs in one snapshot."""
         if len(summaries) > _MAX_JOB_PAGE:
@@ -662,8 +681,63 @@ class JobService:
             task_aggregates = reads.task_summaries_for_jobs(tx, job_ids, attempt_counts=attempt_counts)
             parents = reads.parent_ids_with_children(tx, job_ids)
             handoff_states = reads.handoff_states(tx, job_ids)
+        return self._build_job_observations(summaries, task_aggregates, parents, handoff_states)
+
+    def list_job_inventory(self, query: JobInventoryQuery) -> JobInventoryPage:
+        """Return one bounded, sorted Job inventory page in a single snapshot."""
+        if query.limit <= 0 or query.limit > _MAX_JOB_PAGE:
+            raise ValueError(f"Job inventory limit must be between 1 and {_MAX_JOB_PAGE}")
+        if query.offset < 0:
+            raise ValueError("Job inventory offset cannot be negative")
+        parent_job_id = None
+        if query.scope is JobListScope.CHILDREN:
+            if query.parent_resource_id is None:
+                raise ValueError("parent_resource_id is required for child scope")
+            parent_job_id = JobName.from_wire(query.parent_resource_id)
+        with self._dependencies.db.read_snapshot() as tx:
+            rows, total_count = reads.list_inventory_jobs(
+                tx,
+                scope=query.scope,
+                parent_job_id=parent_job_id,
+                states=[int(state) for state in query.states],
+                name_contains=query.name_contains,
+                job_id_prefix=_escaped_prefix(query.job_id_prefix) if query.job_id_prefix is not None else None,
+                backend_id=query.backend_id,
+                execution_cluster=(
+                    _stored_cluster(self._dependencies.cluster_id, query.execution_cluster_id)
+                    if query.execution_cluster_id is not None
+                    else None
+                ),
+                sort_field=query.sort_field,
+                sort_direction=query.sort_direction,
+                offset=query.offset,
+                limit=query.limit,
+            )
+            job_ids = [row.job_id for row in rows]
+            parent_coordinates = self._job_coordinates_in_snapshot(
+                tx,
+                {row.parent_job_id for row in rows if row.parent_job_id is not None},
+            )
+            attempt_counts = reads.attempt_counts_for_jobs(tx, job_ids)
+            task_aggregates = reads.task_summaries_for_jobs(tx, job_ids, attempt_counts=attempt_counts)
+            parents = reads.parent_ids_with_children(tx, job_ids)
+            handoff_states = reads.handoff_states(tx, job_ids)
+        summaries = tuple(self._job_summary_from_row(row, parent_coordinates=parent_coordinates) for row in rows)
+        return JobInventoryPage(
+            self._build_job_observations(summaries, task_aggregates, parents, handoff_states),
+            total_count,
+        )
+
+    def _build_job_observations(
+        self,
+        summaries: Sequence[JobSummary],
+        task_aggregates: Mapping[JobName, reads.TaskJobSummary],
+        parents: set[JobName],
+        handoff_states: Mapping[JobName, int],
+    ) -> tuple[JobObservation, ...]:
         observations = []
-        for summary, job_id in zip(summaries, job_ids, strict=True):
+        for summary in summaries:
+            job_id = JobName.from_wire(summary.identity.key.resource_id)
             aggregate = task_aggregates.get(job_id, reads.TaskJobSummary(job_id=job_id))
             observations.append(
                 JobObservation(
@@ -829,7 +903,7 @@ class JobService:
                     authority,
                     job_id,
                     submitted_at,
-                    handoff_nonce=str(getattr(coordinates or row, "handoff_nonce", "") or ""),
+                    handoff_nonce=str((coordinates or row).handoff_nonce or ""),
                 ),
             ),
             owner_id=job_id.user,
@@ -843,6 +917,13 @@ class JobService:
             finished_at=row.finished_at_ms,
             error_message=str(row.error or ""),
             pending_reason=self._job_pending_reason(row, coordinates or row),
+            exit_code=int(row.exit_code) if row.exit_code is not None else None,
+            resources=resource_spec_from_scalars(
+                row.res_cpu_millicores,
+                row.res_memory_bytes,
+                row.res_disk_bytes,
+                row.res_device_json,
+            ),
         )
 
     def _job_pending_reason(
@@ -852,9 +933,9 @@ class JobService:
     ) -> str:
         if JobState(row.state) is not JobState.PENDING:
             return ""
-        if getattr(coordinates, "direction", None) == int(FederationDirection.SENT):
-            peer_id = str(getattr(coordinates, "peer_id", "") or "")
-            handoff_state = getattr(coordinates, "handoff_state", None)
+        if coordinates.direction == int(FederationDirection.SENT):
+            peer_id = str(coordinates.peer_id or "")
+            handoff_state = coordinates.handoff_state
             if handoff_state == int(HandoffState.QUEUED_HANDOFF):
                 if peer_id:
                     return f"Queued for peer {peer_id} to report free capacity"
@@ -884,13 +965,12 @@ class JobService:
                 authority,
                 row.job_id,
                 row.submitted_at_ms,
-                handoff_nonce=str(getattr(row, "handoff_nonce", "") or ""),
+                handoff_nonce=str(row.handoff_nonce or ""),
             ),
         )
 
     def _authority_cluster(self, row: reads.JobCoordinates | reads.JobRecord) -> str:
-        direction = getattr(row, "direction", None)
-        if direction == int(FederationDirection.RECEIVED):
+        if row.direction == int(FederationDirection.RECEIVED):
             return str(row.peer_id)
         return self._dependencies.cluster_id
 

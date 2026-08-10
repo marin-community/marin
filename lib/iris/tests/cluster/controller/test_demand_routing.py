@@ -28,7 +28,10 @@ from iris.cluster.controller.autoscaler.routing import (
     route_demand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.types import AcceleratorType, CapacityType
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
 from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
 from rigging.timing import Duration, Timestamp
 from tests.cluster.controller.conftest import (

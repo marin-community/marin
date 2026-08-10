@@ -24,9 +24,9 @@ from iris.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
-from iris.cluster.types import JobName
 from iris.resources.execution import Entrypoint, ResourceSpec, gpu_device
 from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)

@@ -20,9 +20,12 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     with_slice_topology_env,
 )
-from iris.cluster.types import AttemptUid, JobName
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.rpc import job_pb2
 from iris.rpc.legacy.job_codec import (
     constraint_from_proto,

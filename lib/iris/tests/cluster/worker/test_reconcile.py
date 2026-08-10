@@ -11,9 +11,12 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
-from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.resources.attempt import AttemptLaunch, AttemptObservation
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.state import TaskState
 from iris.resources.worker import (
     DesiredAttempt,

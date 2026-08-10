@@ -41,8 +41,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
-from iris.cluster.types import AttemptUid, JobName, is_task_finished
-from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
+from iris.cluster.types import is_task_finished
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
@@ -50,6 +49,11 @@ from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.endpoint import ExecResult, ProfileConfiguration
 from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
+from iris.resources.names import TaskAttempt as TaskAttemptIdentity
 from iris.resources.state import TaskState
 from iris.resources.worker import BuildMetrics, ResourceUsage, WorkerMetadata, WorkerTaskStatus
 

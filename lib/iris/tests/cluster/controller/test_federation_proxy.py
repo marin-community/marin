@@ -48,8 +48,8 @@ from iris.cluster.controller.native_proxy import (
     NativeProxy,
 )
 from iris.cluster.controller.persistence import reads
-from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2
 from iris.rpc.dashboard import ControllerDashboard
 from iris.rpc.legacy.controller_service import LegacyControllerService
@@ -159,7 +159,7 @@ def _register_endpoint(
             address=address,
             task_id=task.to_wire(),
             attempt_id=query_task(peer_state, task).current_attempt_id,
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+            access=controller_pb2.Controller.ENDPOINT_ACCESS_LINK,
         ),
         None,
     )

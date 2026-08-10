@@ -8,7 +8,10 @@ import sys
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.types import AcceleratorType, CapacityType
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,

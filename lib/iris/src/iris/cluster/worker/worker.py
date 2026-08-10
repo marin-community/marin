@@ -34,8 +34,10 @@ from iris.cluster.stats.tables import (
     WorkerStatus,
     build_worker_stat,
 )
-from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType
-from iris.cluster.types import TaskAttempt as TaskAttemptId
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
 from iris.cluster.worker.control import WorkerController, WorkerRegistration, WorkerServer
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -59,6 +61,8 @@ from iris.resources.endpoint import (
     ExecResult,
     ProfileConfiguration,
 )
+from iris.resources.names import AttemptUid
+from iris.resources.names import TaskAttempt as TaskAttemptId
 from iris.resources.state import TaskState
 from iris.resources.worker import (
     AttemptStatus,

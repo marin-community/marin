@@ -1,7 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from iris.resources.job import JobQuery
 from iris.resources.source import SourceState
+
+
+def test_exact_job_query_excludes_descendants(journey):
+    root = journey.submit("exact-job")
+    child = journey.submit_child(root, "child")
+
+    page = journey.controller.controller.list_jobs(JobQuery(resource_id=root.wire_id, page_size=1))
+
+    assert [job.identity.key.resource_id for job in page.items] == [root.wire_id]
+    assert child.wire_id != root.wire_id
 
 
 def test_global_task_view_spans_jobs_and_backends_with_exact_current_attempts(multi_backend_journey):

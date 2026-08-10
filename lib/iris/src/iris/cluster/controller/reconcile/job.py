@@ -9,8 +9,8 @@ from iris.cluster.controller.reconcile.policy import ERROR_STATES
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
-    JobName,
 )
+from iris.resources.names import JobName
 from iris.resources.state import JobState, TaskState
 
 

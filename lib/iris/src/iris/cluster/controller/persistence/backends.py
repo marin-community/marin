@@ -23,21 +23,24 @@ from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.operations.worker import fail as fail_workers
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.persistence.reads import ControlSnapshot, ReconcileRow
 from iris.cluster.controller.persistence.transition_reader import load_transition_snapshot
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
+from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
+from iris.cluster.controller.snapshot import ControlSnapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
-    AttemptUid,
-    JobName,
     UserBudgetDefaults,
-    WorkerId,
     WorkerStatus,
     WorkerStatusMap,
     WorkerUsability,
 )
 from iris.resources.attempt import AttemptLaunchTemplate
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 
 # Failure reason stamped on a healthy slice sibling reaped alongside a dead worker.

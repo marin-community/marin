@@ -26,7 +26,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 
 from .conftest import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config

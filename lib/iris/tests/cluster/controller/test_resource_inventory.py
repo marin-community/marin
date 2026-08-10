@@ -24,7 +24,10 @@ from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.persistence.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.types import DEFAULT_BACKEND_ID, UserBudgetDefaults
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+)
 from iris.resources.endpoint import EndpointQuery
 from iris.resources.errors import ResourceNotFound
 from iris.resources.identity import NodeLocator, ResourceKind, SliceLocator

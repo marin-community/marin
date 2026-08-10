@@ -53,7 +53,10 @@ from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.platforms.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    AcceleratorType,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory

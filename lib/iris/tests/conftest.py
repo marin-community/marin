@@ -31,8 +31,12 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
-from iris.cluster.types import AcceleratorType, CapacityType, JobName
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
 from iris.managed_thread import thread_container_scope
+from iris.resources.names import JobName
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 

@@ -18,12 +18,12 @@ from typing import Protocol
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import PeerConfig
-from iris.cluster.types import JobName
 from iris.resources.action import ActionReceipt
 from iris.resources.endpoint import EndpointAccess, ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.resources.execution import ResourceSpec
 from iris.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
 from iris.resources.job import JobSpec
+from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
 
 

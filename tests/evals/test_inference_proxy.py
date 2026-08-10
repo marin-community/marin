@@ -16,13 +16,13 @@ import httpx
 import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
-from iris.cluster.types import EndpointAccess, JobName
+from iris.resources.endpoint import EndpointAccess, EndpointDetail, EndpointQuery, EndpointSummary, EndpointToken
 from iris.resources.endpoint import (
     EndpointAccess as ResourceEndpointAccess,
 )
-from iris.resources.endpoint import EndpointDetail, EndpointQuery, EndpointSummary, EndpointToken
 from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
 from iris.resources.job import JobSummary
+from iris.resources.names import JobName
 from iris.resources.source import Page
 from iris.rpc import job_pb2
 from marin.execution.lazy import lower
@@ -679,7 +679,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert endpoint_name == minted[0][0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
-    assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
+    assert register_kwargs["access"] is EndpointAccess.LINK
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:

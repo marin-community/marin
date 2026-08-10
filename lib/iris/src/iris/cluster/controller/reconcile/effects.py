@@ -25,7 +25,10 @@ from enum import StrEnum
 from rigging.timing import Timestamp
 
 from iris.cluster.stats.tables import TaskEventSeverity
-from iris.cluster.types import JobName, WorkerId
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 
 # ---------------------------------------------------------------------------
 # Per-entity row deltas

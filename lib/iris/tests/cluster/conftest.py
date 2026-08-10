@@ -14,19 +14,23 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence.database import ControllerDB
-from iris.cluster.controller.persistence.operations.task import Assignment
-from iris.cluster.controller.persistence.reads import ControlSnapshot
 from iris.cluster.controller.persistence.reconcile import dispatch
 from iris.cluster.controller.persistence.reconcile.commit import commit_effects
 from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.scheduling.decision import Assignment
+from iris.cluster.controller.snapshot import ControlSnapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import get_thread_container
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.legacy.controller_service import LegacyControllerService

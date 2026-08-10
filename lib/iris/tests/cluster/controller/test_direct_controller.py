@@ -23,7 +23,8 @@ from iris.cluster.controller.persistence.reconcile import dispatch
 from iris.cluster.controller.persistence.schema import tasks_table
 from iris.cluster.controller.persistence.writes import set_user_budget, stamp_backend
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import UserBudgetDefaults
+from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import RateLimiter, Timestamp

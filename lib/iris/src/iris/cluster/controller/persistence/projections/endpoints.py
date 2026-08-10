@@ -27,7 +27,9 @@ from iris.cluster.controller.persistence import database as db
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.projections.base import Projection
 from iris.cluster.controller.persistence.schema import endpoints_table, tasks_table
-from iris.cluster.types import TERMINAL_TASK_STATES, EndpointAccess, JobName
+from iris.cluster.types import TERMINAL_TASK_STATES
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.names import JobName
 
 
 @dataclass(frozen=True)
@@ -39,9 +41,9 @@ class EndpointQuery:
     limit: int | None = None
 
 
-def access_from_db(value: int | None) -> int:
+def access_from_db(value: int | None) -> EndpointAccess:
     """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess value."""
-    return EndpointAccess.ENDPOINT_ACCESS_PRIVATE if value is None else value
+    return EndpointAccess.from_storage(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +59,7 @@ class EndpointRow:
     # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
     # A passed deadline is hidden from reads and swept by ``sweep_expired``.
     lease_deadline: Timestamp | None = None
-    # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
-    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    access: EndpointAccess = EndpointAccess.PRIVATE
     # Owning peer cluster id when this row is mirrored from a federated child; None
     # for a locally-registered endpoint. A remote row's ``address`` is the peer-side
     # bind (display only); /proxy forwards to the peer's controller instead.
@@ -371,7 +372,7 @@ class EndpointsProjection(Projection):
                 "metadata_json": endpoint.metadata,
                 "registered_at_ms": endpoint.registered_at,
                 "lease_deadline_ms": endpoint.lease_deadline,
-                "access": endpoint.access,
+                "access": endpoint.access.to_storage(),
                 "peer_id": endpoint.peer_id,
             },
         )
@@ -424,7 +425,7 @@ class EndpointsProjection(Projection):
                     "metadata_json": row.metadata,
                     "registered_at_ms": row.registered_at,
                     "lease_deadline_ms": row.lease_deadline,
-                    "access": row.access,
+                    "access": row.access.to_storage(),
                     "peer_id": peer_id,
                 },
             )

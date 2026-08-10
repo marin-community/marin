@@ -42,7 +42,11 @@ from sqlalchemy import (
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
-from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
+from iris.cluster.types import LOCAL_CLUSTER
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 

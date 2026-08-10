@@ -6,7 +6,7 @@ import json
 import pytest
 from iris.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.constraints import ConstraintMode, ConstraintOp
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 
 
 @pytest.fixture(autouse=True)

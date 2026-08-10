@@ -28,9 +28,10 @@ from iris.cluster.controller.persistence.federation import ControllerFederationS
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.protocol import FederationBackendObservation, FederationSyncBatch, HandoffDelivery
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import get_thread_container
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE

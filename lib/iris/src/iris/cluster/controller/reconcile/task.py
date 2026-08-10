@@ -25,8 +25,8 @@ from iris.cluster.controller.task_state import (
     TaskDetailRow,
     task_is_finished,
 )
-from iris.cluster.types import (
-    TERMINAL_TASK_STATES,
+from iris.cluster.types import TERMINAL_TASK_STATES
+from iris.resources.names import (
     JobName,
     WorkerId,
 )

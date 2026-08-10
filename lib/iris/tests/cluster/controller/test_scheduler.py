@@ -21,9 +21,9 @@ from iris.cluster.controller.persistence.json_codec import (
     device_counts_from_json,
     device_variant_from_json,
 )
-from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.schema import jobs_table, worker_attributes_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -34,8 +34,16 @@ from iris.cluster.controller.scheduling.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+    UserBudgetDefaults,
+)
 from iris.cluster.worker.env_probe import _build_worker_attributes
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.legacy.job_codec import attribute_value_to_proto, constraint_to_proto
 from iris.time_proto import duration_to_proto

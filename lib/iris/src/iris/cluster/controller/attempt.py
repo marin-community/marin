@@ -27,10 +27,7 @@ from iris.cluster.controller.resource_identity import (
 )
 from iris.cluster.controller.task import TaskResources
 from iris.cluster.federation.protocol import FederationDirection
-from iris.cluster.types import (
-    LOCAL_ADMIN_SUBMITTER,
-    JobName,
-)
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult
 from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject
 from iris.resources.errors import (
@@ -47,6 +44,7 @@ from iris.resources.identity import (
     ResourceKind,
     TaskIdentity,
 )
+from iris.resources.names import JobName
 
 
 class AttemptResources:
@@ -343,13 +341,12 @@ class AttemptResources:
                 authority,
                 row.job_id,
                 row.submitted_at_ms,
-                handoff_nonce=str(getattr(row, "handoff_nonce", "") or ""),
+                handoff_nonce=str(row.handoff_nonce or ""),
             ),
         )
 
     def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        direction = getattr(row, "direction", None)
-        if direction == int(FederationDirection.RECEIVED):
+        if row.direction == int(FederationDirection.RECEIVED):
             return str(row.peer_id)
         return self._dependencies.cluster_id
 

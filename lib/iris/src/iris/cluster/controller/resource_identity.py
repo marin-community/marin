@@ -7,13 +7,11 @@ import uuid
 
 from rigging.timing import Timestamp
 
-from iris.cluster.types import (
-    LOCAL_CLUSTER,
-    JobName,
-)
+from iris.cluster.types import LOCAL_CLUSTER
 from iris.resources.identity import (
     ResourceKind,
 )
+from iris.resources.names import JobName
 
 _RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
 _RESOURCE_UID_PREFIX = "iris-resource-v2"

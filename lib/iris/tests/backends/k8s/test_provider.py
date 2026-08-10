@@ -36,7 +36,6 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
-from iris.cluster.types import JobName
 from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
@@ -47,6 +46,7 @@ from iris.resources.endpoint import (
     ThreadsProfileConfiguration,
 )
 from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration

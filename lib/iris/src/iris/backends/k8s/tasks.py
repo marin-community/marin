@@ -50,7 +50,7 @@ from iris.backends.status import (
 )
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
+from iris.cluster.controller.reconcile.apply import apply_dispatch_updates
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -111,7 +111,7 @@ from iris.cluster.stats.tables import (
     build_task_stat,
     stats_timestamp,
 )
-from iris.cluster.types import JobName, WellKnownAttribute, WorkerId
+from iris.cluster.types import WellKnownAttribute
 from iris.resources.attempt import AttemptLaunch
 from iris.resources.endpoint import (
     CpuProfileConfiguration,
@@ -126,6 +126,10 @@ from iris.resources.endpoint import (
 )
 from iris.resources.execution import GpuDevice, TpuDevice, get_gpu_count
 from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.resources.worker import ResourceUsage

@@ -21,10 +21,8 @@ from iris.cluster.controller.persistence.projections.endpoints import (
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.types import (
-    WorkerId,
-)
 from iris.resources.log import LogReader
+from iris.resources.names import WorkerId
 
 
 class ResourceRuntime(Protocol):

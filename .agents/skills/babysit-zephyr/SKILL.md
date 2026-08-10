@@ -44,21 +44,21 @@ uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memo
 
 The command prints a job ID on success. Note it for monitoring.
 
-## Stopping a Job
+## Cancelling a Job
 
-Always ask the user before stopping. Stopping kills all child jobs (coordinators, workers).
+Always ask the user before cancelling. Cancelling the parent also cancels its
+child coordinators and workers according to the Job's preemption policy.
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job stop <JOB_ID>
+uv run iris --config lib/iris/config/marin.yaml job cancel <JOB_ID>
 ```
 
 ## Monitoring
 
 ### Health Checks
 
-Check child job states via the Iris CLI (returns per-task state and resourceUsage):
+Check child Task states through the resource inventory:
 ```bash
-# diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
-uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
+uv run iris --config lib/iris/config/marin.yaml task list --prefix <JOB_ID>
 ```
 
 A healthy zephyr job has:
@@ -74,8 +74,8 @@ The coordinator logs a progress line every 5s:
 
 Fetch via the Iris CLI:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller get-task-logs \
-  --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
+uv run iris --config lib/iris/config/marin.yaml job logs \
+  <COORD_JOB_ID> --max-lines 5000
 ```
 
 **Caveat**: With large worker pools, `pull_task` operations flood the log buffer (#3707). Filter when parsing:
@@ -91,8 +91,8 @@ for entry in task_logs:
 
 When logs are flooded, a thread dump tells you if the coordinator is alive and working:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller profile-task \
-  --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
+uv run iris --config lib/iris/config/marin.yaml attempt profile \
+  <COORD_JOB_ID>/0 --type thread --duration 1
 ```
 
 Key patterns:
@@ -114,8 +114,8 @@ After submitting, monitor in escalating stages:
 
 ## Restarting After Failure
 
-1. Ask the user if it's okay to stop and restart.
-2. Stop the job.
+1. Ask the user if it's okay to cancel and restart.
+2. Cancel the exact parent Job.
 3. Get the run command (or reuse the previous one).
 4. Submit and resume monitoring.
 

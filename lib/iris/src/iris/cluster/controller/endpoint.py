@@ -35,9 +35,6 @@ from iris.cluster.controller.source_status import (
     peer_source_statuses,
 )
 from iris.cluster.federation.protocol import FederationDirection
-from iris.cluster.types import (
-    JobName,
-)
 from iris.resources.endpoint import (
     EndpointAccess,
     EndpointDetail,
@@ -52,6 +49,7 @@ from iris.resources.identity import (
     ResourceKey,
     ResourceKind,
 )
+from iris.resources.names import JobName
 from iris.resources.source import (
     Page,
 )
@@ -203,7 +201,7 @@ class EndpointResources:
             name=row.name,
             task=task,
             execution_cluster_id=execution,
-            access=EndpointAccess.from_storage(row.access),
+            access=row.access,
             lease_deadline=row.lease_deadline,
         )
 
@@ -236,8 +234,7 @@ class EndpointResources:
         return coordinates
 
     def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        direction = getattr(row, "direction", None)
-        if direction == int(FederationDirection.RECEIVED):
+        if row.direction == int(FederationDirection.RECEIVED):
             return str(row.peer_id)
         return self._dependencies.cluster_id
 

@@ -34,9 +34,9 @@ from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.json_codec import reconstruct_job_spec
 from iris.cluster.controller.persistence.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.persistence.schema import job_config_table, job_workdir_files_table
-from iris.cluster.types import JobName
 from iris.resources.attempt import AttemptLaunchTemplate
 from iris.resources.job import JobSpec
+from iris.resources.names import JobName
 
 # Size matches the worst-case concurrent job count expected in a single
 # controller process.

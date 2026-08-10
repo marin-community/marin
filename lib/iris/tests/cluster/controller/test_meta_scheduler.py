@@ -21,7 +21,8 @@ from iris.cluster.controller.scheduling.meta_scheduler import (
     build_backend_index,
     route_jobs_to_backends,
 )
-from iris.cluster.types import AcceleratorType, JobName
+from iris.cluster.types import AcceleratorType
+from iris.resources.names import JobName
 
 
 def _eq(key: str, value: str) -> Constraint:

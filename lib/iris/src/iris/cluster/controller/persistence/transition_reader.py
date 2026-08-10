@@ -16,7 +16,11 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 
 
 def load_transition_snapshot(

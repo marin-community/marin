@@ -19,7 +19,7 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.legacy.controller_service import LegacyControllerService

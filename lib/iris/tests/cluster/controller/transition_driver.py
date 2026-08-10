@@ -4,7 +4,7 @@
 """Test driver for landing task-state updates through the production path.
 
 The live controller lands worker-reported task states through the reconcile
-loop (``ops.worker.apply_reconcile``). To keep tests exercising
+loop (``controller.reconcile.apply.apply_worker_reconcile``). To keep tests exercising
 the same code the controller runs, ``apply_task_observations`` rebuilds a
 per-worker batch of :class:`WorkerTaskUpdates` into native reconcile
 ``AttemptObservation`` records and applies them through that production verb.
@@ -14,11 +14,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from iris.cluster.controller.persistence.database import Tx
-from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
-from iris.cluster.controller.persistence.operations.worker import apply_reconcile
 from iris.cluster.controller.persistence.reconcile.commit import commit_effects
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.persistence.schema import task_attempts_table
+from iris.cluster.controller.reconcile.apply import apply_dispatch_updates, apply_worker_reconcile
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.reconcile.worker import (
@@ -32,8 +31,12 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.resources.attempt import AttemptObservation
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -43,7 +46,7 @@ from sqlalchemy import select
 class CursorTransitionReader:
     """A ``TransitionReader`` backed by an open write transaction.
 
-    Lets the test drivers author effects through the production ``apply_reconcile``
+    Lets the test drivers author effects through the production ``apply_worker_reconcile``
     / ``apply_dispatch_updates`` path while loading the snapshot from the very
     transaction they commit into — same ``cur``, same explicit ``now``, no extra
     ``Timestamp.now()`` and no second connection — so a frozen-clock replay
@@ -95,7 +98,7 @@ def commit_reconcile(
     transaction. Loads from ``cur`` so the snapshot reflects the same transaction
     the effects commit into.
     """
-    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    effects = apply_worker_reconcile(CursorTransitionReader(cur), plan_results, now=now)
     commit_effects(cur, effects)
     return effects
 
@@ -167,7 +170,7 @@ def apply_task_observations(
     # Author the effects through the relocated (backend-side) reconcile glue,
     # reading from this write transaction, then commit them — the controller now
     # does these as two separate steps.
-    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    effects = apply_worker_reconcile(CursorTransitionReader(cur), plan_results, now=now)
     commit_effects(cur, effects)
     build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
     if build_events:

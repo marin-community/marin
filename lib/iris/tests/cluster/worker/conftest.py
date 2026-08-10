@@ -13,13 +13,16 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
-from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.endpoint import ProfileConfiguration
 from iris.resources.execution import Entrypoint, Environment, ResourceSpec
 from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from rigging.timing import Duration
 
 

@@ -30,8 +30,9 @@ import click
 from connectrpc.errors import ConnectError
 from iris.cli.connect import connect_controller, rpc_client
 from iris.client import IrisClient
-from iris.cluster.types import JobName, is_task_finished
+from iris.cluster.types import is_task_finished
 from iris.resources.job import JobQuery, JobSummary
+from iris.resources.names import JobName
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import query_pb2

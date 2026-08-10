@@ -11,8 +11,11 @@ from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
 
 from iris.cluster.log_highlights import is_progress_bar_line
-from iris.cluster.types import JobName, TaskAttempt
 from iris.resources.log import LogLevel, LogMatchScope
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 
 CONTROLLER_LOG_KEY = "/system/controller"
 _WORKER_LOG_PREFIX = "/system/worker/"

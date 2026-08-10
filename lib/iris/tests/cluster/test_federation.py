@@ -9,6 +9,7 @@ live backends, the ListPeers view, and the submit router's decision matrix
 """
 
 from dataclasses import replace
+from typing import cast
 
 import pydantic
 import pytest
@@ -20,6 +21,8 @@ from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.protocol import (
     FederationBackendObservation,
     FederationResourceAvailability,
+    FederationStore,
+    FederationSyncBatch,
     PeerCallError,
     PeerErrorCode,
 )
@@ -129,6 +132,42 @@ class _StubConnection:
         self.shutdown_count += 1
 
 
+class _SyncConnection(_StubConnection):
+    def __init__(self, peer_id: str):
+        super().__init__(())
+        self.peer_id = peer_id
+        self.cursors: list[str] = []
+
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
+        self.cursors.append(cursor)
+        return FederationSyncBatch(
+            deltas=(),
+            next_cursor=f"{self.peer_id}-{len(self.cursors)}",
+            cursor_stale=False,
+            endpoints=(),
+        )
+
+
+class _RejectingSyncStore:
+    def __init__(self) -> None:
+        self.cursors: dict[str, str] = {}
+        self.reject_peer = "bad"
+
+    def pending_handoffs(self):
+        return []
+
+    def pending_cancels(self):
+        return []
+
+    def read_cursor(self, peer_id: str) -> str:
+        return self.cursors.get(peer_id, "")
+
+    def apply_sync_batch(self, peer_id: str, deltas, *, next_cursor: str, cursor_stale: bool, endpoints=()) -> None:
+        if peer_id == self.reject_peer:
+            raise ValueError("conflicting retained mirror")
+        self.cursors[peer_id] = next_cursor
+
+
 def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
     return FederationPeer(peer_id, PeerConfig(controller_address="http://cw:10000"), connection)
 
@@ -236,6 +275,30 @@ def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
         finally:
             manager.stop()
     assert connection.shutdown_count == 1
+
+
+def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync(caplog):
+    bad_connection = _SyncConnection("bad")
+    good_connection = _SyncConnection("good")
+    store = _RejectingSyncStore()
+    manager = FederationManager(
+        [_peer("bad", bad_connection), _peer("good", good_connection)],
+        threads=get_thread_container(),
+        store=cast(FederationStore, store),
+        cluster_id="parent",
+    )
+
+    manager.sync_once()
+
+    assert store.cursors == {"good": "good-1"}
+    assert "peer bad at cursor '' was rejected" in caplog.text
+
+    store.reject_peer = ""
+    manager.sync_once()
+
+    assert store.cursors == {"bad": "bad-2", "good": "good-2"}
+    assert bad_connection.cursors == ["", ""]
+    assert good_connection.cursors == ["", "good-1"]
 
 
 def test_manager_without_peers_is_inert():

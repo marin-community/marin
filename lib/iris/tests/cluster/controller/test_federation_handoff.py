@@ -51,12 +51,14 @@ from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
-    AttemptUid,
-    JobName,
     WellKnownAttribute,
 )
 from iris.managed_thread import get_thread_container
 from iris.resources.execution import ResourceSpec
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.rpc.endpoint_service import EndpointServiceImpl

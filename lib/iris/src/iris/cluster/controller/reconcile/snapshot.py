@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.task_state import ActiveTaskRow, AttemptRecord, TaskDetailRow
-from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 
 

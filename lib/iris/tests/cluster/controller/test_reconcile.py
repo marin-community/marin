@@ -9,7 +9,7 @@ Three layers, exercised in order:
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
    fake stub factory and synthesizes ``WorkerReconcileResult.observations``.
-3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
+3. **Apply + e2e** — ``apply_worker_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through the production control
    tick's reconcile phase (``reconcile_once``).
 """
@@ -37,7 +37,6 @@ from iris.backends.rpc.backend import (
 from iris.cluster.controller.persistence import operations as ops
 from iris.cluster.controller.persistence import writes
 from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
-from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.persistence.schema import task_attempts_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -56,6 +55,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
@@ -64,10 +64,18 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+)
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
 from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.worker_client import RpcWorkerClient
@@ -1623,7 +1631,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================
 #
-# ``apply_reconcile`` (the batch verb) shares one Overlay overlay across
+# ``apply_worker_reconcile`` (the batch verb) shares one Overlay overlay across
 # every worker in a batch. When a coscheduled member's terminal update requeues
 # its sibling, the sibling's PENDING task state + PREEMPTED attempt state are
 # written into the overlay only. Reconcile guards that later read the raw
@@ -1724,7 +1732,7 @@ def _apply_batch(
 ):
     """Apply a multi-worker reconcile batch through the production verb.
 
-    ``results`` order is the per-worker processing order (``apply_reconcile``
+    ``results`` order is the per-worker processing order (``apply_worker_reconcile``
     iterates it in order), so it controls which worker is seen first.
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
@@ -1775,7 +1783,7 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
 def test_coscheduled_rpc_failure_does_not_split_slice():
     """#2: an RPC failure must not fabricate WORKER_FAILED for a same-batch requeued sibling.
 
-    One batch through the production ``apply_reconcile`` verb: worker W0 succeeds
+    One batch through the production ``apply_worker_reconcile`` verb: worker W0 succeeds
     reporting t0=WORKER_FAILED (with preemption budget, so t0 -> PENDING, which
     requeues sibling t1 to PENDING in the overlay), and worker W1's reconcile RPC
     fails. Processing W0 first means the RPC-failure synthesis for W1 runs after

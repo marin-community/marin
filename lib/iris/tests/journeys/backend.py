@@ -23,13 +23,17 @@ from iris.backends.protocol import (
     TaskTarget,
 )
 from iris.backends.status import AutoscalerStatus, BackendStatus, KubernetesStatus
-from iris.cluster.controller.persistence.operations.task import apply_dispatch_updates
+from iris.cluster.controller.reconcile.apply import apply_dispatch_updates
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp

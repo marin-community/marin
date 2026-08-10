@@ -8,10 +8,13 @@ from dataclasses import dataclass
 from rigging.provenance import Provenance
 from rigging.timing import Duration
 
-from iris.cluster.types import AttemptUid, JobName
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
 from iris.resources.endpoint import ExecResult, ProfileConfiguration
 from iris.resources.job import ContainerProfile, CoschedulingConfig, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.resources.worker import (

@@ -27,8 +27,12 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.task_state import ActiveTaskRow
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
+from iris.cluster.types import TERMINAL_JOB_STATES
 from iris.resources.job import JobPreemptionPolicy
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import JobState, TaskState
 
 _T = TypeVar("_T")

@@ -20,8 +20,9 @@ from iris.cluster.controller.persistence.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.protocol import FederationBackendObservation
-from iris.cluster.types import LOCAL_CLUSTER, JobName
+from iris.cluster.types import LOCAL_CLUSTER
 from iris.managed_thread import get_thread_container
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from rigging.server_auth import VerifiedIdentity, identity_scope

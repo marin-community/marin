@@ -40,9 +40,13 @@ from iris.cluster.controller.persistence.reads import (
 )
 from iris.cluster.controller.persistence.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults
+from iris.cluster.types import UserBudgetDefaults
 from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate
 from iris.resources.job import CoschedulingConfig
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.state import TaskState
 
 
@@ -50,7 +54,7 @@ from iris.resources.state import TaskState
 class DispatchBatch:
     """The dispatch drain a cluster backend's reconcile tick consumes.
 
-    Rides on :class:`~iris.cluster.controller.persistence.reads.ControlSnapshot` as
+    Rides on :class:`~iris.cluster.controller.snapshot.ControlSnapshot` as
     ``tasks_to_run`` / ``running_tasks``: tasks the controller promoted to
     ASSIGNED this tick plus the active null-worker roster to poll.
     """

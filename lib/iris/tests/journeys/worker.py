@@ -12,7 +12,7 @@ from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.runtime import ControllerConfig
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import ThreadContainer
 from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
 from iris.resources.identity import NodeIdentity, NodeLocator, ResourceKey, ResourceKind
@@ -23,6 +23,7 @@ from iris.resources.job import (
     JobSpec,
     PriorityBand,
 )
+from iris.resources.names import JobName
 from iris.resources.node import NodeDetail, NodeQuery
 from iris.resources.state import TaskState
 from iris.resources.task import TaskDetail

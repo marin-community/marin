@@ -71,8 +71,6 @@ from iris.cluster.controller.persistence import reads, writes
 from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.federation import build_queued_candidates
-from iris.cluster.controller.persistence.operations.task import Assignment
-from iris.cluster.controller.persistence.operations.worker import apply_reconcile
 from iris.cluster.controller.persistence.reads import SchedulableWorker
 from iris.cluster.controller.persistence.schema import (
     task_attempts_table,
@@ -80,9 +78,11 @@ from iris.cluster.controller.persistence.schema import (
     worker_attributes_table,
 )
 from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.reconcile.apply import apply_worker_reconcile
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import (
@@ -101,14 +101,16 @@ from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     AcceleratorType,
     CapacityType,
-    JobName,
     UserBudgetDefaults,
-    WorkerId,
     is_job_finished,
 )
 from iris.managed_thread import get_thread_container
 from iris.resources.endpoint import ProfileRequest, ProfileResult
 from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.system import ProcessInfo
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
@@ -180,7 +182,7 @@ def run_worker_daemon_reconcile(
     on ``self._pending_dead``."""
     assert store is not None, "worker-daemon backend reconciled before worker store attached"
     now = Timestamp.now()
-    effects = apply_reconcile(store, worker_results, now=now)
+    effects = apply_worker_reconcile(store, worker_results, now=now)
     events = transport_events + [
         WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
     ]

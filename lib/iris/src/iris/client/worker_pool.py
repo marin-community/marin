@@ -47,9 +47,9 @@ from iris.actor.resolver import Resolver
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.client.job_info import get_job_info
-from iris.cluster.types import JobName
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 

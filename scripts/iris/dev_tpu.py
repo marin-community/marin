@@ -28,9 +28,10 @@ from iris.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
-from iris.cluster.types import JobName, WellKnownAttribute
+from iris.cluster.types import WellKnownAttribute
 from iris.resources.execution import Entrypoint, ResourceSpec, tpu_device
 from iris.resources.identity import NodeLocator
+from iris.resources.names import JobName
 from iris.resources.node import NodeDetail
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value

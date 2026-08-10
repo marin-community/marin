@@ -55,7 +55,7 @@ from iris.resources.source import Freshness, Page, ResourceSourceStatus, SourceS
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import resource_pb2
-from iris.rpc.resource_codec import job_spec_from_proto
+from iris.rpc.resource_codec import job_spec_from_proto, resource_spec_from_proto
 from iris.time_proto import timestamp_from_proto, timestamp_to_proto
 
 _RESOURCE_KIND_TO_PROTO = {
@@ -222,6 +222,7 @@ def _page[T](items: tuple[T, ...], value: resource_pb2.PageInfo) -> Page[T]:
 
 def job_query_to_proto(value: JobQuery) -> resource_pb2.JobQuery:
     result = resource_pb2.JobQuery(
+        resource_id=value.resource_id or "",
         owner_id=value.owner_id or "",
         job_id_prefix=value.job_id_prefix or "",
         states=value.states,
@@ -248,6 +249,8 @@ def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
         finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
         error_message=value.error_message,
         pending_reason=value.pending_reason,
+        exit_code=value.exit_code if value.HasField("exit_code") else None,
+        resources=resource_spec_from_proto(value.resources),
     )
 
 

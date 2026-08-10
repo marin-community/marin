@@ -26,13 +26,13 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.types import (
-    TERMINAL_JOB_STATES,
+from iris.cluster.types import TERMINAL_JOB_STATES
+from iris.resources.attempt import AttemptCounts
+from iris.resources.names import (
     AttemptUid,
     JobName,
     WorkerId,
 )
-from iris.resources.attempt import AttemptCounts
 
 
 def _build_multi_root_descendants_stmt():

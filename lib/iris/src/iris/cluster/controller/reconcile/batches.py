@@ -52,10 +52,12 @@ from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
+)
+from iris.resources.job import JobPreemptionPolicy
+from iris.resources.names import (
     JobName,
     WorkerId,
 )
-from iris.resources.job import JobPreemptionPolicy
 from iris.resources.state import JobState, TaskState
 
 logger = logging.getLogger(__name__)

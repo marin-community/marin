@@ -17,13 +17,13 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
 )
-from iris.cluster.types import (
-    TERMINAL_TASK_STATES,
+from iris.cluster.types import TERMINAL_TASK_STATES
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.names import (
     AttemptUid,
     JobName,
     WorkerId,
 )
-from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
 from iris.resources.state import TaskState
 
 logger = logging.getLogger(__name__)
@@ -274,7 +274,9 @@ def filter_observations_to_plan(
         else:
             dropped += 1
     if dropped:
-        logger.warning("apply_reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped)
+        logger.warning(
+            "apply_worker_reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped
+        )
     return kept
 
 

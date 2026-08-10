@@ -8,7 +8,10 @@ from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 
-from iris.cluster.types import JobName, WorkerId
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(

@@ -12,9 +12,12 @@ from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.types import AttemptUid, JobName
 from iris.resources.attempt import AttemptLaunch, AttemptObservation
 from iris.resources.execution import Device
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.state import TaskState
 
 

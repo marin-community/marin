@@ -37,15 +37,13 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
-from iris.cluster.types import (
-    JobName,
-    is_job_finished,
-)
+from iris.cluster.types import is_job_finished
 from iris.hooks.multigpu import build_multigpu_hook
 from iris.resources.endpoint import EndpointQuery
 from iris.resources.execution import Device, EnvironmentSpec, GpuDevice, ResourceSpec, tpu_device
 from iris.resources.execution import Entrypoint as IrisEntrypoint
 from iris.resources.job import CoschedulingConfig, ExistingJobPolicy, PriorityBand
+from iris.resources.names import JobName
 from iris.resources.state import JobState
 from iris.rpc import actor_pb2
 from iris.rpc.errors import is_retryable_error
@@ -600,13 +598,15 @@ class IrisActorGroup:
             # missing interpreter). Without this check we'd spin for the full
             # timeout waiting for endpoints that will never appear.
             client = self._get_client()
-            status = client.current_job(self._job_id).status()
-            if is_job_finished(status.state):
+            job = client.current_job(self._job_id)
+            state = job.state_only()
+            if is_job_finished(state):
+                status = job.status()
                 error = status.error_message or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "
-                    f"Job state={status.state}, error={error}"
+                    f"Job state={state}, error={error}"
                 )
 
             elapsed = time.monotonic() - start
@@ -618,7 +618,7 @@ class IrisActorGroup:
     def is_done(self) -> bool:
         """Return True if the Iris worker job has permanently terminated."""
         client = self._get_client()
-        return is_job_finished(client.current_job(self._job_id).status().state)
+        return is_job_finished(client.current_job(self._job_id).state_only())
 
     def shutdown(self) -> None:
         """Terminate the actor job."""

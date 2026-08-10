@@ -14,7 +14,8 @@ from iris.cluster.controller.endpoint_registry import (
     EndpointTaskNotFound,
     EndpointTaskTerminal,
 )
-from iris.cluster.types import JobName
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
 
@@ -45,7 +46,11 @@ class EndpointServiceImpl:
                 task_id=task_id,
                 attempt_id=request.attempt_id,
                 metadata=dict(request.metadata),
-                access=request.access,
+                access=(
+                    EndpointAccess.LINK
+                    if request.access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
+                    else EndpointAccess.PRIVATE
+                ),
                 requested_lease=requested_lease,
             )
         except EndpointTaskNotFound as exc:
@@ -101,7 +106,7 @@ class EndpointServiceImpl:
                     address=row.address,
                     task_id=row.task_id.to_wire(),
                     metadata=row.metadata,
-                    access=row.access,
+                    access=row.access.to_storage(),
                     peer_id=row.peer_id or "",
                 )
                 for row in rows

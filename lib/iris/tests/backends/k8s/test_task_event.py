@@ -23,7 +23,7 @@ from iris.backends.k8s.tasks import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.test_util import FakeStatsTable
 
 from .conftest import (

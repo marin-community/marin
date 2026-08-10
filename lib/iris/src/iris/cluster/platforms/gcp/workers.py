@@ -63,7 +63,11 @@ from iris.cluster.platforms.types import (
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+    GcpSliceMode,
+)
 from iris.cluster.worker.env_probe import construct_worker_id
 
 logger = logging.getLogger(__name__)

@@ -21,9 +21,12 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileRequest,
     WorkerReconcileResult,
 )
-from iris.cluster.types import AttemptUid, WorkerId
 from iris.resources.attempt import AttemptObservation
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import (
+    AttemptUid,
+    WorkerId,
+)
 from iris.resources.state import TaskState
 from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2, worker_pb2

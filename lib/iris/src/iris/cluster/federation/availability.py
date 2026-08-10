@@ -46,7 +46,7 @@ from typing import NamedTuple
 
 from iris.cluster.constraints import AVAILABLE_PREFIX, AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.federation.router import backend_satisfies
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 

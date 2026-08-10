@@ -5,8 +5,8 @@
 
 import pytest
 from iris.cluster.log_keys import build_log_source, classify_log_level
-from iris.cluster.types import JobName
 from iris.resources.log import LogLevel, LogMatchScope
+from iris.resources.names import JobName
 
 
 @pytest.mark.parametrize(

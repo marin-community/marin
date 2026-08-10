@@ -12,7 +12,7 @@ three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.recon
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). Worker and placement state
 never flow controller→backend: a backend sources its own workers through a
-:class:`~iris.cluster.controller.persistence.backends.BackendWorkerStore` and decides
+:class:`BackendWorkerStore` and decides
 placement itself. Backends perform
 backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
 read or write the controller database directly.
@@ -39,8 +39,6 @@ from iris.backends.status import AutoscalerStatus, BackendStatus
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
-from iris.cluster.controller.persistence.operations.task import Assignment
-from iris.cluster.controller.persistence.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
@@ -52,7 +50,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
+from iris.cluster.controller.scheduling.decision import Assignment, apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
     SchedulingOrder,
@@ -71,18 +69,21 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
+from iris.cluster.controller.snapshot import ControlSnapshot
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
-    AttemptUid,
-    JobName,
     PendingTask,
     UserBudgetDefaults,
-    WorkerId,
     WorkerStatusMap,
 )
 from iris.resources.attempt import AttemptLaunch
 from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.system import ProcessInfo
 
 logger = logging.getLogger(__name__)

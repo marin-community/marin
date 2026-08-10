@@ -52,6 +52,7 @@ def _rpc_imports(paths: list[Path]) -> frozenset[tuple[str, str]]:
 
 def test_native_resource_and_controller_kernel_packages_do_not_import_rpc_transport() -> None:
     paths = [path for package in _TRANSPORT_FREE_PACKAGES for path in (_SOURCE_ROOT / package).rglob("*.py")]
+    paths.append(_SOURCE_ROOT / "cluster" / "types.py")
     paths.extend(
         path
         for path in (_SOURCE_ROOT / "cluster" / "controller").rglob("*.py")
@@ -65,6 +66,26 @@ def test_native_resource_and_controller_kernel_packages_do_not_import_rpc_transp
     violations = _rpc_imports(paths)
 
     assert not violations, f"RPC imports in native resource/controller packages: {sorted(violations)}"
+
+
+def test_resources_and_backends_do_not_reach_through_controller_persistence() -> None:
+    violations: list[tuple[str, str]] = []
+    for package in ("resources", "backends"):
+        for path in (_SOURCE_ROOT / package).rglob("*.py"):
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = tuple(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    modules = (node.module or "",)
+                else:
+                    continue
+                violations.extend(
+                    (path.relative_to(_SOURCE_ROOT).as_posix(), module)
+                    for module in modules
+                    if module.startswith("iris.cluster.controller.persistence")
+                )
+    assert not violations, f"Controller persistence imports in native packages: {sorted(violations)}"
 
 
 def test_worker_core_does_not_import_iris_rpc_transport() -> None:

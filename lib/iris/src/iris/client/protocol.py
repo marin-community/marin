@@ -8,11 +8,11 @@ from typing import Protocol
 
 from rigging.timing import Duration
 
-from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
 from iris.resources.action import ActionReceipt
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail
 from iris.resources.endpoint import (
+    EndpointAccess,
     EndpointDetail,
     EndpointQuery,
     EndpointSummary,
@@ -32,9 +32,14 @@ from iris.resources.identity import (
 )
 from iris.resources.job import JobDetail, JobQuery, JobSpec, JobSummary
 from iris.resources.log import LogEntry, LogPage, LogQuery
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 from iris.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.resources.source import Page
+from iris.resources.state import JobState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 
 
@@ -46,6 +51,8 @@ class ResourceClientProtocol(Protocol):
     def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]: ...
 
     def describe_job(self, key: ResourceKey) -> JobDetail: ...
+
+    def job_state(self, identity: JobIdentity) -> JobState: ...
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]: ...
 
@@ -141,7 +148,7 @@ class ClusterClient(ResourceClientProtocol, Protocol):
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str: ...
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...

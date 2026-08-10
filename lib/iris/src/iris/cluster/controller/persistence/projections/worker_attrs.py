@@ -27,7 +27,7 @@ from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.json_codec import WorkerAttributeRow, attribute_value_from_row
 from iris.cluster.controller.persistence.projections.base import Projection
 from iris.cluster.controller.persistence.schema import worker_attributes_table
-from iris.cluster.types import WorkerId
+from iris.resources.names import WorkerId
 
 logger = logging.getLogger(__name__)
 

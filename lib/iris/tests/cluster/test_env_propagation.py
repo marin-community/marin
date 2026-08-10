@@ -17,10 +17,10 @@ import pytest
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.types import JobName
 from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.identity import JobIdentity, ResourceKey, ResourceKind
 from iris.resources.job import JobSpec
+from iris.resources.names import JobName
 
 
 def dummy_entrypoint():

@@ -15,7 +15,7 @@ from iris.cluster.controller.task_state import (
     ActiveTaskRow,
 )
 from iris.cluster.stats.tables import TaskEventSeverity
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.resources.state import TaskState
 
 

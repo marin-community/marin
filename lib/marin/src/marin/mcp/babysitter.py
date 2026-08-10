@@ -16,7 +16,6 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.types import JobName, TaskAttempt
 from iris.resources.attempt import AttemptSummary
 from iris.resources.endpoint import (
     CpuProfileConfiguration,
@@ -30,6 +29,7 @@ from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevi
 from iris.resources.identity import ResourceKey, ResourceKind
 from iris.resources.job import JobDetail, JobQuery, JobSummary
 from iris.resources.log import LogMatchScope
+from iris.resources.names import JobName, TaskAttempt
 from iris.resources.node import NodeHealth, NodeQuery, NodeSummary
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import job_pb2

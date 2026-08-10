@@ -36,7 +36,12 @@ from iris.cluster.platforms.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
-from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatus, WorkerUsability
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+    WorkerStatus,
+    WorkerUsability,
+)
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.platforms.conftest import (

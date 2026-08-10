@@ -11,7 +11,29 @@ from rigging.timing import Duration, Timestamp
 
 from iris.resources.errors import InvalidResourceKey
 from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
-from iris.resources.state import EndpointAccess as EndpointAccess
+
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
+"""Endpoint metadata key overriding the controller proxy timeout in seconds."""
+
+
+class EndpointAccess(StrEnum):
+    """Who may use an Endpoint through the controller proxy."""
+
+    PRIVATE = "private"
+    LINK = "link"
+
+    @classmethod
+    def from_storage(cls, value: int | None) -> "EndpointAccess":
+        """Decode the stable persistence representation."""
+        if value in (None, 0):
+            return cls.PRIVATE
+        if value == 2:
+            return cls.LINK
+        raise ValueError(f"Unknown stored endpoint access value: {value!r}")
+
+    def to_storage(self) -> int:
+        """Encode the stable persistence representation."""
+        return 0 if self is EndpointAccess.PRIVATE else 2
 
 
 @dataclass(frozen=True, slots=True)

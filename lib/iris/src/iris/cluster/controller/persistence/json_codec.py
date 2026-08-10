@@ -16,7 +16,6 @@ from rigging.provenance import Provenance
 from rigging.timing import Duration
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
-from iris.cluster.types import JobName
 from iris.resources.execution import (
     CommandEntrypoint,
     CpuDevice,
@@ -34,6 +33,7 @@ from iris.resources.job import (
     JobSpec,
     PriorityBand,
 )
+from iris.resources.names import JobName
 from iris.resources.worker import WorkerMetadata
 
 

@@ -28,7 +28,11 @@ from iris.cluster.controller.endpoint_registry import (
 from iris.cluster.controller.persistence.projections.endpoints import EndpointRow
 from iris.cluster.controller.persistence.pruning import prune_old_data
 from iris.cluster.controller.persistence.schema import tasks_table
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, JobName, TaskAttempt
+from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.rpc.endpoint_service import EndpointServiceImpl

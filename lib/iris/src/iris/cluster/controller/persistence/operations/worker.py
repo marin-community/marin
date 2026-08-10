@@ -16,12 +16,12 @@ from iris.cluster.controller.persistence.projections.worker_attrs import WorkerA
 from iris.cluster.controller.persistence.reconcile.commit import commit_effects
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.persistence.schema import workers_table
-from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
-from iris.cluster.controller.reconcile.reader import TransitionReader
-from iris.cluster.controller.reconcile.worker import LaunchAttempt, WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.resources.execution import GpuDevice, TpuDevice
+from iris.resources.names import (
+    WorkerId,
+)
 from iris.resources.worker import WorkerMetadata
 
 FAIL_WORKERS_CHUNK_SIZE = 10
@@ -201,52 +201,3 @@ def _apply_worker_failures_chunk(
     commit_effects(cur, effects)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health)
-
-
-def apply_reconcile(
-    source: TransitionReader,
-    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
-    *,
-    now: Timestamp,
-) -> ControllerEffects:
-    """Author reconcile effects from the backend's read snapshot (no commit).
-
-    Loads ONE snapshot covering every (plan, result) pair through the backend's
-    own read surface, then runs the reconcile kernel once: the pure
-    :meth:`ReconcileState.reconcile` shares one ``Overlay`` across all pairs so
-    cascade kills triggered by earlier workers are visible to later ones. The
-    caller (the backend) folds the returned ``effects.health`` and the controller
-    commits the ``effects`` via ``commit_effects``.
-    """
-    all_task_ids: list[JobName] = []
-    all_attempt_keys: list[tuple[JobName, int]] = []
-    all_attempt_uids: list[AttemptUid] = []
-    all_worker_ids: list[WorkerId] = []
-
-    for plan, result in plan_results:
-        all_worker_ids.append(plan.worker_id)
-
-        if result.error is not None:
-            for desired in plan.request.desired:
-                if not isinstance(desired, LaunchAttempt):
-                    continue
-                launch = desired.launch
-                tid = launch.task_id
-                all_task_ids.append(tid)
-                all_attempt_keys.append((tid, launch.attempt_id))
-        else:
-            # Extract only plan-scoped UIDs for snapshot preloading (no logging here;
-            # worker.filter_observations_to_plan logs dropped observations inline).
-            plan_uids = {d.attempt_uid for d in plan.request.desired if d.attempt_uid}
-            for obs in result.observations:
-                if obs.attempt_uid and obs.attempt_uid in plan_uids:
-                    all_attempt_uids.append(AttemptUid(obs.attempt_uid))
-
-    snapshot = source.transition_snapshot(
-        now=now,
-        seed_worker_ids=all_worker_ids,
-        observation_uids=all_attempt_uids,
-        seed_task_ids=all_task_ids,
-        extra_attempt_keys=all_attempt_keys,
-    )
-    return ReconcileState.open(snapshot).reconcile(plan_results, now)

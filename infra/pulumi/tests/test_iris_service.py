@@ -31,8 +31,8 @@ from iac.iris.deploy import (
 )
 from iac.iris.service import IrisServiceArgs, _parse_outputs, code_hash, wire_spec
 from iac.iris.spec import ALWAYS_ON_RETRIES, ServiceSpec
-from iris.cluster.types import JobName
 from iris.resources.execution import ResourceSpec, tpu_device
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 
 # Mirrors IrisServiceArgs minus the component-only fields; keyword overrides per test.

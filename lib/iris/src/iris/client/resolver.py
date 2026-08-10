@@ -7,7 +7,7 @@ import os
 
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.client.client import get_iris_ctx
-from iris.cluster.types import Namespace
+from iris.resources.names import Namespace
 from iris.rpc.resource_client import ResourceRpcClient
 
 

@@ -51,8 +51,16 @@ from iris.cluster.controller.persistence.schema import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.protocol import FederationDirection, HandoffState, SyncedAttempt
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+    TERMINAL_JOB_STATES,
+)
 from iris.resources.execution import ResourceSpec
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import JobState, TaskState
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []

@@ -30,7 +30,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/iris.cluster.ControllerService': 'http://localhost:8080',
+      '/iris.cluster.EndpointService': 'http://localhost:8080',
       '/iris.cluster.WorkerService': 'http://localhost:8081',
+      '/iris.resource.ResourceService': 'http://localhost:8080',
       '/proxy': 'http://localhost:8080',
       '/bundles': 'http://localhost:8080',
       '/blobs': 'http://localhost:8080',

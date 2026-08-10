@@ -38,8 +38,8 @@ from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.persistence.schema import task_attempts_table
-from iris.cluster.types import JobName
 from iris.resources.attempt import AttemptCounts
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 

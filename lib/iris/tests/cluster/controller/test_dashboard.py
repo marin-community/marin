@@ -51,11 +51,11 @@ from iris.cluster.controller.persistence.json_codec import (
     device_counts_from_json,
     device_variant_from_json,
 )
-from iris.cluster.controller.persistence.operations.task import Assignment
 from iris.cluster.controller.persistence.projections.endpoints import EndpointRow
-from iris.cluster.controller.persistence.reads import ControlSnapshot, healthy_active_workers_with_attributes
+from iris.cluster.controller.persistence.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -64,11 +64,20 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
+from iris.cluster.controller.snapshot import ControlSnapshot
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+    WorkerUsability,
+)
 from iris.managed_thread import get_thread_container
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.rpc.endpoint_service import EndpointServiceImpl
@@ -2191,17 +2200,21 @@ def _proxy_dashboard_with_transport(monkeypatch, credentials=None):
     return ProxyControllerDashboard("https://iris.example", credentials=credentials), requests
 
 
-def test_proxy_dashboard_forwards_endpoint_service_rpc(monkeypatch):
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/iris.cluster.EndpointService/ListEndpoints",
+        "/iris.resource.ResourceService/ListEndpoints",
+    ],
+)
+def test_proxy_dashboard_forwards_resource_and_endpoint_service_rpcs(monkeypatch, path):
     dashboard, requests = _proxy_dashboard_with_transport(monkeypatch)
     with TestClient(dashboard.app) as client:
-        response = client.post(
-            "/iris.cluster.EndpointService/ListEndpoints",
-            json={"prefix": "/jobs/"},
-        )
+        response = client.post(path, json={"prefix": "/jobs/"})
 
     assert response.status_code == 200
     assert response.json() == {"endpoints": []}
-    assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
+    assert [request.url.path for request in requests] == [path]
 
 
 def _static_credentials() -> ClientCredentials:

@@ -47,10 +47,7 @@ from iris.cluster.controller.persistence.checkpoint import (
 from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.controller.persistence.federation import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.persistence.json_codec import constraints_from_json, device_counts_from_json
-from iris.cluster.controller.persistence.operations.task import (
-    Assignment,
-    finalize,
-)
+from iris.cluster.controller.persistence.operations.task import finalize
 from iris.cluster.controller.persistence.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
@@ -62,6 +59,7 @@ from iris.cluster.controller.persistence.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.meta_scheduler import (
     BackendRouting,
     RoutableJob,
@@ -75,6 +73,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
+from iris.cluster.controller.snapshot import ControlSnapshot
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
@@ -87,12 +86,14 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
-    JobName,
     PendingTask,
     UserBudgetDefaults,
-    WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.resources.state import PriorityBand
 
 logger = logging.getLogger(__name__)
@@ -1364,7 +1365,7 @@ class ControllerRuntime:
     # Worker reconcile pass (snapshot → backend.reconcile → apply + health)
     # =========================================================================
 
-    def _drain_dispatch_snapshot(self, backend_id: str) -> reads.ControlSnapshot:
+    def _drain_dispatch_snapshot(self, backend_id: str) -> ControlSnapshot:
         """Promote PENDING->ASSIGNED for a placement-owning backend and ride the drain.
 
         The dispatch drain is the single DB write a ``CLUSTER_VIEW`` backend needs
@@ -1386,7 +1387,7 @@ class ControllerRuntime:
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        return reads.ControlSnapshot(
+        return ControlSnapshot(
             worker_addresses={},
             reconcile_rows=[],
             timeout_rows=[],

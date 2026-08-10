@@ -32,7 +32,6 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
-from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.worker.control import WorkerRegistrationResult
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.task_attempt import TaskAttempt
@@ -48,6 +47,10 @@ from iris.resources.execution import (
     RuntimeEntrypoint,
 )
 from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.resources.worker import DesiredAttempt, StopReason, WorkerReconcileRequest
 from iris.rpc import job_pb2
 from iris.rpc.worker_service import WorkerServiceImpl

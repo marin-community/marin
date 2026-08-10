@@ -19,8 +19,12 @@ from iris.backends.status import (
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
-from iris.cluster.types import JobName, WorkerId, WorkerUsability
+from iris.cluster.types import WorkerUsability
 from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 
 
 @dataclass(frozen=True)

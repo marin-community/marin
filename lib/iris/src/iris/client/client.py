@@ -43,16 +43,11 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.types import (
-    EndpointAccess,
-    JobName,
-    Namespace,
-    TaskAttempt,
-)
 from iris.resources.action import ActionReceipt
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail
 from iris.resources.endpoint import (
+    EndpointAccess,
     EndpointDetail,
     EndpointQuery,
     EndpointSummary,
@@ -91,6 +86,11 @@ from iris.resources.job import (
     PriorityBand,
 )
 from iris.resources.log import LogEntry, LogLevel, LogPage, LogQuery
+from iris.resources.names import (
+    JobName,
+    Namespace,
+    TaskAttempt,
+)
 from iris.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.resources.source import Page
@@ -99,8 +99,6 @@ from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
-
-_RESOURCE_PAGE_SIZE = 500
 
 
 class _ClusterLifecycle(Protocol):
@@ -250,7 +248,7 @@ class Job:
 
     def state_only(self) -> JobState:
         """Return the current state of this exact Job incarnation."""
-        return self.status().state
+        return self._client.job_state(self._identity)
 
     @property
     def state(self) -> JobState:
@@ -296,7 +294,7 @@ class Job:
         cursor = 0
         minimum_level = LogLevel[min_level.upper()] if min_level else LogLevel.UNKNOWN
         while True:
-            status = self.status()
+            state = self.state_only()
             if stream_logs:
                 page = self._client.fetch_job_logs(
                     self._identity,
@@ -309,7 +307,7 @@ class Job:
                 for entry in page.entries:
                     logger.info("task=%s | %s", entry.key, entry.data)
                 cursor = max(cursor, page.next_cursor)
-            if status.state in {
+            if state in {
                 JobState.SUCCEEDED,
                 JobState.FAILED,
                 JobState.KILLED,
@@ -320,7 +318,8 @@ class Job:
             deadline.raise_if_expired(f"Job {self.job_id} did not complete in {timeout}s")
             time.sleep(min(backoff.next_interval(), deadline.remaining_seconds()))
 
-        if raise_on_failure and status.state is not JobState.SUCCEEDED:
+        status = self.status()
+        if raise_on_failure and state is not JobState.SUCCEEDED:
             raise JobFailedError(self.job_id, status)
         return status
 
@@ -343,7 +342,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -371,7 +370,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> AbstractContextManager[str]:
         """Own one renewable endpoint registration for a context lifetime."""
         ...
@@ -395,7 +394,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 
@@ -435,7 +434,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> Generator[str, None, None]:
         """Register and renew an endpoint, then remove it promptly on clean exit."""
         endpoint_id = self.register(name, address, metadata, access)
@@ -854,6 +853,9 @@ class IrisClient:
     def describe_job(self, key: ResourceKey) -> JobDetail:
         return self._cluster_client.describe_job(key)
 
+    def job_state(self, identity: JobIdentity) -> JobState:
+        return self._cluster_client.job_state(identity)
+
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         return self._cluster_client.list_tasks(query)
 
@@ -971,22 +973,10 @@ class IrisClient:
 
     def current_job(self, job_id: JobName) -> Job:
         """Resolve the current Job incarnation for a wire ID."""
-        query = JobQuery(job_id_prefix=job_id.to_wire(), page_size=_RESOURCE_PAGE_SIZE)
-        while True:
-            page = self.list_jobs(query)
-            match = next(
-                (summary for summary in page.items if summary.identity.key.resource_id == job_id.to_wire()),
-                None,
-            )
-            if match is not None:
-                return Job(self, match.identity)
-            if page.next_page_token is None:
-                raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
-            query = JobQuery(
-                job_id_prefix=job_id.to_wire(),
-                page_size=_RESOURCE_PAGE_SIZE,
-                page_token=page.next_page_token,
-            )
+        page = self.list_jobs(JobQuery(resource_id=job_id.to_wire(), page_size=1))
+        if not page.items:
+            raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
+        return Job(self, page.items[0].identity)
 
     def current_task(self, task_id: JobName) -> Task:
         """Resolve the current Task incarnation for a wire ID."""

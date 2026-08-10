@@ -26,7 +26,7 @@ from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.persistence.json_codec import reconstruct_job_spec
 from iris.cluster.controller.persistence.schema import job_config_table
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import UserBudgetDefaults
 from iris.resources.execution import (
     CommandEntrypoint,
     Environment,
@@ -44,6 +44,7 @@ from iris.resources.job import (
     JobSpec,
     PriorityBand,
 )
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.legacy.controller_service import LegacyControllerService

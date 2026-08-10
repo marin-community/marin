@@ -36,6 +36,7 @@ from iris.resources.log import LogEntry, LogPage, LogQuery
 from iris.resources.node import NodeDetail, NodeQuery, NodeSummary
 from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.resources.source import Page
+from iris.resources.state import JobState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import resource_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -131,6 +132,11 @@ class ResourceRpcClient:
         request = resource_pb2.DescribeJobRequest(job=resource_key_to_proto(key))
         response = call_with_retry("describe_job", lambda: self._client.describe_job(request))
         return job_detail_from_proto(response.job)
+
+    def job_state(self, identity: JobIdentity) -> JobState:
+        request = resource_pb2.GetJobStateRequest(job=job_identity_to_proto(identity))
+        response = call_with_retry("get_job_state", lambda: self._client.get_job_state(request))
+        return JobState(response.state)
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         request = resource_pb2.ListTasksRequest(query=task_query_to_proto(query))

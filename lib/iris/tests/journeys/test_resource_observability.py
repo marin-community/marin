@@ -7,10 +7,11 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table
-from iris.cluster.types import JobName
 from iris.resources.activity import ActivityQuery
 from iris.resources.endpoint import ExecResult, ProfileResult
 from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.names import JobName
+from iris.resources.state import JobState
 from iris.rpc import resource_pb2
 from iris.rpc.resource_service import ResourceServiceImpl
 from sqlalchemy import update
@@ -62,6 +63,25 @@ def _attempt_identity(identity, *, uid: str | None = None) -> resource_pb2.Attem
 def _log_lines(service: ResourceServiceImpl, target: resource_pb2.LogTarget) -> set[str]:
     response = service.fetch_logs(resource_pb2.FetchLogsRequest(target=target), None)
     return {entry.data for entry in response.entries}
+
+
+def test_state_only_rpc_tracks_one_exact_job_incarnation(journey) -> None:
+    job = journey.submit("state-only")
+    identity = journey.job(job).summary.identity
+    service = ResourceServiceImpl(journey.controller.controller)
+    request = resource_pb2.GetJobStateRequest(
+        job=resource_pb2.JobIdentity(key=_key(identity.key), job_uid=identity.job_uid)
+    )
+
+    assert JobState(service.get_job_state(request, None).state) is JobState.PENDING
+
+    journey.settle()
+
+    assert JobState(service.get_job_state(request, None).state) is JobState.RUNNING
+    request.job.job_uid = "replaced-job"
+    with pytest.raises(ConnectError) as exc_info:
+        service.get_job_state(request, None)
+    assert exc_info.value.code is Code.FAILED_PRECONDITION
 
 
 def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> None:

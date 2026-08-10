@@ -9,7 +9,11 @@ from typing import Protocol
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
 
 
 class TransitionReader(Protocol):
