@@ -10,8 +10,9 @@ author: kaiyuew
 ## Current TL;DR
 
 Implementation and local validation are complete at commit
-`87426191277502d955b50806873435b43bcc8206`. Gate 1 is ready to launch on the
-two July 8k-context v5p-8 baseline cells.
+`87426191277502d955b50806873435b43bcc8206`. The Gate-1 CPU launcher
+`/kaiyuew/moe-row-norm-gate1-8131` is pending ordinary worker scale-up in
+`us-central1`; neither TPU child has allocated yet.
 
 ## Scope
 
@@ -194,3 +195,27 @@ baseline when the two factors are constrained to their initial norms?
 - Interpretation: initialization, optimizer routing, and mathematical/stored
   axis conventions are locally validated; TPU behavior remains untested.
 - Next action: push the snapshot and launch both Gate-1 artifacts on v5p-8.
+
+### 2026-08-10 14:18 PDT - Gate-1 launcher placement recovery
+
+- Hypothesis: constraining the CPU StepRunner parent to a region containing
+  v5p-8 groups allows its two Fray children to inherit a schedulable region
+  without attaching an accelerator to the parent.
+- Commit Hash: `cdf354d93ff82efc8aeff94f9ba19cf0b26b1e3c`.
+- Command:
+  - Initial: CPU parent without a region or availability constraint.
+  - Rejected adjustment: CPU parent with `--reserve v5p-8 --preemptible`.
+  - Active: CPU parent with `--region us-central1`.
+- Config: parent uses 1 CPU, 2 GiB RAM, and the `cpu` extra; child
+  `ResourceConfig` remains v5p-8. No training configuration changed.
+- Result: the unconstrained parent landed in `us-central2`, causing both
+  child submissions to fail because that region has no v5p groups. The
+  availability-constrained CPU parent had no matching CPU scaling group and was
+  stopped while unallocated. The region-pinned parent is accepted and waiting
+  for an ordinary CPU worker in `us-central1`. No W&B run or TPU allocation
+  occurred in either failed attempt.
+- Interpretation: parent location is inherited by Fray children, so the
+  launcher needs an explicit TPU-capable region; `--reserve` is not a valid
+  CPU-parent placement mechanism on the current scaling-group catalog.
+- Next action: wait for the CPU parent, verify exactly two v5p-8 children, then
+  validate W&B startup and configuration.
