@@ -34,6 +34,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBuffer,
     StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
+    StreamingAttentionLogSumExpEncoding,
     TritonAotKernelPlan,
     _aot_launcher_declarations,
     _forward_aot_plan,
@@ -63,6 +64,7 @@ class GeneratedStreamingAttentionForwardFfi:
     handler_template: str
     semantic_fingerprint: str
     reverse_state_policy: StreamingAttentionBackwardStatePolicy
+    saved_state_encoding: StreamingAttentionLogSumExpEncoding
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,7 @@ def generate_streaming_attention_forward_ffi(
         outputs[0].strides,
         parameters,
         schedule,
+        natural_log_sum_exp=True,
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -130,6 +133,7 @@ def generate_streaming_attention_forward_ffi(
         "score_map": json.loads(serialize_scalar_expression(program.forward.score_map.expression)),
         "fold_state": ("maximum", "sum_exp", "weighted_value"),
         "saved_state": "log_sum_exp",
+        "saved_state_encoding": StreamingAttentionLogSumExpEncoding.NATURAL_LOG.value,
         "output_layouts": {output.name: output.layout for output in outputs},
         "schedule": {
             "query_tile": schedule.query_tile_size,
@@ -156,6 +160,7 @@ def generate_streaming_attention_forward_ffi(
         ),
         semantic_fingerprint=fingerprint,
         reverse_state_policy=StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP,
+        saved_state_encoding=StreamingAttentionLogSumExpEncoding.NATURAL_LOG,
     )
 
 

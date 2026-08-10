@@ -95,6 +95,7 @@ def _streaming_dq_kernel(
     head_group_size: tl.constexpr,
     causal: tl.constexpr,
     has_softcap: tl.constexpr,
+    natural_log_sum_exp: tl.constexpr,
 ):
     query_block_index = tl.program_id(0)
     batch_key_value_head = tl.program_id(1)
@@ -143,6 +144,8 @@ def _streaming_dq_kernel(
     )
     row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
     lse = tl.load(log_sum_exp + row_offset, mask=query_valid, other=-float("inf"))
+    if natural_log_sum_exp:
+        lse *= LOG2_E
     delta = tl.sum(output_tile * output_cotangent_tile.to(tl.float32), axis=1)
     tl.store(output_dot + row_offset, delta, mask=query_valid)
     query_gradient = tl.zeros((packed_query_rows, head_dimension), tl.float32)
@@ -239,6 +242,7 @@ def _streaming_dkdv_kernel(
     head_group_size: tl.constexpr,
     causal: tl.constexpr,
     has_softcap: tl.constexpr,
+    natural_log_sum_exp: tl.constexpr,
 ):
     key_block_index = tl.program_id(0)
     batch_key_value_head = tl.program_id(1)
@@ -300,6 +304,8 @@ def _streaming_dkdv_kernel(
         )
         row_offset = (batch_index * query_heads + query_heads_for_rows) * sequence_length + query_tokens
         lse = tl.load(log_sum_exp + row_offset, mask=query_valid, other=-float("inf"))
+        if natural_log_sum_exp:
+            lse *= LOG2_E
         delta = tl.load(output_dot + row_offset, mask=query_valid, other=0.0)
         score = tl.dot(query_tile, key_tile) * scale_log2
         score_slope = tl.full((packed_query_rows, block_n), scale, tl.float32)
@@ -472,6 +478,7 @@ def prepare_streaming_attention_backward_launches(
             head_group_size,
             lowered.causal,
             lowered.softcap is not None,
+            False,
             num_warps=num_warps,
             num_stages=num_stages,
         )
@@ -491,6 +498,7 @@ def prepare_streaming_attention_backward_launches(
             head_group_size,
             lowered.causal,
             lowered.softcap is not None,
+            False,
             num_warps=num_warps,
             num_stages=num_stages,
         )

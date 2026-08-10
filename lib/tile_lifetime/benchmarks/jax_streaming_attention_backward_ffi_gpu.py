@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compile and benchmark the natural-signature JAX attention reverse FFI."""
+"""Historical component benchmark for the recompute/combined attention FFI.
+
+This remains useful as isolated physical evidence, but it is not the accepted
+public Shuttle attention source boundary. The accepted comparison recovers an
+ordinary JAX plus ``jax.vjp`` program and benchmarks separate generated
+forward-state and saved-state reverse targets against Grug FA4 in
+``jax_streaming_attention_saved_state_fa4_gpu.py``.
+"""
 
 from __future__ import annotations
 
@@ -488,6 +495,7 @@ def main() -> None:
     ]
     result = {
         "schema_version": 1,
+        "claim_status": "historical_component_only_not_accepted_public_frontend",
         "boundary": (
             "natural JAX Q/K/V/output-cotangent to output plus Q/K/V cotangents; "
             "forward state produced and consumed inside one timed call"

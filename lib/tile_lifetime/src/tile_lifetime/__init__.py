@@ -151,6 +151,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBuffer,
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
+    StreamingAttentionLogSumExpEncoding,
     TritonAotKernelPlan,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
@@ -165,6 +166,12 @@ from tile_lifetime.jax_streaming_attention_forward_ffi import (
     compile_streaming_attention_forward_ffi,
     generate_streaming_attention_forward_ffi,
     register_streaming_attention_forward_ffi,
+)
+from tile_lifetime.jax_streaming_attention_training_frontend import (
+    JaxAutomaticDifferentiationOwner,
+    JaxVjpFrontendAudit,
+    RecoveredJaxVjpStreamingAttentionTraining,
+    recover_jax_vjp_streaming_attention_training,
 )
 from tile_lifetime.kimi_delta_scan import (
     KimiDeltaScanCompilation,
@@ -458,8 +465,10 @@ from tile_lifetime.streaming_attention_backward_reference import (
     causal_gqa_attention,
     causal_gqa_attention_training,
     causal_gqa_attention_vjp,
+    causal_gqa_attention_with_log_sum_exp,
     export_debug_streaming_attention_backward,
     export_debug_streaming_attention_training,
+    streaming_attention_training_input_specifications,
 )
 from tile_lifetime.swiglu import compile_swiglu_region
 from tile_lifetime.tensor_program import (

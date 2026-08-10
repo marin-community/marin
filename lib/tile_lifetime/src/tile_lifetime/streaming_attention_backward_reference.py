@@ -39,8 +39,45 @@ class StreamingAttentionBackwardDebugConfig:
 STREAMING_ATTENTION_BACKWARD_INPUT_NAMES = ("query", "key", "value", "output_cotangent")
 
 
+def streaming_attention_training_input_specifications(
+    config: StreamingAttentionBackwardDebugConfig,
+) -> tuple[jax.ShapeDtypeStruct, ...]:
+    """Return the natural BSHD primal and output-cotangent interface."""
+    bf16 = jnp.bfloat16
+    return (
+        jax.ShapeDtypeStruct(
+            (config.batch, config.query_length, config.query_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.query_length, config.query_heads, config.head_dimension),
+            bf16,
+        ),
+    )
+
+
 def causal_gqa_attention(config: StreamingAttentionBackwardDebugConfig):
     """Return ordinary JAX tensor algebra for exact causal GQA."""
+
+    attention_with_state = causal_gqa_attention_with_log_sum_exp(config)
+
+    def attention(query, key, value):
+        output, _log_sum_exp = attention_with_state(query, key, value)
+        return output
+
+    return attention
+
+
+def causal_gqa_attention_with_log_sum_exp(config: StreamingAttentionBackwardDebugConfig):
+    """Return ordinary JAX attention plus the natural-log normalizer Fold state."""
 
     def attention(query, key, value):
         group_size = config.query_heads // config.key_value_heads
@@ -68,19 +105,26 @@ def causal_gqa_attention(config: StreamingAttentionBackwardDebugConfig):
         )
         row_max = jnp.max(masked_scores, axis=-1, keepdims=True)
         exponentials = jnp.exp(masked_scores - row_max)
-        probabilities = exponentials / jnp.sum(exponentials, axis=-1, keepdims=True)
+        row_sum_exp = jnp.sum(exponentials, axis=-1, keepdims=True)
+        probabilities = exponentials / row_sum_exp
         output = jnp.einsum(
             "bhgqk,bkhv->bqhgv",
             probabilities,
             value.astype(jnp.float32),
             preferred_element_type=jnp.float32,
         )
-        return output.reshape(
+        output = output.reshape(
             config.batch,
             config.query_length,
             config.query_heads,
             config.head_dimension,
         ).astype(jnp.bfloat16)
+        log_sum_exp = (row_max + jnp.log(row_sum_exp)).reshape(
+            config.batch,
+            config.query_heads,
+            config.query_length,
+        )
+        return output, log_sum_exp
 
     return attention
 
@@ -113,25 +157,7 @@ def export_debug_streaming_attention_backward(
     config: StreamingAttentionBackwardDebugConfig = StreamingAttentionBackwardDebugConfig(),
 ) -> bytes:
     """Export the JAX-owned reverse as portable StableHLO."""
-    bf16 = jnp.bfloat16
-    specifications = (
-        jax.ShapeDtypeStruct(
-            (config.batch, config.query_length, config.query_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.query_length, config.query_heads, config.head_dimension),
-            bf16,
-        ),
-    )
+    specifications = streaming_attention_training_input_specifications(config)
     exported = jax.export.export(jax.jit(causal_gqa_attention_vjp(config)))(*specifications)
     return exported.mlir_module_serialized
 
@@ -140,24 +166,6 @@ def export_debug_streaming_attention_training(
     config: StreamingAttentionBackwardDebugConfig = StreamingAttentionBackwardDebugConfig(),
 ) -> bytes:
     """Export a natural forward-plus-reverse JAX training boundary."""
-    bf16 = jnp.bfloat16
-    specifications = (
-        jax.ShapeDtypeStruct(
-            (config.batch, config.query_length, config.query_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
-            bf16,
-        ),
-        jax.ShapeDtypeStruct(
-            (config.batch, config.query_length, config.query_heads, config.head_dimension),
-            bf16,
-        ),
-    )
+    specifications = streaming_attention_training_input_specifications(config)
     exported = jax.export.export(jax.jit(causal_gqa_attention_training(config)))(*specifications)
     return exported.mlir_module_serialized
