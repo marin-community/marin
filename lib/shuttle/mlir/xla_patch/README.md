@@ -43,12 +43,25 @@ Apply and test the patch from an exact XLA checkout:
 test "$(git rev-parse HEAD)" = 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
 git apply --check /path/to/0001-add-stablehlo-module-transform-hook.patch
 git apply /path/to/0001-add-stablehlo-module-transform-hook.patch
+git apply --check /path/to/0002-anchor-lit-labels-to-xla-repository.patch
+git apply /path/to/0002-anchor-lit-labels-to-xla-repository.patch
 bazel test \
   //xla/pjrt:stablehlo_module_transform_test \
   //xla/pjrt:mlir_to_hlo_test \
   //xla/pjrt:mlir_to_hlo_unregistered_transform_test \
   //xla/pjrt:pjrt_executable_test
 ```
+
+The second patch makes XLA's OSS CPU lit runner data label safe for calls from
+an external repository. String labels created inside a macro resolve in the
+caller's repository. Constructing the runner label with `Label(...)` in
+`lit.bzl` anchors it to XLA, so Shuttle retains XLA's runner and tool staging
+without resolving `//xla` inside `@shuttle_mlir`.
+
+The macro has additional string labels in its default-config, GPU, CUDA/NCCL,
+and Google-only branches. Shuttle's current lit target supplies its own config
+and exercises the OSS CPU branch, so those paths are outside this checkpoint.
+They need the same anchoring before Shuttle uses those macro modes.
 
 The artifact is source-level integration work. Marin does not vendor XLA, and
 the patch has not been compiled in this repository. End-to-end acceptance

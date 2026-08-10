@@ -223,6 +223,37 @@ methods.
 - Native linking remains pending. This debugging task does not claim the
   unresolved dialect symbols are fixed until the exact-pin binary links.
 
+## Hypothesis 7
+
+XLA's pinned lit macro uses repository-relative label strings inside callable
+functions. Those strings resolve in the macro caller's repository, so invoking
+`lit_test_suite` from `@shuttle_mlir` turns `//xla:sh_test_with_runfiles.py`
+into `@@shuttle_mlir//xla:sh_test_with_runfiles.py`.
+
+The exact-pin build compiled and linked `shuttle-opt`, then failed while
+analyzing the generated lit test targets because that Shuttle-local package
+does not exist. No fixture ran.
+
+Patch the unconditional OSS CPU runner datum to construct
+`Label("//xla:sh_test_with_runfiles.py")` inside `lit.bzl`. A Label constructed
+by the defining `.bzl` file is anchored to XLA instead of the external caller.
+Keep the macro implementation and Shuttle's fixture wiring unchanged.
+
+## Results 7
+
+- The one-line patch applies cleanly to exact XLA commit `9b635916ecc6` and
+  changes only the unconditional OSS CPU runner label in `xla/lit.bzl`.
+- Shuttle still uses XLA's pinned `lit_test_suite`, `FileCheck`, `shuttle-opt`,
+  and the complete fixture glob.
+- `bazel build @shuttle_mlir//:mlir_tests` is documented as the analysis and
+  executable preflight before running the suite.
+- Repository formatting and lint gates run on the changed files.
+- Native lit analysis and fixture execution remain pending. This debugging task
+  does not claim any lit test passed.
+- Default-config, GPU, CUDA/NCCL, and Google-only string labels remain relative
+  inside the pinned macro. They require the same audit before Shuttle uses
+  those modes.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.

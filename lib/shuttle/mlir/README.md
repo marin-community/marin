@@ -32,6 +32,7 @@ Then run:
 bazel build @shuttle_mlir//:shuttle_ops_inc_gen
 bazel build @shuttle_mlir//:ShuttleDialect
 bazel build @shuttle_mlir//:shuttle-opt
+bazel build @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:mlir_tests
 ```
 
@@ -40,6 +41,10 @@ compatibility with the pinned MLIR revision. The dialect library is the next
 preflight: it compiles the generated operation declarations and definitions
 without building the pass driver or linking `shuttle-opt`. Run both before
 scheduling the larger cluster build.
+
+Building `mlir_tests` is the analysis and executable preflight for the lit
+suite. It preserves all fixture targets without running them; the following
+`bazel test` command executes the fixtures.
 
 Building from XLA rather than an installed `_jax.so` is intentional. MLIR's C++
 ABI and the private LLVM/StableHLO revisions embedded in a jaxlib wheel are not
