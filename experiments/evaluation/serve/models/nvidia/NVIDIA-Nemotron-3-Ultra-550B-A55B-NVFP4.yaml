@@ -9,11 +9,13 @@ resource_hint:
 serve:
   tensor_parallel_size: 8
   max_model_len: 32768
-  max_num_batched_tokens: 32768
+  max_num_batched_tokens: 16384
   max_num_seqs: 16
   reasoning_parser: nemotron_v3
   vllm_extra_args:
   - --enable-prefix-caching
+  - --gpu-memory-utilization
+  - "0.85"
 generation:
   max_gen_toks: 8192
   extra_gen_kwargs:
