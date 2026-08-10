@@ -180,6 +180,7 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
   SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
   SmallVector<char> boundDimensions(domain.getNumDims(), 0);
   bool hasRankedTensor = false;
+  bool resultMapProjectsDomain = false;
   size_t mapPosition = 0;
   for (auto [mapAttribute, indexedType] :
        llvm::zip_equal(indexingMaps, indexedTypes)) {
@@ -196,9 +197,7 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     }
     if (isResultMap &&
         indexingMap.getNumResults() != indexingMap.getNumDims()) {
-      return map.emitOpError(
-          "map result indexing maps must cover every domain dimension "
-          "exactly once");
+      resultMapProjectsDomain = true;
     }
     auto tensorType = dyn_cast<RankedTensorType>(indexedType);
     if (!tensorType) {
@@ -240,6 +239,11 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     return map.emitOpError(
         "every map domain dimension must be bound by a ranked tensor "
         "dimension");
+  }
+  if (resultMapProjectsDomain) {
+    return map.emitOpError(
+        "map result indexing maps must cover every domain dimension "
+        "exactly once");
   }
   return success();
 }

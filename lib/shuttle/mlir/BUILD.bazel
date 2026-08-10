@@ -130,5 +130,6 @@ lit_test_suite(
     tools = [
         ":shuttle-opt",
         "@llvm-project//llvm:FileCheck",
+        "@llvm-project//llvm:not",
     ],
 )
