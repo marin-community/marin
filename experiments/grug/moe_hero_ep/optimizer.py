@@ -202,6 +202,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "token_embed" in path_lower
                 or "router_bias" in path_lower
                 or path_lower.endswith(".attn_gate")
+                or path_lower.endswith(".latent_gate")
                 or ".router" in path_lower
             ):
                 return "adam"

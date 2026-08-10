@@ -168,6 +168,10 @@ class GrugModelConfig:
     # would otherwise leave even after the latent RMSNorm. Set False to init gate/up at the plain
     # `initializer_std` instead (an ablation of that reinit). No effect without a latent.
     latent_reinit_gate_up: bool = True
+    # Dynamic latent: replace the fixed hidden->latent down-projection with a full hidden->hidden one
+    # plus a per-token sigmoid gate that mixes its two halves, so each token picks its own latent
+    # subspace rather than sharing one. Requires `latent_dim`. See MoEMLP for the exact form.
+    dynamic_latent: bool = False
     qb_estimator: QbEstimator = QbEstimator.TOPK
     qb_hist_bins: int = 1000  # bins for the QB histogram estimator; ignored by the top-k estimator
     num_layers: int = 6
@@ -228,6 +232,11 @@ class GrugModelConfig:
             raise ValueError(
                 f"latent_dim must be in (0, hidden_dim={self.hidden_dim}], got {self.latent_dim}; "
                 "it only reduces communication when it is smaller than the hidden dimension"
+            )
+        if self.dynamic_latent and (self.latent_dim is None or 2 * self.latent_dim != self.hidden_dim):
+            raise ValueError(
+                "dynamic_latent needs latent_dim = hidden_dim / 2 (it mixes the two halves of a full "
+                f"hidden->hidden projection); got latent_dim={self.latent_dim}, hidden_dim={self.hidden_dim}"
             )
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
@@ -823,10 +832,13 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
-    # LatentMoE projections. All None for a standard MoE, in which case the layer is unchanged.
+    # LatentMoE projections. All None for a standard MoE, in which case the layer is unchanged. Under
+    # `dynamic_latent`, `w_latent_down` is a full hidden->hidden projection and `latent_gate` is the
+    # per-token mixing gate; otherwise `latent_gate` is None and `w_latent_down` is hidden->latent.
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
+    latent_gate: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -849,13 +861,23 @@ class MoEMLP(eqx.Module):
             w_latent_down=(
                 None
                 if latent is None
-                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
+                # Dynamic latent projects to the full hidden dim (two candidate subspaces); standard
+                # LatentMoE projects straight to the latent width.
+                else reshard(
+                    _init_weight(k_down, (d, d if cfg.dynamic_latent else latent), cfg.initializer_std),
+                    P(_FSDP_AXES, "model"),
+                )
             ),
             latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
             w_latent_up=(
                 None
                 if latent is None
                 else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
+            # Per-token subspace-mixing gate; zero-init so it starts at an even 0.5 mix (like the
+            # attention gate) and learns under Adam. Only built for the dynamic-latent variant.
+            latent_gate=(
+                reshard(jnp.zeros((d, 1)), P(None, None)) if (latent is not None and cfg.dynamic_latent) else None
             ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -944,12 +966,21 @@ class MoEMLP(eqx.Module):
         # token, and the shared experts in the enclosing block never see this path.
         routed_input = x_flat
         if self.w_latent_down is not None and self.latent_norm is not None:
-            routed_input = jnp.einsum(
-                "td,dl->tl",
-                x_flat,
-                self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_batch_spec(),
-            )
+            if self.latent_gate is not None:
+                # Dynamic latent: the full hidden->hidden projection yields two candidate latent
+                # subspaces (its halves); a per-token gate s = sigmoid(x @ gate) mixes them as
+                # s*full[:half] + (1-s)*full[half:], so each token composes its own subspace instead of
+                # sharing the single one a fixed down-projection imposes. s starts at 0.5 (gate=0).
+                full = jnp.einsum(
+                    "td,dh->th", x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()
+                )
+                s = jax.nn.sigmoid(jnp.einsum("td,do->to", x_flat, self.latent_gate.astype(x_flat.dtype)))
+                half = self.cfg.latent_dim
+                routed_input = s * full[:, :half] + (1.0 - s) * full[:, half:]
+            else:
+                routed_input = jnp.einsum(
+                    "td,dl->tl", x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()
+                )
             # The expert weights carry an initializer std tuned for a `hidden_dim` fan-in, and the
             # down-projection shrinks the signal on top of that, so without this the routed path
             # starts about 2.8x attenuated relative to a standard MoE. Normalizing here also makes

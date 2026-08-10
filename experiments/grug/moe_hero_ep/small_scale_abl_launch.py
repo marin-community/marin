@@ -192,6 +192,7 @@ def _small_model(
     latent_reinit_gate_up: bool = True,
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
+    dynamic_latent: bool = False,
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
@@ -225,6 +226,7 @@ def _small_model(
         expert_chunks=expert_chunks,
         latent_dim=latent_dim,
         latent_reinit_gate_up=latent_reinit_gate_up,
+        dynamic_latent=dynamic_latent,
         qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
         qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
@@ -256,6 +258,7 @@ def build_small_run(
     latent_reinit_gate_up: bool = True,
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
+    dynamic_latent: bool = False,
     tokens_per_active_param: int = 60,
     num_train_steps_override: int | None = None,
     watch_interval: int = 0,
@@ -323,6 +326,7 @@ def build_small_run(
         latent_reinit_gate_up,
         qb_use_histogram,
         qb_hist_bins,
+        dynamic_latent,
     )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
