@@ -4,6 +4,7 @@
 """Fused Mixture-of-Kittens forward with a JAX reference gradient."""
 
 from collections.abc import Callable
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -26,7 +27,16 @@ from experiments.grug.mixture_of_kittens.schedule import build_schedule
 
 _EXPERT_AXIS = "expert"
 _NUM_DEVICES = 4
-MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
+MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_routed_context"
+
+
+class MoKRoutedForwardContext(NamedTuple):
+    """Routed ring tensors retained for the fused backward."""
+
+    x_routed: jax.Array
+    gate_routed: jax.Array
+    up_routed: jax.Array
+    hidden_routed: jax.Array
 
 
 def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
@@ -180,7 +190,7 @@ def _fused_backward(
     shared_gate: jax.Array,
     shared_up: jax.Array,
     shared_down: jax.Array,
-    context: MoKForwardContext,
+    context: MoKRoutedForwardContext,
     *,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     config: MoKForwardConfig,
@@ -203,13 +213,10 @@ def _fused_backward(
         )
     )
     routed_context_spec = P(_EXPERT_AXIS, None)
-    context_specs = MoKForwardContext(
+    context_specs = MoKRoutedForwardContext(
         x_routed=routed_context_spec,
-        gate_shared=batch_spec,
         gate_routed=routed_context_spec,
-        up_shared=batch_spec,
         up_routed=routed_context_spec,
-        hidden_shared=batch_spec,
         hidden_routed=routed_context_spec,
     )
 
@@ -223,7 +230,7 @@ def _fused_backward(
     shared_gate = _reshard_for_shard_map(shared_gate, mesh, shared_weight_spec)
     shared_up = _reshard_for_shard_map(shared_up, mesh, shared_weight_spec)
     shared_down = _reshard_for_shard_map(shared_down, mesh, shared_weight_spec)
-    context = MoKForwardContext(
+    context = MoKRoutedForwardContext(
         *(_reshard_for_shard_map(value, mesh, spec) for value, spec in zip(context, context_specs, strict=True))
     )
 
@@ -238,7 +245,7 @@ def _fused_backward(
         local_shared_gate: jax.Array,
         local_shared_up: jax.Array,
         local_shared_down: jax.Array,
-        local_context: MoKForwardContext,
+        local_context: MoKRoutedForwardContext,
     ) -> tuple[jax.Array, ...]:
         all_selected_experts = jax.lax.all_gather(local_selected_experts, _EXPERT_AXIS)
         rank = jax.lax.axis_index(_EXPERT_AXIS)
@@ -255,6 +262,18 @@ def _fused_backward(
             schedule_capacity=capacity,
             rank=rank,
         )
+        gate_shared = jnp.einsum("td,di->ti", local_x, local_shared_gate).astype(local_x.dtype)
+        up_shared = jnp.einsum("td,di->ti", local_x, local_shared_up).astype(local_x.dtype)
+        hidden_shared = (jax.nn.silu(gate_shared) * up_shared).astype(local_x.dtype)
+        full_context = MoKForwardContext(
+            x_routed=local_context.x_routed,
+            gate_shared=gate_shared,
+            gate_routed=local_context.gate_routed,
+            up_shared=up_shared,
+            up_routed=local_context.up_routed,
+            hidden_shared=hidden_shared,
+            hidden_routed=local_context.hidden_routed,
+        )
         gradients = backward_bf16_local(
             local_output_gradient,
             local_x,
@@ -265,7 +284,7 @@ def _fused_backward(
             jnp.transpose(local_w_up, (0, 2, 1)),
             jnp.transpose(local_shared_down),
             jnp.transpose(local_w_down, (0, 2, 1)),
-            local_context,
+            full_context,
             schedule.peer_rank,
             schedule.peer_token_idx,
             schedule.num_tokens,
@@ -421,13 +440,19 @@ def _custom_forward(
 
     def fused_fwd(
         *arguments: jax.Array,
-    ) -> tuple[tuple[jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MoKForwardContext]]:
+    ) -> tuple[tuple[jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MoKRoutedForwardContext]]:
         output, dropped_assignments, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
-        context = tree_checkpoint_name(context, MOK_CONTEXT_CHECKPOINT_NAME)
-        return (output, dropped_assignments), (arguments, context)
+        routed_context = MoKRoutedForwardContext(
+            x_routed=context.x_routed,
+            gate_routed=context.gate_routed,
+            up_routed=context.up_routed,
+            hidden_routed=context.hidden_routed,
+        )
+        routed_context = tree_checkpoint_name(routed_context, MOK_CONTEXT_CHECKPOINT_NAME)
+        return (output, dropped_assignments), (arguments, routed_context)
 
     def fused_bwd(
-        residual: tuple[tuple[jax.Array, ...], MoKForwardContext],
+        residual: tuple[tuple[jax.Array, ...], MoKRoutedForwardContext],
         output_gradients: tuple[jax.Array, jax.Array],
     ) -> tuple[jax.Array | None, ...]:
         output_gradient, _ = output_gradients

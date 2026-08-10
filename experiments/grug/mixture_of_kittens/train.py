@@ -53,7 +53,7 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
-MOK_HOST_MEMORY_LIMIT_GB = 220
+MOK_HOST_MEMORY_LIMIT_GB = 160
 MOK_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": str(MOK_HOST_MEMORY_LIMIT_GB),
