@@ -300,6 +300,7 @@ RUN set -eux; \
     done < /tmp/h100-evidence-debian12-amd64.sha256; \
     rm -f /tmp/h100-evidence-debian12-amd64.sha256; \
     ln -sfn /usr/local/cuda-13.2 /usr/local/cuda; \
+    ln -s libnvtx3interop.so /usr/local/cuda-13.2/lib64/libnvToolsExt.so; \
     ln -s /opt/nvidia/nsight-compute/2026.1.1/ncu /usr/local/bin/ncu; \
     test -x /usr/local/cuda-13.2/bin/nvcc; \
     test -x /usr/local/cuda-13.2/bin/ptxas; \
@@ -314,6 +315,22 @@ RUN set -eux; \
 
 ENV CUDA_HOME=/usr/local/cuda-13.2
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
+
+# The runner loads these libraries from the selected NVCC toolkit before it
+# records any evidence. Resolve and load every required symbol without calling
+# a CUDA device API.
+RUN python - <<'PY'
+from ctypes import CDLL
+from pathlib import Path
+
+probes = {
+    "cudart": "cudaFree",
+    "nvToolsExt": "nvtxRangePushA",
+}
+for library, symbol in probes.items():
+    handle = CDLL(str(Path("/usr/local/cuda-13.2/lib64") / f"lib{library}.so"))
+    getattr(handle, symbol)
+PY
 
 # Import and version validation is forced onto the CPU backend. It proves the
 # installed runtime is internally coherent without enumerating or initializing

@@ -17,6 +17,7 @@ BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.
 ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 TILE_LIFETIME_PYPROJECT = REPO_ROOT / "lib" / "tile_lifetime" / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
+H100_RUNNER = REPO_ROOT / "lib" / "tile_lifetime" / "benchmarks" / "h100_contract_map_backend_runner.py"
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -27,6 +28,7 @@ EXPECTED_PACKAGES = {
     "cuda-cuobjdump-13-2_13.2.86-1_amd64.deb",
     "cuda-driver-dev-13-2_13.2.86-1_amd64.deb",
     "cuda-nvcc-13-2_13.2.86-1_amd64.deb",
+    "cuda-nvtx-13-2_13.2.86-1_amd64.deb",
     "cuda-toolkit-13-2-config-common_13.2.86-1_all.deb",
     "cuda-toolkit-13-config-common_13.2.86-1_all.deb",
     "cuda-toolkit-config-common_13.2.86-1_all.deb",
@@ -137,6 +139,21 @@ def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
     assert 'test "$(dpkg --print-architecture)" = amd64' in target
     for tool in ("nvcc", "ptxas", "cuobjdump", "ncu", "nsys"):
         assert re.search(rf"/[^ ;]*{tool} --version", target)
+
+
+def test_h100_evidence_image_probes_every_runner_loaded_cuda_library():
+    runner = H100_RUNNER.read_text()
+    required_libraries = set(re.findall(r'cuda_toolkit_shared_library\(nvcc, "([A-Za-z0-9]+)"\)', runner))
+    target = _docker_stage("task-h100-evidence")
+    probe_match = re.search(r"probes = (?P<probes>\{.*?\n\})", target, re.DOTALL)
+
+    assert required_libraries == {"cudart", "nvToolsExt"}
+    assert probe_match is not None
+    probes = ast.literal_eval(probe_match.group("probes"))
+    assert set(probes) == required_libraries
+    assert "cuda-cudart-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
+    assert "cuda-nvtx-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
+    assert "ln -s libnvtx3interop.so /usr/local/cuda-13.2/lib64/libnvToolsExt.so" in target
 
 
 def test_h100_evidence_runtime_uses_the_frozen_cuda13_workspace_closure():
