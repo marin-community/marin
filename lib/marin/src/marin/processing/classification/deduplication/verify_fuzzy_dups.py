@@ -60,6 +60,7 @@ class RepresentativeKind(StrEnum):
     """The retained document used for a direct verification."""
 
     CLUSTER_CANONICAL = "cluster_canonical"
+    CLUSTER_FALLBACK = "cluster_fallback"
     LOCAL_REPRESENTATIVE = "local_representative"
 
 
@@ -469,14 +470,22 @@ def _make_cluster_verifier(
             lookup_batch_size,
         )
         representative = next(records_with_text)
+        # A node is canonical when its own content hash equals the cluster
+        # label, so a cluster loses its canonical once the node owning that
+        # label joins a lower-labelled cluster. The remaining members are still
+        # candidates for one another, thus the first member in the deterministic
+        # sort order stands in and every removal is still verified against
+        # retained text.
+        representative_kind = RepresentativeKind.CLUSTER_CANONICAL
         if not representative["is_cluster_canonical"]:
-            raise ValueError(f"Cluster {group_key[1]!r} has no canonical member")
+            representative_kind = RepresentativeKind.CLUSTER_FALLBACK
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters_without_canonical", 1)
         canonical = _RetainedRepresentative(
             id=representative["id"],
             source_key=representative["source_key"],
             prepared=prepare_verification_text(representative["text"], verification_params),
             buckets=frozenset(representative["buckets"]),
-            kind=RepresentativeKind.CLUSTER_CANONICAL,
+            kind=representative_kind,
         )
         retained = [canonical]
         bucket_representatives: dict[str, list[int]] = defaultdict(list)

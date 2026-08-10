@@ -866,19 +866,7 @@ def test_verifier_rejects_different_text_for_canonical_content_id(tmp_path, monk
         )
 
 
-@pytest.mark.parametrize(
-    "canonical_flags, expected_error",
-    [
-        ([False, False], "has no canonical member"),
-        ([True, True], "has more than one canonical member"),
-    ],
-)
-def test_verifier_requires_one_candidate_canonical(
-    tmp_path,
-    monkeypatch,
-    canonical_flags,
-    expected_error,
-):
+def test_verifier_rejects_more_than_one_candidate_canonical(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     source_key, source = _write_source(
         root=tmp_path,
@@ -900,13 +888,13 @@ def test_verifier_requires_one_candidate_canonical(
                         "dup_cluster_id": "cluster-a",
                         "is_cluster_canonical": is_canonical,
                     }
-                    for candidate_id, is_canonical in zip(("first", "second"), canonical_flags, strict=True)
+                    for candidate_id, is_canonical in (("first", True), ("second", True))
                 ]
             }
         },
     )
 
-    with pytest.raises(ZephyrWorkerError, match=expected_error):
+    with pytest.raises(ZephyrWorkerError, match="has more than one canonical member"):
         verify_fuzzy_dups(
             normalized_sources={"source": source},
             minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
@@ -936,3 +924,49 @@ def test_verifier_rejects_mismatched_source_sets(tmp_path, monkeypatch):
             verification_params=FuzzyVerificationParams(),
             local_representative_params=TEST_LOCAL_PARAMS,
         )
+
+
+def test_verifier_falls_back_when_a_cluster_lost_its_canonical(tmp_path, monkeypatch):
+    """Connected components can leave a cluster whose label owner moved away.
+
+    Those members are still candidates for one another, so verification keeps
+    running against the first retained member instead of failing the job.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "aaa", "text": "alpha beta gamma delta epsilon"},
+                {"id": "bbb", "text": "alpha beta gamma delta"},
+            ]
+        },
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "aaa", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                    {"id": "bbb", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                ]
+            }
+        },
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    rows = _output_rows(verified, source_key)
+    assert [row["id"] for row in rows] == ["bbb"]
+    assert rows[0]["dup_doc"] is True
+    assert rows[0]["dup_representative_id"] == "aaa"
+    assert rows[0]["dup_representative_kind"] == "cluster_fallback"
+    assert verified.counters["dedup/fuzzy/verification/clusters_without_canonical"] == 1
