@@ -1,0 +1,37 @@
+Workflow run: https://github.com/marin-community/marin/actions/runs/31442411318
+Run ID: 31442411318
+Run attempt: 1
+Event: workflow_dispatch
+Head SHA: c6f94dda2e1fbb4af06c8f35363c4556c237b9be
+Created: 2026-08-10T23:27:24Z
+Completed: 2026-08-10T23:31:17Z
+Conclusion: success
+
+Build job: h100-evidence-image / build-h100-evidence-image
+Build job ID: 93629683491
+Build started: 2026-08-10T23:27:34Z
+Build completed: 2026-08-10T23:31:16Z
+Build conclusion: success
+
+Skipped legacy jobs:
+- finelog-image
+- marin-tpu-ci-images
+- iris-images
+- iris-manifests
+- iris-tags
+
+Image tag: ghcr.io/marin-community/iris-task-h100-evidence:c6f94dda2e1fbb4af06c8f35363c4556c237b9be
+OCI digest: sha256:b5cd299addc5e7b313f4e7b18537b765b74b31e4c092e1e257c031a9c0483819
+Immutable image: ghcr.io/marin-community/iris-task-h100-evidence:c6f94dda2e1fbb4af06c8f35363c4556c237b9be@sha256:b5cd299addc5e7b313f4e7b18537b765b74b31e4c092e1e257c031a9c0483819
+
+The build log recorded these completed layers:
+
+- `/opt/h100-evidence-runtime/bin/python` loaded CUDA runtime and NVTX symbols.
+- `JAX_PLATFORMS=cpu /opt/h100-evidence-runtime/bin/python` imported the pinned
+  JAX, NumPy, SciPy, and Shuttle runtime.
+- CUDA 13.2 `nvcc`, `ptxas`, and `cuobjdump`, Nsight Compute 2026.1.1.0, and
+  Nsight Systems 2026.1.3.425 returned version identities.
+
+The build did not compile and disassemble an `sm_90a` cubin. It therefore did
+not detect that `cuobjdump --dump-sass` required an absent `nvdisasm` executable.
+

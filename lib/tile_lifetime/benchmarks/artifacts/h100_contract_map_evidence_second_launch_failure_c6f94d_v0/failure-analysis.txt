@@ -1,0 +1,27 @@
+Observed boundary
+=================
+
+1. The task command authenticated the transported launcher and manifest with
+   trusted image `sha256sum` before invoking Python.
+2. The command selected `/opt/h100-evidence-runtime/bin/python` both to execute
+   the launcher and as the launcher's required `--runtime-python` value.
+3. The launcher restored the exact 152-member source capsule. The runner then
+   passed its manifest/import audit, exact one-H100 compute-capability check,
+   and executable/tool identity checks. `run_coordinator` writes preflight
+   evidence before calling `compile_generated_candidates`.
+4. For the first SOURCE_ORDERED candidate, the runner completed the shared
+   library, PTX, and cubin commands before invoking `cuobjdump --dump-sass` on
+   the retained cubin.
+5. `cuobjdump` recognized `sm_90a` code, then exited 1 because it could not find
+   `nvdisasm` through `PATH` or `NVDISASM_PATH`.
+
+The image build checked `cuobjdump --version`; that does not exercise the
+separate executable used by `--dump-sass`. The missing disassembler therefore
+escaped the build smoke even though the runner requires SASS for every generated
+candidate.
+
+No kernel execution, numerical check, timing schedule, Nsight Compute profile,
+Nsight Systems trace, or evidence acceptance occurred. The controller recorded
+one failed attempt with `max_retries_failure=0`; no retry or relaunch was
+performed.
+

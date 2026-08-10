@@ -1,0 +1,22 @@
+[23:39:53] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | h100_contract_map_source_payload.py: OK
+[23:39:53] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | h100-evidence-source-manifest.json: OK
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | Traceback (most recent call last):
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |     main()
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |     output = run_coordinator(
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |              ^^^^^^^^^^^^^^^^
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1549, in run_coordinator
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |     generated_artifacts = compile_generated_candidates(config)
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 826, in compile_generated_candidates
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |     cubin_sass = _run_retained(plan.sass_command)
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 875, in _run_retained
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 |     raise RuntimeError(
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | RuntimeError: CUDA artifact command failed with 1: ('/usr/local/cuda-13.2/bin/cuobjdump', '--dump-sass', '/tmp/shuttle-h100-contract-map-evidence-c6f94d-v2/generated/contract_map_9836cdbed389db24/shuttle_source_ordered/contract_map_source_ordered_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01.cubin'): 
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | 	code for sm_90a
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | 
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | cuobjdump fatal   : Could not find executable file 'nvdisasm'; you can try adding path to environment variables PATH or NVDISASM_PATH
+[23:40:03] task=/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2/0 | 
+
