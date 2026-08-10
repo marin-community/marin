@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import re
 from pathlib import Path
 
@@ -30,6 +29,23 @@ EXPECTED_PACKAGES = {
     "nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb",
 }
 
+LEGACY_IMAGE_JOBS = {
+    "iris-tags",
+    "iris-images",
+    "iris-manifests",
+    "finelog-image",
+    "marin-tpu-ci-images",
+}
+MANUAL_IMAGE_SET_PATTERN = re.compile(r"github\.event_name == 'workflow_dispatch'\s*&&\s*inputs\.image_set == '([^']+)'")
+
+
+def _manual_jobs_for(workflow: dict, image_set: str) -> set[str]:
+    return {
+        name
+        for name, job in workflow["jobs"].items()
+        if image_set in MANUAL_IMAGE_SET_PATTERN.findall(job.get("if", ""))
+    }
+
 
 def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
     records = [line.split() for line in PACKAGE_MANIFEST.read_text().splitlines()]
@@ -53,9 +69,18 @@ def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
     workflow = yaml.safe_load(H100_IMAGE_WORKFLOW.read_text())
     triggers = workflow[True]
 
-    assert set(triggers) == {"workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch", "workflow_call"}
     assert triggers["workflow_dispatch"]["inputs"] == {
         "ref": {"description": "Git ref to build", "required": True, "type": "string"}
+    }
+    assert triggers["workflow_call"] == {
+        "inputs": {"ref": {"description": "Git ref to build", "required": True, "type": "string"}},
+        "outputs": {
+            "image_ref": {
+                "description": "Full-SHA image reference with OCI digest",
+                "value": "${{ jobs.build-h100-evidence-image.outputs.image_ref }}",
+            }
+        },
     }
     assert workflow["permissions"] == {"contents": "read", "packages": "write"}
     assert set(workflow["jobs"]) == {"build-h100-evidence-image"}
@@ -83,10 +108,26 @@ def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
     assert "HASH_TAG" not in build["run"]
 
 
-def test_broad_ops_workflow_cannot_build_h100_evidence_image():
+def test_broad_ops_manual_image_set_selects_legacy_or_h100_exclusively():
     workflow = yaml.safe_load(BROAD_IMAGE_WORKFLOW.read_text())
-    serialized_jobs = json.dumps(workflow["jobs"], sort_keys=True)
+    dispatch = workflow[True]["workflow_dispatch"]
+    bridge = workflow["jobs"]["h100-evidence-image"]
 
-    assert "iris-h100-evidence-image" not in workflow["jobs"]
-    assert "task-h100-evidence" not in serialized_jobs
-    assert "iris-task-h100-evidence" not in serialized_jobs
+    assert dispatch["inputs"] == {
+        "image_set": {
+            "description": "Image set to build",
+            "required": True,
+            "default": "all",
+            "type": "choice",
+            "options": ["all", "h100-evidence"],
+        }
+    }
+    assert set(workflow["jobs"]) == LEGACY_IMAGE_JOBS | {"h100-evidence-image"}
+    assert _manual_jobs_for(workflow, "all") == LEGACY_IMAGE_JOBS
+    assert _manual_jobs_for(workflow, "h100-evidence") == {"h100-evidence-image"}
+    assert bridge == {
+        "if": "github.event_name == 'workflow_dispatch' && inputs.image_set == 'h100-evidence'",
+        "permissions": {"contents": "read", "packages": "write"},
+        "uses": "./.github/workflows/ops-h100-evidence-image.yaml",
+        "with": {"ref": "${{ github.sha }}"},
+    }
