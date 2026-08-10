@@ -126,6 +126,12 @@ def dedup_report(
     canonical_verified = int(
         verified.counters.get(f"{VERIFICATION_COUNTER_PREFIX}/accepted_representative/cluster_canonical", 0)
     )
+    # The anchor is the cluster's longest document, which is the canonical only
+    # about half the time, so leaving this out drops roughly half of
+    # ``verified_duplicates`` from the breakdown.
+    longest_verified = int(
+        verified.counters.get(f"{VERIFICATION_COUNTER_PREFIX}/accepted_representative/cluster_longest", 0)
+    )
     local_verified = int(
         verified.counters.get(f"{VERIFICATION_COUNTER_PREFIX}/accepted_representative/local_representative", 0)
     )
@@ -139,6 +145,7 @@ def dedup_report(
         "delegated_global_exact": delegated_global_exact,
         "verified_duplicates": verified_duplicates,
         "canonical_verified": canonical_verified,
+        "longest_verified": longest_verified,
         "local_verified": local_verified,
         "retained_candidates": retained_candidates,
         "local_representatives": int(

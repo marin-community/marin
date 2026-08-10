@@ -319,14 +319,15 @@ def inspect_verification(
         canonicals = [member for member in cluster_members if member.is_cluster_canonical]
         if len(canonicals) != 1:
             raise AssertionError(f"Cluster {cluster_id!r} has {len(canonicals)} canonical members")
-        canonical = canonicals[0]
-        ordered = [
-            canonical,
-            *sorted(
-                (member for member in cluster_members if not member.is_cluster_canonical),
-                key=lambda member: (member.id, member.file_idx),
-            ),
-        ]
+        # Mirror the verifier: the anchor is the longest document, and the rest
+        # arrive in the shuffle's content-ID order. Replaying against the
+        # connected-components canonical instead would disagree with a correct
+        # run on every cluster whose canonical is not its longest member.
+        stream = sorted(cluster_members, key=lambda member: (len(member.id), member.id, member.file_idx))
+        canonical = max(stream, key=lambda member: (len(member.text), member.id))
+        ordered = [canonical, *(member for member in stream if member is not canonical)]
+        # The verifier labels the anchor by whether it is also the canonical.
+        canonical_kind = "cluster_canonical" if canonical.is_cluster_canonical else "cluster_longest"
         retained = [canonical]
         local_representative_chars = 0
         member_reviews = []
@@ -386,7 +387,7 @@ def inspect_verification(
             attempts.append(
                 {
                     "representative_id": canonical.id,
-                    "representative_kind": "cluster_canonical",
+                    "representative_kind": canonical_kind,
                     "shared_lsh_buckets": shared_buckets,
                     "decision": comparison_decision,
                     "scores": _score_fields(result),
@@ -394,7 +395,7 @@ def inspect_verification(
             )
             matched = canonical if result.accepted else None
             matched_result = result if result.accepted else None
-            matched_kind = "cluster_canonical"
+            matched_kind = canonical_kind
             matched_local_token_sequence_equal = None
             matched_local_char_jaccard = None
 
