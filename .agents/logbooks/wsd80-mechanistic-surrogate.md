@@ -5782,3 +5782,160 @@ as the surface fits the primary less well. It is the ridge experiment's tension 
 the surfaces beat the incumbent on fit and extrapolation and answer the phase question correctly
 everywhere. The failure is not a mis-specified surface. It is that argmin-of-prediction is a
 higher-variance functional than RMSE, and nothing in the model or its selection objective targets it.
+
+## 2026-08-10 — Removing the hand-crafted features fixed the gate they were meant to serve
+
+The round after the independent audit went in an unexpected direction. The audit withdrew the promotion
+case on four verified defects, then a separate constraint from the experimenters decided the round:
+**production swarms do not label buckets semantically.** They arrive classified by topic, with quality
+splits inside each topic, and nothing says which bucket the eval is about. The audited model hand-assigned
+three of its five structures using knowledge that one domain was code and the other off-target text, so it
+could not be deployed as written.
+
+Rebuilding without any semantic assignment did not merely preserve performance. It **fixed the gate that
+had blocked the project throughout**, and the reason was an error of mine.
+
+### The boundary kernel was on the wrong bucket
+
+I had assigned the early-boundary kernel to CODE. Given freedom to place it, the model puts it on BROAD
+text — the fitted scale runs 0.18–1.10 against an early-epoch range of 0–0.797, fully active — and
+switches the code one OFF, its scale pinned at 316.2 where `exp(-21.089/316) = 0.935` is near-constant and
+absorbed by the intercept.
+
+Mechanically this is sensible. The failure mode is starving a domain's early phase; broad text is the
+domain that CAN be starved early and recovered late cheaply; code at 21.089 epochs per unit weight has its
+early share pinned by damage regardless. **Every structural fix attempted in the previous round —
+saturating damage, gate placement, multi-start, the resolution-limit argument — was compensating for a
+misplacement I had introduced.**
+
+### Pool parameters by what determines them
+
+A prediction I made then failed, and produced the next step. The corrected boundary-risk metric does not
+predict which family gets an active kernel. The reason is a grouping mismatch: on the 39-bucket panel one
+topic spans 4.80 to 1723.89 epochs per unit weight, a **359-fold range across all three exposure strata**,
+so a single boundary scale served geometry it could not fit, while another topic had only two buckets to
+fit a scale from.
+
+So parameters now pool by whatever determines them. **Taste** — readout exponents and amplitudes, how much
+a topic helps this eval — stays on topic. **Geometry** — the boundary scale, how fast a bucket exhausts its
+pool — moves to exposure stratum. Neither needs semantics: pool size comes from the token counts the
+exposure columns are already built from.
+
+That stabilised the geometry parameter **44-fold at no fit cost**: worst-case spread across seeds fell from
+120x (by topic: 0.73 to 87.67) to 2.7x (by stratum), with 300M RMSE unchanged at 0.006222–0.006550 and the
+pair gain still correctly negative.
+
+### Final tally, one configuration, honestly obtained
+
+GEN-002 under multi-start, 11 seeds, configuration stamped `NF=2 NS=2` on every line:
+
+| gate | result |
+|---|---|
+| Regret@1 | **11/11** |
+| interior OOF RMSE | 10/11 |
+| gain error | 10/11 |
+| optimum distance | 9/11 (0.027–0.096) |
+| **total** | **40/44** |
+
+Regret@1 at 11/11 is the headline: the model picks a good policy on every fold draw, and that was the
+project's original blocker. Primary-target gain calibration is near-exact, +0.009615 against an observed
++0.009594. Controls pass 25 of 26, the failure being twitterAAE at +0.005783 against a 0.005 limit.
+300M beats HPR outright on RMSE with the correct pair-gain sign.
+
+Note the trajectory as methodology tightened: **42/44 → 43/44 → 40/44**, each drop from removing a defect
+rather than the model worsening. The first two merged selection seeds or configurations; only the last is
+a single configuration with the optimiser fix applied.
+
+### Four corrections, all mine
+
+- A **43/44 tally merged two configurations** — six seeds pre-fix, five post-fix. Same defect the audit
+  found, committed within an hour of my writing the rule against it. Result lines now carry a config stamp
+  so merging is visible rather than silent.
+- The **late-share "sign instability"** I had reported since SUR-098, and which the audit endorsed on the
+  strength of my description, was an unidentified common mode: on a simplex the shares sum to one, so only
+  the CONTRAST is estimable. It is stable at −0.314 to −0.357, spread 0.043.
+- **300M Regret@1 has no valid reference.** Only one row of 520 lies within HPR's published 0.002678 —
+  the observed best itself — so a model scoring at or below it must have picked that row and would score
+  0.000000. Every 300M Regret@1 "fail" in this registry is uninterpretable.
+- I claimed the optimum was **underdetermined**, withdrew that and claimed it **well determined**, and
+  neither was supported. Both came from two-point spreads under mismatched optimiser budgets.
+
+## 2026-08-10 — Codex review voided the round; corrected reruns
+
+An independent Codex 5.6 Sol Max review of GEN-002 found a fatal solver defect, confirmed here from
+scratch. The free design block held the intercept plus one late-share column per family. Family shares
+sum to one, so that block is rank deficient by construction — on WSD80 a 346×3 matrix of rank 2 with a
+third singular value of exactly zero. `fit_head` partialled it out with a plain reduced QR, which returns
+one basis column per *input* column; the surplus direction lay entirely outside the column space
+(measured distance 1.0), so the projector deleted real signal from the response and every constrained
+column. Relabelling the two families — a mathematically identical model — moved predictions by RMS
+0.090 BPB, max 1.664, against gates of 0.008.
+
+The identifiability was documented in this round's own term specification and then never checked in the
+solver. The defect was introduced *by* the round's central change: generalising one designated late-share
+column into one per family. The semantic predecessor used only the identified contrast and is full rank,
+so SUR-102/103 and the 300M port are unaffected.
+
+Fixed with `column_space`, an SVD truncation; relabelling invariance restored to RMS 2.2e-12. Everything
+was rerun. Results in `reference_outputs/general_surrogate_round_verdict_20260810.md` and the
+`gen0*_20260810.txt` outputs beside it.
+
+What the reruns changed:
+
+- WSD80 total is coincidentally still 40/44, but distance gained a seat and gain error lost one. Now
+  reported as two groups — 21/22 nested-OOF, 19/22 full-data — because summing them repeats an accepted
+  defect from SUR-116.
+- Seed 3, the "specification failure" that GEN-007 spent a long investigation on, now **passes** distance
+  at 0.045277. That saga was chasing a solver artifact.
+- Negative controls are 23/26 on five seeds, not 25/26 on one, and the failures are correlated: two of
+  five selections inflate gain on nearly every metric at once.
+- 300M components show four regressions, not two.
+
+Two claims withdrawn. The mechanism headline — that dropping semantic features let the model place the
+boundary kernel on the right bucket, evidenced by a large fitted code scale — is wrong: `exp(-E/k)`
+linearises for large `k` and the unit-norm column scaling cancels the `1/k`, so a large scale turns the
+term into a linear early-exposure feature at full amplitude rather than switching it off. And a four-seed
+ablation headline of 16/16 did not survive to eleven seeds.
+
+The ablation's real result is better than either claim. Over 11 seeds full 42/44 and ablated 41/44 are
+indistinguishable, but the aggregate hides two unanimous opposing effects: without the kernel, gain error
+is better on 11/11 seeds (median 0.000440 vs 0.003348) and RMSE on 10/11, while distance is worse.
+Decomposed against the true (0.100, 0.500), the full model averages early share 0.0693 and late 0.4854;
+ablated averages early 0.1049 and late 0.4539. **The kernel breaks the early share and fixes the late
+share** — 4× better early without it, 3× worse late. That localises the specification gap to a single
+coordinate instead of leaving it as a distance failure.
+
+New and clean: cross-scale transfer. θ selected at 60M and applied at 300M (and the reverse), with only
+the per-target head refit, recovers 80–98% of in-scale variance on 11 of 12 cells. The nonlinear
+parameters look like a property of training rather than of one panel.
+
+### Second Codex review, and the fragility it uncovered
+
+The corrected round was sent back to Codex 5.6 Sol Max. It confirmed the SVD fix is correct (and proved
+why: `Fb̂ + Câ = Py + MCâ`, so the non-unique `b̂` never reaches the predictions), then found five further
+problems. All were verified before acceptance.
+
+Two mattered. **The ablation mechanism claim was wrong-sign** — the boundary column has a non-positive
+derivative in early share, so with a non-negative amplitude it *encourages* a higher early share, the
+opposite of what I claimed it did. The measured shift is a total-refitting effect. **Cross-scale transfer
+is far more qualified than claimed**: the own arm leaked its selection, the recovery statistic differenced
+RMSE rather than MSE, and — decisively — the panels share their policy coordinates almost entirely (60M/300M
+share 241 of 242; 300M/delphi_3e18 share all 280; epoch geometry identical). It measures shape stability
+across model scale at fixed design, not generalisation.
+
+Fixing the leak led somewhere neither review predicted. With a fair comparison, transferred θ scored as
+well as in-scale θ, which raised the worry that θ simply does not matter. A random-θ control refutes that
+— random θ recovers only ~0.25 of explainable MSE on 60M Uncheatable — but shows something worse: on 300M,
+random θ drawn from the model's own search box is up to **23× worse than predicting the mean**.
+
+That is not a hypothetical. The 300M component sweep at seed 2 produced an `arc_challenge` RMSE of
+**562.68 BPB** (ratio 6586) from ordinary nested selection, and a 60M Table-9 cell where in-scale selection
+lost outright to transferred θ. The component regression count is consequently seed-dependent — 4, 1 and 5
+on seeds 0, 1, 2, with only `csqa` and `basic_skills_pattern` recurring.
+
+**The GEN family has a robustness defect: parameter values inside its declared search box produce
+predictions orders of magnitude outside the data range, and ordinary selection lands there often enough to
+corrupt a sweep.** Bound the design or reject out-of-range fits before quoting any further gate number.
+
+A regression test (`test_general_mixture_surrogate.py`) now locks in relabelling invariance; reintroducing
+the old QR makes 4 of 5 checks fail.
