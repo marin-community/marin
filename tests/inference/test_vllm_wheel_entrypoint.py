@@ -21,6 +21,7 @@ import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuWheel
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
+from marin.inference.vllm_wheel_entrypoint import installed_wheel_url_matches
 
 VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
@@ -150,8 +151,8 @@ def _serve_directory(directory: Path) -> Iterator[str]:
             thread.join(timeout=10)
 
 
-def test_uvx_install_records_no_wheel_digest(tmp_path):
-    """Pin the metadata the verifier reads: the production install drops the requirement digest."""
+def test_verifier_accepts_the_record_a_real_uvx_install_writes(tmp_path):
+    """Feed the verifier's URL check a PEP 610 record from a real hashed ``uvx`` install."""
     wheel_path = _build_wheel(tmp_path)
     digest = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
 
@@ -175,7 +176,12 @@ def test_uvx_install_records_no_wheel_digest(tmp_path):
         )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == _uvx_direct_url(url)
+    recorded = json.loads(result.stdout)
+    assert installed_wheel_url_matches(recorded, url)
+    # No digest survives the install, which is why startup verification cannot check one.
+    assert digest not in json.dumps(recorded)
+    # The fake installs below stand in for this record; keep them honest about its shape.
+    assert recorded == _uvx_direct_url(url)
 
 
 @pytest.mark.parametrize(

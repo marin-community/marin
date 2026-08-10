@@ -41,6 +41,18 @@ class _WheelProvenance:
         return dataclasses.asdict(self)
 
 
+def installed_wheel_url_matches(direct_url: dict, expected_wheel_url: str) -> bool:
+    """Whether a PEP 610 record identifies ``expected_wheel_url``.
+
+    The URL is the only artifact identity available at runtime: uv drops the ``#sha256=`` fragment of
+    a remote direct reference and writes an empty ``archive_info``, so there is no installed digest
+    to compare against. Do not add a digest check here.
+    """
+    installed_url = urlsplit(direct_url["url"])
+    installed_url_without_fragment = urlunsplit(installed_url._replace(fragment=""))
+    return unquote(installed_url_without_fragment) == unquote(expected_wheel_url)
+
+
 def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)
@@ -56,12 +68,7 @@ def main() -> None:
     if direct_url_text is None:
         raise RuntimeError("Installed vLLM does not record direct wheel provenance")
     direct_url = json.loads(direct_url_text)
-    # The URL is the only artifact identity available at runtime: uv drops the ``#sha256=`` fragment
-    # of a remote direct reference from the PEP 610 record and writes an empty ``archive_info``, so
-    # there is no installed digest to compare against. Do not reinstate a digest check here.
-    installed_url = urlsplit(direct_url["url"])
-    installed_url_without_fragment = urlunsplit(installed_url._replace(fragment=""))
-    if unquote(installed_url_without_fragment) != unquote(expected.wheel_url):
+    if not installed_wheel_url_matches(direct_url, expected.wheel_url):
         raise RuntimeError(f"Installed vLLM URL {direct_url['url']} does not match {expected.wheel_url}")
 
     torch = importlib.import_module("torch")
