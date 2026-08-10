@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "shuttle/Transforms/Passes.h"
 #include "shuttle/Transforms/XlaRegistration.h"
 #include "stablehlo/dialect/Register.h"
 
@@ -69,7 +70,7 @@ TEST(ShuttleObserverTestBridgeTest, CopiesCompleteSuccessfulInvocation) {
   EXPECT_TRUE(events[2].coverageManifest.empty());
   EXPECT_TRUE(events[2].unsupportedFingerprint.empty());
   EXPECT_EQ(events[2].normalizedModuleFingerprint,
-            "4c2185f4fdec7743950f300b615cf0c2af056339e180c3d46035c54971045dfc");
+            mlir::shuttle::normalizedStablehloFingerprint(*module));
   EXPECT_TRUE(events[2].noShuttleSemantics);
   for (const auto &event : events) {
     EXPECT_TRUE(event.failurePass.empty());

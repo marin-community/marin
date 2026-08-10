@@ -4,6 +4,7 @@
 """Adversarial tests for the pure ordinary-JAX observer contract."""
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from acceptance_contract import (
@@ -12,6 +13,7 @@ from acceptance_contract import (
     ObserverIdentity,
     validate_success_events,
 )
+from verify_acceptance_fixture_oracles import EXPECTATIONS, audited_fingerprint, fixture_path, verify_oracles
 
 IDENTITY = ObserverIdentity(
     policy="source_ordered",
@@ -20,6 +22,9 @@ IDENTITY = ObserverIdentity(
     canonical_options='{"numerics":"source_ordered"}',
     canonical_tuning='{"tile_sizes":[64,128]}',
 )
+
+
+FIXTURE_DIRECTORY = Path(__file__).resolve().parents[1] / "test" / "Inputs"
 
 
 def valid_events(fixture=VJP_EXPECTATION):
@@ -49,7 +54,7 @@ def valid_events(fixture=VJP_EXPECTATION):
             "region_membership": "",
             "coverage_manifest": "",
             "unsupported_fingerprint": "",
-            "normalized_module_fingerprint": fixture.final_normalized_fingerprint,
+            "normalized_module_fingerprint": audited_fingerprint(fixture_path(FIXTURE_DIRECTORY, fixture)),
             "no_shuttle_semantics": True,
         }
     ]
@@ -107,3 +112,19 @@ def test_accepts_only_the_complete_fixture_contract():
 
     assert evidence["fixture"] == "vjp"
     assert evidence["final_fingerprint"] == VJP_EXPECTATION.final_normalized_fingerprint
+
+
+@pytest.mark.parametrize("expectation", EXPECTATIONS)
+def test_acceptance_fingerprint_matches_independent_fixture_audit(expectation):
+    assert audited_fingerprint(fixture_path(FIXTURE_DIRECTORY, expectation)) == expectation.final_normalized_fingerprint
+
+
+def test_fixture_audit_tool_rejects_oracle_drift(tmp_path):
+    for expectation in EXPECTATIONS:
+        source = fixture_path(FIXTURE_DIRECTORY, expectation).read_text()
+        fixture_path(tmp_path, expectation).write_text(source)
+    vjp_path = fixture_path(tmp_path, VJP_EXPECTATION)
+    vjp_path.write_text(vjp_path.read_text().replace("2D557BD5", "0D557BD5"))
+
+    with pytest.raises(ValueError, match="acceptance fixture fingerprint drift"):
+        verify_oracles(tmp_path)

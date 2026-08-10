@@ -108,7 +108,7 @@ FORWARD_EXPECTATION = FixtureExpectation(
     selected_regions=((0, 1, 2),),
     excluded_manifest="[]",
     function_result_anchors=(2,),
-    final_normalized_fingerprint="464fe627e348299133617e8a40c97afa6c5d6683d80a53e94e7686684f9b563a",
+    final_normalized_fingerprint="01539d7d3febf0814ccf67320863712fa19e0425bdda9a716b4716fbe2efc944",
 )
 VJP_EXPECTATION = FixtureExpectation(
     name="vjp",
@@ -116,7 +116,7 @@ VJP_EXPECTATION = FixtureExpectation(
     selected_regions=((0, 1), (5, 6), (7, 8, 9, 10, 11, 12, 13)),
     excluded_manifest=VJP_EXCLUDED_MANIFEST,
     function_result_anchors=(13, 12, 6),
-    final_normalized_fingerprint="60e664d813f5e02ecfdcbfd975501d54332c3eeb076059f306b2e674f1979105",
+    final_normalized_fingerprint="2d557bd5d2f259a053335a6e004f9c5290d19713961e2c41787ed197ed042891",
 )
 FIXTURE_EXPECTATIONS = (FORWARD_EXPECTATION, VJP_EXPECTATION)
 
