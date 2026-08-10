@@ -33,6 +33,7 @@ from rigging.provenance import launch_provenance
 logger = logging.getLogger(__name__)
 
 TRANSFORMER_ENGINE_VERSION = "2.17.1"
+CUDNN_FRONTEND_VERSION = "1.27.0"
 CUDA_CCCL_VERSION = "13.0.85"
 ROUTED_ROWS = 348_672
 ACTIVE_GROUP_SIZES = (116_218, 116_217, 116_217)
@@ -167,6 +168,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
             "cmake>=3.21",
             "ninja",
             "pybind11>=3",
+            f"nvidia-cudnn-frontend=={CUDNN_FRONTEND_VERSION}",
             f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION}",
         ],
         check=False,
@@ -206,7 +208,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
             str(cuda_home),
             str(cccl_include),
         )
-    include_paths = (cccl_include, *_installed_nvidia_include_paths())
+    include_paths = (Path(target) / "include", cccl_include, *_installed_nvidia_include_paths())
     env["CPLUS_INCLUDE_PATH"] = f"{':'.join(str(path) for path in include_paths)}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     start = time.perf_counter()
