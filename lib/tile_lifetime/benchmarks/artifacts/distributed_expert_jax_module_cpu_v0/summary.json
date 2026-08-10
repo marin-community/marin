@@ -18,7 +18,8 @@
       "mechanism": "jax.lax.all_to_all",
       "name": "input_adjoint_return_transport",
       "payload_shape_per_rank": [
-        10,
+        4,
+        4,
         32
       ],
       "semantics": "payload_permutation_only"
@@ -57,13 +58,34 @@
     "shuttle.distributed_expert_cpu.weight_gradient.w13": 1,
     "shuttle.distributed_expert_cpu.weight_gradient.w2": 1
   },
+  "input_adjoint_resources": {
+    "capacity": 5,
+    "contract_flops": 61440,
+    "input_adjoint_output_bytes": 640,
+    "input_features": 32,
+    "intermediate_features": 32,
+    "map_items": 640,
+    "pair_output_bytes": 1280,
+    "projection_scratch_bytes": 640,
+    "rejected_dense_auxiliary_output_bytes": 2560,
+    "rejected_dense_contract_flops": 122880,
+    "rejected_dense_first_lhs_bytes": 1280,
+    "rejected_dense_map_items": 1280,
+    "rejected_dense_mapped_scratch_bytes": 2560,
+    "rejected_dense_total_intermediate_bytes": 8960,
+    "rejected_dense_validity_bytes": 1280,
+    "segment_count": 2,
+    "total_generated_bytes": 2560
+  },
   "input_adjoint_weight_abi": {
     "generated_down_input_adjoint": [
-      64,
+      2,
+      32,
       32
     ],
     "generated_gate_up_input_adjoint": [
-      128,
+      2,
+      64,
       32
     ],
     "stored_down": [
@@ -76,7 +98,7 @@
       32,
       32
     ],
-    "transformation": "transpose each forward Contract weight, concatenate gate/up, then reshape"
+    "transformation": "transpose each forward Contract weight within each segment, then concatenate gate/up"
   },
   "input_edge_return_identity_exact": true,
   "integrated_custom_call_count": 5,
@@ -109,6 +131,69 @@
     "up_weight_cotangent": 9.695035259937868e-06
   },
   "natural_frontend": "ordinary JAX router/top-k/normalized weights and selected expert tensor algebra",
+  "numerical_error": {
+    "down_weight_cotangent": {
+      "maximum_absolute": 0.000622674822807312,
+      "maximum_bf16_ulp": 13959,
+      "maximum_relative": 3.417495184364924e+32,
+      "mean_absolute": 9.100455827137921e-06,
+      "mean_relative": 6.641959345544734e+28
+    },
+    "gate_weight_cotangent": {
+      "maximum_absolute": 0.00030914321541786194,
+      "maximum_bf16_ulp": 27175,
+      "maximum_relative": 3.929729240107904e+33,
+      "mean_absolute": 9.431998478248715e-06,
+      "mean_relative": 4.797032763803594e+29
+    },
+    "input_cotangent": {
+      "maximum_absolute": 0.0007162485271692276,
+      "maximum_bf16_ulp": 160,
+      "maximum_relative": 1.404821753501892,
+      "mean_absolute": 0.00013302169099915773,
+      "mean_relative": 0.019453471526503563
+    },
+    "output": {
+      "maximum_absolute": 0.0003302246332168579,
+      "maximum_bf16_ulp": 28753,
+      "maximum_relative": 3.9876537322998047,
+      "mean_absolute": 7.943704258650541e-05,
+      "mean_relative": 0.029197610914707184
+    },
+    "router_weight_cotangent": {
+      "maximum_absolute": 6.103515625e-05,
+      "maximum_bf16_ulp": 33,
+      "maximum_relative": 0.20408163964748383,
+      "mean_absolute": 7.662689313292503e-06,
+      "mean_relative": 0.010440569370985031
+    },
+    "up_weight_cotangent": {
+      "maximum_absolute": 0.0002546999603509903,
+      "maximum_bf16_ulp": 13608,
+      "maximum_relative": 5.333438348347629e+31,
+      "mean_absolute": 9.695035259937868e-06,
+      "mean_relative": 6.510544858822789e+27
+    }
+  },
+  "primary_input_adjoint_resources_per_rank": {
+    "capacity": 256,
+    "contract_flops": 3246995275776,
+    "input_adjoint_output_bytes": 352321536,
+    "input_features": 7168,
+    "intermediate_features": 3072,
+    "map_items": 150994944,
+    "pair_output_bytes": 301989888,
+    "projection_scratch_bytes": 150994944,
+    "rejected_dense_auxiliary_output_bytes": 28991029248,
+    "rejected_dense_contract_flops": 311711546474496,
+    "rejected_dense_first_lhs_bytes": 33822867456,
+    "rejected_dense_map_items": 14495514624,
+    "rejected_dense_mapped_scratch_bytes": 28991029248,
+    "rejected_dense_total_intermediate_bytes": 106803757056,
+    "rejected_dense_validity_bytes": 14495514624,
+    "segment_count": 96,
+    "total_generated_bytes": 805306368
+  },
   "relation": {
     "capacity_per_destination": 5,
     "destination_rows": 40,
