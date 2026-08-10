@@ -1,0 +1,9 @@
+Branch: codex/event-right-resource-gb200-linkage
+Commit: ac475ef28b
+CPU preflight: /dlwh/shuttle-event-right-resource-cpu-preflight-2
+GB200 linkage: /dlwh/shuttle-event-right-resource-gb200-linkage-2
+Runner: lib/tile_lifetime/benchmarks/run_jax_right_resource_gb200_linkage.sh
+Device shape: --query-length 128 --key-length 1024 --query-heads 16 --key-value-heads 2 --selected-count 4 --seed 17 --warmups 2 --repeats 10 --architecture sm_100a
+Scheduling: 1 GB200, 1 CPU, 32 GB memory, 50 GB disk, batch priority, no retries, 1800 second timeout
+Claim: bounded physical linkage only; do not use the latency as a performance or overlap result
+
