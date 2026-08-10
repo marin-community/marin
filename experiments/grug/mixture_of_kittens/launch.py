@@ -87,6 +87,7 @@ def build_mok_run(
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    watch_interval: int = 0,
     version: str | None = None,
 ) -> ArtifactStep[MokThroughputResult]:
     """Build one arm of the XLA ragged all-to-all comparison.
@@ -98,6 +99,8 @@ def build_mok_run(
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if watch_interval < 0:
+        raise ValueError(f"watch_interval must be non-negative, got {watch_interval}")
     if not 1 <= num_nodes <= MAX_MOK_NODES:
         raise ValueError(f"num_nodes must be between 1 and {MAX_MOK_NODES}, got {num_nodes}")
     if execution is MokExecution.FUSED and num_nodes != 1:
@@ -196,7 +199,10 @@ def build_mok_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=WatchConfig(
+                watch_targets=["grads", "updates", "params"],
+                interval=watch_interval,
+            ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -274,6 +280,13 @@ def build_mok_run(
     default=None,
     help="Override the ragged all-to-all receiver capacity factor.",
 )
+@click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Log per-parameter gradient, update, and parameter norms at this step interval. Zero disables logging.",
+)
 @build_options
 def main(
     run_id: str,
@@ -285,6 +298,7 @@ def main(
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    watch_interval: int,
 ) -> ArtifactStep[MokThroughputResult]:
     return build_mok_run(
         run_id=run_id,
@@ -296,6 +310,7 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        watch_interval=watch_interval,
     )
 
 

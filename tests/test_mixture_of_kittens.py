@@ -300,6 +300,22 @@ def test_fused_gate_records_the_mixture_of_kittens_boundary():
     assert fused["schedule_capacity_factor"] == 1.1
 
 
+def test_gate_can_log_optimizer_boundary_norms():
+    step = launch.build_mok_run(
+        run_id="watch-boundary",
+        num_steps=2,
+        execution=launch.MokExecution.FUSED,
+        implementation=train.RaggedAllToAllImplementation.DEVICE,
+        num_nodes=1,
+        watch_interval=1,
+        version="dev",
+    )
+
+    watch = json.loads(step.fingerprint_payload())["trainer"]["trainer"]["watch"]
+    assert watch["watch_targets"] == ["grads", "updates", "params"]
+    assert watch["interval"] == 1
+
+
 def test_fused_schedule_capacity_adds_headroom_and_expert_padding():
     capacity = schedule_capacity(
         num_tokens=16 * 4096,
