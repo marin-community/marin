@@ -20,6 +20,7 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
+from experiments.datakit.cluster import intruder
 from experiments.datakit.cluster.intruder import (
     Bucket,
     BucketPool,
@@ -396,4 +397,40 @@ def test_claude_panelist_raises_on_nonzero_exit(monkeypatch):
     """A failed CLI call must raise so the driver scores it as an abstention, not a wrong vote."""
     _stub_claude(monkeypatch, "", returncode=1)
     with pytest.raises(RuntimeError, match="exited 1"):
+        ClaudeCliPanelist(seat=1, attempts=1).vote(_trial(), max_doc_chars=2000)
+
+
+def test_claude_panelist_retries_a_failed_process_rather_than_abstaining(monkeypatch):
+    """A transient CLI failure costs a retry, not a trial.
+
+    Abstentions are not free: each one removes a trial from one side, and when
+    failures cluster on one side that side is scored on an easier, self-selected
+    subset. A run that lost 39% of its calls to load had to be discarded.
+    """
+    calls = {"n": 0}
+
+    def flaky(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return subprocess.CompletedProcess(["claude", "-p"], 1, stdout="", stderr="overloaded")
+        return subprocess.CompletedProcess(["claude", "-p"], 0, stdout='{"intruder": 2, "reasoning": "x"}', stderr="")
+
+    monkeypatch.setattr(intruder.subprocess, "run", flaky)
+    monkeypatch.setattr(intruder.time, "sleep", lambda _s: None)
+    assert ClaudeCliPanelist(seat=1).vote(_trial(), max_doc_chars=2000) == 1
+    assert calls["n"] == 2
+
+
+def test_claude_panelist_does_not_retry_a_well_formed_bad_answer(monkeypatch):
+    """An out-of-range index is the model's answer, not contention; asking again buys nothing."""
+    calls = {"n": 0}
+
+    def bad(*_args, **_kwargs):
+        calls["n"] += 1
+        return subprocess.CompletedProcess(["claude", "-p"], 0, stdout='{"intruder": 9, "reasoning": "x"}', stderr="")
+
+    monkeypatch.setattr(intruder.subprocess, "run", bad)
+    monkeypatch.setattr(intruder.time, "sleep", lambda _s: None)
+    with pytest.raises(ValueError, match="out-of-range"):
         ClaudeCliPanelist(seat=1).vote(_trial(), max_doc_chars=2000)
+    assert calls["n"] == 1

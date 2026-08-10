@@ -53,6 +53,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import time
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -93,6 +94,12 @@ DEFAULT_PANEL_SIZE = 3
 # The cap is generous enough to absorb a slow start but still fails a wedged
 # process rather than stalling a round behind it.
 CLAUDE_CLI_TIMEOUT = 180.0
+# Attempts per vote before abstaining. Failures under sustained load are transient,
+# and an abstention costs a trial rather than merely a retry.
+VOTE_ATTEMPTS = 3
+# Spacing between attempts. Retrying immediately re-enters the same contention that
+# caused the failure, so each attempt waits longer than the last.
+VOTE_RETRY_SECONDS = 5.0
 DEFAULT_MAX_DOC_CHARS = 8_000
 
 # --- Sequential-test defaults ---------------------------------------------
@@ -317,11 +324,19 @@ class ClaudeCliPanelist:
 
     A non-zero exit, a timeout, or unparseable output raises, which the driver
     records as an abstention rather than a wrong vote.
+
+    A failed process is retried, because an abstention is not free: it removes a
+    trial from one side's count, and if failures cluster on one side that side is
+    scored on an easier, self-selected subset. A run that lost 39% of its calls
+    this way had to be discarded. Retries are spaced, since sustained load is what
+    produces the failures in the first place, and bounded, so a genuinely broken
+    panelist still abstains instead of stalling the round.
     """
 
     seat: int
     model: str | None = None
     timeout: float = CLAUDE_CLI_TIMEOUT
+    attempts: int = VOTE_ATTEMPTS
 
     @property
     def name(self) -> str:
@@ -334,6 +349,21 @@ class ClaudeCliPanelist:
             "intruder from a different group. Identify the intruder.\n\n"
             + _format_documents(trial.documents, max_doc_chars)
         )
+        for attempt in range(self.attempts):
+            if attempt:
+                time.sleep(VOTE_RETRY_SECONDS * attempt)
+            try:
+                return self._vote_once(prompt)
+            except (subprocess.TimeoutExpired, RuntimeError) as e:
+                # Only the process failing is worth retrying. A reply that parses to
+                # a nonsense index is the model's answer, not contention, and asking
+                # again three times buys nothing.
+                if attempt == self.attempts - 1:
+                    raise
+                logger.debug("%s: vote attempt %d failed (%s), retrying", self.name, attempt + 1, e)
+        raise AssertionError("unreachable: the loop either returns or raises")
+
+    def _vote_once(self, prompt: str) -> int:
         command = ["claude", "-p"]
         if self.model:
             command += ["--model", self.model]
