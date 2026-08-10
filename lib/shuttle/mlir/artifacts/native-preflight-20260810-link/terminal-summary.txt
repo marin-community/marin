@@ -1,0 +1,32 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-arrayattr (/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: ut/k8-opt/bin/external/shuttle_mlir/shuttle-opt-2.params
+clang: warning: argument unused during compilation: '-pthread' [-Wunused-command-line-argument]
+ld.lld: error: undefined symbol: mlir::detail::TypeIDResolver<mlir::shuttle::ShuttleDialect, void>::id
+>>> referenced by shuttle-opt.cc
+>>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(main)
+>>> referenced by Passes.cc
+>>>               Passes.o:(mlir::shuttle::impl::ShuttleAnnotateSourcePassBase<mlir::shuttle::(anonymous namespace)::AnnotateSourcePass>::getDependentDialects(mlir::DialectRegistry&) const) in archive bazel-out/k8-opt/bin/external/shuttle_mlir/libShuttlePasses.a
+>>> referenced by shuttle-opt.cc
+>>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(std::_Function_handler<mlir::Dialect* (mlir::MLIRContext*), void mlir::DialectRegistry::insert<mlir::shuttle::ShuttleDialect>()::'lambda'(mlir::MLIRContext*)>::_M_invoke(std::_Any_data const&, mlir::MLIRContext*&&))
+>>> referenced 1 more times
+
+ld.lld: error: undefined symbol: mlir::shuttle::ShuttleDialect::ShuttleDialect(mlir::MLIRContext*)
+>>> referenced by shuttle-opt.cc
+>>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(std::unique_ptr<mlir::Dialect, std::default_delete<mlir::Dialect>> llvm::function_ref<std::unique_ptr<mlir::Dialect, std::default_delete<mlir::Dialect>> ()>::callback_fn<mlir::shuttle::ShuttleDialect* mlir::MLIRContext::getOrLoadDialect<mlir::shuttle::ShuttleDialect>()::'lambda'()>(long))
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 541.934s, Critical Path: 107.51s
+INFO: 5951 processes: 1348 internal, 4603 local.
+ERROR: Build did NOT complete successfully
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T10:12:23Z
+
+
+  TASK  STATE      EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  10 minutes and 51.05 seconds  -           -          ut/k8-opt/bin/external/shuttle_mlir/shuttle-opt-2.params
+                                                                              clang: warning: argument unused during compilation: '-pthrea...
