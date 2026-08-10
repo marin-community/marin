@@ -465,11 +465,12 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
         json={},
         headers={"content-type": "application/json", "cookie": "iris_session=stale-token"},
     )
-    forwarded = httpx.post(
+    forwarded_with_retired_cookie = httpx.post(
         f"{controller.url}/iris.cluster.ControllerService/ListJobs",
         json={},
         headers={
             "content-type": "application/json",
+            "cookie": f"iris_session={token}",
             "x-forwarded-for": "203.0.113.10",
         },
     )
@@ -494,7 +495,7 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
 
     assert direct.status_code == 200
     assert direct_with_stale_browser_cookie.status_code == 200
-    assert forwarded.status_code == 401
+    assert forwarded_with_retired_cookie.status_code == 401
     assert authenticated.status_code == 200
     assert spoofed.status_code == 401
 

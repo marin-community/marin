@@ -167,6 +167,9 @@ class NativeProxyAuthConfig:
     proxy_audience: str = PROXY_PLANE_AUDIENCE
     proxy_scope: str = ENDPOINT_TOKEN_SCOPE
     federation_audience: str = FEDERATION_AUDIENCE
+    # Published native wheels still require this private envelope field. Cookie
+    # parsers split on "=", so this value cannot match any browser cookie name.
+    session_cookie: str = "__iris_browser_sessions_disabled__="
     iap_public_keys_url: str = IAP_PUBLIC_KEYS_URL
     iap_issuer: str = IAP_ISSUER
     iap_audience: str | None = None
