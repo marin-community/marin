@@ -4087,3 +4087,38 @@ author: dlwh
   host. A CPU-only Bazel preflight is gated on the dialect's independent source
   review and must not be promoted to ordinary-JAX acceptance until the same
   pass library is linked into a Shuttle-enabled jaxlib.
+
+### 2026-08-10 - TLTC-MLIR-002 ordinary-JAX vertical-slice design
+
+- Hypothesis: one bounded f32 `tanh(x @ w0) @ w1` forward and JAX-owned VJP can
+  prove the native MLIR conversion boundary without adding a workload
+  recognizer or absorbing unsupported StableHLO.
+- Commit: `b9ef181c5ea38106bee38a61d271b4cd3870445d`, based on canonical
+  `0481d4ef2b9f7139b53784ea3d03790d72d1699c`.
+- Fixture: JAX/jaxlib 0.10.1; `x=[2,3]`, `w0=[3,4]`, `w1=[4,5]`, and output
+  cotangent `[2,5]`, all f32. The VJP returns `dx=[2,3]`, `dw0=[3,4]`, and
+  `dw1=[4,5]`.
+- Commands:
+
+  ```bash
+  /Users/dlwh/src/marin/.venv/bin/python -c 'import jax, jax.numpy as jnp; print(jax.__version__); f=lambda x,w0,w1: jnp.tanh(x@w0)@w1; g=lambda x,w0,w1,dy: jax.vjp(f,x,w0,w1)[1](dy); x=jnp.zeros((2,3),jnp.float32); w0=jnp.zeros((3,4),jnp.float32); w1=jnp.zeros((4,5),jnp.float32); dy=jnp.zeros((2,5),jnp.float32); print(jax.jit(f).lower(x,w0,w1).compiler_ir(dialect="stablehlo")); print(jax.jit(g).lower(x,w0,w1,dy).compiler_ir(dialect="stablehlo"))'
+  ./infra/pre-commit.py --changed-files --fix
+  ```
+- Result: the pinned VJP contains the expected
+  `constant -> broadcast_in_dim -> subtract` unsupported island. The design
+  selects one forward region and three contiguous VJP regions around that
+  island. It specifies a transient complete/selected/excluded source coverage
+  manifest, post-lowering equality, provenance stripping, one shared native
+  pipeline builder, and separate offline `shuttle-opt` and patched-jaxlib
+  acceptance gates. `SOURCE_ORDERED` and `FAST` retain distinct policy and
+  cache identities even while their first lowerings may be identical.
+- Validation: `git diff --check` and all
+  `./infra/pre-commit.py --changed-files --fix` checks pass. The initial
+  isolated-worktree run lacked a `.venv` and reported repository-wide missing
+  imports; rerunning against the existing project environment passed.
+- Interpretation: this is a design and test-plan checkpoint. StableHLO
+  conversion, lowering, offline execution, and ordinary `jax.jit` integration
+  have not passed these gates.
+- Next action: implement the shared pipeline and the offline fixture gate after
+  the native dialect's CPU Bazel preflight is green; then build the patched
+  jaxlib and run the ordinary-JAX forward/VJP gate.
