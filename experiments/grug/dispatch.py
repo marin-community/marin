@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
@@ -52,6 +52,7 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     pip_packages: Sequence[str] = (),
+    extra_env_vars: Mapping[str, str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -59,7 +60,10 @@ def dispatch_grug_training_run(
     not itself an Iris job -- which is the case for a launcher run from a dev box.
     """
     safe_run_id = _safe_job_suffix(run_id)
-    env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    env_vars = resolve_training_env(
+        base_env={**_forwarded_env_vars(), **(extra_env_vars or {})},
+        resources=resources,
+    )
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),

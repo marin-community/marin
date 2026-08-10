@@ -28,8 +28,17 @@ TRANSFORMER_ENGINE_PIP_ARGS = (
     # The aarch64 JAX package is an sdist. Its isolated build omits the NVTX headers and cannot
     # detect the CUDA 13 toolchain already installed by Marin's GPU extra.
     "--no-build-isolation",
-    "transformer_engine[jax]==2.17.1",
+    "transformer_engine[core_cu13,jax]==2.17.1",
 )
+TRANSFORMER_ENGINE_BUILD_ENV = {
+    # TE 2.17.1 falls back to CUDA 12 when JAX 0.11 does not expose its private runtime-version API.
+    "CUDA_VERSION": "13.0",
+    # CUDA 13's unified pip layout nests the CCCL headers below the directory TE discovers.
+    "CPLUS_INCLUDE_PATH": "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl",
+    "NVTE_BUILD_USE_NVIDIA_WHEELS": "1",
+    "NVTE_CUDA_ARCHS": "100",
+    "NVTE_WITH_NCCL_EP": "0",
+}
 BENCHMARK_PATH = Path("lib/levanter/scripts/bench/bench_grug_context_parallel_attention.py")
 
 
@@ -100,6 +109,7 @@ def run_context_parallel_attention_benchmark(config: ContextParallelAttentionBen
         max_retries_failure=0,
         processes_per_task=HERO_PROCESSES_PER_TASK,
         pip_packages=TRANSFORMER_ENGINE_PIP_ARGS,
+        extra_env_vars=TRANSFORMER_ENGINE_BUILD_ENV,
     )
 
 

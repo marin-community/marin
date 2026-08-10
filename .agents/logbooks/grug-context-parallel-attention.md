@@ -219,8 +219,17 @@ run. A benchmark gate for the exact Grug shapes now exists at
   `transformer-engine-jax==2.17.1` package is an sdist. Its isolated build omitted
   `nvtx3/nvToolsExt.h`, pulled both CUDA 12 and explicit CUDA 13 core packages, and failed before JAX
   initialization. The child and its four-GB200 allocation terminated cleanly.
-- Environment fix: install only `transformer_engine[jax]==2.17.1` with `uv pip install
+- Environment fix: install `transformer_engine[core_cu13,jax]==2.17.1` with `uv pip install
   --no-build-isolation`. The non-isolated setup can see the existing CUDA 13 compiler and
   `nvidia-nvtx-cu12` header package, allowing TE's setup logic to select its matching core package.
+- CUDA 13 retry: parent `/dlwh/grug-cp-te217-s262k-ring2-coord`, child
+  `/dlwh/grug-cp-te217-s262k-ring2-coord/grug-train-grug-cp-te217-s262k-ring2`. The non-isolated
+  build found NVTX and reached C++ compilation, then failed because CUDA 13's `cuda_fp16.h` includes
+  `<nv/target>` from a nested CCCL directory that TE did not add. JAX 0.11 also lacks the private
+  runtime-version accessor TE checks, so TE fell back to CUDA 12 dependency selection. The job
+  terminated and released its node.
+- Next environment fix: request the metapackage extras `core_cu13,jax`; set `CUDA_VERSION=13.0`;
+  force NVIDIA-wheel include discovery; add `/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl`
+  to `CPLUS_INCLUDE_PATH`; compile only SM100; and disable the unused NCCL expert-parallel extension.
 - Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
   64-GPU job when the environment gate passes.
