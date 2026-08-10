@@ -4059,3 +4059,31 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_cuda_compile_preflight_sm100_v0/`.
   Device compilation through JAX, integrated numerical execution, and latency
   remain unmeasured. Independent review remains required before GB200.
+
+### 2026-08-10 - TLTC-MLIR-001 native StableHLO transform seam
+
+- Decision: Shuttle's production boundary is a native MLIR extension in the
+  ordinary PJRT conversion path, after Shardy/CHLO cleanup and immediately
+  before StableHLO-to-HLO conversion. Python StableHLO parsers, serialized-HLO
+  callbacks, and textual-HLO rewriters remain experimental evidence only.
+- Canonical commits `be6b4c6e58` and `1c6ab09409` preserve a patch against the
+  pinned XLA revision `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`.
+  `xla_shuttle_enable` selects exactly one composite `shuttle` transform. The
+  registry clones, runs, verifies, and commits transactionally, seals before
+  its first execution, and fails if the keyed transform is absent.
+- Independent review found and rejected two earlier fail-open designs. The
+  first read `DebugOptions` before JAX's `env_option_overrides` had been
+  applied, so ordinary `jax.jit(..., compiler_options=...)` silently skipped
+  Shuttle. The second applied every override early and could undo later Shardy
+  consistency mutations. The accepted source patch applies only
+  `xla_shuttle_enable` and `xla_shuttle_options` before MLIR conversion; all
+  unrelated overrides retain their existing backend boundary and cache wire.
+- Source validation: the generated patch applies cleanly to the exact XLA pin;
+  all CPU, interpreter, StreamExecutor, and deviceless-GPU MLIR callers use the
+  narrow wrapper; proto IDs 481/482 are unused at the pin; `git diff --check`,
+  ten Shuttle tests, and `./infra/pre-commit.py --changed-files` pass.
+- This is source-level integration evidence only. XLA tests and the native
+  dialect have not yet compiled because Bazel/TableGen are unavailable on the
+  host. A CPU-only Bazel preflight is gated on the dialect's independent source
+  review and must not be promoted to ordinary-JAX acceptance until the same
+  pass library is linked into a Shuttle-enabled jaxlib.
