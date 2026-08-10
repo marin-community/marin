@@ -247,6 +247,15 @@ const readout = computed(() => {
   }
 })
 
+// Harness versions the shown aggregates span. More than one means the same benchmark name was
+// defined by more than one harness across the models being averaged, which is worth reading before
+// the number is.
+const aggregateRuntimes = computed(() => {
+  const runtimes = new Set<string>()
+  for (const row of data.value?.rows ?? []) for (const runtime of row.aggregate?.runtimes ?? []) runtimes.add(runtime)
+  return [...runtimes].sort()
+})
+
 function heatStyle(cell: PanelCell): Record<string, string> {
   return { backgroundColor: scoreTint(cell.value) }
 }
@@ -259,12 +268,21 @@ function cellFor(row: PanelRow, task: string): PanelCell | undefined {
 function gapFor(row: PanelRow, task: string): MissingCell | undefined {
   return row.missing[task]
 }
+// A cell names the run behind it, the cohort it came from, and the harness that defined the
+// benchmark. Cells in one column can come from different cohorts -- that is the point of merging the
+// newest valid result per benchmark -- so the row heading cannot carry this and the cell must.
 function cellTitle(cell: PanelCell): string {
   const scope =
     cell.interval_kind === INTERVAL_KIND.IDENTIFIED
       ? formatCoverage(cell.coverage)
       : 'attempted count not reported, so completeness is unknown'
-  return `${cell.metric} · ${cell.n_scored} items graded · 95% ${formatInterval(cell.low, cell.high)} · ${scope} — click for history`
+  return [
+    `${cell.metric} · ${cell.n_scored} items graded`,
+    `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
+    `run ${cell.run_id}`,
+    `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
+    'click for history',
+  ].join('\n')
 }
 function gapLabel(gap: MissingCell): string {
   return gap.reason.startsWith('coverage') ? 'under-covered' : 'no result'
@@ -528,8 +546,10 @@ function goToModel(model: string) {
             aggregatePolicy === 'require_complete'
               ? 'omitted for any model missing one of them'
               : 'with a missing benchmark bounded to the full [0, 1] range it could have taken'
-          }}. The interval covers item sampling and ungraded items. It does not cover run-to-run variation, and it is
-          marginal per model, so it makes no simultaneous claim across the table.
+          }}<template v-if="aggregateRuntimes.length">, over
+          <span class="font-mono">{{ aggregateRuntimes.join(', ') }}</span></template>. The interval covers item
+          sampling and ungraded items. It does not cover run-to-run variation, and it is marginal per model, so it
+          makes no simultaneous claim across the table.
         </p>
         <p v-else class="text-xs text-text-muted mt-2 leading-relaxed">
           No cross-benchmark mean is shown by default: it has no interpretation without a fixed benchmark panel, the

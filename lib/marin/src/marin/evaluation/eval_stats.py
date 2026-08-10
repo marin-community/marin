@@ -361,6 +361,11 @@ class Aggregate:
     """The per-benchmark metric each cell contributed, in panel order, so the aggregate can show what
     it averaged. A missing cell contributes an empty string."""
 
+    runtimes: tuple[str, ...]
+    """Distinct harness versions across the contributing cells, sorted. Two benchmarks under the same
+    name are not the same benchmark if different harness versions defined them, so an aggregate that
+    spans more than one says so."""
+
 
 def panel_aggregate(
     cells: Mapping[str, Measurement],
@@ -412,6 +417,7 @@ def panel_aggregate(
         protocol=protocol,
         covered=len(scored),
         metrics=tuple(cell.metric if cell is not None else "" for cell in present),
+        runtimes=tuple(sorted({cell.eval_runtime for cell in scored if cell.eval_runtime})),
     )
 
 

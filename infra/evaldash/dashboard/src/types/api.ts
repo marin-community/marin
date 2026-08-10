@@ -87,6 +87,8 @@ export interface PanelAggregate {
   panel: string[]
   missing_policy: string
   metrics: string[]
+  /** Distinct harness versions the averaged cells came from; more than one is worth seeing. */
+  runtimes: string[]
 }
 
 export interface PanelRow {

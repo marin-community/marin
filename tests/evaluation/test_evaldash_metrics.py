@@ -196,6 +196,9 @@ def test_a_requested_aggregate_carries_its_panel_and_missing_policy():
     assert aggregate["panel"] == ["mmlu", "drop"]
     assert aggregate["missing_policy"] == "require_complete"
     assert aggregate["metrics"] == ["acc,none", "acc,none"]
+    # Two benchmarks under the same names are not the same benchmarks if different harness versions
+    # defined them, so the aggregate carries the versions it spans.
+    assert aggregate["runtimes"] == ["i"]
 
 
 def test_an_incomplete_panel_has_no_aggregate_under_the_default_policy():

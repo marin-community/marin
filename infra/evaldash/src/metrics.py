@@ -159,6 +159,7 @@ def _aggregate_payload(aggregate: Aggregate | None) -> dict | None:
         "panel": list(aggregate.protocol.panel),
         "missing_policy": aggregate.protocol.missing.value,
         "metrics": list(aggregate.metrics),
+        "runtimes": list(aggregate.runtimes),
     }
 
 
