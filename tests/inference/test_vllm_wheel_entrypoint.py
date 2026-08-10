@@ -191,26 +191,48 @@ def test_verifier_accepts_the_record_a_real_uvx_install_writes(tmp_path):
     assert recorded == _uvx_direct_url(url)
 
 
-def test_deep_gemm_cuda_environment_uses_packaged_nvcc_and_cccl(tmp_path):
+def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     nvidia_root = tmp_path / "site-packages" / "nvidia"
     compiler_root = nvidia_root / "cu13"
     (compiler_root / "bin").mkdir(parents=True)
     (compiler_root / "bin" / "nvcc").touch()
+    (compiler_root / "include").mkdir()
+    (compiler_root / "include" / "cuda.h").touch()
     cccl_root = nvidia_root / "cuda_cccl" / "include"
     (cccl_root / "nv").mkdir(parents=True)
     (cccl_root / "nv" / "target").touch()
     (cccl_root / "cuda" / "std").mkdir(parents=True)
     (cccl_root / "cuda" / "std" / "type_traits").touch()
+    cublas_root = nvidia_root / "cublas"
+    (cublas_root / "include").mkdir(parents=True)
+    (cublas_root / "include" / "cublasLt.h").touch()
+    (cublas_root / "lib").mkdir()
+    (cublas_root / "lib" / "libcublas.so.12").touch()
+    cuda_runtime_root = nvidia_root / "cuda_runtime"
+    (cuda_runtime_root / "lib").mkdir(parents=True)
+    (cuda_runtime_root / "lib" / "libcudart.so.12").touch()
 
     environment = deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
 
-    compatibility_include = tmp_path / "runtime" / "marin-deep-gemm-cuda" / "include"
+    compatibility_home = Path(environment["CUDA_HOME"])
+    compatibility_include = compatibility_home / "include"
     assert environment == {
-        "CUDA_HOME": str(compiler_root),
+        "CUDA_HOME": str(compatibility_home),
         "DG_JIT_USE_NVRTC": "0",
         "NVCC_PREPEND_FLAGS": f"-I{compatibility_include} -I{cccl_root}",
     }
+    assert (compatibility_home / "bin" / "nvcc").resolve() == (compiler_root / "bin" / "nvcc").resolve()
+    assert (compatibility_include / "cuda.h").resolve() == (compiler_root / "include" / "cuda.h").resolve()
     assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
+    assert (compatibility_include / "cublasLt.h").resolve() == (cublas_root / "include" / "cublasLt.h").resolve()
+    assert (compatibility_home / "lib64" / "libcudart.so.12").resolve() == (
+        cuda_runtime_root / "lib" / "libcudart.so.12"
+    ).resolve()
+    assert (compatibility_home / "lib64" / "libcublas.so.12").resolve() == (
+        cublas_root / "lib" / "libcublas.so.12"
+    ).resolve()
+
+    assert deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime") == environment
 
 
 def test_deep_gemm_cuda_environment_rejects_missing_compiler(tmp_path):
@@ -220,6 +242,11 @@ def test_deep_gemm_cuda_environment_rejects_missing_compiler(tmp_path):
     (cccl_root / "nv" / "target").touch()
     (cccl_root / "cuda" / "std").mkdir(parents=True)
     (cccl_root / "cuda" / "std" / "type_traits").touch()
+    cublas_root = nvidia_root / "cublas"
+    (cublas_root / "include").mkdir(parents=True)
+    (cublas_root / "include" / "cublasLt.h").touch()
+    (cublas_root / "lib").mkdir()
+    (nvidia_root / "cuda_runtime" / "lib").mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="Expected one packaged CUDA compiler root"):
         deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")

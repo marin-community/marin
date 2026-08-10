@@ -11,6 +11,7 @@ extension check on its own, because its metadata and its extension agree with ea
 """
 
 import dataclasses
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -67,8 +68,21 @@ def installed_wheel_url_matches(direct_url: dict, expected_wheel_url: str) -> bo
     return unquote(installed_url_without_fragment) == unquote(expected_wheel_url)
 
 
+def _link_directory_entries(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for source_entry in sorted(source.iterdir()):
+        destination_entry = destination / source_entry.name
+        if destination_entry.is_symlink():
+            if destination_entry.resolve() != source_entry.resolve():
+                raise RuntimeError(f"Conflicting CUDA compatibility link: {destination_entry}")
+            continue
+        if destination_entry.exists():
+            raise RuntimeError(f"CUDA compatibility path is not a symlink: {destination_entry}")
+        destination_entry.symlink_to(source_entry, target_is_directory=source_entry.is_dir())
+
+
 def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: Path) -> dict[str, str]:
-    """Build the CUDA compiler environment expected by DeepGEMM's runtime JIT."""
+    """Build the packaged CUDA toolkit view expected by DeepGEMM and FlashInfer JITs."""
     compiler_roots = tuple(
         candidate
         for nvidia_root in nvidia_roots
@@ -81,25 +95,55 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
         for candidate in (nvidia_root / "cuda_cccl" / "include",)
         if (candidate / "nv" / "target").is_file() and (candidate / "cuda" / "std" / "type_traits").is_file()
     )
+    cublas_roots = tuple(
+        candidate
+        for nvidia_root in nvidia_roots
+        for candidate in (nvidia_root / "cublas",)
+        if (candidate / "include" / "cublasLt.h").is_file() and (candidate / "lib").is_dir()
+    )
+    cuda_runtime_roots = tuple(
+        candidate
+        for nvidia_root in nvidia_roots
+        for candidate in (nvidia_root / "cuda_runtime",)
+        if (candidate / "lib").is_dir()
+    )
     if len(compiler_roots) != 1:
         raise RuntimeError(f"Expected one packaged CUDA compiler root, found {compiler_roots}")
     if len(cccl_roots) != 1:
         raise RuntimeError(f"Expected one packaged CUDA CCCL include root, found {cccl_roots}")
+    if len(cublas_roots) != 1:
+        raise RuntimeError(f"Expected one packaged cuBLAS root, found {cublas_roots}")
+    if len(cuda_runtime_roots) != 1:
+        raise RuntimeError(f"Expected one packaged CUDA runtime root, found {cuda_runtime_roots}")
 
+    compiler_root = compiler_roots[0]
     cccl_root = cccl_roots[0]
-    compatibility_include = temporary_root / _CUDA_COMPAT_DIRECTORY / "include"
-    compatibility_include.mkdir(parents=True, exist_ok=True)
+    cublas_root = cublas_roots[0]
+    cuda_runtime_root = cuda_runtime_roots[0]
+    source_identity = "\0".join(
+        str(path.resolve()) for path in (compiler_root, cccl_root, cublas_root, cuda_runtime_root)
+    )
+    identity = hashlib.sha256(source_identity.encode()).hexdigest()[:16]
+    compatibility_home = temporary_root / _CUDA_COMPAT_DIRECTORY / identity
+    compatibility_bin = compatibility_home / "bin"
+    compatibility_include = compatibility_home / "include"
+    compatibility_lib = compatibility_home / "lib64"
+
+    _link_directory_entries(compiler_root / "bin", compatibility_bin)
+    _link_directory_entries(compiler_root / "include", compatibility_include)
+    _link_directory_entries(cublas_root / "include", compatibility_include)
+    _link_directory_entries(cuda_runtime_root / "lib", compatibility_lib)
+    _link_directory_entries(cublas_root / "lib", compatibility_lib)
+
     namespaced_cccl = compatibility_include / "cccl"
-    if namespaced_cccl.is_symlink():
-        if namespaced_cccl.resolve() != cccl_root.resolve():
-            raise RuntimeError(f"Stale CUDA CCCL compatibility link: {namespaced_cccl}")
-    elif namespaced_cccl.exists():
-        raise RuntimeError(f"CUDA CCCL compatibility path is not a symlink: {namespaced_cccl}")
+    if namespaced_cccl.exists() or namespaced_cccl.is_symlink():
+        if not namespaced_cccl.is_symlink() or namespaced_cccl.resolve() != cccl_root.resolve():
+            raise RuntimeError(f"Conflicting CUDA CCCL compatibility path: {namespaced_cccl}")
     else:
-        namespaced_cccl.symlink_to(cccl_root)
+        namespaced_cccl.symlink_to(cccl_root, target_is_directory=True)
 
     return {
-        _CUDA_HOME_ENV_VAR: str(compiler_roots[0]),
+        _CUDA_HOME_ENV_VAR: str(compatibility_home),
         _DEEP_GEMM_NVRTC_ENV_VAR: "0",
         _NVCC_PREPEND_FLAGS_ENV_VAR: f"-I{compatibility_include} -I{cccl_root}",
     }
