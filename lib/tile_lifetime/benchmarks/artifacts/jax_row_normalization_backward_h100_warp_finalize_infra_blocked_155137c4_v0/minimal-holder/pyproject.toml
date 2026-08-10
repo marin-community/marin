@@ -1,0 +1,12 @@
+[project]
+name = "shuttle-rms-warp-finalize-h100-holder"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+gpu = ["jax[cuda13]==0.10.1"]
+
+[dependency-groups]
+dev = []
+

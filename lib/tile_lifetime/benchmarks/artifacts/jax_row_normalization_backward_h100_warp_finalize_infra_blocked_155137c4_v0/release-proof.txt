@@ -1,0 +1,90 @@
+Current-Iris client submission log:
+I20260809 19:50:41 8418467456 iris.cluster.config Loading config from /tmp/marin-current-iris-dYl9RP/lib/iris/config/cw-us-east-02a.yaml
+Traceback (most recent call last):
+  File "/tmp/marin-current-iris-dYl9RP/.venv/bin/iris", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cli/main.py", line 289, in main
+    iris()
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1870, in invoke
+    super().invoke(ctx)
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cli/main.py", line 102, in iris
+    _configure_client_s3(config)
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cli/main.py", line 36, in _configure_client_s3
+    configure_client_s3(config)
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cluster/platforms/k8s/controller.py", line 117, in configure_client_s3
+    credentials = s3_credentials(StoreType.COREWEAVE)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/rigging/src/rigging/filesystem/s3_compat.py", line 195, in s3_credentials
+    config = store_config(store)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/rigging/src/rigging/filesystem/cluster_config.py", line 418, in store_config
+    raise ValueError(f"no cluster config declares a 'stores' entry for {store}")
+ValueError: no cluster config declares a 'stores' entry for coreweave
+
+Iris query after rejection:
+I20260809 19:51:04 8418467456 iris.cluster.config Loading config from /tmp/shuttle-rms-warp-Nu18Sl/lib/iris/config/cw-us-east-02a.yaml
+Traceback (most recent call last):
+  File "/tmp/marin-current-iris-dYl9RP/.venv/bin/iris", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cli/main.py", line 289, in main
+    iris()
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1870, in invoke
+    super().invoke(ctx)
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cli/main.py", line 99, in iris
+    config = load_config(config_file)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cluster/config.py", line 1539, in load_config
+    config = parse_config(data)
+             ^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/lib/iris/src/iris/cluster/config.py", line 1514, in parse_config
+    config = IrisClusterConfig.model_validate(data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/marin-current-iris-dYl9RP/.venv/lib/python3.12/site-packages/pydantic/main.py", line 716, in model_validate
+    return cls.__pydantic_validator__.validate_python(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for IrisClusterConfig
+kubernetes_provider.default_image
+  Extra inputs are not permitted [type=extra_forbidden, input_value='ghcr.io/marin-community/iris-task:latest', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden
+
+Exact task-label pod query:
+
+Local dev_gpu sessions matching warp-finalize:
+
+Compatible read-only Iris query after rejection:
+I20260809 19:51:14 8418467456 iris.cluster.config Loading config from /tmp/shuttle-rms-warp-Nu18Sl/lib/iris/config/cw-us-east-02a.yaml
+I20260809 19:51:14 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 19:51:16 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+No jobs found.

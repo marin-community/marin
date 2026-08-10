@@ -3772,6 +3772,29 @@ author: dlwh
   empty after rejection. The failure evidence is under
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_warp_finalize_bundle_rejection_571d227b_v0/`.
 
+### 2026-08-09 19:51 PDT - TLTC-XLA-078 warp-finalize launch compatibility block
+
+- A corrected minimal holder reduced the Iris bundle from `35.828574 MiB` to
+  `481,889` bytes. It contains an exact `git archive` of pushed revision
+  `155137c495`, an empty `dev` dependency group, and a universal lock whose
+  Linux dry-run resolves JAX/JAXLIB/CUDA plugin/PJRT `0.10.1` plus NVCC
+  `13.3.73`.
+- The first minimal launch was rejected by the controller because the local
+  Iris client dated `2026-07-21` was older than the server's `2026-07-27`
+  floor. No job was inserted. A current Iris client from `origin/main`
+  revision `64913f5302` reports `2026-08-08` and passes a read-only controller
+  RPC.
+- The final authorized current-Iris launch failed before opening the controller
+  connection. Current `job run` configures CoreWeave S3 first, but its
+  `cw-us-east-02a.yaml` has no `stores` entry. No job, pod, GPU allocation, or
+  benchmark process existed after any attempt. The no-further-submission rule
+  ended the experiment without an H100 measurement.
+- Warp-finalize remains unmeasured. The sealed generic barrier-tree result is
+  still `0.089681 ms`, while matched XLA is `0.061414 ms`. Minimal-holder
+  inputs, exact client logs, source and bundle hashes, and release proof are
+  under
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_warp_finalize_infra_blocked_155137c4_v0/`.
+
 ### 2026-08-09 - TLTC-MOE-001 distributed training parity boundary
 
 - The ownership audit separates the accepted four-rank primary-shape forward
