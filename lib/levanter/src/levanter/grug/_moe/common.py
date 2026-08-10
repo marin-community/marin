@@ -23,6 +23,8 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "ragged_all_to_all_cute",  # Ragged transport with QuACK SM100 grouped GEMMs.
+    "ragged_all_to_all_cudnn_cute",  # QuACK activation path plus cuDNN grouped Wgrad.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
@@ -30,7 +32,12 @@ MoeImplementation: TypeAlias = Literal[
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "deepep")
+_RAGGED_ALL_TO_ALL_IMPLEMENTATIONS = (
+    "ragged_all_to_all",
+    "ragged_all_to_all_cute",
+    "ragged_all_to_all_cudnn_cute",
+)
+_EP_MOE_IMPLEMENTATIONS = ("ring", *_RAGGED_ALL_TO_ALL_IMPLEMENTATIONS, "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (

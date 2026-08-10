@@ -18,8 +18,10 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.cudnn_wgrad_cute import pad_grouped_rows
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_common import _local_permute_from_counts, _zero_inactive_grouped_rows
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -43,6 +45,46 @@ def _make_dense_mesh() -> Mesh:
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
+
+
+def test_cudnn_wgrad_padding_preserves_groups_and_zeros_inserted_rows():
+    values = jnp.arange(18, dtype=jnp.bfloat16).reshape(9, 2)
+    padded, offsets = jax.jit(pad_grouped_rows)(values, jnp.array([3, 1, 4], dtype=jnp.int32))
+
+    expected = np.zeros((30, 2), dtype=np.float32)
+    expected[0:3] = np.asarray(values[0:3], dtype=np.float32)
+    expected[8] = np.asarray(values[3], dtype=np.float32)
+    expected[16:20] = np.asarray(values[4:8], dtype=np.float32)
+    np.testing.assert_array_equal(np.asarray(padded, dtype=np.float32), expected)
+    np.testing.assert_array_equal(np.asarray(offsets), np.array([8, 16, 24], dtype=np.int32))
+
+
+def test_local_permute_separates_active_groups_from_physical_receiver_capacity():
+    inputs = jnp.arange(12, dtype=jnp.float32).reshape(6, 2)
+    global_group_sizes = jnp.array([[1, 0, 2, 0], [0, 2, 0, 1]], dtype=jnp.int32)
+
+    sorted_inputs, sorted_indices, physical_group_sizes, active_group_sizes = jax.jit(
+        lambda x, sizes: _local_permute_from_counts(
+            x,
+            sizes,
+            local_expert_size=2,
+            shard_index=jnp.array(0, dtype=jnp.int32),
+        )
+    )(inputs, global_group_sizes)
+
+    np.testing.assert_array_equal(np.asarray(active_group_sizes), np.array([1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(physical_group_sizes), np.array([1, 5], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(sorted_indices), np.arange(6, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(sorted_inputs[:3]), np.asarray(inputs[:3]))
+    np.testing.assert_array_equal(np.asarray(sorted_inputs[3:]), np.zeros((3, 2), dtype=np.float32))
+
+
+def test_inactive_grouped_rows_are_zeroed():
+    values = jnp.arange(18, dtype=jnp.float32).reshape(6, 3)
+    masked = jax.jit(_zero_inactive_grouped_rows)(values, jnp.array([0, 1, 3], dtype=jnp.int32))
+
+    np.testing.assert_array_equal(np.asarray(masked[:3]), np.asarray(values[:3]))
+    np.testing.assert_array_equal(np.asarray(masked[3:]), np.zeros((3, 3), dtype=np.float32))
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:
@@ -696,7 +738,28 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
 
 
-def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
+def test_shard_a2a_params_splits_each_peer_slice_without_changing_layout():
+    shard_counts = jnp.array(
+        [
+            [1, 7, 2],
+            [3, 5, 4],
+            [6, 8, 9],
+        ],
+        dtype=jnp.int32,
+    )
+
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+        shard_counts, jnp.array(1, dtype=jnp.int32), splits_per_peer=2
+    )
+
+    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([2, 1, 3, 2, 2, 2], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 2, 3, 6, 8, 10], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([4, 3, 3, 2, 4, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 3, 7, 10, 2, 4], dtype=np.int32))
+
+
+@pytest.mark.parametrize("ragged_splits_per_peer", [1, 2])
+def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available(ragged_splits_per_peer: int):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -748,6 +811,7 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
             mesh=None,
             report_capacity_overflow=True,
             capacity_factor=1.0,
+            ragged_all_to_all_splits_per_peer=ragged_splits_per_peer,
         )
 
     np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)

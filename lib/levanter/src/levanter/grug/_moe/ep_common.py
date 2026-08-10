@@ -80,18 +80,31 @@ def _unpermute_from_global_expert(
 def _shard_a2a_params(
     shard_counts: Int[Array, "S S"],
     shard_id: Int[Array, ""],
-) -> tuple[Int[Array, "S"], Int[Array, "S"], Int[Array, "S"], Int[Array, "S"]]:
-    row = shard_counts[shard_id]
+    splits_per_peer: int = 1,
+) -> tuple[Int[Array, "U"], Int[Array, "U"], Int[Array, "U"], Int[Array, "U"]]:
+    if splits_per_peer <= 0:
+        raise ValueError(f"splits_per_peer must be positive, got {splits_per_peer}")
+
+    # Keep updates peer-major: XLA interprets each contiguous group of
+    # `splits_per_peer` entries as cooperating updates for one output rank.
+    split_indices = jnp.arange(splits_per_peer, dtype=shard_counts.dtype)
+    split_counts = shard_counts[..., None] // splits_per_peer
+    split_counts += split_indices < shard_counts[..., None] % splits_per_peer
+
+    row = split_counts[shard_id].reshape(-1)
     input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
     send_sizes = row
 
-    recv_sizes = shard_counts[:, shard_id]
+    recv_sizes = split_counts[:, shard_id].reshape(-1)
     # `ragged_all_to_all` expects sender-side output offsets: for each
     # destination shard, where this sender's slice should land in the remote
     # receiver buffer. JAX computes the local receive offsets by transposing
     # these offsets with an internal all_to_all.
     sender_output_offsets = jnp.cumsum(shard_counts, axis=0, dtype=shard_counts.dtype) - shard_counts
-    output_offsets = sender_output_offsets[shard_id]
+    split_output_offsets = (
+        sender_output_offsets[..., None] + jnp.cumsum(split_counts, axis=-1, dtype=shard_counts.dtype) - split_counts
+    )
+    output_offsets = split_output_offsets[shard_id].reshape(-1)
     return input_offsets, send_sizes, output_offsets, recv_sizes
 
 
@@ -101,7 +114,12 @@ def _local_permute_from_counts(
     *,
     local_expert_size: int,
     shard_index: Int[Array, ""],
-) -> tuple[Float[Array, "C H"], Int[Array, "C"], Int[Array, "Elocal"]]:
+) -> tuple[
+    Float[Array, "C H"],
+    Int[Array, "C"],
+    Int[Array, "Elocal"],
+    Int[Array, "Elocal"],
+]:
     all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
         global_group_sizes,
         start_index=shard_index * local_expert_size,
@@ -118,8 +136,13 @@ def _local_permute_from_counts(
     sorted_indices = jnp.argsort(local_expert_ids)
     sorted_inputs = _sort_activations(inputs, sorted_indices)
     sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
-    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
-    return sorted_inputs, sorted_indices, group_sizes
+    physical_group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
+    return sorted_inputs, sorted_indices, physical_group_sizes, local_group_sizes
+
+
+def _zero_inactive_grouped_rows(values: jax.Array, cumulative_group_sizes: jax.Array) -> jax.Array:
+    active_rows = cumulative_group_sizes[-1]
+    return jnp.where(jnp.arange(values.shape[0])[:, None] < active_rows, values, jnp.zeros((), values.dtype))
 
 
 def _clip_receiver_group_sizes(
