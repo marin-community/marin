@@ -33,7 +33,7 @@ module {
       -> tensor<2x4xf32> {
     %result = "shuttle.region"(%lhs, %rhs) ({
     ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf32>):
-      // expected-error @+1 {{requires one precision entry per input}}
+      // expected-error @+1 {{precision contains unsupported value 'INVALID'}}
       %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
         accumulator_types = [f32],
         algorithm = "dot_general",
@@ -43,7 +43,7 @@ module {
           affine_map<(m, n, k) -> (m, n)>
         ],
         iterator_kinds = ["parallel", "parallel", "reduction"],
-        precision = ["DEFAULT"],
+        precision = ["DEFAULT", "INVALID"],
         source = #shuttle.source_ref<0, 0, 0, 0>
       } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf32>
       "shuttle.yield"(%contract) : (tensor<2x4xf32>) -> ()

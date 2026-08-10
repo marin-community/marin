@@ -43,7 +43,8 @@ Current implemented behavior is deliberately narrow:
 - `shuttle-annotate-source` attaches rename-invariant
   `#shuttle.source_ref<function, block, operation, result>` attributes.
 - `shuttle-verify-source-coverage` checks exact declared-to-represented source
-  coverage, allowing one source result to feed multiple algebra operations.
+  coverage inside each extant `shuttle.region`, allowing one source result to
+  feed multiple algebra operations. This is only a pre-lowering check.
 - `shuttle-verify-semantic-erasure` rejects a source operation still carrying
   `shuttle.selected`.
 - `shuttle-verify-no-shuttle-ops` rejects all remaining Shuttle operations and
@@ -51,10 +52,19 @@ Current implemented behavior is deliberately narrow:
 
 The remaining declared passes emit an error and fail. No Python StableHLO
 parser or textual HLO transformation participates in this native target.
+Post-lowering provenance manifests and removal of `shuttle.source_refs` from
+untouched source operations are not implemented. Consequently the current
+coverage pass does not prove coverage after regions have been lowered.
 
-`shuttle.fold` carries initializer operands explicitly. Its verifier checks the
-combiner's source arguments against input element types and its initializer,
-accumulator arguments, yields, and result elements against declared
-accumulator types. An output cast must be a separate `shuttle.map`.
-`shuttle.contract` keeps accumulator types distinct from its explicit result
-element types as part of the selected contraction algorithm.
+`shuttle.map` and `shuttle.fold` admit only scalar, region-free operations with
+proven no memory effects in their bodies. Fold inputs are positive-rank tensors
+whose element types equal the scalar numeric accumulator types. Initializers,
+combiner arguments and yields, and result elements use the same accumulator
+types; an output cast must be a separate `shuttle.map`.
+
+The first `shuttle.contract` surface is intentionally closed to two-input,
+one-result `dot_general`. Its indexing maps are symbol-free projected
+permutations of direct domain dimensions with consistent static extents.
+Inputs and results are ranked tensors, precision and iterator values are
+closed, and accumulator types are scalar numeric types. Contract accumulator
+types remain distinct from explicit result element types.

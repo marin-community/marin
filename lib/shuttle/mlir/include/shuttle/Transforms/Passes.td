@@ -28,7 +28,7 @@ def ShuttleConvertStablehloToAlgebraPass
 
 def ShuttleVerifySourceCoveragePass
     : Pass<"shuttle-verify-source-coverage", "::mlir::ModuleOp"> {
-  let summary = "Verify exact source-reference coverage within Shuttle regions";
+  let summary = "Verify pre-lowering source coverage within Shuttle regions";
   let constructor = "createVerifySourceCoveragePass()";
 }
 

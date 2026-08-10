@@ -39,19 +39,20 @@ constexpr llvm::StringLiteral kSourceRefsAttribute = "shuttle.source_refs";
 constexpr llvm::StringLiteral kSelectedAttribute = "shuttle.selected";
 
 bool containsShuttleAttribute(Attribute attribute) {
-  if (attribute.getDialect().getNamespace() ==
-      ShuttleDialect::getDialectNamespace()) {
-    return true;
-  }
-  if (auto array = dyn_cast<ArrayAttr>(attribute)) {
-    return llvm::any_of(array, containsShuttleAttribute);
-  }
-  if (auto dictionary = dyn_cast<DictionaryAttr>(attribute)) {
-    return llvm::any_of(dictionary, [](NamedAttribute namedAttribute) {
-      return containsShuttleAttribute(namedAttribute.getValue());
-    });
-  }
-  return false;
+  bool found = false;
+  attribute.walk([&](Attribute nested) {
+    if (nested.getDialect().getNamespace() ==
+        ShuttleDialect::getDialectNamespace()) {
+      found = true;
+      return;
+    }
+    if (auto opaque = dyn_cast<OpaqueAttr>(nested);
+        opaque && opaque.getDialectNamespace().getValue() ==
+                      ShuttleDialect::getDialectNamespace()) {
+      found = true;
+    }
+  });
+  return found;
 }
 
 void annotateRegion(Region &region, uint64_t functionOrdinal,
@@ -220,10 +221,14 @@ struct VerifyNoShuttleOpsPass
     : impl::ShuttleVerifyNoShuttleOpsPassBase<VerifyNoShuttleOpsPass> {
   void runOnOperation() override {
     WalkResult result = getOperation().walk([&](Operation *operation) {
-      Dialect *dialect = operation->getDialect();
-      if (dialect != nullptr &&
-          dialect->getNamespace() == ShuttleDialect::getDialectNamespace()) {
+      if (operation->getName().getDialectNamespace() ==
+          ShuttleDialect::getDialectNamespace()) {
         operation->emitOpError("Shuttle operation remains before HLO export");
+        return WalkResult::interrupt();
+      }
+      if (containsShuttleAttribute(operation->getLoc())) {
+        operation->emitOpError(
+            "Shuttle attribute remains in a location before HLO export");
         return WalkResult::interrupt();
       }
       for (NamedAttribute namedAttribute : operation->getAttrs()) {

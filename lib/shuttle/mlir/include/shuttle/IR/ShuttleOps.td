@@ -25,8 +25,7 @@ def Shuttle_RegionOp : Shuttle_Op<"region", [RecursiveMemoryEffects,
 
 def Shuttle_MapOp
     : Shuttle_Op<
-          "map", [ParentOneOf<["::mlir::shuttle::RegionOp"]>,
-                  RecursiveMemoryEffects,
+          "map", [ParentOneOf<["::mlir::shuttle::RegionOp"]>, Pure,
                   SingleBlockImplicitTerminator<"::mlir::shuttle::YieldOp">]> {
   let summary = "Pointwise scalar computation with explicit indexing maps";
   let arguments = (ins Variadic<AnyType>:$inputs,
@@ -51,8 +50,7 @@ def Shuttle_ContractOp
 def Shuttle_FoldOp
     : Shuttle_Op<
           "fold", [AttrSizedOperandSegments,
-                   ParentOneOf<["::mlir::shuttle::RegionOp"]>,
-                   RecursiveMemoryEffects,
+                   ParentOneOf<["::mlir::shuttle::RegionOp"]>, Pure,
                    SingleBlockImplicitTerminator<"::mlir::shuttle::YieldOp">]> {
   let summary = "Reduction with explicit accumulator and ordering contract";
   let arguments = (ins Variadic<AnyType>:$inputs,
@@ -68,7 +66,7 @@ def Shuttle_YieldOp
     : Shuttle_Op<"yield", [ParentOneOf<["::mlir::shuttle::RegionOp",
                                         "::mlir::shuttle::MapOp",
                                         "::mlir::shuttle::FoldOp"]>,
-                           ReturnLike, Terminator]> {
+                           Pure, ReturnLike, Terminator]> {
   let summary = "Yield values from a Shuttle algebra region";
   let arguments = (ins Variadic<AnyType>:$values);
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];

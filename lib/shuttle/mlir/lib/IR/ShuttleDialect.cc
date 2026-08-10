@@ -5,9 +5,12 @@
 
 #include <cstddef>
 
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "shuttle/IR/ShuttleAttrs.h"
 #include "shuttle/IR/ShuttleOps.h"
@@ -65,6 +68,45 @@ Type scalarType(Type type) {
   return type;
 }
 
+bool isScalarNumericType(Type type) {
+  return isa<IntegerType, FloatType, ComplexType>(type);
+}
+
+bool haveCompatibleShapes(RankedTensorType lhs, RankedTensorType rhs) {
+  if (lhs.getRank() != rhs.getRank()) {
+    return false;
+  }
+  for (auto [lhsSize, rhsSize] :
+       llvm::zip_equal(lhs.getShape(), rhs.getShape())) {
+    if (!ShapedType::isDynamic(lhsSize) && !ShapedType::isDynamic(rhsSize) &&
+        lhsSize != rhsSize) {
+      return false;
+    }
+  }
+  return true;
+}
+
+LogicalResult verifyPureScalarComputation(Operation *owner, Region &region) {
+  for (Operation &operation : region.front()) {
+    if (operation.getNumRegions() != 0) {
+      return owner->emitOpError(
+          "scalar body operations must not contain nested regions");
+    }
+    if (llvm::any_of(operation.getOperandTypes(),
+                     [](Type type) { return isa<ShapedType>(type); }) ||
+        llvm::any_of(operation.getResultTypes(),
+                     [](Type type) { return isa<ShapedType>(type); })) {
+      return owner->emitOpError(
+          "scalar body operations must not use shaped values");
+    }
+    if (!isMemoryEffectFree(&operation)) {
+      return owner->emitOpError(
+          "scalar body operations must have proven no memory effects");
+    }
+  }
+  return success();
+}
+
 LogicalResult verifyScalarBody(Operation *owner, Region &region,
                                ValueRange inputs, TypeRange results) {
   if (failed(verifySingleBlockRegion(owner, region))) {
@@ -93,7 +135,7 @@ LogicalResult verifyScalarBody(Operation *owner, Region &region,
           "scalar body yield types must equal result element types");
     }
   }
-  return success();
+  return verifyPureScalarComputation(owner, region);
 }
 
 LogicalResult verifyIndexingMaps(Operation *owner, ArrayAttr indexingMaps,
@@ -119,6 +161,102 @@ LogicalResult verifyIndexingMaps(Operation *owner, ArrayAttr indexingMaps,
       return owner->emitOpError(
           "indexing map result count must equal the indexed value rank");
     }
+  }
+  return success();
+}
+
+LogicalResult verifyContractMaps(ContractOp contract, TypeRange indexedTypes) {
+  ArrayAttr indexingMaps = contract.getIndexingMaps();
+  if (failed(verifyIndexingMaps(contract, indexingMaps, indexedTypes))) {
+    return failure();
+  }
+  if (indexingMaps.empty()) {
+    return contract.emitOpError("requires non-empty indexing maps");
+  }
+
+  AffineMap domain = cast<AffineMapAttr>(indexingMaps.front()).getValue();
+  SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
+  SmallVector<char> boundDimensions(domain.getNumDims(), 0);
+  for (auto [mapAttribute, indexedTypeValue] :
+       llvm::zip_equal(indexingMaps, indexedTypes)) {
+    auto indexedType = cast<RankedTensorType>(indexedTypeValue);
+    AffineMap map = cast<AffineMapAttr>(mapAttribute).getValue();
+    if (map.getNumSymbols() != 0) {
+      return contract.emitOpError(
+          "contraction indexing maps must not contain affine symbols");
+    }
+    if (!map.isProjectedPermutation()) {
+      return contract.emitOpError(
+          "contraction indexing maps must be projected permutations of "
+          "direct domain dimensions");
+    }
+    for (auto [resultPosition, expression] :
+         llvm::enumerate(map.getResults())) {
+      auto dimension = dyn_cast<AffineDimExpr>(expression);
+      if (!dimension) {
+        return contract.emitOpError(
+            "contraction indexing maps must contain only direct dimensions");
+      }
+      const unsigned domainPosition = dimension.getPosition();
+      boundDimensions[domainPosition] = 1;
+      const int64_t extent = indexedType.getDimSize(resultPosition);
+      if (ShapedType::isDynamic(extent)) {
+        continue;
+      }
+      int64_t &knownExtent = domainExtents[domainPosition];
+      if (!ShapedType::isDynamic(knownExtent) && knownExtent != extent) {
+        return contract.emitOpError(
+            "contraction indexing maps bind one domain dimension to "
+            "inconsistent static extents");
+      }
+      knownExtent = extent;
+    }
+  }
+  if (llvm::is_contained(boundDimensions, 0)) {
+    return contract.emitOpError(
+        "every contraction domain dimension must be bound by an indexing map");
+  }
+  return success();
+}
+
+bool mapContainsDimension(AffineMap map, unsigned dimension) {
+  return llvm::any_of(map.getResults(), [dimension](AffineExpr expression) {
+    auto dimExpression = dyn_cast<AffineDimExpr>(expression);
+    return dimExpression && dimExpression.getPosition() == dimension;
+  });
+}
+
+LogicalResult verifyDotGeneralIterators(ContractOp contract) {
+  ArrayAttr indexingMaps = contract.getIndexingMaps();
+  AffineMap lhsMap = cast<AffineMapAttr>(indexingMaps[0]).getValue();
+  AffineMap rhsMap = cast<AffineMapAttr>(indexingMaps[1]).getValue();
+  AffineMap resultMap = cast<AffineMapAttr>(indexingMaps[2]).getValue();
+
+  size_t reductionCount = 0;
+  for (auto [dimension, iteratorAttribute] :
+       llvm::enumerate(contract.getIteratorKinds())) {
+    StringRef iterator = cast<StringAttr>(iteratorAttribute).getValue();
+    const bool inLhs = mapContainsDimension(lhsMap, dimension);
+    const bool inRhs = mapContainsDimension(rhsMap, dimension);
+    const bool inResult = mapContainsDimension(resultMap, dimension);
+    if (iterator == "reduction") {
+      ++reductionCount;
+      if (!inLhs || !inRhs || inResult) {
+        return contract.emitOpError(
+            "each reduction dimension must appear in both input maps and not "
+            "in the result map");
+      }
+      continue;
+    }
+    if ((!inLhs && !inRhs) || !inResult) {
+      return contract.emitOpError(
+          "each parallel dimension must appear in an input map and exactly "
+          "once in the result map");
+    }
+  }
+  if (reductionCount == 0) {
+    return contract.emitOpError(
+        "the 'dot_general' algorithm requires at least one reduction iterator");
   }
   return success();
 }
@@ -178,14 +316,28 @@ LogicalResult MapOp::verifyRegions() {
 }
 
 LogicalResult ContractOp::verify() {
+  if (getInputs().empty() || getResults().empty()) {
+    return emitOpError("requires at least one input and one result");
+  }
   SmallVector<Type> indexedTypes;
   llvm::append_range(indexedTypes, getInputs().getTypes());
   llvm::append_range(indexedTypes, getResults().getTypes());
-  if (failed(verifyIndexingMaps(*this, getIndexingMaps(), indexedTypes))) {
+  for (Type type : indexedTypes) {
+    if (!isa<RankedTensorType>(type)) {
+      return emitOpError("requires ranked tensor inputs and results");
+    }
+  }
+  if (failed(verifyContractMaps(*this, indexedTypes))) {
     return failure();
   }
   if (getAccumulatorTypes().size() != getResults().size()) {
     return emitOpError("requires one accumulator type per result");
+  }
+  for (Attribute accumulator : getAccumulatorTypes()) {
+    Type accumulatorType = cast<TypeAttr>(accumulator).getValue();
+    if (!isScalarNumericType(accumulatorType)) {
+      return emitOpError("accumulator types must be scalar numeric types");
+    }
   }
   constexpr StringRef kIteratorKinds[] = {"parallel", "reduction"};
   constexpr StringRef kPrecisionValues[] = {"DEFAULT", "HIGH", "HIGHEST"};
@@ -206,15 +358,22 @@ LogicalResult ContractOp::verify() {
   if (getPrecision().size() != getInputs().size()) {
     return emitOpError("requires one precision entry per input");
   }
-  if (getAlgorithm().empty()) {
-    return emitOpError("requires a non-empty algorithm identifier");
+  if (getAlgorithm() != "dot_general") {
+    return emitOpError("supports only the 'dot_general' algorithm");
   }
-  return success();
+  if (getInputs().size() != 2 || getResults().size() != 1) {
+    return emitOpError(
+        "the 'dot_general' algorithm requires two inputs and one result");
+  }
+  return verifyDotGeneralIterators(*this);
 }
 
 LogicalResult FoldOp::verifyRegions() {
   if (failed(verifySingleBlockRegion(*this, getCombiner()))) {
     return failure();
+  }
+  if (getInputs().empty() || getResults().empty()) {
+    return emitOpError("requires at least one input and one result");
   }
   if (getAccumulatorTypes().size() != getResults().size()) {
     return emitOpError("requires one accumulator type per result");
@@ -225,6 +384,9 @@ LogicalResult FoldOp::verifyRegions() {
   if (getInitializers().size() != getResults().size()) {
     return emitOpError("requires one explicit initializer per result");
   }
+  if (getReductionDimensions().empty()) {
+    return emitOpError("requires at least one reduction dimension");
+  }
   llvm::SmallDenseSet<int64_t> dimensions;
   for (int64_t dimension : getReductionDimensions()) {
     if (dimension < 0 || !dimensions.insert(dimension).second) {
@@ -232,12 +394,17 @@ LogicalResult FoldOp::verifyRegions() {
           "reduction dimensions must be non-negative and unique");
     }
   }
+  SmallVector<RankedTensorType> inputTypes;
+  SmallVector<RankedTensorType> resultTypes;
   for (auto [input, result] : llvm::zip_equal(getInputs(), getResults())) {
     auto inputType = dyn_cast<RankedTensorType>(input.getType());
     auto resultType = dyn_cast<RankedTensorType>(result.getType());
-    if (!inputType || !resultType) {
-      continue;
+    if (!inputType || inputType.getRank() == 0 || !resultType) {
+      return emitOpError(
+          "requires positive-rank tensor inputs and ranked tensor results");
     }
+    inputTypes.push_back(inputType);
+    resultTypes.push_back(resultType);
     for (int64_t dimension : dimensions) {
       if (dimension >= inputType.getRank()) {
         return emitOpError("reduction dimension is outside an input rank");
@@ -254,6 +421,13 @@ LogicalResult FoldOp::verifyRegions() {
                          "dimensions removed");
     }
   }
+  for (size_t index = 1; index < inputTypes.size(); ++index) {
+    if (!haveCompatibleShapes(inputTypes.front(), inputTypes[index]) ||
+        !haveCompatibleShapes(resultTypes.front(), resultTypes[index])) {
+      return emitOpError(
+          "multi-input folds require compatible input and result shapes");
+    }
+  }
   Block &combiner = getCombiner().front();
   const size_t resultCount = getResults().size();
   if (combiner.getNumArguments() != 2 * resultCount) {
@@ -267,19 +441,22 @@ LogicalResult FoldOp::verifyRegions() {
     Type accumulatorType =
         cast<TypeAttr>(getAccumulatorTypes()[index]).getValue();
     Type inputElementType = scalarType(getInputs()[index].getType());
-    if (getInitializers()[index].getType() != accumulatorType ||
+    if (!isScalarNumericType(accumulatorType)) {
+      return emitOpError("accumulator types must be scalar numeric types");
+    }
+    if (inputElementType != accumulatorType ||
+        getInitializers()[index].getType() != accumulatorType ||
         combiner.getArgument(index).getType() != inputElementType ||
         combiner.getArgument(index + resultCount).getType() !=
             accumulatorType ||
         yield.getValues()[index].getType() != accumulatorType ||
         scalarType(getResults()[index].getType()) != accumulatorType) {
       return emitOpError(
-          "combiner input arguments must use input element types, while "
-          "initializers, accumulator arguments, combiner yields, and result "
-          "elements must use accumulator types");
+          "input elements, initializers, combiner arguments and yields, and "
+          "result elements must use accumulator types");
     }
   }
-  return success();
+  return verifyPureScalarComputation(*this, getCombiner());
 }
 
 } // namespace mlir::shuttle

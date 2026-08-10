@@ -111,6 +111,7 @@ cc_binary(
         ":ShuttleDialect",
         ":ShuttlePasses",
         "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:AllExtensions",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:MlirOptLib",
         "@llvm-project//mlir:RegisterAllDialects",
