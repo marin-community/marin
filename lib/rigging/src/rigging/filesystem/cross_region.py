@@ -168,7 +168,7 @@ def _cached_bucket_location(bucket_name: str) -> str | None:
         return None
 
 
-def _regions_match(vm_region: str, bucket_location: str) -> bool:
+def regions_match(vm_region: str, bucket_location: str) -> bool:
     """Return True if *vm_region* and *bucket_location* are the same region.
 
     Handles GCS multi-region buckets whose location is ``"us"``, ``"eu"``,
@@ -223,7 +223,7 @@ def _is_cross_region_url(url: str) -> bool:
     bucket_location = _cached_bucket_location(bucket)
     if bucket_location is None:
         return False
-    return not _regions_match(vm_region, bucket_location)
+    return not regions_match(vm_region, bucket_location)
 
 
 def is_cross_region_url(url: str) -> bool:
@@ -307,7 +307,7 @@ class CrossRegionGuardedFS:
         bucket_location = _cached_bucket_location(bucket_name)
         if bucket_location is None:
             return False
-        return not _regions_match(self._current_region, bucket_location)
+        return not regions_match(self._current_region, bucket_location)
 
     # -- read interception ---------------------------------------------------
 

@@ -26,7 +26,7 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, url_to_fs
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -38,6 +38,7 @@ from marin.execution.artifact import (
     is_mutable_version,
     write_step_record,
 )
+from marin.execution.region_guard import region_guard
 from marin.execution.remote import RemoteCallable, sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
@@ -140,6 +141,7 @@ def _expand_unseen(
     seen: set[str],
     is_built: Callable[[StepSpec], bool] = lambda _s: False,
     pruned: set[str] | None = None,
+    on_visit: Callable[[StepSpec], None] = lambda _s: None,
 ) -> list[StepSpec]:
     """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
@@ -147,6 +149,10 @@ def _expand_unseen(
     calls skip nodes already scheduled by an earlier terminal. Cycles within
     this expansion raise ``ValueError`` — by DAG construction they shouldn't
     exist, but the check guards against silent hangs.
+
+    ``on_visit(node)`` runs when the walk first reaches ``node``, before the
+    ``is_built`` probe reads its output. The region guard rejects a node there,
+    so a graph rooted in the wrong region never touches its storage at all.
 
     When ``is_built(node)`` holds, ``node``'s output is already cached: the walk
     records its ``output_path`` in ``pruned`` and does not descend into its deps,
@@ -164,6 +170,7 @@ def _expand_unseen(
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
         in_stack.add(path)
+        on_visit(s)
         if is_built(s):
             recorded.add(path)
         else:
@@ -192,6 +199,7 @@ class StepRunner:
         dry_run: bool = False,
         force_run_failed: bool = True,
         max_concurrent: int | None = None,
+        allow_cross_region: bool = False,
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
@@ -203,6 +211,13 @@ class StepRunner:
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
+
+        ``MARIN_PREFIX``, and every scheduled step's output and dependency paths,
+        are checked against the region the run executes in
+        (:mod:`marin.execution.region_guard`): a mismatch fails before the runner
+        reads or writes those paths and before any child job is submitted.
+        ``allow_cross_region`` (or ``MARIN_I_WILL_PAY_FOR_ALL_FEES``) downgrades
+        that to a logged and telemetered warning.
         """
         # Make step progress visible by default. Idempotent and non-clobbering:
         # skipped when the driver (or a wrapping app) already installed handlers.
@@ -212,6 +227,11 @@ class StepRunner:
         # A non-primary Iris task loses the per-step lock race and never enters the
         # step; warn before doing any work in case an SPMD launch was intended (#7080).
         _warn_if_secondary_task()
+
+        # The whole graph is rooted at MARIN_PREFIX, so a prefix in another region
+        # sends every step's data across regions: check it before touching storage.
+        guard = region_guard(allow_cross_region=allow_cross_region)
+        guard.check("The run's storage prefix", [("MARIN_PREFIX", marin_prefix())])
 
         max_workers = max_concurrent or 8
         if max_workers < 1:
@@ -239,6 +259,13 @@ class StepRunner:
         # I/O-free and lists the full static graph.
         pruned: set[str] = set()
         is_built = (lambda _s: False) if dry_run else step_is_built
+
+        def _check_region(step: StepSpec) -> None:
+            """Reject a step whose output or inputs live outside the run's region."""
+            guard.check(
+                f"Step {step.name_with_hash}",
+                [("output_path", step.output_path), *zip(step.dep_names, step.dep_paths, strict=True)],
+            )
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
@@ -325,7 +352,7 @@ class StepRunner:
 
         scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned, on_visit=_check_region):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()

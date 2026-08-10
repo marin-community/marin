@@ -15,6 +15,7 @@ import pytest
 from rigging.filesystem.cluster_config import (
     check_gcs_paths_same_region,
     collect_gcs_paths,
+    declared_bucket_region,
     marin_region,
     marin_temp_bucket,
     region_from_metadata,
@@ -62,6 +63,23 @@ def test_region_from_metadata_caches_failure():
 )
 def test_region_from_prefix(prefix, expected):
     assert region_from_prefix(prefix) == expected
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("gs://marin-us-east1/scratch", "us-east1"),
+        ("gs://marin-eu-west4/tokenized", "europe-west4"),
+        # A marin bucket the config does not place in a region. region_from_prefix
+        # guesses "data" from the name; callers deciding whether a path is in the
+        # wrong region need the honest answer instead.
+        ("gs://marin-data/raw", None),
+        ("gs://other-bucket/foo", None),
+        ("/tmp/marin/foo", None),
+    ],
+)
+def test_declared_bucket_region(path, expected):
+    assert declared_bucket_region(path) == expected
 
 
 def test_marin_region_from_metadata():

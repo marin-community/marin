@@ -23,7 +23,7 @@ For the storage class, decide between:
 - **Standard**: Lowest latency and predictable performance; slightly higher cost but ideal if training jobs read/write checkpoints frequently.
 - **Autoclass**: Google automatically moves objects to colder tiers if they sit idle, which can cut storage costs but occasionally delays reads when objects are thawed. Use this if you mostly archive checkpoints and don't mind rare rehydration pauses.
 
-Marin will attempt to prevent cross-region egress by raising an error in training jobs that write to a different region than the compute, but it's best to avoid that situation entirely.
+Marin will attempt to prevent cross-region egress by raising an error in training jobs and pipeline steps that read or write a different region than the compute (see [MARIN_PREFIX](../explanations/marin-prefix.md#region)), but it's best to avoid that situation entirely.
 
 !!! warning
     Avoid multi-region buckets (e.g., `us` or `us-west`) because they incur higher costs and have more complex performance characteristics. Single-region buckets are cheaper and more predictable for Marin workloads.

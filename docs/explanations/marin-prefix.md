@@ -64,3 +64,27 @@ When running Marin in a distributed setup (e.g., across multiple nodes via Iris)
 *   **Points to the same shared storage location for all workers:** Using a local path like `/tmp/marin_output` on each machine will result in data being scattered and inaccessible, not a unified output. You must use a shared filesystem (like NFS) or a cloud storage solution (S3, GCS) for distributed runs.
 
 Choosing a suitable shared storage solution is crucial for the successful execution and reproducibility of your experiments in a distributed setting.
+
+## Region
+
+On GCP, the prefix must be in the region the run executes in. A pipeline reads and writes
+its inputs and outputs continuously, so a prefix in another region sends every step's data
+across regions and is billed as egress.
+
+Before scheduling any step, `StepRunner` compares the region it is running in against
+`MARIN_PREFIX` and against each step's output and dependency paths. A mismatch fails the
+run, naming the region and the offending paths:
+
+```text
+Step tokenize_1a2b3c4d would move data across regions: this run executes in us-central2,
+but output_path=gs://marin-us-central1/tokenized/... (region us-central1).
+```
+
+The usual fixes are to launch the job in the data's region (`iris job run --region`) or to
+point `MARIN_PREFIX` at the region-local bucket. Only the regional marin buckets declared
+in `config/<cluster>.yaml` are compared; reads of any other GCS bucket are governed by the
+cumulative cross-region transfer budget instead.
+
+To run cross-region deliberately, set `MARIN_I_WILL_PAY_FOR_ALL_FEES=1` (or pass
+`allow_cross_region=True` to `StepRunner.run`). Each offending path is then logged and
+recorded as a telemetry event rather than failing the run.

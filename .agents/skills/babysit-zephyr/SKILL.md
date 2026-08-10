@@ -37,6 +37,10 @@ Get the run command from the user. Typical pattern:
 uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
 ```
 
+`--region` must match the region of the pipeline's `MARIN_PREFIX` bucket. Without it Iris
+places the root task anywhere, its children inherit that placement, and every read and
+write crosses regions; `StepRunner` rejects such a run before it schedules anything.
+
 The entrypoint container defaults to 1GB memory. For long-running pipelines that accumulate state (GCS clients, logging), increase with `--memory`:
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>

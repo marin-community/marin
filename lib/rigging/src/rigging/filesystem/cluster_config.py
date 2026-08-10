@@ -342,6 +342,24 @@ def region_from_metadata() -> str | None:
     return _region_from_metadata()
 
 
+def declared_bucket_region(path: str) -> str | None:
+    """The region the active config declares for *path*'s bucket, or ``None``.
+
+    Only the buckets listed under ``region_buckets`` resolve: those are the
+    cluster's regional data buckets, the ones whose placement is a deliberate
+    choice. Everything else — a non-regional marin bucket like ``marin-data``,
+    a third-party bucket, a local path — is ``None``, meaning "this config says
+    nothing about where that lives".
+    """
+    parsed = StoragePath.parse(path)
+    if not parsed.bucket:
+        return None
+    for region, spec in data_config().region_buckets.items():
+        if spec.name == parsed.bucket:
+            return region
+    return None
+
+
 def region_from_prefix(prefix: str) -> str | None:
     """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
 
@@ -352,12 +370,11 @@ def region_from_prefix(prefix: str) -> str | None:
     parsed = StoragePath.parse(prefix)
     if parsed.scheme != "gs" or not parsed.bucket:
         return None
-    bucket = parsed.bucket
-    for region, spec in data_config().region_buckets.items():
-        if spec.name == bucket:
-            return region
-    if bucket.startswith("marin-"):
-        return bucket[len("marin-") :]
+    declared = declared_bucket_region(prefix)
+    if declared is not None:
+        return declared
+    if parsed.bucket.startswith("marin-"):
+        return parsed.bucket[len("marin-") :]
     return None
 
 

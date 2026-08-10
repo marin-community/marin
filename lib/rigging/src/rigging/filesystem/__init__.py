@@ -42,6 +42,7 @@ from rigging.filesystem.cluster_config import (
     collect_gcs_paths,
     data_buckets,
     data_config,
+    declared_bucket_region,
     get_bucket_location,
     load_cluster_config,
     marin_prefix,
@@ -66,6 +67,7 @@ from rigging.filesystem.cross_region import (
     is_cross_region_url,
     mirror_budget,
     record_transfer,
+    regions_match,
     reset_mirror_budget,
     set_mirror_budget,
 )
