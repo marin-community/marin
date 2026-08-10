@@ -8,10 +8,6 @@ import importlib
 import importlib.metadata
 import json
 import logging
-import os
-import site
-import subprocess
-import tempfile
 import time
 
 import click
@@ -20,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from fray.cluster import ResourceConfig
 from fray.types import ANY_REGION
-from levanter.cutlass_kernel_cache import cutlass_call
+from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -31,15 +27,11 @@ from pydantic import BaseModel
 from rigging.filesystem import prefix_join
 from rigging.provenance import launch_provenance
 
-from experiments.grug.moe_hero_ep.cudnn_jax_weight_grad import build_cudnn_grouped_wgrad_launcher
-
 logger = logging.getLogger(__name__)
 
 CUDNN_FRONTEND_VERSION = "1.27.0"
 ROUTED_ROWS = 348_672
 ACTIVE_GROUP_SIZES = (116_218, 116_217, 116_217)
-PADDED_GROUP_SIZE = 116_224
-PADDED_GROUP_SIZES = (PADDED_GROUP_SIZE,) * 3
 WARMUP_RUNS = 2
 TIMED_RUNS = 5
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu(
@@ -90,96 +82,51 @@ class CudnnJaxWeightGradBenchmarkConfig:
     output_path: str
 
 
-def _install_cudnn_frontend() -> float:
-    target = tempfile.mkdtemp(prefix="ra2a-cudnn-jax-")
-    env = dict(os.environ)
-    env["UV_CACHE_DIR"] = "/tmp/ra2a-cudnn-jax-uv-cache"
+def _load_cudnn_frontend() -> float:
     start = time.perf_counter()
-    subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--target",
-            target,
-            "--no-deps",
-            f"nvidia-cudnn-frontend=={CUDNN_FRONTEND_VERSION}",
-        ],
-        check=True,
-        env=env,
-    )
-    install_time = time.perf_counter() - start
-    site.addsitedir(target)
-    return install_time
+    importlib.import_module("cudnn")
+    package_version = importlib.metadata.version("nvidia-cudnn-frontend")
+    if package_version != CUDNN_FRONTEND_VERSION:
+        raise RuntimeError(f"expected cuDNN Frontend {CUDNN_FRONTEND_VERSION}, found {package_version}")
+    return time.perf_counter() - start
 
 
-def _grouped_wgrad(shape: WeightGradientShape, modules, lhs: jax.Array, rhs: jax.Array, offsets: jax.Array):
-    cutlass, _cute, cjax, _kernel_type, _weight_mode, _input_order = modules
-    cluster_shape_mn = (2, 1)
-    max_active_clusters = cutlass.utils.HardwareInfo().get_max_active_clusters(cluster_shape_mn[0] * cluster_shape_mn[1])
-    launcher = build_cudnn_grouped_wgrad_launcher(
-        modules,
-        expert_count=len(PADDED_GROUP_SIZES),
-        max_active_clusters=max_active_clusters,
-        mma_tiler_mn=(256, 256),
-        cluster_shape_mn=cluster_shape_mn,
-    )
-    tensor_spec = cjax.TensorSpec
-    call = cutlass_call(
-        launcher,
-        output_shape_dtype=(
-            jax.ShapeDtypeStruct((len(PADDED_GROUP_SIZES), shape.m, shape.n), lhs.dtype),
-            jax.ShapeDtypeStruct((1,), jnp.uint8),
-        ),
-        input_spec=(
-            tensor_spec(mode=(1, 0), divisibility=(1, 8), static=False),
-            tensor_spec(divisibility=(1, 8), static=False),
-            tensor_spec(static=False),
-        ),
-        output_spec=(
-            tensor_spec(divisibility=(1, 1, 8), static=False),
-            tensor_spec(static=False),
-        ),
-        use_static_tensors=False,
-    )
-    output, _workspace = call(lhs, rhs, offsets)
-    return output
-
-
-def _benchmark_shape(shape: WeightGradientShape, modules) -> BenchmarkRow:
+def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
     row_ids = jnp.arange(ROUTED_ROWS, dtype=jnp.int32)
-    expert_ids = row_ids // PADDED_GROUP_SIZE
-    rows_within_expert = row_ids % PADDED_GROUP_SIZE
-    active_limits = jnp.asarray(ACTIVE_GROUP_SIZES, dtype=jnp.int32)
-    active_mask = rows_within_expert < active_limits[expert_ids]
-    lhs = jnp.broadcast_to(
-        active_mask[:, None].astype(jnp.bfloat16) * jnp.asarray(1 / 128, dtype=jnp.bfloat16),
-        (ROUTED_ROWS, shape.m),
-    )
-    rhs = jnp.broadcast_to(
-        active_mask[:, None].astype(jnp.bfloat16) * jnp.asarray(1 / 64, dtype=jnp.bfloat16),
-        (ROUTED_ROWS, shape.n),
-    )
-    offsets = jnp.cumsum(jnp.asarray(PADDED_GROUP_SIZES, dtype=jnp.int32))
+    group_sizes = jnp.asarray(ACTIVE_GROUP_SIZES, dtype=jnp.int32)
+    active_offsets = jnp.cumsum(group_sizes)
+    expert_ids = jnp.sum(row_ids[:, None] >= active_offsets[None, :], axis=1, dtype=jnp.int32)
+    safe_expert_ids = jnp.minimum(expert_ids, len(ACTIVE_GROUP_SIZES) - 1)
+    active_mask = expert_ids < len(ACTIVE_GROUP_SIZES)
+    expert_factors = (safe_expert_ids + 1).astype(jnp.bfloat16)
+    lhs_values = (jnp.arange(shape.m, dtype=jnp.int32) % 17 + 1).astype(jnp.bfloat16) / 1_024
+    rhs_values = (jnp.arange(shape.n, dtype=jnp.int32) % 19 + 1).astype(jnp.bfloat16) / 512
+    lhs = active_mask[:, None].astype(jnp.bfloat16) * expert_factors[:, None] * lhs_values[None, :]
+    rhs = active_mask[:, None].astype(jnp.bfloat16) * rhs_values[None, :]
 
     error = None
     compile_time = 0.0
     samples: list[float] = []
     max_abs_error = None
     try:
-        function = jax.jit(lambda x, y, group_offsets: _grouped_wgrad(shape, modules, x, y, group_offsets))
+        function = jax.jit(cudnn_grouped_wgrad)
         start = time.perf_counter()
-        compiled = function.lower(lhs, rhs, offsets).compile()
+        compiled = function.lower(lhs, rhs, group_sizes).compile()
         compile_time = time.perf_counter() - start
         for _ in range(WARMUP_RUNS):
-            compiled(lhs, rhs, offsets).block_until_ready()
+            compiled(lhs, rhs, group_sizes).block_until_ready()
         for _ in range(TIMED_RUNS):
             start = time.perf_counter()
-            output = compiled(lhs, rhs, offsets)
+            output = compiled(lhs, rhs, group_sizes)
             output.block_until_ready()
             samples.append(time.perf_counter() - start)
-        expected = jnp.asarray(ACTIVE_GROUP_SIZES, dtype=jnp.bfloat16) / jnp.asarray(8_192, dtype=jnp.bfloat16)
-        max_abs_error = float(jnp.max(jnp.abs(output.astype(jnp.float32) - expected[:, None, None])).item())
+        expected = (
+            group_sizes[:, None, None].astype(jnp.float32)
+            * jnp.arange(1, len(ACTIVE_GROUP_SIZES) + 1, dtype=jnp.float32)[:, None, None]
+            * lhs_values[None, :, None].astype(jnp.float32)
+            * rhs_values[None, None, :].astype(jnp.float32)
+        ).astype(jnp.bfloat16)
+        max_abs_error = float(jnp.max(jnp.abs(output.astype(jnp.float32) - expected.astype(jnp.float32))).item())
     except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
         error = f"{type(exc).__name__}: {exc}"
 
@@ -204,21 +151,8 @@ def _benchmark_shape(shape: WeightGradientShape, modules) -> BenchmarkRow:
 
 
 def run_benchmark(config: CudnnJaxWeightGradBenchmarkConfig) -> None:
-    install_time = _install_cudnn_frontend()
-    cutlass = importlib.import_module("cutlass")
-    cute = importlib.import_module("cutlass.cute")
-    cjax = importlib.import_module("cutlass.jax")
-    kernel_module = importlib.import_module("cudnn.gemm.cutedsl.grouped.wgrad.moe_grouped_gemm_wgrad")
-    utility_module = importlib.import_module("cudnn.gemm.cutedsl.grouped.moe_utils")
-    modules = (
-        cutlass,
-        cute,
-        cjax,
-        kernel_module.MoEGroupedGemmWgradBF16Kernel,
-        utility_module.MoEWeightMode,
-        utility_module.WGradInputOrder,
-    )
-    rows = [_benchmark_shape(shape, modules) for shape in TARGET_SHAPES]
+    install_time = _load_cudnn_frontend()
+    rows = [_benchmark_shape(shape) for shape in TARGET_SHAPES]
     logger.info(
         "cudnn_jax_weight_grad_result install_time=%s rows=%s",
         install_time,

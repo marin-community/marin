@@ -70,6 +70,32 @@ def _cute_expert_mlp(
     )
 
 
+def _cudnn_cute_expert_mlp(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    local_group_sizes: jax.Array,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    if activation_fn is not jax.nn.silu:
+        raise ValueError("ragged_all_to_all_cudnn_cute requires SiLU because its QuACK kernel fuses SwiGLU")
+
+    from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn, _interleave_gate_up  # noqa: PLC0415
+
+    moe_dim = moe_w2_local.shape[1]
+    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    cumulative_group_sizes = jnp.concatenate(
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(local_group_sizes).astype(jnp.int32)]
+    )
+    return _expert_mlp_cudnn(
+        x_dispatch,
+        w13_interleaved,
+        moe_w2_local,
+        local_group_sizes,
+        cumulative_group_sizes,
+    )
+
+
 def _moe_mlp_ep_ragged_a2a_impl(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -225,4 +251,30 @@ def _moe_mlp_ep_ragged_a2a_cute_local(
         capacity_factor=capacity_factor,
         splits_per_peer=splits_per_peer,
         expert_mlp=_cute_expert_mlp,
+    )
+
+
+def _moe_mlp_ep_ragged_a2a_cudnn_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    return _moe_mlp_ep_ragged_a2a_impl(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        splits_per_peer=splits_per_peer,
+        expert_mlp=_cudnn_cute_expert_mlp,
     )

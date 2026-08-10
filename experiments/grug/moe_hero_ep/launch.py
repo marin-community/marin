@@ -82,6 +82,8 @@ FLAVORS: dict[str, Flavor] = {
     # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
     # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
     "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),
+    # The same QuACK activation path with cuDNN Frontend grouped weight gradients.
+    "ep-ragged-cudnn-cute": Flavor(None, "ragged_all_to_all_cudnn_cute"),
     "fsdp-nodrop": Flavor(1, "scatter"),
 }
 

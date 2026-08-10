@@ -18,6 +18,7 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.cudnn_wgrad_cute import pad_grouped_rows
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.sonic import sonic_gather_sum
@@ -43,6 +44,18 @@ def _make_dense_mesh() -> Mesh:
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
+
+
+def test_cudnn_wgrad_padding_preserves_groups_and_zeros_inserted_rows():
+    values = jnp.arange(18, dtype=jnp.bfloat16).reshape(9, 2)
+    padded, offsets = jax.jit(pad_grouped_rows)(values, jnp.array([3, 1, 4], dtype=jnp.int32))
+
+    expected = np.zeros((30, 2), dtype=np.float32)
+    expected[0:3] = np.asarray(values[0:3], dtype=np.float32)
+    expected[8] = np.asarray(values[3], dtype=np.float32)
+    expected[16:20] = np.asarray(values[4:8], dtype=np.float32)
+    np.testing.assert_array_equal(np.asarray(padded, dtype=np.float32), expected)
+    np.testing.assert_array_equal(np.asarray(offsets), np.array([8, 16, 24], dtype=np.int32))
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:

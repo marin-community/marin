@@ -8,7 +8,8 @@ Dispatch/combine as in ``scatter``, but the expert MLP GEMMs run on QuACK's
 shim. QuACK does all four activation-path grouped GEMMs (gate/up fwd fused with
 SwiGLU, down fwd, and the ``dh``/``dx`` backward matmuls); the SwiGLU backward is
 elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
-``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
+``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs. The explicit
+cuDNN variant replaces those two weight gradients with cuDNN Frontend grouped Wgrad kernels.
 """
 
 import jax
@@ -25,6 +26,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
 )
+from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
 from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
 
 
@@ -74,6 +76,33 @@ def _expert_mlp_bwd(res, dy):
 
 
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
+
+
+@jax.custom_vjp
+def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+    """QuACK activation path with cuDNN grouped weight gradients."""
+    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+
+
+def _expert_mlp_cudnn_bwd(res, dy):
+    x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
+    dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
+    gate, up = gu[:, 0::2], gu[:, 1::2]
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    dgate = dh * up * (sg + silu * (1.0 - sg))
+    dup = dh * silu
+    d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
+    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
+    gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
+    cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
+    return dx, dw13_il, dw2, gs_ct, cu_ct
+
+
+_expert_mlp_cudnn.defvjp(_expert_mlp_fwd, _expert_mlp_cudnn_bwd)
 
 
 def _moe_mlp_local_sonic_cute(

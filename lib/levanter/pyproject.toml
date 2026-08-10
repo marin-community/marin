@@ -92,6 +92,8 @@ gpu = [
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # Quack 0.5 uses CUTLASS APIs removed in 4.6; 0.6.1 pins the matching DSL.
   "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+  # Blackwell grouped weight gradients for the explicit ragged cuDNN/CuTe backend.
+  "nvidia-cudnn-frontend==1.27.0; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
   "jax-triton==0.3.1; sys_platform == 'linux'",

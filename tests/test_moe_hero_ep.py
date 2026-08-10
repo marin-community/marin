@@ -121,7 +121,11 @@ def test_small_ep_ring_control_preserves_expert_sharding_without_ragged_all_to_a
 
 @pytest.mark.parametrize(
     ("flavor", "expected_implementation"),
-    [("ep-ragged", "ragged_all_to_all"), ("ep-ragged-cute", "ragged_all_to_all_cute")],
+    [
+        ("ep-ragged", "ragged_all_to_all"),
+        ("ep-ragged-cute", "ragged_all_to_all_cute"),
+        ("ep-ragged-cudnn-cute", "ragged_all_to_all_cudnn_cute"),
+    ],
 )
 def test_small_ragged_run_selects_backend_and_propagates_peer_transfer_splits(flavor, expected_implementation):
     step = small_scale_ablation_launch.build_small_run(
@@ -250,7 +254,9 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
 
 
-@pytest.mark.parametrize("implementation", ["ragged_all_to_all", "ragged_all_to_all_cute"])
+@pytest.mark.parametrize(
+    "implementation", ["ragged_all_to_all", "ragged_all_to_all_cute", "ragged_all_to_all_cudnn_cute"]
+)
 def test_run_grug_uses_safe_ragged_xla_schedule(monkeypatch, implementation: str):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = _grug_run_config(watch_interval=0, moe_implementation=implementation)
