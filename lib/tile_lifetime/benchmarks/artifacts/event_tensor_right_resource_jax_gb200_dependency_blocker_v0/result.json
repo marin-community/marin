@@ -1,0 +1,17 @@
+{
+  "cuda_device_invocation": false,
+  "device_kernel_launched": false,
+  "duration_seconds": 5.95,
+  "failure": "the dependency-only JAX runtime environment contains Torch",
+  "failure_stage": "dependency_environment_gate",
+  "iris_job": "/dlwh/shuttle-event-right-resource-gb200-linkage",
+  "job_state": "failed",
+  "jax": "0.10.1",
+  "preflight_completed": false,
+  "quack_kernels": "0.2.10",
+  "shuttle_revision": "73b7a277f7",
+  "source_abi_compilation_started": false,
+  "torch_installed": "2.10.0",
+  "torch_loaded_by_shuttle": false,
+  "torch_was_absent_before_quack_install": true
+}
