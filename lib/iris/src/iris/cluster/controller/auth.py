@@ -61,7 +61,6 @@ from iris.cluster.config import AuthConfig, PeerConfig
 
 logger = logging.getLogger(__name__)
 
-SESSION_COOKIE = "iris_session"
 WORKER_USER = "system:worker"
 VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
 INVALID_VERIFIED_IDENTITY_REASON = "Invalid verified identity"
@@ -75,10 +74,6 @@ WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
 
-# TTL for the control-plane admin token LocalCluster mints in-process for its
-# auto-login (aud="iris"). Short-lived and non-refreshable. Deployed clusters
-# authenticate users via IAP and mint no user tokens, so this is dev-only.
-SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # Worker machine identity (aud="iris", role="worker"). This is a SHARED,
 # cluster-lived credential: one token is minted per controller start and injected
 # into every worker, with no refresh path, so it must outlive any single job. It
@@ -172,7 +167,6 @@ class NativeProxyAuthConfig:
     proxy_audience: str = PROXY_PLANE_AUDIENCE
     proxy_scope: str = ENDPOINT_TOKEN_SCOPE
     federation_audience: str = FEDERATION_AUDIENCE
-    session_cookie: str = SESSION_COOKIE
     iap_public_keys_url: str = IAP_PUBLIC_KEYS_URL
     iap_issuer: str = IAP_ISSUER
     iap_audience: str | None = None
@@ -209,12 +203,9 @@ class NativeProxyIdentityAuthenticator:
         )
 
 
-def native_proxy_auth_policy(external_policy: RequestAuthPolicy) -> RequestAuthPolicy:
-    """Trust private ingress and retain the external verifier for session login."""
-    return RequestAuthPolicy(
-        authenticators=(NativeProxyIdentityAuthenticator(),),
-        verifier=external_policy.verifier,
-    )
+def native_proxy_auth_policy() -> RequestAuthPolicy:
+    """Trust only the identity stamped by the public native listener."""
+    return RequestAuthPolicy(authenticators=(NativeProxyIdentityAuthenticator(),))
 
 
 # ---------------------------------------------------------------------------
@@ -268,10 +259,8 @@ class JwtTokenManager:
     ) -> str:
         """Mint a control-plane (``aud="iris"``) user/worker token.
 
-        ``ttl_seconds`` is required: a session token uses
-        :data:`SESSION_TOKEN_TTL_SECONDS` and a worker token
-        :data:`WORKER_TOKEN_TTL_SECONDS`; there is no default (an over-long token
-        is not revocable, so the caller must pick the right lifetime).
+        ``ttl_seconds`` is required because tokens are not revocable; each caller
+        must choose the lifetime appropriate to its service boundary.
         """
         return self._signer.mint(
             {"sub": user_id, "role": role, "jti": key_id},

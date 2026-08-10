@@ -43,12 +43,7 @@ let _peersFetched = false
 let _peersPromise: Promise<void> | null = null
 
 export interface AuthConfig {
-  authEnabled: boolean
-  authenticated: boolean
-  authOptional: boolean
-  // The login provider ('iap', 'cidr', or null for null-auth). Drives 401 recovery:
-  // an IAP cluster re-authenticates at the edge on reload, so a 401 must not route to
-  // the bearer-token login page (see App.vue onAuthRequired).
+  // An IAP cluster re-authenticates at the edge on a full-page reload.
   provider: string | null
 }
 
@@ -58,20 +53,16 @@ export function useBackends() {
   /**
    * Fetch /auth/config and populate the module-level singleton.
    * Safe to call multiple times — only the first call performs the fetch.
-   * Returns auth-related fields so App.vue can handle login redirection
-   * without a second fetch.
+   * Returns the edge provider so App.vue can handle IAP re-authentication.
    */
   async function fetchConfig(): Promise<AuthConfig> {
-    const authDefaults: AuthConfig = { authEnabled: false, authenticated: false, authOptional: false, provider: null }
+    const authDefaults: AuthConfig = { provider: null }
     if (_configFetched) return authDefaults
     _configFetched = true
     try {
       const resp = await fetch('/auth/config')
       if (!resp.ok) return authDefaults
       const config = await resp.json() as {
-        auth_enabled?: boolean
-        authenticated?: boolean
-        optional?: boolean
         provider?: string | null
         capabilities?: string[]
         backends?: Array<{ id: string; name?: string; capabilities?: string[] }>
@@ -89,9 +80,6 @@ export function useBackends() {
         }))
       }
       return {
-        authEnabled: config.auth_enabled ?? false,
-        authenticated: config.authenticated ?? false,
-        authOptional: config.optional ?? false,
         provider: config.provider ?? null,
       }
     } catch {

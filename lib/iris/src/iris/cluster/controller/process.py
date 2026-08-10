@@ -24,7 +24,6 @@ from iris.cluster.controller.auth import (
     NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
     NATIVE_PROXY_JWT_LEEWAY_SECONDS,
     PROXY_PLANE_AUDIENCE,
-    SESSION_COOKIE,
     NativeProxyAuthConfig,
     NativeProxyAuthMode,
 )
@@ -256,7 +255,6 @@ class ControllerProcess:
             proxy_audience=PROXY_PLANE_AUDIENCE,
             proxy_scope=ENDPOINT_TOKEN_SCOPE,
             federation_audience=FEDERATION_AUDIENCE,
-            session_cookie=SESSION_COOKIE,
             iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
             iap_issuer=IAP_ISSUER,
             iap_audience=auth.iap_audience if auth is not None else None,

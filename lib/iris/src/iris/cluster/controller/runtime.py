@@ -225,7 +225,7 @@ class ControllerConfig:
     """Name of the auth provider (e.g. "gcp", "static") for the dashboard UI."""
 
     auth: ControllerAuth | None = None
-    """Full auth config passed to the service layer for login and API key management."""
+    """Full auth config passed to the service layer and native listener."""
 
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""

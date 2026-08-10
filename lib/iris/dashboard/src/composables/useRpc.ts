@@ -62,7 +62,7 @@ async function readErrorDetail(resp: Response): Promise<string | null> {
   return detail.slice(0, MAX_ERROR_DETAIL_CHARS)
 }
 
-/** Send the browser to the iris login page on an iris auth challenge.
+/** Notify the application that an Iris RPC received an auth challenge.
  *  Only iris itself answers 401 here: the endpoint proxy reports a rejected
  *  upstream as a 502, so a proxied service can never trigger this. */
 function handleUnauthorized(resp: Response): void {
@@ -133,7 +133,7 @@ export function useWorkerRpc<T>(
 
 /** POST a Connect RPC to `/<service>/<method>` and decode its response.
  *  Throws RpcError carrying the server's message on a non-OK response, and
- *  sends the browser to the login page on an iris auth challenge. */
+ *  lets the application recover an expired IAP edge session. */
 async function rpcCall<T>(service: string, method: string, body?: Record<string, unknown>): Promise<T> {
   const resp = await fetch(`/${service}/${method}`, {
     method: 'POST',

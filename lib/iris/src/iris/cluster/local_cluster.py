@@ -15,7 +15,6 @@ Provides:
 - make_local_cluster_config: Build a fully-configured IrisClusterConfig for local execution
 """
 
-import secrets
 import tempfile
 import threading
 from pathlib import Path
@@ -34,7 +33,7 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.constraints import worker_attributes_from_resources
-from iris.cluster.controller.auth import SESSION_TOKEN_TTL_SECONDS, create_controller_auth
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
@@ -188,7 +187,6 @@ class LocalCluster:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
-        self._auto_login_token: str | None = None
         # Persistent across stop()/start() so checkpoints survive restart().
         self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
@@ -269,27 +267,11 @@ class LocalCluster:
         )
         self._controller.start()
 
-        # Auto-login: mint an in-process admin JWT so the local dashboard can open a
-        # browser session (the `?session_token=` link). Raw tokens won't work since
-        # the verifier only accepts JWTs; the CLI itself authenticates by loopback
-        # trust (the controller binds 127.0.0.1) and needs no cached token.
         url = self._controller.url
-        # jti is for log correlation only — the local session token is stateless
-        # (nothing persisted, never revocable), like every other iris token. The
-        # admin role is config-derived (RolePolicy), so no user row is created.
-        key_id = f"iris_s_local_{secrets.token_hex(8)}"
-        assert auth.jwt_manager is not None  # create_controller_auth always builds one
-        jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
-
         cluster_name = self._config.name or "local"
         save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url))
-        self._auto_login_token = jwt_token
 
         return url
-
-    @property
-    def auto_login_token(self) -> str | None:
-        return self._auto_login_token
 
     def stop(self) -> None:
         self._stopped.set()

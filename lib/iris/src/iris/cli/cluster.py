@@ -652,11 +652,7 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
             cluster = LocalCluster(config)
             address = cluster.start()
             click.echo(f"Controller started at {address}")
-            token = cluster.auto_login_token
-            if token:
-                click.echo(f"Dashboard: {address}?session_token={token}")
-            else:
-                click.echo(f"Dashboard: {address}")
+            click.echo(f"Dashboard: {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Press Ctrl+C to stop.")
             if threading.current_thread() is threading.main_thread():

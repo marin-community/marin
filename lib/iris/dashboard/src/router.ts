@@ -2,11 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
-    path: '/login',
-    component: () => import('./components/controller/LoginPage.vue'),
-    meta: { public: true },
-  },
-  {
     path: '/',
     component: () => import('./components/controller/JobsTab.vue'),
   },
@@ -63,6 +58,10 @@ const routes = [
     name: 'node-detail',
     component: () => import('./components/controller/NodeDetail.vue'),
     props: true,
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]
 

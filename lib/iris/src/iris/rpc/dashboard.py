@@ -23,7 +23,7 @@ Auth model:
   is a permissive chain, not a bypass.
 - HTML shell routes are public — they contain no data, just the SPA skeleton.
 - Bundle downloads use capability URLs (SHA-256 hash = 256 bits of entropy).
-- Auth endpoints (/auth/*) handle session management (CSRF-protected).
+- /auth/config reports the configured edge-auth provider and backend roster.
 - Each route handler is annotated @public or @requires_auth; an unannotated
   route is denied, so forgetting to annotate a new route is a safe failure.
 """
@@ -34,7 +34,6 @@ import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 import httpx
 from rigging.credentials import ClientCredentials
@@ -42,7 +41,6 @@ from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     RouteAuthMiddleware,
-    extract_bearer_token,
     public,
 )
 from starlette.applications import Starlette
@@ -53,7 +51,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
 from iris.backends.protocol import backend_descriptor
-from iris.cluster.controller.auth import SESSION_COOKIE, VERIFIED_IDENTITY_HEADER, JwtTokenManager
+from iris.cluster.controller.auth import JwtTokenManager
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
@@ -105,64 +103,9 @@ class _FederationDecision:
     token: str | None = None
 
 
-def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bool:
-    headers = dict(request.headers)
-    token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-    client = request.client
-    try:
-        policy.resolve(
-            token,
-            client_address=f"{client.host}:{client.port}" if client else None,
-            headers=headers,
-        )
-    except ValueError:
-        return False
-    return True
-
-
 # Every control RPC is authenticated: users reach the controller only through IAP,
 # which authenticates each request at the edge. No RPC is exempt from the policy.
 _UNAUTHENTICATED_RPCS: frozenset[str] = frozenset()
-
-
-def _check_csrf(request: Request) -> bool:
-    """Verify Origin header matches the request host for CSRF protection."""
-    origin = request.headers.get("origin")
-    if origin is None:
-        referer = request.headers.get("referer")
-        if referer is None:
-            return False
-        parsed = urlparse(referer)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-
-    forwarded_host = request.headers.get("x-forwarded-host")
-    if forwarded_host:
-        proto = request.headers.get("x-forwarded-proto", "https")
-        expected_origin = f"{proto}://{forwarded_host}"
-    else:
-        expected_origin = f"{request.url.scheme}://{request.url.netloc}"
-    return origin == expected_origin
-
-
-# Path scoping the session cookie. set/delete must use the same path or the
-# browser will not match them, so both go through this constant.
-SESSION_COOKIE_PATH = "/"
-
-
-def _set_session_cookie(response: Response, token: str, request: Request) -> None:
-    """Attach the session cookie with the standard security attributes.
-
-    Centralizes the cookie flags so the bootstrap (redirect) and auth-session
-    (fetch) paths cannot drift apart on security-sensitive attributes.
-    """
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="strict",
-        secure=request.url.scheme == "https",
-        path=SESSION_COOKIE_PATH,
-    )
 
 
 class ControllerDashboard:
@@ -181,7 +124,6 @@ class ControllerDashboard:
         endpoint_service: EndpointServiceImpl | None = None,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
-        reported_auth_policy: RequestAuthPolicy | None = None,
         jwt_manager: JwtTokenManager | None = None,
         federated_handoff: FederatedEndpointHandoff | None = None,
         federation_owner_check: FederationOwnerCheck | None = None,
@@ -194,8 +136,6 @@ class ControllerDashboard:
         self._endpoint_service = endpoint_service or service.endpoint_service
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
-        self._reports_native_identity = reported_auth_policy is not None
-        self._auth_optional = (reported_auth_policy or auth_policy).allows_anonymous
         # The signing authority, for serving public keys at /.well-known/jwks.json
         # (None when the controller has no auth configured, so no signer exists).
         self._jwt_manager = jwt_manager
@@ -224,7 +164,6 @@ class ControllerDashboard:
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
         auth_interceptor = PolicyAuthInterceptor(
             self._auth_policy,
-            cookie_name=SESSION_COOKIE,
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
         )
@@ -321,8 +260,6 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             favicon_route(),
             Route("/auth/config", self._auth_config),
-            Route("/auth/session", self._auth_session, methods=["POST"]),
-            Route("/auth/logout", self._auth_logout, methods=["POST"]),
             Route("/job/{job_id:path}", self._dashboard),
             Route("/worker/{worker_id:path}", self._dashboard),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
@@ -348,7 +285,7 @@ class ControllerDashboard:
         # ``redirect_slashes`` is a Router attribute, not a Starlette ctor
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
-        return RouteAuthMiddleware(app, self._auth_policy, cookie_name=SESSION_COOKIE)
+        return RouteAuthMiddleware(app, self._auth_policy)
 
     @public
     def _dashboard(self, _request: Request) -> HTMLResponse:
@@ -369,19 +306,8 @@ class ControllerDashboard:
         return JSONResponse(self._jwt_manager.public_jwks())
 
     @public
-    def _auth_config(self, request: Request) -> JSONResponse:
-        """Report whether auth is required and whether this request is authenticated.
-
-        Public endpoint the frontend reads before rendering to decide whether to
-        show the login page. On the native listener, ``authenticated`` reflects
-        Rust's verified identity stamp. Standalone dashboards resolve the
-        request through the same policy as the RPC surface.
-        """
-        authenticated = (
-            VERIFIED_IDENTITY_HEADER in request.headers
-            if self._reports_native_identity
-            else _request_is_authenticated(self._auth_policy, request)
-        )
+    def _auth_config(self, _request: Request) -> JSONResponse:
+        """Report the edge-auth provider and available backend capabilities."""
         descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
         representative = backend_descriptor(self._service.provider)
@@ -389,7 +315,6 @@ class ControllerDashboard:
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
-                "authenticated": authenticated,
                 # Union of every backend's capabilities gates which tabs the dashboard shows.
                 "capabilities": union_capabilities,
                 "backends": [
@@ -400,38 +325,8 @@ class ControllerDashboard:
                     "name": representative.name,
                     "capabilities": representative.capabilities,
                 },
-                "optional": self._auth_optional,
             }
         )
-
-    # Rate limiting is handled at the infrastructure layer via Cloudflare WAF rules.
-    # See: https://developers.cloudflare.com/waf/rate-limiting-rules/
-    @public
-    async def _auth_session(self, request: Request) -> JSONResponse:
-        """Set auth cookie from bearer token."""
-        if not _check_csrf(request):
-            return JSONResponse({"error": "CSRF check failed"}, status_code=403)
-        body = await request.json()
-        token = body.get("token", "").strip()
-        if not token:
-            return JSONResponse({"error": "token required"}, status_code=400)
-        if self._auth_policy.verifier is not None:
-            try:
-                self._auth_policy.verifier.verify(token)
-            except ValueError:
-                return JSONResponse({"error": "invalid token"}, status_code=401)
-        response = JSONResponse({"ok": True})
-        _set_session_cookie(response, token, request)
-        return response
-
-    @public
-    async def _auth_logout(self, request: Request) -> JSONResponse:
-        """Clear auth cookie."""
-        if not _check_csrf(request):
-            return JSONResponse({"error": "CSRF check failed"}, status_code=403)
-        response = JSONResponse({"ok": True})
-        response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH)
-        return response
 
     @public
     def _health(self, _request: Request) -> JSONResponse:
