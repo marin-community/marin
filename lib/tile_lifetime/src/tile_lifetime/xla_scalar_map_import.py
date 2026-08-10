@@ -109,10 +109,11 @@ def import_hlo_scalar_map(
                 dtype=dtype,
                 operands=(import_node(node.operands[0], row_offset, feature_offset),),
             )
-        elif node.opcode in {"negate", "exponential", "tanh"}:
+        elif node.opcode in {"negate", "exponential", "rsqrt", "tanh"}:
             kind = {
                 "negate": CastScalarKind.NEGATE,
                 "exponential": CastScalarKind.EXP,
+                "rsqrt": CastScalarKind.RSQRT,
                 "tanh": CastScalarKind.TANH,
             }[node.opcode]
             result = CastScalarExpression(
@@ -198,10 +199,11 @@ def import_hlo_scalar_computation(computation: HloComputation) -> CastScalarProg
                 if node.opcode == "convert"
                 else operand
             )
-        elif node.opcode in {"negate", "exponential", "tanh"}:
+        elif node.opcode in {"negate", "exponential", "rsqrt", "tanh"}:
             kind = {
                 "negate": CastScalarKind.NEGATE,
                 "exponential": CastScalarKind.EXP,
+                "rsqrt": CastScalarKind.RSQRT,
                 "tanh": CastScalarKind.TANH,
             }[node.opcode]
             result = CastScalarExpression(kind=kind, dtype=dtype, operands=(import_node(node.operands[0]),))

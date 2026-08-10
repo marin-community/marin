@@ -3639,3 +3639,28 @@ author: dlwh
   including rejection of a weakened policy. No GPU replay was run, and
   TLTC-XLA-068 remains rejected under the policy committed before that
   measurement.
+
+### 2026-08-09 - TLTC-XLA-073 Fold-to-consumer Contract preparation
+
+- The generic cast-aware scalar AST now represents `rsqrt` in HLO import,
+  CPU evaluation, JAX evaluation, and generated CUDA source. This is reduction
+  finalization machinery, not a normalization- or attention-named primitive.
+- Starting from auxiliary partition Fold outputs, the new preparation planner
+  finds a BF16 value that depends on exactly one raw partition and one FP32
+  Fold, imports its ordered scalar expression, and follows only shape/index
+  transforms and constant-only local Maps to one downstream Contract operand.
+- The natural post-rewrite Grug module yields two attachments to `%dot.16`.
+  Partition 0 plus `%reduce_sum.630` prepares operand 0; partition 2 plus
+  `%reduce_sum.632` prepares operand 1. Both programs contain explicit FP32
+  scale, epsilon add, `rsqrt`, multiply, and BF16 conversion. The exact
+  reshape, broadcast, constant-scale, and transpose paths remain schedule
+  records outside the scalar AST.
+- Changing epsilon from `1e-6` to `2e-6` retains the same partitions, Fold
+  outputs, consumer Contract, and operand assignments while changing both
+  generated scalar digests. Twenty-three focused partitioned Contract tests
+  and changed-files pre-commit including Pyrefly pass.
+- This checkpoint is structural. It does not replace `%dot.16`, execute the
+  preparation in the high-throughput segmented mainloop, or make a GPU
+  performance claim. The segmented QuACK backend must expose auxiliary Fold
+  results and accept these generated operand preparations before the path is
+  physically owned.

@@ -155,3 +155,41 @@ also checks the locked `quack-kernels==0.5.0` package and narrows the first
 tiled implementation to one shared A stage plus coordinate-aligned WGMMA
 groups for each RHS segment. The newer package does not remove the segmented
 operand limitation.
+
+## Fold-to-consumer preparation
+
+`plan_fold_consumer_preparations` closes the next schedule-level dataflow link.
+Starting from the auxiliary Fold outputs and retained raw BF16 partitions, it
+recovers a cast-aware scalar preparation and the exact index/shape path into a
+downstream Contract operand. The current natural module yields two independent
+attachments to the same binary Contract:
+
+```text
+raw partition 0 + Fold 0
+  -> FP32 scale/add/rsqrt
+  -> raw * inverse statistic
+  -> BF16 boundary
+  -> local scale + transpose
+  -> Contract operand 0
+
+raw partition 2 + Fold 1
+  -> FP32 scale/add/rsqrt
+  -> raw * inverse statistic
+  -> BF16 boundary
+  -> reshape/broadcast/transpose
+  -> Contract operand 1
+```
+
+The pass does not inspect attention or normalization names. A candidate must
+depend on exactly one raw partition and one FP32 Fold output, contain an
+explicit generated `rsqrt`, and reach one Contract operand through a unique
+chain of shape transforms and constant-only local Maps. The scalar program
+preserves every explicit conversion; its physical index transforms remain
+separate schedule records instead of being hidden inside the scalar AST.
+
+Changing epsilon regenerates the scalar digest while retaining the same Fold,
+partition, consumer Contract, and operand assignments. This is still a
+structural preparation plan: the current scalar partitioned backend can execute
+the arithmetic, but the high-throughput segmented QuACK mainloop must expose
+the Fold result and accept the generated consumer preparation before this
+becomes an owned physical attention-input path.

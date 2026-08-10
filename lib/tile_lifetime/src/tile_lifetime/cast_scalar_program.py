@@ -26,6 +26,7 @@ class CastScalarKind(StrEnum):
     MULTIPLY = "multiply"
     DIVIDE = "divide"
     EXP = "exp"
+    RSQRT = "rsqrt"
     TANH = "tanh"
     SELECT = "select"
 
@@ -76,6 +77,7 @@ class CastScalarExpression:
             CastScalarKind.CONVERT: 1,
             CastScalarKind.NEGATE: 1,
             CastScalarKind.EXP: 1,
+            CastScalarKind.RSQRT: 1,
             CastScalarKind.TANH: 1,
             CastScalarKind.ADD: 2,
             CastScalarKind.SUBTRACT: 2,
@@ -230,6 +232,8 @@ def evaluate_cast_scalar_program(program: CastScalarProgram, inputs: Mapping[str
             value = float(values[0]) / float(values[1])
         elif expression.kind is CastScalarKind.EXP:
             value = math.exp(float(values[0]))
+        elif expression.kind is CastScalarKind.RSQRT:
+            value = 1.0 / math.sqrt(float(values[0]))
         elif expression.kind is CastScalarKind.TANH:
             value = math.tanh(float(values[0]))
         else:
@@ -295,6 +299,8 @@ def _render_cuda_expression(expression: CastScalarExpression) -> str:
         rendered = f"{intrinsic}({operands[0]}, {operands[1]})"
     elif expression.kind is CastScalarKind.EXP:
         rendered = f"expf({operands[0]})"
+    elif expression.kind is CastScalarKind.RSQRT:
+        rendered = f"rsqrtf({operands[0]})"
     elif expression.kind is CastScalarKind.TANH:
         rendered = f"tanhf({operands[0]})"
     elif expression.kind is CastScalarKind.SELECT:

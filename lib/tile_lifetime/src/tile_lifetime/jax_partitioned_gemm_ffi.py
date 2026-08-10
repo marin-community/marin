@@ -280,6 +280,8 @@ def _evaluate_jax_expression(
             value = operands[0] / operands[1]
         elif expression.kind is CastScalarKind.EXP:
             value = jnp.exp(operands[0])
+        elif expression.kind is CastScalarKind.RSQRT:
+            value = jax.lax.rsqrt(operands[0])
         elif expression.kind is CastScalarKind.TANH:
             value = jnp.tanh(operands[0])
         else:

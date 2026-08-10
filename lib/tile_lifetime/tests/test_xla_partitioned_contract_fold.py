@@ -31,6 +31,7 @@ from tile_lifetime.partitioned_gemm_program import (
     PassthroughPartitionFinalization,
 )
 from tile_lifetime.partitioned_gemm_reference import evaluate_partitioned_gemm_reference
+from tile_lifetime.xla_fold_consumer_preparation import plan_fold_consumer_preparations
 from tile_lifetime.xla_low_rank_gated_product_ffi import (
     plan_generated_low_rank_contract_map_training,
     replace_generated_low_rank_contract_map_training,
@@ -92,6 +93,12 @@ def _ambiguous_second_partition_fold(hlo: str) -> str:
     return "".join(lines)
 
 
+def _epsilon_mutation(hlo: str) -> str:
+    original = "%constant.246 = f32[] constant(1e-06)"
+    assert original in hlo
+    return hlo.replace(original, "%constant.246 = f32[] constant(2e-06)")
+
+
 def _self_product_program() -> CastScalarProgram:
     source = CastScalarExpression(
         CastScalarKind.INPUT,
@@ -119,6 +126,10 @@ def _sum_program() -> CastScalarProgram:
         input_index=ScalarIndexRelation(0, 0),
     )
     return CastScalarProgram(CastScalarExpression(CastScalarKind.ADD, CastScalarDType.F32, operands=(left, right)))
+
+
+def _kinds(expression: CastScalarExpression) -> set[CastScalarKind]:
+    return {expression.kind}.union(*(_kinds(operand) for operand in expression.operands))
 
 
 def _tiny_program() -> PartitionedGemmProgram:
@@ -259,6 +270,55 @@ def test_scalar_mutation_reuses_partition_and_fold_structure_but_regenerates_bod
     assert original.program.semantic_digest != mutated.program.semantic_digest
     assert original.target != mutated.target
     assert "(-input_r0_f0)" in mutated.generated.auxiliary_contribution_bodies[0].source
+
+
+def test_auxiliary_folds_feed_generated_consumer_contract_preparation() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    folds = plan_attached_partition_folds(hlo, target_prefix=_TARGET_PREFIX)
+
+    plan = plan_fold_consumer_preparations(hlo, folds)
+
+    assert len(plan.attachments) == 2
+    assert tuple(attachment.raw_partition for attachment in plan.attachments) == ("slice.66", "slice.68")
+    assert tuple(attachment.fold_output for attachment in plan.attachments) == ("reduce_sum.630", "reduce_sum.632")
+    assert tuple(attachment.prepared_value for attachment in plan.attachments) == (
+        "convert_element_type.361",
+        "convert_element_type.367",
+    )
+    assert tuple(attachment.consumer_contract for attachment in plan.attachments) == ("dot.16", "dot.16")
+    assert tuple(attachment.consumer_operand for attachment in plan.attachments) == (0, 1)
+    assert all(attachment.scalar_program.expression.kind is CastScalarKind.CONVERT for attachment in plan.attachments)
+    assert all(CastScalarKind.RSQRT in _kinds(attachment.scalar_program.expression) for attachment in plan.attachments)
+    assert tuple(step.instruction for step in plan.attachments[0].consumer_steps) == (
+        "mul.725",
+        "transpose.16",
+    )
+    assert tuple(step.instruction for step in plan.attachments[1].consumer_steps) == (
+        "reshape.485",
+        "broadcast.196",
+        "transpose.17",
+    )
+
+
+def test_fold_consumer_preparation_mutation_reuses_attachment_structure() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    original_folds = plan_attached_partition_folds(hlo, target_prefix=_TARGET_PREFIX)
+    mutated_hlo = _epsilon_mutation(hlo)
+    mutated_folds = plan_attached_partition_folds(mutated_hlo, target_prefix=_TARGET_PREFIX)
+
+    original = plan_fold_consumer_preparations(hlo, original_folds)
+    mutated = plan_fold_consumer_preparations(mutated_hlo, mutated_folds)
+
+    assert tuple(
+        (attachment.raw_partition, attachment.fold_output, attachment.consumer_contract, attachment.consumer_operand)
+        for attachment in original.attachments
+    ) == tuple(
+        (attachment.raw_partition, attachment.fold_output, attachment.consumer_contract, attachment.consumer_operand)
+        for attachment in mutated.attachments
+    )
+    assert tuple(attachment.scalar_program.digest for attachment in original.attachments) != tuple(
+        attachment.scalar_program.digest for attachment in mutated.attachments
+    )
 
 
 def test_reference_and_jax_keep_raw_outputs_and_emit_source_ordered_fold_values() -> None:
