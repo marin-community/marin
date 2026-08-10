@@ -134,7 +134,26 @@ policy and validates both handlers before traits are emitted. SiLU and tanh
 hidden Maps use the same capture-safe wrapper; only their generated scalar ASTs
 change.
 
-No GPU latency result is attached to this candidate yet.
+The capture gate records forward and reverse callback counts before and after
+every variant in every counterbalanced sample. Each checkpoint includes the
+sample index, complete execution order, variant, count delta, and number of
+logical handler calls. This distinguishes callbacks caused by the generated
+variant from callbacks observed while the matched JAX variant runs.
+
+The bounded acceptance policy requires at least one pre-timing callback for
+each handler. It permits at most one further callback per handler on only the
+first sample of each distinct counterbalanced order. Later recapture, more than
+one recapture per order, a callback attributed to a variant with no declared
+handler calls, or a callback count at least as large as the logical call count
+rejects the run. The latter is classified separately as per-logical-call
+fallback. The result exposes the policy, every checkpoint, per-order deltas,
+and the final classification.
+
+The harness writes a pending result containing the full raw timing distributions
+before it evaluates this policy. It then rewrites the result with the accepted
+or rejected classification and raises only after the rejected result is on
+disk. This preserves performance evidence even when capture accounting fails,
+as it did for TLTC-XLA-063. No GPU result is attached to the revised gate yet.
 
 ## Next bounded candidate: predicated BF16 MMA
 
