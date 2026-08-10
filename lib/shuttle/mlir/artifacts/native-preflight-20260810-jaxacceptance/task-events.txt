@@ -1,0 +1,7 @@
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance/0
+
+TIME (UTC)                          ATTEMPT  TYPE     SOURCE           ACTION             COUNT  MESSAGE
+2026-08-10T18:59:10.526000+00:00          0  Normal   k8s/container    PodInitializing        1
+2026-08-10T19:27:55.207000+00:00          0  Normal   k8s/container    Error                  1  69650a8319366bbeb5bbdc9c94b77194cd1acddb1e356629c2f6  /app/logs/bazel-build-shuttle-opt.log
+                                                                                                 c92f966…
+2026-08-10T19:28:04.491000+00:00          0  Warning  iris/controller  TaskTerminated         1  Backend reported FAILED; controller resolved the task as FAILED.

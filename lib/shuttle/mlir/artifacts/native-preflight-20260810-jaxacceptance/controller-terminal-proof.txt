@@ -1,0 +1,27 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance (/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: 69650a8319366bbeb5bbdc9c94b77194cd1acddb1e356629c2f6  /app/logs/bazel-build-shuttle-opt.log
+c92f9669894f27957a55854d658d4cae7b6681658ec34a9d54a06c4bc42ea463  /app/logs/bazel-build-shuttle_ops_inc_gen.log
+02187f47c2faca236e3cdb8429a92ec98d30bdf1d4d2fcc7c179c9a18f0574f3  /app/logs/bazel-test-observer_test_bridge_test.log
+1a0e27f33b13737110e5af1300ff5293c0c6c4cd977d726d37f69c6e082c4a47  /app/logs/bazel-test-pipeline_observer_test.log
+29f930aa398bc7c0527c994280c9ef4180bfb4235f726aead530ad22270fe47a  /app/logs/bazel-test-shuttle-mlir.log
+135f370c44ba375c95bb6878273dfe6d69e547ad314d29b4a061d300f3a9b689  /app/logs/bazel-test-xla-mlir_to_hlo_test.log
+1cda0f84baf8d407751d53cca083a5902df4aa9027a936a71cdb0733f4d04c1b  /app/logs/bazel-test-xla-mlir_to_hlo_unregistered_transform_test.log
+9d14a6fe3cd7ada5c42c9448d578f9e8d5fb423cd573ff56fcb2a54d55ce6148  /app/logs/bazel-test-xla-pjrt_executable_test.log
+5823a16a14fe7b9603abe1dd66ebdf57a70f6ea1f589f30d59f491993ecb5b02  /app/logs/bazel-test-xla-stablehlo_module_transform_test.log
+63f2ee575f4557ff0633c68af50b1def9ce7ad6e8eb2e84f25a4835eda00fe34  /app/logs/bazel-test-xla_registration_test.log
+b2491bca970988f71eada926c3f67a31cce25bdc429aa87be50e86d4b1541e83  /app/logs/bazel-test-xla_registry_adapter_test.log
+7956fdb97e8d19a25441d64fe98e42b8f0563c92e38118bdac3156213f880105  /app/logs/bundled-source-sha256.txt
+725a7772f41e3640a8111c5669efe18f9c5ec8fb1cb37495ff7515ca2f64887e  /app/logs/jax-acceptance-cquery-proof.log
+e8b605a0fcf06cd0f3e5eae394455b4f77d5667150cd859957ee7194548a9851  /app/logs/jax-patch-sha256.txt
+d43cb1899f235d6490c5ff7baeadae1a62931dab94f33fb6ee45dc70572edc6c  /app/logs/jax-patch-stat.txt
+a520714785d6cf73889f2965c211fe23910efc278800ecc117e2b512f2501e15  /app/logs/jaxlib-wheel-build.log
+1e0b22f66ead7b9fc35b7787b3693cf1d8c90e353e510a87a90cc76ddd9c561d  /app/logs/lit-label-proof.txt
+858436d681258b3c97c6bccc4530fbf82439ddbc5c8c555c3239873332af2768  /app/logs/xla-patch-sha256.txt
+835786bd7f7cc0fb1188b402c9e60f8f5bc4ce274f3e29dec70211a9120d196a  /app/logs/xla-patch-stat.txt
+
+
+  TASK  STATE      EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  28 minutes and 47.53 seconds  -           -          69650a8319366bbeb5bbdc9c94b77194cd1acddb1e356629c2f6  /app/logs/bazel-build-shuttle-opt.log
+                                                                              c92f9669894f27957a55854d6...
