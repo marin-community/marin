@@ -16,8 +16,8 @@ consumed by ``np.interp`` in ``score.py``.
 
     python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \\
         --labels    s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \\
-        --model-dir s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2 \\
-        --out       s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2/calib_bme.json
+        --model-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2 \\
+        --out       s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/calib_bme.json
 """
 
 import argparse

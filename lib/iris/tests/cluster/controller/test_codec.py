@@ -80,7 +80,13 @@ def test_every_launch_request_field_survives_storage(state):
     assert not unset, f"_fully_populated_request must set every field; missing {sorted(unset)}"
 
     with state._db.transaction() as cur:
-        ops.job.insert_job_and_config(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        ops.job.insert_job_and_config(
+            cur,
+            job_id=job_id,
+            request=request,
+            ts=Timestamp.now(),
+            priority_band=int(request.priority_band),
+        )
 
     with state._db.read_snapshot() as tx:
         job = reads.get_job_detail(tx, job_id)

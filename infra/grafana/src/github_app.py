@@ -18,19 +18,19 @@ from datetime import datetime
 
 import httpx
 import jwt
-from config import GITHUB_API_BASE, GithubAppCredentials
+from config import GITHUB_API_BASE, GITHUB_USER_AGENT, GithubAppCredentials
 from errors import UpstreamError
 
 logger = logging.getLogger(__name__)
 
-# Read-only permissions the token is attenuated to, whatever the app itself holds:
-# contents+metadata for the commit history, checks+statuses for the
-# statusCheckRollup, actions for the ferry/nightly run lists.
+# Read-only permissions the token is attenuated to. A token request may only name
+# permissions the installation actually holds — asking for an ungranted one 422s the
+# whole mint and blanks every panel — so this stays the minimal set the panels read:
+# contents+metadata for the commit history and its statusCheckRollup state, actions
+# for the ferry/nightly run lists.
 _TOKEN_PERMISSIONS = {
     "metadata": "read",
     "contents": "read",
-    "checks": "read",
-    "statuses": "read",
     "actions": "read",
 }
 
@@ -95,7 +95,13 @@ def _app_request(method: str, path: str, jwt_token: str, *, json: dict | None = 
     return httpx.Request(
         method,
         f"{GITHUB_API_BASE}{path}",
-        headers={"authorization": f"Bearer {jwt_token}", "accept": "application/vnd.github+json"},
+        headers={
+            "authorization": f"Bearer {jwt_token}",
+            "accept": "application/vnd.github+json",
+            # auth_flow builds these requests directly, so httpx never merges the client's
+            # default User-Agent; without one GitHub 403s the App auth and blanks every panel.
+            "user-agent": GITHUB_USER_AGENT,
+        },
         json=json,
     )
 

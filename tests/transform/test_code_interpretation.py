@@ -9,15 +9,17 @@ from marin.transform.evaluation.code_interpretation import (
     CODE_INTERPRETATION_NUM_FEWSHOT,
     CODE_INTERPRETATION_TASKS_BY_KEY,
     CODE_INTERPRETATION_TEMPLATES,
-    DEFAULT_CODE_INTERPRETATION_OUTPUT_FILENAME,
-    CodeInterpretationStagingConfig,
     code_interpretation_record,
     stage_code_interpretation_source,
+)
+from marin.transform.evaluation.continuation_records import (
+    DEFAULT_CONTINUATION_OUTPUT_FILENAME,
+    ContinuationStagingConfig,
 )
 
 
 def _read_records(output_path: Path) -> list[dict]:
-    with gzip.open(output_path / DEFAULT_CODE_INTERPRETATION_OUTPUT_FILENAME, "rt", encoding="utf-8") as handle:
+    with gzip.open(output_path / DEFAULT_CONTINUATION_OUTPUT_FILENAME, "rt", encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
 
@@ -81,7 +83,7 @@ def test_every_slice_renders_heldout_query_unfinished() -> None:
 
 def test_stage_code_interpretation_source_writes_valid_target_only_jsonl(tmp_path: Path) -> None:
     result = stage_code_interpretation_source(
-        CodeInterpretationStagingConfig(
+        ContinuationStagingConfig(
             output_path=str(tmp_path),
             task_key="function_definition_calls",
             template_key="python_repl",

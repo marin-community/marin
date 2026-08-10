@@ -7,7 +7,7 @@ from typing import Any, Callable, Generic, TypeVar
 import jax
 from jaxtyping import PyTree
 
-from levanter.callbacks._core import Callback, LambdaCallback, StepInfo
+from levanter.callbacks._core import Callback, LambdaCallback, ProgressEvent, StepInfo
 
 
 S = TypeVar("S")
@@ -52,6 +52,10 @@ class StateCallbackRunner(Generic[S]):
         callback = fn if isinstance(fn, Callback) else LambdaCallback(fn)
         self._hooks.append(_Hook(callback, every))
 
+    def emit_event(self, event: ProgressEvent) -> None:
+        for hook in self._hooks:
+            hook.fn.on_event(event)
+
     def run(self, state: S, *, loss: float | jax.Array, step_duration: float, force: bool = False) -> None:
         # CallbackStateView is a structural stand-in supplying exactly the attributes StepInfo reads;
         # it deliberately does not subclass TrainerState, so it cannot satisfy StepInfo's S: TrainerState bound.
@@ -65,6 +69,7 @@ class StateCallbackRunner(Generic[S]):
             ),
             loss=loss,  # type: ignore[arg-type]
             step_duration=step_duration,
+            _event_handler=self.emit_event,
         )
         for hook in self._hooks:
             if force or (info.next_step > 0 and info.next_step % hook.every == 0):

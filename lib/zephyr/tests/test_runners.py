@@ -4,14 +4,16 @@
 """Tests for the pluggable StageRunner strategies (zephyr.runners)."""
 
 import os
+import time
 import uuid
 from contextlib import suppress
 
+import polars as pl
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
-from zephyr import counters
+from zephyr import counters, runners
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.runners import InlineRunner, SubprocessRunner
@@ -53,6 +55,29 @@ def test_simple_map(local_client, tmp_path, runner_factory):
     finally:
         ctx.shutdown()
     assert sorted(results) == [3, 6, 9, 12, 15]
+
+
+def test_subprocess_runner_limits_polars_threads_to_task_cpu(local_client, tmp_path):
+    def polars_thread_pool_size(_: int) -> int:
+        return pl.thread_pool_size()
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=4, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-polars-threads-{uuid.uuid4().hex[:8]}",
+        stage_runner_factory=lambda: SubprocessRunner(),
+    )
+    try:
+        results = ctx.execute(
+            Dataset.from_list([0]).map(polars_thread_pool_size),
+            map_task_resources=ResourceConfig(cpu=1, ram="256m"),
+        ).results
+    finally:
+        ctx.shutdown()
+
+    assert results == [1]
 
 
 def test_user_counters_propagate(local_client, tmp_path, runner_factory):
@@ -173,6 +198,7 @@ def finelog_server(tmp_path):
 
 def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):
     """Pipeline emits rows to both zephyr.stage and zephyr.worker finelog tables."""
+    num_items = 2
     writers: list[StatsWriter] = []
 
     def make_writer(url: str | None = None) -> StatsWriter:
@@ -181,10 +207,16 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
         return w
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
+    monkeypatch.setattr(runners, "SUBPROCESS_STATS_INTERVAL", 0.01)
+
+    def slow_identity(x: int) -> int:
+        # Keep the shard alive long enough for the background sampler to emit.
+        time.sleep(0.05)
+        return x
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: InlineRunner())
     try:
-        ds = Dataset.from_list(list(range(10))).map(lambda x: x)
+        ds = Dataset.from_list(list(range(num_items))).map(slow_identity)
         ctx.execute(ds)
     finally:
         ctx.shutdown()
@@ -209,7 +241,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
 
     # ---- stage stat correctness ----
     total_items = sum(stage_rows.column("items").to_pylist())
-    assert total_items >= 10, f"Expected >= 10 items across stage rows, got {total_items}"
+    assert total_items >= num_items, f"Expected >= {num_items} items across stage rows, got {total_items}"
 
     total_bytes = sum(stage_rows.column("bytes_processed").to_pylist())
     assert total_bytes > 0, f"Expected non-zero bytes_processed in stage rows, got {total_bytes}"
@@ -238,16 +270,17 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     # ---- worker stat correctness ----
     worker_statuses = worker_rows.column("status").to_pylist()
     assert "START" in worker_statuses, f"No START worker rows: {worker_statuses}"
+    assert "RUNNING" in worker_statuses, f"No RUNNING worker rows: {worker_statuses}"
     assert "END" in worker_statuses, f"No END worker rows: {worker_statuses}"
 
     shard_indices = worker_rows.column("shard_idx").to_pylist()
     assert all(i >= 0 for i in shard_indices), f"Negative shard_idx: {shard_indices}"
 
-    # END rows must have processed all items (sum across shards = 10) and
+    # END rows must have processed all items and
     # non-zero byte counts.
     end_mask = [s == "END" for s in worker_statuses]
     end_items = [v for v, m in zip(worker_rows.column("items").to_pylist(), end_mask, strict=True) if m]
-    assert sum(end_items) >= 10, f"END rows account for fewer than 10 items: {end_items}"
+    assert sum(end_items) >= num_items, f"END rows account for fewer than {num_items} items: {end_items}"
     end_bytes = [v for v, m in zip(worker_rows.column("bytes_processed").to_pylist(), end_mask, strict=True) if m]
     assert sum(end_bytes) > 0, f"END rows have zero bytes_processed: {end_bytes}"
 
@@ -265,6 +298,16 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     assert all(v >= 0 for v in end_cpu_avg_pct)
     end_mem_avg_bytes = [v for v, m in zip(worker_rows.column("mem_avg_bytes").to_pylist(), end_mask, strict=True) if m]
     assert all(v >= 0 for v in end_mem_avg_bytes)
+
+    # Periodic samples run on a dedicated thread. They must use the shard's
+    # explicit context because ContextVars are not inherited by new threads.
+    running_mask = [s == "RUNNING" for s in worker_statuses]
+    running_mem_current = [
+        v for v, m in zip(worker_rows.column("mem_current_bytes").to_pylist(), running_mask, strict=True) if m
+    ]
+    assert all(
+        v > 0 for v in running_mem_current
+    ), f"RUNNING rows have non-positive mem_current_bytes: {running_mem_current}"
 
     # ---- cross-validation: stage aggregates must match worker END rows ----
     # Single-stage pipeline: exactly one stage row expected.
@@ -287,11 +330,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
         stage["cpu_time_total"], rel=1e-4
     ), f"sum(worker END cpu_time_total)={sum(end_cpu_time)} != stage cpu_time_total={stage['cpu_time_total']}"
 
-    # Average CPU% and average RSS are AVERAGE (mean of per-shard END values).
-    n_end = len(end_cpu_avg_pct)
-    assert stage["cpu_pct_avg"] == pytest.approx(
-        sum(end_cpu_avg_pct) / n_end, rel=1e-4
-    ), f"stage cpu_pct_avg={stage['cpu_pct_avg']} != mean(worker END cpu_avg_pct)={sum(end_cpu_avg_pct) / n_end}"
-    assert stage["mem_bytes_avg"] == pytest.approx(
-        sum(end_mem_avg_bytes) / n_end, rel=1e-4
-    ), f"stage mem_bytes_avg={stage['mem_bytes_avg']} != mean(worker END mem_avg_bytes)={sum(end_mem_avg_bytes) / n_end}"
+    # Average CPU% and RSS are weighted by each shard's sample count. The
+    # aggregate must therefore lie within the final per-shard averages.
+    assert min(end_cpu_avg_pct) <= stage["cpu_pct_avg"] <= max(end_cpu_avg_pct)
+    assert min(end_mem_avg_bytes) <= stage["mem_bytes_avg"] <= max(end_mem_avg_bytes)

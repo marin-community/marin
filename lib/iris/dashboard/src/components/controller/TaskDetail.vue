@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
+import { useControllerRpc, useEndpointRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName } from '@/types/status'
+import { stateToName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import {
   isLocal,
   LOCAL_CLUSTER,
+  attemptFailureReason,
   type TaskStatus,
   type GetTaskStatusResponse,
   type EndpointInfo,
@@ -61,7 +62,7 @@ const rootCauseHighlights = computed(() => taskResponse.value?.rootCauseHighligh
 const {
   data: endpointsResponse,
   refresh: fetchEndpoints,
-} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
 
 const endpoints = computed<EndpointInfo[]>(() => endpointsResponse.value?.endpoints ?? [])
 
@@ -391,7 +392,11 @@ watch(() => props.taskId, async () => {
         <!-- Status card -->
         <InfoCard title="Status">
           <InfoRow label="State">
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </InfoRow>
           <!-- Human-readable status for a waiting/building task (e.g. the Kueue
                admission detail). Often long and multi-line, so it renders as a
@@ -633,8 +638,13 @@ watch(() => props.taskId, async () => {
                 <td class="px-3 py-2 text-[13px] font-mono">
                   {{ formatDuration(timestampMs(attempt.startedAt), timestampMs(attempt.finishedAt) || undefined) }}
                 </td>
-                <td class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs">
-                  {{ attempt.error ?? '-' }}
+                <!-- The reason can run to 500 chars, so the cell truncates and
+                     the full text lives in the tooltip. -->
+                <td
+                  class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs"
+                  :title="attemptFailureReason(attempt)"
+                >
+                  {{ attemptFailureReason(attempt) || '-' }}
                 </td>
               </tr>
             </tbody>

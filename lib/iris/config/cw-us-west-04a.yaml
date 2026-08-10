@@ -54,7 +54,7 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai"]
+  allowed_submitters: ["*@openathena.ai", "ravwojdyla@rav-openathena.iam.gserviceaccount.com"]
 
 platform:
   label_prefix: iris-ci
@@ -74,14 +74,12 @@ storage:
 
 kubernetes_provider:
   namespace: iris-ci
-  default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
   kueue:
-    # The K8s backend admits every pod through Kueue. ClusterQueue + ResourceFlavors
-    # are admin-provisioned out of band (scripts/install_kueue.py --with-queues
-    # --cpu-flavor-node-label ...); Iris reconciles the namespaced LocalQueue.
+    # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
+    # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
 
 controller:

@@ -5,8 +5,8 @@
 
 Deploys this directory (Grafana + the finelog bridge) as an IAP-gated Cloud Run service
 through the reusable `iac.gcp.cloud_run.CloudRunService` component. Grafana's fixed shape
-— project, region, one warm instance — lives here; the list of people admitted through
-IAP is stack config (`marin-grafana:viewers`).
+— project, region, one warm instance — lives here. The shared component owns the common
+IAP access policy; additional members are stack config (`marin-grafana:viewers`).
 
 Runs on the shared repo venv (plain `python` runtime), which is where `iac` and the Pulumi
 GCP/Docker providers live; `uv sync --all-packages` first. See README.md.
@@ -32,6 +32,11 @@ SERVICE = "marin-grafana"
 LOOM_STACK = "organization/marin-loom/marin-loom"
 LOOM_WORKLOAD = "grafana-alerts"
 LOOM_ALERT_REPOSITORY = "marin-community/marin"
+# Secret Manager secret holding the Slack bot token the bridge announces alerts
+# with. A bot token rather than an incoming webhook because only chat.postMessage
+# returns the message timestamp, and that timestamp is the thread Loom routes to
+# the triage session. Hand-placed like the other runtime secrets.
+SLACK_BOT_TOKEN_SECRET = "marin-grafana-slack-bot-token"
 
 # The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
 # Grafana's state. On the self-managed GCS backend a stack reference is
@@ -52,7 +57,7 @@ SMTP_SECRET = "marin-grafana-smtp-credentials"
 # bridge mints short-lived installation tokens from it (github_app.py), so nothing
 # long-lived expires under the GitHub panels. Hand-placed like the other runtime
 # secrets — the Cloud Run deploy account is fail-closed on secret creation — and
-# allowlisted for IAM binding in infra/permissions.
+# declared for IAM binding in infra/pulumi/src/iac/gcp/iam_data.yaml.
 GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
 
@@ -71,7 +76,7 @@ def main() -> None:
     # to the container listener and links point to localhost:8080.
     custom_domain = config.get("custom_domain")
     loom_alerts_enabled = config.get_bool("loom_alerts") or False
-    # IAM members admitted through IAP, e.g. group:marin@…; set with
+    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
 
@@ -88,13 +93,11 @@ def main() -> None:
     # Secret values stay hand-placed in Secret Manager; the component only grants the
     # runtime service account access. CW_READ_TOKEN is the CoreWeave read-role token
     # behind the k8s source; GF_DATABASE_PASSWORD is the grafana Postgres user's
-    # password; SLACK_ALERTS_WEBHOOK and GF_SMTP_PASSWORD feed the provisioned
-    # alerting contact points. GF_SMTP_PASSWORD and the GitHub App key are appended
-    # below only when present.
+    # password. GF_SMTP_PASSWORD, the GitHub App key, and the Slack bot token are
+    # appended below only when their feature is on.
     secrets = [
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
-        SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
     ]
     env = {
         "DATABASE_SOCKET_DIR": database_socket_dir,
@@ -112,6 +115,13 @@ def main() -> None:
         env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
         env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
         env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
+        # The bridge is the only thing that announces alerts now, so neither the
+        # channel nor the token is optional the way SMTP is: without them the
+        # container refuses to boot rather than dropping alerting silently. The
+        # channel is a Slack id (`C…`) and @russbot must be a member of it.
+        slack_alerts_channel = config.require("slack_alerts_channel")
+        env["SLACK_ALERTS_CHANNEL"] = slack_alerts_channel
+        secrets.append(SecretEnv(name="SLACK_ALERTS_BOT_TOKEN", secret=SLACK_BOT_TOKEN_SECRET))
     if custom_domain:
         env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
     if secret_exists(provider, SMTP_SECRET):
@@ -124,7 +134,7 @@ def main() -> None:
     # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
     # unauthenticated (build panel shows no data), so the merge deploy never blocks.
     #   gcloud secrets create marin-grafana-github-app-private-key \
-    #     --project=hai-gcp-models --data-file=key.pem   # (then allowlist in infra/permissions)
+    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iam_data.yaml)
     #   pulumi config set marin-grafana:github_app_client_id <client-id>
     github_app_client_id = config.get("github_app_client_id")
     if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
@@ -145,6 +155,7 @@ def main() -> None:
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
+            cpu="1",
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
             env=env,

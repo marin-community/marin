@@ -7,19 +7,18 @@ Reads datakit-normalized Parquet (``id``, ``text``), builds an in-memory
 bloom filter from the eval text, and emits a co-partitioned Parquet
 attributes dataset marking which records overlap with eval text.
 
-Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
+Schema of the emitted Parquet attributes (flat Datakit attribute convention,
 consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
     partition_id             : int            — source partition index (from sorted file order)
-    attributes               : struct
-        contaminated         : bool           — max paragraph overlap meets the threshold
-        max_overlap          : float          — highest paragraph overlap fraction in [0, 1]
-        matched_hashes       : list[uint64]   — bloom-hit ngram hashes from this record
+    contaminated             : bool           — max paragraph overlap meets the threshold
+    max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
+    matched_hashes           : list[uint64]   — bloom-hit ngram hashes from this record
 
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
-Join ``attributes.matched_hashes`` against this sidecar to attribute
+Join ``matched_hashes`` against this sidecar to attribute
 contamination back to specific eval records.
 
 Output follows the normalize job's layout: main attributes land in
@@ -58,6 +57,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 
@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 # re-addresses cached blooms/marks instead of silently reusing incompatible
 # features. v2 added the no-alphabetic-character ngram filter (marin#6852 cluster D).
 FEATURE_FILTER_VERSION = 2
+DECON_ATTRIBUTES_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -106,16 +107,16 @@ class DeconAttributes(BaseModel):
             (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
-            Join the per-record ``attributes.matched_hashes`` column against
+            Join the per-record ``matched_hashes`` column against
             this to attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
-    version: str = "v3"
-    main_output_dir: str
-    flagged_output_dir: str
+    version: str = f"v{DECON_ATTRIBUTES_VERSION}"
+    main_output_dir: DatakitArtifactPath
+    flagged_output_dir: DatakitArtifactPath
     num_partitions: int
-    eval_hash_index_path: str
+    eval_hash_index_path: DatakitArtifactPath
     counters: dict[str, int | float]
 
 
@@ -161,9 +162,9 @@ class EvalBloom(BaseModel):
     """
 
     version: str = "v1"
-    bloom_dir: str
-    bloom_path: str
-    eval_hash_index_path: str
+    bloom_dir: DatakitArtifactPath
+    bloom_path: DatakitArtifactPath
+    eval_hash_index_path: DatakitArtifactPath
     estimated_doc_count: int
     false_positive_rate: float
     n_eval_records: int = 0
@@ -368,24 +369,14 @@ def _build_filter(
     return stats["n_records"]
 
 
-_ATTRIBUTES_STRUCT = pa.struct(
-    [
-        pa.field("contaminated", pa.bool_()),
-        pa.field("max_overlap", pa.float64()),
-        pa.field("matched_hashes", pa.list_(pa.uint64())),
-    ]
-)
-
-# Wrapped-attributes schema -- matches the datakit convention consumed by
-# ``marin.processing.classification.consolidate``: top-level ``id`` (join key)
-# and ``partition_id`` (co-partitioning invariant), with the per-record decon
-# facts grouped under ``attributes`` so a ``FilterConfig(name="contaminated")``
-# resolves correctly.
+# Flat attribute columns keep all Datakit sidecars directly selectable by name.
 _OUTPUT_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
         pa.field("partition_id", pa.int64()),
-        pa.field("attributes", _ATTRIBUTES_STRUCT),
+        pa.field("contaminated", pa.bool_()),
+        pa.field("max_overlap", pa.float64()),
+        pa.field("matched_hashes", pa.list_(pa.uint64())),
     ]
 )
 
@@ -466,11 +457,9 @@ def _make_marker(
                     yield {
                         "id": record["id"],
                         "partition_id": shard.shard_idx,
-                        "attributes": {
-                            "contaminated": contaminated,
-                            "max_overlap": max_score,
-                            "matched_hashes": list(matched),
-                        },
+                        "contaminated": contaminated,
+                        "max_overlap": max_score,
+                        "matched_hashes": list(matched),
                     }
 
             # Follow the normalize job's output layout: main attributes under
@@ -502,6 +491,7 @@ def decon_to_parquet(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> DeconAttributes:
     """Mark records in *normalized_data* that overlap with eval text.
 
@@ -595,8 +585,11 @@ def decon_to_parquet(
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
-    outcome = ctx.execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
 
     return DeconAttributes(
         main_output_dir=prefix_join(output_path, "outputs/main"),
@@ -864,7 +857,7 @@ class SourceDropSet(BaseModel):
     the counts are informational.
     """
 
-    output_dir: str
+    output_dir: DatakitArtifactPath
     n_sampled: int
     n_dropped: int
 
@@ -969,8 +962,8 @@ class AllSourceDropSets(BaseModel):
     and source frequencies retained for threshold audits.
     """
 
-    output_dir: str
-    global_output_dir: str
+    output_dir: DatakitArtifactPath
+    global_output_dir: DatakitArtifactPath
     num_sources: int
     n_global_dropped: int
     counters: dict[str, int | float]
@@ -1039,6 +1032,7 @@ def build_all_source_drop_sets(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
 
@@ -1112,7 +1106,11 @@ def build_all_source_drop_sets(
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
     global_rows = list(outcome.results)
     global_output_dir = f"{output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}"
     out_file = _write_global_drop_set(global_output_dir, global_rows)
@@ -1150,6 +1148,7 @@ def all_source_drop_sets_step(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1214,6 +1213,7 @@ def all_source_drop_sets_step(
             global_common_min_sources=global_common_min_sources,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[prebuilt_bloom, *source_dependencies],
         hash_attrs=hash_attrs,
@@ -1240,6 +1240,7 @@ def decon_step(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1306,6 +1307,7 @@ def decon_step(
         "overlap_threshold": overlap_threshold,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "attribute_schema_version": DECON_ATTRIBUTES_VERSION,
         "input_dir": input_dir,
     }
     # Only fold in when enabled: the flagged sidecar is *additional* output, so a
@@ -1345,6 +1347,7 @@ def decon_step(
                 flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
+                zephyr_context=zephyr_context,
             ),
             deps=[*norm_deps, bloom_step, *drop_deps],
             hash_attrs=hash_attrs,
@@ -1375,6 +1378,7 @@ def decon_step(
             false_positive_rate=false_positive_rate,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[*norm_deps, *eval_steps, *drop_deps],
         hash_attrs=inline_hash_attrs,

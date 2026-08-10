@@ -3,6 +3,7 @@
 
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+import os
 import time
 from typing import Any, cast
 
@@ -13,6 +14,15 @@ from jax.sharding import AxisType, NamedSharding
 
 
 _AUTOTUNE_THREAD_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pallas_autotune")
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def env_flag(name: str, *, default: bool) -> bool:
+    """Whether ``name`` is set to a truthy value, or ``default`` when it is unset."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in _TRUTHY_ENV_VALUES
 
 
 def sharding_of(value: jax.Array):

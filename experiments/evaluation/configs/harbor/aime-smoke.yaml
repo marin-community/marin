@@ -1,0 +1,26 @@
+n_attempts: 1
+n_concurrent_trials: 2
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+  exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+  force_build: false
+  delete: true
+agents:
+  # This is an integration smoke, not the production agentic AIME benchmark. One bounded model
+  # request makes missing EOS a scored model failure instead of an unbounded Terminus retry loop.
+  - import_path: marin.evaluation.harbor.single_turn_aime_agent:SingleTurnAimeAgent
+    kwargs:
+      answer_path: /app/answer.txt
+      max_tokens: 256
+datasets:
+  - name: aime
+    version: "1.0"

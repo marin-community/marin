@@ -5,7 +5,7 @@
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -22,6 +22,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     HardwareRef,
+    ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
@@ -31,7 +32,6 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
-from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,11 @@ class EvaluationError(RuntimeError):
 
 
 class EvalExecutor(Protocol):
-    """Execute one evaluation mechanism against an already-running OpenAI endpoint."""
+    """Execute one evaluation mechanism against an inference session."""
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome: ...
@@ -106,10 +106,12 @@ class EvaluationBatch:
     records_prefix: str
     model: ModelConfig
     accelerator: AcceleratorChoice
+    priority_band: int
     capability_origin: str
     api_model: str | None
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
+    submission_cluster: str
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
 
@@ -148,6 +150,7 @@ def _record(
             name=batch.model.name,
             location=batch.model.location,
             backend=batch.model.serve.backend.value,
+            config=ModelConfigRef.model_validate(asdict(batch.model)),
         ),
         eval=identity.eval_ref,
         hardware=HardwareRef(
@@ -252,7 +255,7 @@ def _run_one_evaluation(
         session.check_alive()
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
+        outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:
@@ -335,6 +338,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         env_vars=runtime_env,
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
+        priority=batch.priority_band,
     )
     try:
         with remote_inference(inference) as session:
@@ -356,7 +360,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
 def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
     """Submit a resolved batch to one CPU orchestrator."""
     constraints = None
-    if batch.accelerator.target_cluster:
+    if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
         constraints = [
             Constraint.create(
                 key=CLUSTER_CONSTRAINT_KEY,
@@ -380,6 +384,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         max_retries_failure=0,
+        priority_band=batch.priority_band,
     )
     logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
     return SubmittedEvaluationBatch(

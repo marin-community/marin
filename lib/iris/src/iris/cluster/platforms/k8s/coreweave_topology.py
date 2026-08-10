@@ -1,20 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical CoreWeave node-label keys for Kueue topology-aware scheduling.
-
-These keys are the levels in CoreWeave's Kueue Topology CRs and the node
-selectors that three sites must agree on: the K8s task provider stamps
-``podset-{required,preferred,slice-required}-topology`` annotations naming them
-(``providers/k8s/tasks.py``), the install script declares them as Topology
-levels + ResourceFlavor selectors (``scripts/install_kueue.py``), and the kind
-smoke stamps them onto synthetic nodes so TAS resolves the same layout it would
-on a real CKS cluster (``tests/e2e/gpu_gang_smoke.py``). Declared once here so
-those three sites cannot drift.
-
-Names leak CoreWeave conventions by design: ``group_by`` reflects the actual
-topology the gang runs against, it is not a portable abstraction.
-"""
+"""CoreWeave label hierarchies used by Kueue topology-aware scheduling."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -26,15 +13,16 @@ CW_LABEL_FABRIC = "backend.coreweave.cloud/fabric"
 CW_LABEL_SUPERPOD = "backend.coreweave.cloud/superpod"
 CW_LABEL_LEAFGROUP = "backend.coreweave.cloud/leafgroup"
 
-# Per-flavor capacity selector. Every IB-fabric node carries
-# ``backend.coreweave.cloud/flavor=infiniband``; the cw-ib ResourceFlavor
-# selects on it and the kind smoke stamps it so the flavor matches.
-CW_LABEL_FLAVOR = "backend.coreweave.cloud/flavor"
-CW_FLAVOR_INFINIBAND = "infiniband"
-
 # GB200 NVLink domain (hard/required single-domain colocation). H100 nodes do
 # NOT carry this label, so an H100 IB deployment has no nvlink.domain level.
 CW_LABEL_NVLINK_DOMAIN = "ds.coreweave.com/nvlink.domain"
+
+CW_INFINIBAND_TOPOLOGY_LABELS = (
+    CW_LABEL_FABRIC,
+    CW_LABEL_SUPERPOD,
+    CW_LABEL_LEAFGROUP,
+)
+CW_MULTINODE_TOPOLOGY_LABELS = (*CW_INFINIBAND_TOPOLOGY_LABELS, CW_LABEL_NVLINK_DOMAIN)
 
 # NVL72 (GB200/GB300) instances deploy in whole racks of 18 nodes. Such NodePools are
 # declared by rack count (spec.targetRacks) and do NOT autoscale — CoreWeave rejects both a
@@ -146,7 +134,17 @@ def balanced_rack_slice_size(num_tasks: int) -> int:
     return slice_size
 
 
-def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
+def gpu_gang_rack_slice_size(gpu_count: int, replicas: int) -> int:
+    """Return the rack slice size for a node-saturating multi-rack NVL72 gang."""
+    if gpu_count != NVL72_GPUS_PER_NODE:
+        raise ValueError(
+            f"sliced multi-rack placement requires node-saturating NVL72 pods "
+            f"({NVL72_GPUS_PER_NODE} GPUs each); got {gpu_count}"
+        )
+    return balanced_rack_slice_size(replicas)
+
+
+def gpu_gang_coscheduling_level(gpu_variant: str, gpu_count: int, replicas: int) -> str:
     """The Kueue topology level a multi-node GPU gang of ``replicas`` nodes should bind to.
 
     NVL72 (GB200/GB300) nodes carry ``ds.coreweave.com/nvlink.domain`` and one rack is a
@@ -157,9 +155,10 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     hard would demand a fully healthy rack and could leave it unschedulable whenever a rack is
     down a node, so that is the largest hard single-domain gang.
 
-    A larger gang binds to ``nvlink.domain.sliced``: the gang is partitioned into
-    ``SCHEDULABLE_RACK_NODES``-node slices, each hard-bound to its own nvlink.domain, so it lands
-    as an exact N racks x SCHEDULABLE_RACK_NODES balanced layout (see ``COSCHEDULE_NVLINK_DOMAIN_SLICED``).
+    A larger valid gang binds to ``nvlink.domain.sliced``: the gang is partitioned into
+    balanced, more-than-half-rack slices, each hard-bound to its own nvlink.domain. Before
+    selecting that level, this validates that each pod fills an NVL72 node and the replicas
+    split into valid rack slices.
 
     H100 and every non-NVL72 GPU carry no ``nvlink.domain`` label, so they always coschedule
     on ``leafgroup`` (soft IB colocation), which is the behavior this preserves for them.
@@ -167,5 +166,6 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     if is_rack_based(gpu_variant):
         if replicas <= SCHEDULABLE_RACK_NODES:
             return COSCHEDULE_NVLINK_DOMAIN
+        gpu_gang_rack_slice_size(gpu_count, replicas)
         return COSCHEDULE_NVLINK_DOMAIN_SLICED
     return COSCHEDULE_LEAFGROUP

@@ -14,11 +14,12 @@ from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.federation import peer as peer_module
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
 from iris.managed_thread import get_thread_container, thread_container_scope
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 
@@ -160,6 +161,51 @@ def test_list_peers_view_surfaces_heartbeat_backends():
     assert forwarded.kind == "worker-daemon"
     assert forwarded.worker_count == 3
     assert summary.last_contact_ms > 0
+
+
+def _availability_backend(backend_id: str, version: int) -> controller_pb2.Controller.BackendSummary:
+    """A GPU backend reporting the capacity metric at ``version``."""
+    backend = _gpu_backend(backend_id, "h100")
+    backend.availability.version = version
+    backend.availability.observation_epoch_ms = 1000
+    backend.availability.amounts["h100"] = 8
+    backend.availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 16})
+    return backend
+
+
+def test_availability_at_a_known_version_is_read_in_full():
+    peer = _peer("cw", _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),)))
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    ((backend,),) = [p.backends for p in manager.peer_availability()]
+    assert backend.supplies_metric is True
+    assert backend.amounts == {"h100": 8}
+    assert backend.held_by_band == {job_pb2.PRIORITY_BAND_BATCH: {"h100": 16}}
+
+
+def test_availability_from_an_older_metric_version_is_still_read():
+    # v1 reports free amounts and no band split. Its numbers are conservative under v2
+    # semantics, so a rolling upgrade keeps gating on them rather than dropping the gate.
+    backend = _availability_backend("gpu", 1)
+    backend.availability.ClearField("held_by_band")
+    peer = _peer("cw", _StubConnection((backend,)))
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    ((projected,),) = [p.backends for p in manager.peer_availability()]
+    assert projected.supplies_metric is True
+    assert projected.amounts == {"h100": 8}
+    assert projected.held_by_band == {}
+
+
+def test_availability_from_a_newer_metric_version_is_treated_as_unsupplied():
+    # The parent cannot know what a future version's amounts mean, so it falls back to
+    # shape-only matching for that backend instead of acting on numbers it misreads.
+    peer = _peer("cw", _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION + 1),)))
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    ((backend,),) = [p.backends for p in manager.peer_availability()]
+    assert backend.supplies_metric is False
+    assert (backend.amounts, backend.held_by_band, backend.generation) == ({}, {}, 0)
 
 
 class _RecordingStub:

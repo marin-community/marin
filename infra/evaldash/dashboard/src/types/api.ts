@@ -1,10 +1,20 @@
 // Shapes returned by the evaldash server (src/server.py). Kept in sync with the
 // dict shapes that RecordStore, cluster.py, and samples.py produce.
 
+export const RUN_STATUS = {
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  ARTIFACT_FAILED: 'artifact_failed',
+  INFRA_FAILED: 'infra_failed',
+} as const
+
+export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
+
 export interface RunRow {
   run_id: string
   group_id: string | null
   created_at: string
+  version: string | null
   user_name: string | null
   model_name: string | null
   model_location: string | null
@@ -74,12 +84,18 @@ export interface Meta {
   store: string
 }
 
+export interface RecordParseFailure {
+  path: string
+  error: string
+}
+
 export interface PrefixProbe {
   prefix: string
   last_probe_time: string | null
   last_success_time: string | null
   record_count: number | null
   error: string | null
+  parse_failures: RecordParseFailure[]
 }
 
 export interface StoreInfo {
@@ -102,7 +118,8 @@ export interface EvalTask {
   num_fewshot: number | null
 }
 
-// The canonical record.json shape (records.EvalRunRecord).
+// The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
+// the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
   run_id: string
   group_id: string
@@ -120,6 +137,15 @@ export interface EvalRecord {
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
   provenance: { git_sha: string; eval_runtime: string; launch_host: string }
+  timing: { started_at: string; finished_at: string | null } | null
+  serving: {
+    tensor_parallel_size: number | null
+    data_parallel_size: number | null
+    max_model_len: number | null
+    max_gen_tokens: number | null
+    extra: Record<string, string>
+  } | null
+  headline: { value: number; metric: string; stderr: number | null } | null
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -193,7 +219,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py, mirroring marin.evaluation.samples.EvalSample) ---
+// --- Per-sample browser (samples.py, mirroring finestore.eval.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -215,7 +241,7 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
-// How one prediction was scored (marin.evaluation.samples.Grading). `method` names the grader
+// How one prediction was scored (finestore.eval.Grading). `method` names the grader
 // (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
 // as a JSON string, the escape hatch for anything the typed fields do not carry.
 export interface SampleGrading {
@@ -230,8 +256,8 @@ export interface SampleGrading {
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples, and `trajectory_uri` for `agentic` samples. The two unbounded payloads (the agentic
-// trajectory, a prediction's raw exchange) are referenced by URI and lazy-loaded on demand.
+// samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
+// trajectory, is referenced by URI and lazy-loaded on demand.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -245,14 +271,13 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
-  exchange_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory, an exchange) resolved to text by the server's
+// One sample-referenced artifact (a trajectory) resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {
@@ -311,16 +336,28 @@ export interface Trajectory {
   final_metrics?: Record<string, number>
 }
 
+// Unpaginated per-task outcome counts; `ungraded` is its own bucket, apart from `incorrect`.
+export interface SampleCounts {
+  all: number
+  correct: number
+  incorrect: number
+  ungraded: number
+}
+
 export interface SamplesResponse {
   available: boolean
   error: string | null
   task: string
   primary_metric: string | null
   metric_columns: string[]
+  /** Extraction filters this task was scored under; empty only when its rows carry no filter. */
+  extraction_filters: string[]
+  /** The filter the returned page was drawn from. */
+  extraction_filter: string | null
   total: number
   offset: number
   limit: number
-  counts?: { all: number; correct: number; incorrect: number }
+  counts?: SampleCounts
   rows: SampleRow[]
 }
 
@@ -355,6 +392,67 @@ export interface GroupResponse {
   siblings: GroupSibling[]
 }
 
+// --- Model detail (/api/models/{model}) ---
+
+// A model runs each benchmark many times; a cohort is one version's launch. Newest cohort first.
+export interface ModelCohort {
+  version: string | null
+  created_at: string
+  n_evals: number
+  n_succeeded: number
+  group_id: string | null
+}
+
+export interface ModelRun {
+  run_id: string
+  eval_name: string
+  status: string
+  created_at: string | null
+  version: string | null
+  value: number | null
+  stderr: number | null
+  metric: string | null
+}
+
+// Everything the model view needs in one call: the cohort list for the version selector, every
+// succeeded run's score per benchmark for the sparklines, and every run for the run list. The page
+// derives each cohort's per-benchmark cells from `runs`, so no precomputed cell map is sent.
+export interface ModelDetail {
+  model: string
+  location: string | null
+  backend: string | null
+  user: string | null
+  current_version: string | null
+  cohorts: ModelCohort[]
+  history: Record<string, HistoryPoint[]>
+  runs: ModelRun[]
+}
+
+// --- Agentic failure review (POST /api/runs/{run_id}/samples/review) ---
+
+export interface ReviewCategory {
+  label: string
+  count: number
+  doc_ids: string[]
+}
+
+export interface ReviewSummary {
+  categories: ReviewCategory[]
+  narrative: string
+}
+
+// `available` is false with a `reason` when the reviewer is not configured (no API key/SDK) or
+// there are no samples — mirroring the logs/artifact endpoints rather than erroring.
+export interface ReviewResponse {
+  available: boolean
+  reason: string | null
+  model: string | null
+  task: string
+  filter: string
+  n_reviewed: number
+  summary: ReviewSummary | null
+}
+
 // One eval within a launch (a serve group), with its headline score.
 export interface GroupMember {
   run_id: string
@@ -375,7 +473,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: 'succeeded' | 'failed' | 'infra_failed' | 'mixed'
+  status: RunStatus | 'mixed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

@@ -42,7 +42,8 @@ const options = computed<Record<string, unknown>>(() => ({
   x: { axis: null },
   fx: { label: null, tickRotate: -30 },
   y: { label: 'primary metric', grid: true },
-  color: { legend: true },
+  // Fixed categorical order (dataviz-validated slots 1–4); a legend keeps identity off colour alone.
+  color: { legend: true, range: ['#2a78d6', '#1baf7a', '#eda100', '#008300'] },
   marks: [
     Plot.barY(bars.value, { fx: 'task', x: 'model', y: 'value', fill: 'model' }),
     Plot.ruleX(bars.value, { fx: 'task', x: 'model', y1: 'lo', y2: 'hi', stroke: 'currentColor', strokeOpacity: 0.55 }),

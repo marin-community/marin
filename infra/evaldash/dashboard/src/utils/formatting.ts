@@ -26,6 +26,18 @@ export function shortSha(sha: string | null | undefined): string {
   return sha.length > 10 ? sha.slice(0, 10) : sha
 }
 
+// A browsable Cloud Console URL for a gs:// object path, or null for anything else (local dev paths,
+// or s3:// CoreWeave paths whose console is not public). Used to linkify results/weight locations.
+export function objectStoreUrl(path: string | null | undefined): string | null {
+  if (!path || !path.startsWith('gs://')) return null
+  return `https://console.cloud.google.com/storage/browser/${path.slice('gs://'.length)}`
+}
+
+// The GitHub commit page for a marin git SHA, or null when absent.
+export function githubCommitUrl(sha: string | null | undefined): string | null {
+  return sha ? `https://github.com/marin-community/marin/commit/${sha}` : null
+}
+
 export function formatRelativeAge(iso: string | null | undefined): string {
   if (!iso) return 'never'
   const then = new Date(iso).getTime()

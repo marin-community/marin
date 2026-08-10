@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
+import { controllerRpcCall, endpointRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { stateToName, stateDisplayName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import {
-  LOCAL_CLUSTER, isFederated,
+  LOCAL_CLUSTER, isFederated, attemptFailureReason,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
@@ -247,7 +247,7 @@ async function fetchEndpoints(gen: number) {
   // Endpoint links are an enhancement; a fetch failure should never block the
   // task table, so swallow the error and leave the prior grouping in place.
   try {
-    const resp = await controllerRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
+    const resp = await endpointRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
     if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     const grouped = new Map<string, EndpointInfo[]>()
     for (const ep of resp.endpoints ?? []) {
@@ -651,7 +651,8 @@ function collectFailuresByState(stateName: string, count: (t: TaskStatus) => num
       if (stateToName(attempt.state) !== stateName) continue
       const finishedAtMs = timestampMs(attempt.finishedAt)
       if (!latest || finishedAtMs >= latest.finishedAtMs) {
-        latest = { attemptId: attempt.attemptId, error: attempt.error ?? '', finishedAtMs }
+        const error = attemptFailureReason(attempt)
+        latest = { attemptId: attempt.attemptId, error, finishedAtMs }
       }
     }
     if (!latest) continue
@@ -1441,7 +1442,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             >
               Task {{ taskIndex(task.taskId) }}
             </RouterLink>
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </div>
           <div v-if="task.pendingReason" class="mt-1 text-xs text-status-warning" :title="task.pendingReason">
             {{ task.pendingReason }}
@@ -1555,7 +1560,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   </RouterLink>
                 </td>
                 <td class="px-2 sm:px-3 py-2 text-[13px] align-top">
-                  <StatusBadge :status="task.state" size="sm" />
+                  <StatusBadge
+                    :status="task.state"
+                    :label="taskStateDisplayName(task.state, task.statusMessage)"
+                    size="sm"
+                  />
                   <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                     {{ task.pendingReason }}
                   </div>

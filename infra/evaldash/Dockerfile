@@ -30,9 +30,11 @@ WORKDIR /app
 # prefix; the rest is the server + CloudSQL stack. rigging's wheel force-includes the repo-root
 # config/ cluster YAMLs at ../../config, so the build keeps the checkout's relative layout.
 COPY lib/rigging /build/lib/rigging
+COPY lib/finestore /build/lib/finestore
 COPY config /build/config
 RUN pip install --no-cache-dir \
     /build/lib/rigging \
+    /build/lib/finestore \
     uvicorn \
     sqlalchemy \
     pg8000 \
@@ -43,14 +45,15 @@ RUN pip install --no-cache-dir \
     protobuf \
     pyarrow \
     pydantic \
+    anthropic \
     && rm -rf /build
 
-# The canonical record and sample contracts are the only Marin modules in the image. The private
-# Postgres index lives with the server under infra/evaldash/src.
+# The record contract is the only bespoke Marin module in the image; the per-sample sample contract
+# now lives in finestore.eval, installed above with the finestore wheel. The private Postgres index
+# lives with the server under infra/evaldash/src.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py
 COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
-COPY lib/marin/src/marin/evaluation/samples.py /app/marin/evaluation/samples.py
 # Copy the generated Connect clients and protobufs as package directories; evaldash does not need
 # the full Iris or finelog runtime packages.
 COPY lib/iris/src/iris/__init__.py /app/iris/__init__.py

@@ -48,7 +48,6 @@ Select the existing stack and review its plan before applying changes:
 ```bash
 uv sync --package marin-iac --extra deploy
 cd infra/permissions
-pulumi login gs://marin-iac-state
 pulumi stack select hai-gcp-models
 pulumi preview
 pulumi up

@@ -1,136 +1,129 @@
 ---
 name: query-inference-metrics
-description: Investigate a vLLM serve's performance (throughput, TTFT/TPOT latency, queue depth, KV-cache usage) from durable finelog metrics with SQL. Use when asked how an inference or eval serve performed, or why it was slow. For kernel-level JAX profiling, use profile-training instead.
+description: Investigate a vLLM serve's performance (throughput, TTFT/TPOT latency, queue depth, KV-cache usage) from durable Finelog telemetry with SQL. Use when asked how an inference or eval serve performed, or why it was slow. For kernel-level JAX profiling, use profile-training instead.
 ---
 
-# Skill: Query Inference Metrics
+# Query inference telemetry
 
-A vLLM serve mirrors its `/metrics` into `rigging.telltale`, which forwards to
-finelog every 15s (#7349), so serving metrics stay queryable after the job ends.
-Training runs land in the same table under `source = 'levanter'`.
+Native vLLM `/metrics` snapshots are exported directly to Finelog every 15 seconds with `service = 'vllm'`. They land in `telemetry_v1`; the redundant `vllm:` metric prefix is removed.
 
-This is a triage map, not an inventory. Two queries give the bearing; the three
-traps below let you write the rest.
-
-## Running queries
-
-From a Marin checkout:
+Run SQL from a Marin checkout:
 
 ```sh
 uv run finelog query marin "<SQL>" --format table
 ```
 
-- `marin` is the federated hub — almost always the right target. Per-cluster
-  deployments (`cw-us-east-02a`, …) hold no `telltale` table.
-- Double-quote the SQL, single-quote inside it, leave `telltale` unquoted.
-- `IapLoginRequired` means log in (`lib/iris/OPS.md`). `--format jsonl|csv` to
-  pipe; `--max-rows` raises the 100k cap.
+Use the federated `marin` hub unless a task specifically requires a cluster-local view.
 
-## The data
+## Row shape and identity
 
-One table, `telltale`, one row per sample. Typed, filterable columns: `name,
-value, kind, ts, source, run, job_id, task_index, attempt, worker, region,
-process_index`. Anything else — a histogram's `le`, `model_name`,
-`finished_reason` — lives in a `labels` map read with `json_get(labels, 'key')`
-(extract a key before you `GROUP BY`/`ORDER BY`; the map column itself errors).
-
-Always filter on `name` first: finelog keys the table on it, so `WHERE name = '…'`
-prunes by parquet stats; unfiltered scans are slow and can hit `Offset overflow`.
-Match `name LIKE 'vllm:%'` for serving metrics — `source = 'vllm'` marks the
-forwarding process, so it also tags ~10 stdlib `process_*`/`python_*` collectors.
-Rows exist only for jobs run after the sink landed mid-July 2026 (#7336).
-
-## Three ways to get a wrong number
-
-1. **Series identity is `(job_id, worker, attempt)` plus the metric's own
-   labels** (`engine`, `model_name`, `le`), not `job_id` alone. `run` is NULL on
-   vLLM rows, and a serve spans replicas. Averaging a counter across replicas is
-   meaningless.
-2. **Counters are cumulative, per replica** — this is the rate pattern.
-   `MAX(value)` per replica per time bin, `LAG` within the replica, then `SUM`
-   across replicas. `GREATEST(delta, 0)` clamps a restart's negative jump but
-   doesn't recover the tokens after it, so treat restarted series as approximate.
-3. **Histograms are three families** — this is the quantile pattern. `_bucket`
-   (cumulative, bound in `labels['le']`), `_count`, `_sum`; `CAST(le AS DOUBLE)`
-   maps `+Inf` to `inf`. Find the bucket where cumulative `_count` crosses
-   `q × total`; divide `_sum` by `_count` for a mean.
-
-Stale-data trap: rows written before #7498 collapse
-`vllm:prompt_tokens_by_source_total` into three indistinguishable series
-(#7497); use `vllm:prompt_tokens_total` for the total on older jobs.
-
-## Triage a serve
-
-Examples use `/held/qwen3-evals-otbl-full-r2`, a Qwen3 eval serve. First see what
-it recorded (`AND name LIKE '%cache%'` to narrow; read one row's `labels` for a
-metric's dimensions):
+The useful typed columns are `cluster`, `service`, `name`, `kind`, `value`, `unit`, `timestamp_ms`, and `seq`. Process identity is string JSON in `resource_attributes_json`; source labels and the two snapshot markers are string JSON in `attributes_json`. Read both with untyped `json_get`, for example:
 
 ```sql
-SELECT name, kind, COUNT(*) AS samples
-FROM telltale WHERE job_id = '/held/qwen3-evals-otbl-full-r2'
-GROUP BY 1, 2 ORDER BY 1
+json_get(resource_attributes_json, 'job_id')
+json_get(attributes_json, 'model_name')
 ```
 
-**Lifetime totals** (the counter pattern, summing each counter's per-series max):
+`json_get` returns `VARCHAR`. Do not use typed JSON getters. Use `to_timestamp_millis(timestamp_ms)` for projection or `date_bin`, but keep range predicates on raw `timestamp_ms` so Parquet min/max pruning applies.
+
+A complete imported-snapshot series is identified by `(origin_cluster, service, name, resource_attributes_json, attributes_json)`. The JSON columns contain worker/attempt and metric labels, so do not aggregate them away before computing a cumulative delta.
+
+## Snapshot and delta semantics
+
+Imported vLLM samples are stored as telemetry gauges without changing the source value. `source_kind` preserves the Prometheus family type. Source gauges and summary quantiles carry `source_temporality = 'current_snapshot'`; aggregate them directly or select the latest value. Source counters, histogram bucket/sum/count samples, and summary sum/count samples carry `source_temporality = 'cumulative_snapshot'` and need `LAG`. Discard a negative delta at a process reset. Scan one 15-second scrape interval before the visible window so its first point has a predecessor, then filter output to the visible range.
 
 ```sql
-WITH peaks AS (
-  SELECT name, worker, attempt, MAX(value) AS v
-  FROM telltale
-  WHERE job_id = '/held/qwen3-evals-otbl-full-r2'
-    AND name IN ('vllm:prompt_tokens_total', 'vllm:generation_tokens_total',
-                 'vllm:e2e_request_latency_seconds_count',
-                 'vllm:e2e_request_latency_seconds_sum', 'vllm:num_preemptions_total')
-  GROUP BY 1, 2, 3
+WITH base AS (
+  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+         service, name, resource_attributes_json, attributes_json,
+         timestamp_ms, seq, value
+  FROM telemetry_v1
+  WHERE service = 'vllm'
+    AND name = 'generation_tokens_total'
+    AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
+    AND timestamp_ms >= 1785254385000 -- visible start minus one 15s scrape interval
+    AND timestamp_ms < 1785258000000
+), samples AS (
+  SELECT *,
+         LAG(value) OVER (
+           PARTITION BY origin_cluster, service, name,
+                        resource_attributes_json, attributes_json
+           ORDER BY timestamp_ms, seq
+         ) AS previous_value
+  FROM base
+), deltas AS (
+  SELECT *, CASE
+    WHEN previous_value IS NULL OR value < previous_value THEN NULL
+    ELSE value - previous_value
+  END AS delta
+  FROM samples
 )
-SELECT name, CAST(SUM(v) AS BIGINT) AS total FROM peaks GROUP BY 1 ORDER BY 1
-```
-
-```
-vllm:e2e_request_latency_seconds_count | 57609
-vllm:e2e_request_latency_seconds_sum   | 151792
-vllm:generation_tokens_total           | 41163346
-vllm:num_preemptions_total             | 0
-vllm:prompt_tokens_total               | 25471239
-```
-
-Mean e2e latency = sum/count = 2.63s. `MIN(ts)`, `MAX(ts)`, and
-`COUNT(DISTINCT worker)` on `vllm:generation_tokens_total` give the span and
-replica count — here 2831 tok/s over 242 min on 2 replicas (every replica that
-ran, not the steady-state count). The same pattern over
-`vllm:request_{queue,prefill,decode}_time_seconds_sum` shows decode held 99% of
-request time: generation-bound.
-
-**Saturation** — did requests queue or KV fill? Peaks matter, not averages:
-
-```sql
-SELECT REPLACE(name, 'vllm:', '') AS gauge,
-       ROUND(MAX(value), 3) AS peak, ROUND(AVG(value), 3) AS avg
-FROM telltale
-WHERE job_id = '/held/qwen3-evals-otbl-full-r2'
-  AND name IN ('vllm:num_requests_running', 'vllm:num_requests_waiting', 'vllm:kv_cache_usage_perc')
+SELECT date_bin(INTERVAL '5 minutes', to_timestamp_millis(timestamp_ms)) AS t,
+       SUM(delta) AS generated_tokens
+FROM deltas
+WHERE timestamp_ms >= 1785254400000
 GROUP BY 1 ORDER BY 1
 ```
 
+This rule does not apply to native `rigging.telemetry.counter(...).add(...)` records: those rows are already deltas and must be aggregated with `SUM(value)`, never `LAG`.
+
+Histogram buckets are cumulative snapshots. Their upper bound is `json_get(attributes_json, 'le')`; `_count` and `_sum` use the same full series identity. Derive a quantile from bucket deltas, or divide sum delta by count delta for a mean. Summary quantiles are current snapshots, while their `_count` and `_sum` components use the cumulative path.
+
+## Triage a serve
+
+First list the signals for one job:
+
+```sql
+SELECT name, json_get(attributes_json, 'source_kind') AS source_kind, COUNT(*) AS samples
+FROM telemetry_v1
+WHERE service = 'vllm'
+  AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
+GROUP BY 1, 2 ORDER BY 1
 ```
-kv_cache_usage_perc  | 0.151 | 0.06
-num_requests_running | 16.0  | 9.421
-num_requests_waiting | 7.0   | 0.019
+
+For lifetime totals, sum the initial value and subsequent nonnegative deltas in each reset epoch, then sum replicas:
+
+```sql
+WITH lifetime_base AS (
+  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+         service, name, resource_attributes_json, attributes_json,
+         timestamp_ms, seq, value
+  FROM telemetry_v1
+  WHERE service = 'vllm'
+    AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
+    AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
+    AND name IN ('prompt_tokens_total', 'generation_tokens_total',
+                 'e2e_request_latency_seconds_count', 'e2e_request_latency_seconds_sum',
+                 'num_preemptions_total')
+), lifetime_samples AS (
+  SELECT *,
+         LAG(value) OVER (
+           PARTITION BY origin_cluster, service, name,
+                        resource_attributes_json, attributes_json
+           ORDER BY timestamp_ms, seq
+         ) AS previous_value
+  FROM lifetime_base
+), lifetime_increments AS (
+  SELECT *, CASE
+    WHEN previous_value IS NULL OR value < previous_value THEN value
+    ELSE value - previous_value
+  END AS increment
+  FROM lifetime_samples
+)
+SELECT name, SUM(increment) AS total
+FROM lifetime_increments
+GROUP BY 1 ORDER BY 1
 ```
 
-Waiting peaked at 7 but averaged ~0 and KV never passed 15%, so the serve was
-neither admission- nor memory-limited — just busy decoding long generations.
-Gauges don't prove spare decode capacity, though; test a concurrency theory by
-rerunning higher. `date_bin(INTERVAL '5 minutes', ts)` in the GROUP BY makes it a
-timeline.
+For `current_snapshot` saturation gauges, inspect peaks and averages rather than deltas:
 
-## Going deeper
+```sql
+SELECT name, ROUND(MAX(value), 3) AS peak, ROUND(AVG(value), 3) AS average
+FROM telemetry_v1
+WHERE service = 'vllm'
+  AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
+  AND name IN ('num_requests_running', 'num_requests_waiting', 'kv_cache_usage_perc')
+GROUP BY 1 ORDER BY 1
+```
 
-The three traps are the whole toolkit. For a rate over time, delta a counter
-(trap 2) across `date_bin` buckets. For a latency tail, apply the histogram
-pattern (trap 3) to `vllm:time_to_first_token_seconds_bucket` (TTFT),
-`vllm:inter_token_latency_seconds_bucket` (TPOT), or the e2e bucket. To split a
-counter, `json_get` its label (e.g. `finished_reason` on
-`vllm:request_success_total`) before the per-series `MAX` and `SUM`. Cross-check
-independent numbers — a request total that disagrees with the histogram `_count`
-usually means a counter got averaged across replicas instead of summed.
+Queue depth, KV-cache usage, TTFT (`time_to_first_token_seconds_*`), TPOT (`inter_token_latency_seconds_*`), request completion labels, and token rates usually locate the bottleneck. Cross-check independent totals; disagreement commonly means replica identity was collapsed before delta calculation.

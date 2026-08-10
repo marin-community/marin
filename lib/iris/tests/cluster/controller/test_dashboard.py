@@ -9,6 +9,7 @@ The dashboard serves a web UI that fetches data via RPC calls.
 
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
@@ -17,6 +18,7 @@ from iris.cluster.backends.k8s.tasks import (
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    PodConfig,
 )
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.bundle import BundleStore
@@ -25,7 +27,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -46,13 +48,15 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
+from rigging.auth import StaticTokenProvider
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -69,6 +73,8 @@ from .conftest import (
 # Test Helpers
 # =============================================================================
 
+ENDPOINT_SERVICE = "EndpointService"
+
 
 def submit_job(
     state: ControllerTestState,
@@ -79,7 +85,7 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=request, ts=Timestamp.now())
     return jid
 
 
@@ -391,11 +397,7 @@ def test_list_workers_returns_healthy_status(client, state):
     assert healthy_count == 2
 
 
-# Exercise both the canonical EndpointService route and the deprecated
-# ControllerService forwarding shim, so the shim keeps serving pre-migration
-# callers until it is removed.
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_endpoints_only_returned_for_running_jobs(client, state, job_request, service_name):
+def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints returns endpoints for non-terminal jobs.
 
     Endpoints are associated with tasks and deleted when tasks reach terminal states,
@@ -437,7 +439,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -445,8 +447,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
     assert endpoint_names == {"pending-svc", "running-svc"}
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_returns_task_id(client, state, job_request, service_name):
+def test_list_endpoints_returns_task_id(client, state, job_request):
     """ListEndpoints returns the task_id so the dashboard can derive the owning job."""
     job_id = submit_job(state, "ep-job", job_request)
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
@@ -465,7 +466,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -473,8 +474,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
     assert endpoints[0]["taskId"] == task_id.to_wire()
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_filters_by_task_ids(client, state, service_name):
+def test_list_endpoints_filters_by_task_ids(client, state):
     """ListEndpoints(task_ids=[...]) returns only endpoints owned by those tasks.
 
     The dashboard's task list and detail pages use this to render a proxy link
@@ -505,7 +505,7 @@ def test_list_endpoints_filters_by_task_ids(client, state, service_name):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
@@ -1505,7 +1505,9 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
 def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        kubectl=k8s, pods=PodConfig(namespace="iris", default_image="img:latest"), cluster_scan_interval=0.0
+    )
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
@@ -1938,7 +1940,9 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
+    gcp_backend.resource_capacity.return_value = {
+        "v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})
+    }
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1971,7 +1975,12 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 1
+    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
+    # Held capacity is reported per priority band so a parent can see what a
+    # higher-priority job would reclaim there.
+    assert summaries["gcp"]["availability"]["heldByBand"] == [
+        {"band": "PRIORITY_BAND_BATCH", "amounts": {"v6e-16": "32"}}
+    ]
     assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
@@ -2115,3 +2124,98 @@ def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_pa
     assert data_eu["namespace"] == "eu"
     data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
     assert data_us["namespace"] == "us"
+
+
+def _proxy_dashboard_with_transport(monkeypatch, credentials=None):
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"endpoints": []})
+
+    async_client = httpx.AsyncClient
+
+    def make_async_client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_async_client)
+    return ProxyControllerDashboard("https://iris.example", credentials=credentials), requests
+
+
+def test_proxy_dashboard_forwards_endpoint_service_rpc(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch)
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.EndpointService/ListEndpoints",
+            json={"prefix": "/jobs/"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"endpoints": []}
+    assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
+
+
+def _static_credentials() -> ClientCredentials:
+    return ClientCredentials(
+        token_provider=StaticTokenProvider("app-token"),
+        iap_provider=StaticTokenProvider("iap-token"),
+    )
+
+
+def test_credential_auth_both_providers_attaches_both_bearers(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, _static_credentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert response.status_code == 200
+    headers = requests[0].headers
+    assert headers["authorization"] == "Bearer app-token"
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_caller_supplied_bearer_is_overwritten(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, _static_credentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.ControllerService/ListJobs",
+            json={},
+            headers={"proxy-authorization": "Bearer forged"},
+        )
+
+    assert response.status_code == 200
+    headers = requests[0].headers
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_expired_token_mints_a_fresh_one_per_request(monkeypatch):
+    class Rotating:
+        def __init__(self):
+            self.calls = 0
+
+        def get_token(self) -> str | None:
+            self.calls += 1
+            return f"t{self.calls}"
+
+    dashboard, requests = _proxy_dashboard_with_transport(
+        monkeypatch,
+        ClientCredentials(iap_provider=Rotating()),
+    )
+    with TestClient(dashboard.app) as client:
+        first = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+        second = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [request.headers["proxy-authorization"] for request in requests] == ["Bearer t1", "Bearer t2"]
+
+
+def test_credential_auth_no_providers_sends_no_bearers(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, ClientCredentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert response.status_code == 200
+    headers = requests[0].headers
+    assert "authorization" not in headers
+    assert "proxy-authorization" not in headers

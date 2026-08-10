@@ -126,6 +126,56 @@ def test_write_parquet_file_basic():
         assert len(table) == 2
 
 
+def test_write_parquet_file_accepts_record_batches(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    batches = [
+        pa.RecordBatch.from_pylist([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], schema=schema),
+        pa.RecordBatch.from_pylist([{"id": 3, "name": "Charlie"}], schema=schema),
+    ]
+    output_path = str(tmp_path / "batches.parquet")
+
+    result = write_parquet_file(batches, output_path, target_buffer_bytes=1)
+
+    assert result == {"path": output_path, "count": 3}
+    assert pq.read_table(output_path).equals(pa.Table.from_batches(batches))
+
+
+def test_write_parquet_file_preserves_typed_empty_record_batch(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    empty_batch = pa.RecordBatch.from_arrays(
+        [pa.array([], type=pa.int64()), pa.array([], type=pa.string())],
+        schema=schema,
+    )
+    output_path = str(tmp_path / "empty-batch.parquet")
+
+    result = write_parquet_file([empty_batch], output_path)
+
+    table = pq.read_table(output_path)
+    assert result == {"path": output_path, "count": 0}
+    assert table.schema.equals(schema, check_metadata=True)
+    assert len(table) == 0
+
+
+def test_write_parquet_file_rejects_record_batch_schema_drift(tmp_path):
+    integer_batch = pa.RecordBatch.from_pylist([{"value": 1}])
+    string_batch = pa.RecordBatch.from_pylist([{"value": "one"}])
+
+    with pytest.raises(pa.ArrowInvalid, match="RecordBatch schema mismatch"):
+        write_parquet_file([integer_batch, string_batch], str(tmp_path / "schema-drift.parquet"))
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [pa.RecordBatch.from_pylist([{"value": 1}]), {"value": 2}],
+        [{"value": 1}, pa.RecordBatch.from_pylist([{"value": 2}])],
+    ],
+)
+def test_write_parquet_file_rejects_mixed_rows_and_record_batches(tmp_path, records):
+    with pytest.raises(TypeError, match="cannot mix"):
+        write_parquet_file(records, str(tmp_path / "mixed.parquet"))
+
+
 def test_write_parquet_file_widens_null_to_concrete_type():
     """First batch pins a field as null; a later batch with a concrete type widens cleanly.
 

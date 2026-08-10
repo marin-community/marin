@@ -1,11 +1,12 @@
 # Evaluation launcher
 
-A one-command path from "model + eval suite" to recorded results. Pick a model and an eval selection
-from the registries here; the launcher sizes a serving slice and submits one CPU orchestrator job for
-the whole launch. The orchestrator serves the model once, runs every selected eval against that
-endpoint in order, and writes one durable `record.json` per eval as it finishes -- so a suite fills
-in progressively, each eval independently inspectable (own record, own eval-child job and logs, own
-parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
+A one-command path from "model + eval suite" to recorded results. Pick a registered model or supply a
+catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
+serving slice and submits one CPU orchestrator job for the whole launch. The orchestrator serves the
+model once, runs every selected eval against that endpoint in order, and writes one durable
+`record.json` per eval as it finishes -- so a suite fills in progressively, each eval independently
+inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
+scans those records into its Postgres query index.
 
 `marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
 each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
@@ -30,18 +31,30 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smok
 # See the resolved plan without submitting anything.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke --dry-run
 
+# Evaluate an export without adding it to the model catalog.
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/fresh-rl-checkpoint.yaml --evals smoke --dry-run
+
 # One suite, a specific slice, capped instances, no waiting.
 uv run python -m experiments.evaluation.cli launch --model llama3.1-8b-instruct \
   --evals gsm8k --accelerator v6e-8 --limit 128 --no-wait
 
 # GPU-only model routes to its CoreWeave peer automatically.
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke
+
+# Override GPU placement and scheduling priority.
+uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
+  --federated_cluster cw-rno2a --priority interactive
 ```
 
-Key options: `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
-(`gsm8k,mmlu-smoke`); `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the
-sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
-`--records-prefix` and `--cluster` override where records land and which iris cluster to submit to.
+Key options: exactly one of `--model` or `--model-config` selects a registry entry or a catalog-schema
+YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
+(`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
+files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
+heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
+band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
+launcher always submits through the `marin` Iris controller.
 
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
@@ -50,28 +63,36 @@ math500): one model boot, eleven evals against the shared endpoint, eleven recor
 shows the full model x task grid of runs.
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `marin.evaluation.samples` (the parquet files are
+useful after a change to the contract in `finestore.eval` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
-uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/runs
+uv run python -m experiments.evaluation.migrations.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
+
+A task scored under several extraction filters (gsm8k under `strict-match` and `flexible-extract`)
+stores one sample per (document, filter); the two disagree by design. The dashboard's sample browser
+shows one filter at a time, defaulting to the one that produced the run's headline metric, with a
+selector for the others.
 
 ## Records and the dashboard index
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
-is the source of truth: model, hardware, status (`succeeded` / `failed` / `infra_failed`), the
-per-task metrics, provenance, the `group_id` shared by every eval from the same serve, and the iris
-job paths of every job behind the run (`jobs`: orchestrator, the shared inference child, this eval's
-child). The orchestrator writes it on success and on failure, so a failed run is still accounted
-for -- and a failure carries the failed child's last 100 log lines (`log_tails`), so most failures
-are diagnosable straight from the record (or the dashboard) without cluster access.
+is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
+`artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
+the `group_id`
+shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
+orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
+and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
+last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
+dashboard) without cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.samples`, the per-sample contract -- `EvalSample`, normalized from
-lm-eval's native row shape, with the parquet schema *being* the Pydantic model) -- load them with
-pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
+parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
+`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
+Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
+to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
@@ -79,10 +100,46 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path.
-The step submits the same CPU orchestrator used by the CLI and waits for it. The slice override is a
-runtime arg, so changing it does not change the artifact identity.
+`pipeline.py` exposes the same run as an `ArtifactStep`:
+`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
+versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
+to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity. Produced-model
+adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
+
+## Evalchemy config files
+
+Use repeatable `--evalchemy-config` options to launch portable Evalchemy YAML or JSON without adding
+entries to `EVALS`. Each file is one evaluation and produces one record. Files can select Evalchemy
+chat benchmarks or lm-eval tasks through the same `tasks` list:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --dry-run
+```
+
+Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
+The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
+A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
+the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
+tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
+
+`tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
+`task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
+`apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
+and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
+packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
+explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
+launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
+record provenance stores the exact Evalchemy requirement, including runtime extras.
+
+`--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
+launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.
+When no selection option is supplied, the launcher uses `smoke`; any file-only launch suppresses that
+default.
 
 ## Agentic benchmarks (Harbor)
 
@@ -100,6 +157,44 @@ land in evaldash like every other eval.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
 ```
 
+Use `--harbor-config` to launch a Harbor `JobConfig` without adding it to `EVALS`:
+
+```bash
+# Serve Qwen3-8B and run the checked-in two-task AIME Harbor policy.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals gsm8k-smoke \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2
+```
+
+`--harbor-config` is repeatable and additive with `--evals`, so one served model can run registry
+entries and file-backed Harbor policies in the same launch. When neither option is supplied, the
+launcher uses the `smoke` suite; a file-only launch does not add that default. The launcher validates
+all selected YAML and JSON files against Marin's pinned Harbor `JobConfig` before opening an Iris client.
+File-backed launches support one agent and one dataset; multiple agents, multiple datasets, and
+explicit `tasks` are rejected.
+
+The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
+metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
+`jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.
+The isolated driver applies that overlay to typed Harbor models and validates the complete effective job
+before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoint, model, output path,
+materialized source, and an explicit `--limit` are reserved runtime values.
+
+Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
+an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
+an existing directory inside the Marin workspace, and must be included in the Iris workspace bundle.
+The launcher records the workspace-relative path so the submitted worker resolves the same directory
+under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
+file extensions fail before Iris submission.
+
+Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
+install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
+Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
+the digest.
+
 Daytona-backed definitions declare one experiment-owned credential specification. A launch first
 uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in
 the `hai-gcp-models` Google Secret Manager project. `DAYTONA_API_KEY` is the only supported
@@ -107,7 +202,10 @@ environment override; the old `DAYTONA_EVAL_API_KEY` environment alias is not re
 launcher resolves the declaration immediately before Iris submission, and the isolated Harbor
 subprocess receives that key without inheriting the orchestrator's other credentials.
 
-The Grug OpenCode profile keeps its model and Harbor policy on the unified path:
+Every Harbor catalog policy is YAML under `experiments/evaluation/configs/harbor/`, named after its
+`EVALS` key. Python retains the catalog and suite membership, Evalchemy definitions, model and hardware
+selection, runtime task caps, and secret source declarations. The Grug OpenCode profile runs its YAML
+policy through the same path:
 
 ```bash
 # One OpenCode trial with the step-1903 Grug SFT on H100x8.
@@ -144,13 +242,15 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then add its key to
-`SUITES` when it belongs in a named group. Task flags that matter for served evals:
+Add a same-named Evalchemy YAML file under `configs/evalchemy/` and add its name to
+`_STANDARD_EVALCHEMY_EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under `configs/harbor/`
+and reference it with `harbor_definition()`. Add the key to `SUITES` when it belongs in a named group.
+Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
 
-Use `_chat_eval` for a benchmark under Evalchemy's `eval/chat_benchmarks` tree. It normalizes the
-task directory into the matching Evalchemy extra, so adding a benchmark installs its endpoint and
-grading dependencies without rebuilding an image. The isolated client also installs CPU-only
-PyTorch as a compatibility floor; inference remains in the separately served model process.
+For a benchmark under Evalchemy's `eval/chat_benchmarks` tree, set `runtime_extras` to its matching
+Evalchemy extra so the endpoint and grading dependencies are installed without rebuilding an image.
+The isolated client also installs CPU-only PyTorch as a compatibility floor; inference remains in
+the separately served model process.

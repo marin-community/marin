@@ -2,14 +2,23 @@
 
 A leaderboard and browsable run log over every Marin eval run.
 
-Eval runs write one canonical JSON record per run to an object-store prefix —
-`gs://marin-eval-metadata/runs/<run_id>/record.json` for GCP runs,
-`s3://marin-us-east-02a/marin/eval-metadata/runs/...` (CoreWeave object storage) for CW GPU
-runs. A background loop scans every prefix in `RECORDS_PREFIXES` (CW credentials come from
-Secret Manager; endpoint/addressing via `rigging.filesystem.s3_compat`) and upserts records
-into a Cloud SQL Postgres index (`hai-gcp-models:us-central1:marin-metadata`, database
-`evals`). A Starlette app serves a JSON API over that index and the built Vue SPA. Served at
-https://evaldash.oa.dev.
+Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
+`s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also contains the evaluator's
+results and per-sample artifacts. A background loop scans the roots in `RECORDS_PREFIXES` (CW
+credentials come from Secret Manager; endpoint/addressing via
+`rigging.filesystem.s3_compat`) and upserts records into a Cloud SQL Postgres index
+(`hai-gcp-models:us-central1:marin-metadata`, database `evals`). A Starlette app serves a JSON API over
+that index and the built Vue SPA. Served at https://evaldash.oa.dev.
+
+The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
+`s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
+Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.
+
+Record discovery uses a delimiter-based directory listing and checks only `*/record.json`. It does not
+recursively enumerate results, samples, trajectories, or other evaluator payloads. It reads candidate
+record bodies with up to 16 concurrent object-store requests. Successful records are cached by
+immutable object path, so later ingest passes fetch only new records; directory listings still detect
+additions and deletions.
 
 The SPA has four views: leaderboard (per-model mean score over its latest version cohort, a
 colour-scaled model x task heatmap with model-comparison bars and score-over-time charts,
@@ -21,9 +30,9 @@ per-sample browser, and group siblings), and status (per-prefix ingest probes).
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
 samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
-and renders the agent's turns, tool calls, observations, and reward. A sample's unbounded payloads
-(the trajectory, a prediction's raw exchange) live as sibling artifact files, so paging the light
-columns never materializes them.
+and renders the agent's turns, tool calls, observations, and reward. A sample's one unbounded
+payload, the trajectory, lives as an archive blob referenced by URI, so paging the light columns
+never materializes it.
 
 IAP is the only access gate; there is no application auth.
 
@@ -38,8 +47,10 @@ GET  /api/runs/{run_id}/jobs           live iris job + per-task attempt status f
 GET  /api/runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
 GET  /api/runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
 GET  /api/runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
-GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (trajectory/exchange) as text
+GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
+POST /api/runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /api/runs/{run_id}/group          sibling runs sharing the run's group_id
+GET  /api/models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /api/matrix?include_archived=   model x task matrix (per cell, per-model version cohort) + leaderboard rows
 GET  /api/history?model=&task=   every run's headline score for one cell, over time
 GET  /api/meta              distinct models / evals / suites / users / statuses + archived_models + current_user
@@ -65,11 +76,24 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri`/`exchange_uri` through fsspec,
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
 restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
 refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
 logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
 object rather than a 500. Reads are cached briefly, as sample tables are.
+
+`/api/models/{model}` aggregates in one call everything the Model view needs: the model's identity from
+its newest record, one cohort entry per distinct version (newest first), the current version cohort's
+per-eval cells and each eval's score-over-time -- both following the matrix's cohort semantics with
+`-smoke` suites excluded -- and every run for the model (smoke included), newest first.
+
+`/api/runs/{run_id}/samples/review` samples up to `n` (default 20, capped at 40) rows of the run's
+`{task}` filtered by `{filter}` (`all`/`correct`/`incorrect`), renders each into a bounded text digest,
+and asks one Claude call (`EVALDASH_REVIEW_MODEL`, default `claude-haiku-4-5-20251001`, keyed by
+`ANTHROPIC_API_KEY`) to bucket them into a fixed failure-mode rubric with a short narrative. Like the
+logs and artifact endpoints it returns `{available: false, reason}` -- never a 500 -- when the
+`anthropic` SDK is missing, the key is unset, the task has no matching samples, or the reply is not
+valid JSON.
 
 ## Layout
 
@@ -88,11 +112,40 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 
 ## Develop
 
+### Local mode (no database, no cluster)
+
+`EVALDASH_STORE=local` serves every view from a local records directory with no Cloud SQL, no
+CoreWeave credentials, and no Iris/finelog access — the fastest way to iterate on the UI. Records
+and their per-sample parquet are read straight from `RECORDS_PREFIXES`; the live job/log panels
+degrade to "unreachable" exactly as they do off-VPC. `infra/evaldash/src/fixtures.py` writes a
+deterministic sample dataset (several models across version cohorts; multiple-choice, generation,
+and agentic samples; success/eval-failure/infra-failure/ungraded cases) in the on-disk layout the
+reader expects.
+
 ```bash
-# Build the SPA (served from dashboard/dist)
 npm --prefix infra/evaldash/dashboard install
 npm --prefix infra/evaldash/dashboard run build
 
+# Generate fixtures, then serve them.
+PYTHONPATH=lib/marin/src uv run --with fsspec --with pyarrow --with pydantic \
+  python infra/evaldash/src/fixtures.py /tmp/evaldash-fixtures
+
+EVALDASH_STORE=local \
+RECORDS_PREFIXES=/tmp/evaldash-fixtures \
+EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
+PORT=8080 \
+PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
+uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic --with fsspec \
+  --with anthropic \
+  python infra/evaldash/src/server.py
+# → http://localhost:8080  (binds loopback in local mode)
+# The samples/review endpoint needs `anthropic` importable and ANTHROPIC_API_KEY set; without either it
+# degrades to {available: false, reason}. EVALDASH_REVIEW_MODEL overrides the default review model.
+```
+
+### Against the shared Postgres index
+
+```bash
 # EVAL_DB_* defaults to the shared hai-gcp-models:us-central1:marin-metadata/evals instance;
 # EVAL_DB_PASSWORD comes from the cloudsql-evals-password secret when unset.
 RECORDS_PREFIXES=/path/to/records \
@@ -100,6 +153,7 @@ EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
 PYTHONPATH=lib/marin/src:lib/iris/src:lib/finelog/src \
 uv run \
+  --with anthropic \
   --with cloud-sql-python-connector \
   --with connect-python \
   --with google-cloud-compute \
@@ -126,3 +180,8 @@ provisioning them.
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
+
+The shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
+account through IAP on every internal site. It registers the Marin desktop OAuth client as a
+programmatic audience. The stack's `viewers` list contains only additional accounts or groups
+needed by evaldash.

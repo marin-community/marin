@@ -1,20 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sync github+discord chunks from the marinmirror corpus into the context database.
+"""Sync MarinMirror activity and GitHub repository files into Echo.
 
-One idempotent pass: fetch the marinmirror manifest and compare its ``built_at_epoch``
-against the watermark in ``sync_state`` (exit early when unchanged), download and
-sha-verify the corpus SQLite index, upsert every github/discord chunk on its id, delete
-rows whose ids vanished upstream, and advance the watermark in the same transaction.
+The MarinMirror phase refreshes GitHub and Discord activity. An independently
+watermarked hourly phase indexes the configured GitHub branch head, fetching only
+changed blobs when GitHub can compare it with the previously indexed commit.
 
 This mirror duplicates what marinmirror itself could push; it is the interim answer
 until marinmirror runs as a service in this project (see README.md).
 
 Runs as a Cloud Run job: Postgres is reached over the Cloud SQL connector socket mounted
 at /cloudsql, marinmirror over its bearer-token HTTP API. Configuration comes from env
-vars (see ``infra/echo/__main__.py``): CLOUDSQL_CONNECTION, PGDATABASE, PGUSER,
-PGPASSWORD, MARINMIRROR_TOKEN, and optionally MARINMIRROR_URL.
+vars (see ``infra/echo/__main__.py``).
 """
 
 import hashlib
@@ -26,9 +24,10 @@ import sys
 import tempfile
 import time
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
+import github_repository
 import schema
 import sqlalchemy
 from google.cloud.sql.connector import Connector
@@ -42,20 +41,20 @@ BATCH = 400
 # outlasts the 10-minute schedule, and Cloud Run jobs have no concurrency limit of their own.
 SYNC_LOCK_KEY = 0x6563686F  # "echo"
 
-CHUNK_COLUMNS = [c.name for c in schema.chunks.columns]
+MIRRORED_CHUNK_COLUMNS = tuple(column.name for column in schema.chunks.columns if column.computed is None)
 
 
-def mirror_open(path: str, timeout: int = 600):
+def mirror_open(path: str, token: str, timeout: int = 600):
     req = urllib.request.Request(
         MARINMIRROR_URL + path,
-        headers={"Authorization": f"Bearer {os.environ['MARINMIRROR_TOKEN']}", "User-Agent": "echo-sync"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "echo-sync"},
     )
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def download_corpus(dest: Path, expected_sha: str) -> None:
+def download_corpus(dest: Path, expected_sha: str, token: str) -> None:
     digest = hashlib.sha256()
-    with mirror_open("/corpus-index.db") as response, open(dest, "wb") as out:
+    with mirror_open("/corpus-index.db", token) as response, open(dest, "wb") as out:
         while block := response.read(1 << 20):
             out.write(block)
             digest.update(block)
@@ -91,10 +90,18 @@ def decode_embedding(blob: bytes | None) -> list[float] | None:
 
 
 def chunk_record(row: tuple) -> dict:
-    record = dict(zip(CHUNK_COLUMNS, row, strict=True))
+    record = dict(zip(MIRRORED_CHUNK_COLUMNS, row, strict=True))
     record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
     record["embedding"] = decode_embedding(record["embedding"])
     return record
+
+
+def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
+    placeholders = ",".join("?" * len(SOURCES))
+    return database.execute(
+        f"SELECT {', '.join(MIRRORED_CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
+        SOURCES,
+    )
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
@@ -106,29 +113,26 @@ def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
     exceeds the job's memory — with each batch a single multi-row VALUES statement.
     """
     existing = dict(conn.execute(sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.hash)).fetchall())
-    placeholders = ",".join("?" * len(SOURCES))
-    cursor = sqlite3.connect(corpus).execute(
-        f"SELECT {', '.join(CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
-        SOURCES,
-    )
     ids: list[int] = []
     upserted = 0
     started = time.time()
-    while rows := cursor.fetchmany(BATCH):
-        records = [chunk_record(row) for row in rows]
-        ids.extend(record["id"] for record in records)
-        changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
-        if not changed:
-            continue
-        statement = pg_insert(schema.chunks).values(changed)
-        statement = statement.on_conflict_do_update(
-            index_elements=[schema.chunks.c.id],
-            set_={name: statement.excluded[name] for name in CHUNK_COLUMNS if name != "id"},
-        )
-        conn.execute(statement)
-        upserted += len(changed)
-        if upserted % 8000 < len(changed):
-            print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")
+    with sqlite3.connect(corpus) as database:
+        cursor = corpus_chunk_cursor(database)
+        while rows := cursor.fetchmany(BATCH):
+            records = [chunk_record(row) for row in rows]
+            ids.extend(record["id"] for record in records)
+            changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
+            if not changed:
+                continue
+            statement = pg_insert(schema.chunks).values(changed)
+            statement = statement.on_conflict_do_update(
+                index_elements=[schema.chunks.c.id],
+                set_={name: statement.excluded[name] for name in MIRRORED_CHUNK_COLUMNS if name != "id"},
+            )
+            conn.execute(statement)
+            upserted += len(changed)
+            if upserted % 8000 < len(changed):
+                print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")
 
     # One array bind, not id.not_in(ids): expanding 73k+ ids into individual parameters
     # exceeds pg8000's 65535-parameter wire-protocol limit.
@@ -141,8 +145,8 @@ def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
     return upserted, deleted
 
 
-def fetch_manifest() -> dict:
-    with mirror_open("/manifest.json", timeout=30) as response:
+def fetch_manifest(token: str) -> dict:
+    with mirror_open("/manifest.json", token, timeout=30) as response:
         return json.load(response)
 
 
@@ -157,7 +161,7 @@ def corpus_build_epoch(path: Path) -> int:
         db.close()
 
 
-def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
+def fetch_corpus(dest: Path, manifest: dict, token: str, attempts: int = 2) -> int:
     """Download the corpus and return the build epoch actually downloaded.
 
     The manifest sha is the fast path. marinmirror rebuilds every ~90 minutes, so a
@@ -169,19 +173,19 @@ def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
     error: RuntimeError | None = None
     for _ in range(attempts):
         try:
-            download_corpus(dest, manifest["corpus_index"]["sha256"])
+            download_corpus(dest, manifest["corpus_index"]["sha256"], token)
             return manifest["built_at_epoch"]
         except RuntimeError as caught:
             error = caught
             print(f"{caught}; refetching manifest")
-            manifest = fetch_manifest()
+            manifest = fetch_manifest(token)
     built = corpus_build_epoch(dest)
     print(f"{error}; accepting intact corpus self-reporting build {built} (manifest/corpus skew)")
     return built
 
 
-def run(engine: sqlalchemy.Engine) -> int:
-    manifest = fetch_manifest()
+def sync_corpus(engine: sqlalchemy.Engine, token: str) -> int:
+    manifest = fetch_manifest(token)
     built = manifest["built_at_epoch"]
 
     with engine.connect() as conn:
@@ -193,7 +197,7 @@ def run(engine: sqlalchemy.Engine) -> int:
     start = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         corpus = Path(tmp) / "corpus-index.db"
-        built = fetch_corpus(corpus, manifest)
+        built = fetch_corpus(corpus, manifest, token)
         if watermark is not None and watermark >= built:
             print(f"up to date: downloaded corpus is build {built}, already synced")
             return 0
@@ -221,9 +225,19 @@ def run(engine: sqlalchemy.Engine) -> int:
     return 0
 
 
+def run(engine: sqlalchemy.Engine, target: github_repository.RepositoryTarget, token: str) -> int:
+    github_repository.sync_repository(engine, target, token, datetime.now(UTC))
+    sync_corpus(engine, token)
+    return 0
+
+
 def main() -> int:
+    target = github_repository.RepositoryTarget(
+        repository=os.environ["GITHUB_REPOSITORY"],
+        branch=os.environ["GITHUB_BRANCH"],
+    )
     with Connector() as connector:
-        return run(make_engine(connector))
+        return run(make_engine(connector), target, os.environ["MARINMIRROR_TOKEN"])
 
 
 if __name__ == "__main__":

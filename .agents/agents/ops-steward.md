@@ -87,7 +87,7 @@ You operate as a **surveyor and incrementalist**, not a big-project planner.
    memory of this one) do this unaided?*
 
 4. **Record incidents in the canonical place.** Put incident-specific timelines,
-   evidence, and fixes in `.agents/ops/YYYY-MM-DD-<slug>.md`; extend an existing
+   evidence, and fixes in a tagged Echo incident entry; extend an existing
    record when it covers the same event. Promote reusable procedures to the
    relevant `OPS.md`.
 

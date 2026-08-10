@@ -17,9 +17,10 @@
 //! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result as DFResult;
@@ -31,6 +32,8 @@ use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::query::index_cache::IndexCache;
+
 /// A live namespace as one DataFusion table.
 ///
 /// Backed by a `ListingTable` over the snapshotted sealed parquet files, or —
@@ -40,10 +43,11 @@ use datafusion::physical_plan::ExecutionPlan;
 pub struct NamespaceProvider {
     schema: SchemaRef,
     inner: Inner,
-    /// The snapshotted sealed segment paths, retained so a `contains()` scan can
-    /// locate each segment's trigram sidecar (`<segment>.tgm`) for row-group
-    /// pruning. Empty for the typed-empty (no-segments) case.
+    /// The snapshotted sealed segment paths, retained so scans can locate each
+    /// segment's typed index bundle. Empty for the typed-empty
+    /// (no-segments) case.
     segment_paths: Vec<String>,
+    index_cache: Arc<IndexCache>,
 }
 
 #[derive(Debug)]
@@ -52,7 +56,52 @@ enum Inner {
     Empty(Arc<MemTable>),
 }
 
+/// Retype `schema`'s top-level `Utf8` columns as `Utf8View`.
+///
+/// Parquet stores strings the same way either way, so this only chooses the
+/// in-memory layout the scan produces. `Utf8View` lets the reader emit 16-byte
+/// views over the decompressed pages rather than copying every value into one
+/// contiguous buffer, and lets grouping and comparison settle most rows on the
+/// inline 4-byte prefix. On a `GROUP BY name` over a low-cardinality column that
+/// is worth roughly 1.8x.
+///
+/// Nested string types (a `Map`'s keys and values) are left alone: the win comes
+/// from the wide top-level columns, and retyping map children would churn the
+/// duck-typed `json_*` path for no measured gain.
+///
+/// [`crate::query::normalize_result`] converts back at the response boundary, so
+/// the layout never reaches a client.
+fn view_typed_schema(schema: &SchemaRef) -> SchemaRef {
+    if !schema
+        .fields()
+        .iter()
+        .any(|f| f.data_type() == &DataType::Utf8)
+    {
+        return Arc::clone(schema);
+    }
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| match f.data_type() {
+            DataType::Utf8 => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            _ => f.as_ref().clone(),
+        })
+        .collect();
+    Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
 impl NamespaceProvider {
+    pub fn segment_paths(&self) -> &[String] {
+        &self.segment_paths
+    }
+
+    pub fn index_cache(&self) -> &Arc<IndexCache> {
+        &self.index_cache
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -60,13 +109,19 @@ impl NamespaceProvider {
     /// (`{ns_dir}/seg_L*_*.parquet`). Each is registered individually (rather
     /// than listing a directory) so the scan sees exactly the snapshotted set —
     /// no re-listing, and compaction can't slip a new file in.
-    pub fn build(schema: SchemaRef, segment_paths: &[String]) -> DFResult<NamespaceProvider> {
+    pub fn build(
+        schema: SchemaRef,
+        segment_paths: &[String],
+        index_cache: Arc<IndexCache>,
+    ) -> DFResult<NamespaceProvider> {
+        let schema = view_typed_schema(&schema);
         if segment_paths.is_empty() {
             let mem = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;
             return Ok(NamespaceProvider {
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
+                index_cache,
             });
         }
 
@@ -84,6 +139,7 @@ impl NamespaceProvider {
             schema,
             inner: Inner::Listing(Arc::new(listing)),
             segment_paths: segment_paths.to_vec(),
+            index_cache,
         })
     }
 }
@@ -121,29 +177,56 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
-                // range / min-max / bloom row-group pruning), then layer the
-                // trigram prune on top by injecting per-file access plans.
+                // range / min-max row-group pruning), then layer bundle-backed
+                // filtered projections or access plans onto its files.
                 let plan = t.scan(state, projection, filters, limit).await?;
-                // Hot path: a query with no `contains(col, …)`/`LIKE` filter on any
-                // column does only this cheap expr inspection (no I/O) and returns
-                // untouched.
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
-                if needles.is_empty() {
+                let exact = crate::query::exact_prune::values_by_column(filters);
+                if needles.is_empty() && exact.is_empty() {
                     return Ok(plan);
                 }
                 // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
-                // which segments' sidecars the prune reads — cheap expr inspection,
+                // which segments' sections the prune reads — cheap expr inspection,
                 // done here before the blocking work.
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-                // Substring query: the sidecar + footer reads are blocking, so run
-                // the prune off the async worker.
+                let mut required_columns: BTreeSet<String> = projection
+                    .map(|indices| {
+                        indices
+                            .iter()
+                            .map(|&index| self.schema.field(index).name().clone())
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        self.schema
+                            .fields()
+                            .iter()
+                            .map(|field| field.name().clone())
+                            .collect()
+                    });
+                required_columns.extend(
+                    filters
+                        .iter()
+                        .flat_map(Expr::column_refs)
+                        .map(|column| column.name.clone()),
+                );
+                // Bundle + footer reads are blocking, so run pruning off the
+                // async worker.
                 let segment_paths = self.segment_paths.clone();
+                let index_cache = Arc::clone(&self.index_cache);
                 tokio::task::spawn_blocking(move || {
-                    crate::query::trigram_prune::apply_with_needles(
+                    let plan = crate::query::trigram_prune::apply_with_needles(
                         plan,
                         &segment_paths,
                         &needles,
                         &key_ranges,
+                        &index_cache,
+                    );
+                    crate::query::exact_prune::apply(
+                        plan,
+                        &segment_paths,
+                        &exact,
+                        &required_columns,
+                        &index_cache,
                     )
                 })
                 .await
@@ -163,8 +246,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
+
+    use crate::query::string_values::StringValues;
+    use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::datasource::physical_plan::FileScanConfig;
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
 
     use super::*;
@@ -206,7 +295,12 @@ mod tests {
     #[tokio::test]
     async fn empty_namespace_scans_zero_rows_typed() {
         let schema = worker_arrow();
-        let provider = NamespaceProvider::build(Arc::clone(&schema), &[]).unwrap();
+        let provider = NamespaceProvider::build(
+            Arc::clone(&schema),
+            &[],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table(
             datafusion::common::TableReference::bare("iris.worker"),
@@ -256,7 +350,12 @@ mod tests {
             .collect();
         assert_eq!(paths.len(), 2);
 
-        let provider = NamespaceProvider::build(worker_arrow(), &paths).unwrap();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let ctx = SessionContext::new();
         ctx.register_table(
             datafusion::common::TableReference::bare("iris.worker"),
@@ -270,16 +369,170 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let ids: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let ids = first_column_strings(&batches);
         assert_eq!(ids, vec!["w-1", "w-2", "w-3"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn exact_predicate_uses_complete_filtered_projections() {
+        let dir = tempdir("exact_projection");
+        let batch = worker_batch(1, vec!["w-1", "w-2", "w-3"], vec![100, 200, 300]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[crate::store::schema::CoveringProjection::new(
+                    "workers",
+                    "worker_id",
+                    ["w-2"],
+                    ["seq", "worker_id", "mem_bytes"],
+                )],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let plan = provider
+            .scan(&state, None, &[col("worker_id").eq(lit("w-2"))], None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let files: Vec<_> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert!(files[0]
+            .object_meta
+            .location
+            .as_ref()
+            .ends_with(".fidx.workers.parquet"));
+        assert!(files[0].extensions.is_none());
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT worker_id FROM workers WHERE worker_id = 'w-2'")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(first_column_strings(&batches), vec!["w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn missing_projection_falls_back_only_for_that_segment() {
+        let dir = tempdir("exact_projection_fallback");
+        let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let second = worker_batch(3, vec!["w-2", "w-3"], vec![300, 400]);
+        let (first_path, _) = write_segment_to_dir(&dir, 1, 1, &first).unwrap();
+        let (second_path, _) = write_segment_to_dir(&dir, 1, 3, &second).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        let index_config = crate::store::segment_index::SegmentIndexConfig::from_policies(
+            Vec::<String>::new(),
+            &[config],
+            &[crate::store::schema::CoveringProjection::new(
+                "workers",
+                "worker_id",
+                ["w-2"],
+                ["seq", "worker_id", "mem_bytes"],
+            )],
+            None,
+        );
+        crate::store::segment_index::write_segment_index(&first_path, &[first], &index_config)
+            .unwrap();
+        crate::store::segment_index::write_segment_index(&second_path, &[second], &index_config)
+            .unwrap();
+        std::fs::remove_file(crate::store::exact::named_projection_path(
+            &second_path,
+            "workers",
+        ))
+        .unwrap();
+        let paths = vec![
+            first_path.to_string_lossy().into_owned(),
+            second_path.to_string_lossy().into_owned(),
+        ];
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        let plan = provider
+            .scan(&ctx.state(), None, &[col("worker_id").eq(lit("w-2"))], None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let locations: Vec<&str> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.ends_with(".fidx.workers.parquet"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.ends_with(".parquet"))
+                .count(),
+            2
+        );
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT worker_id FROM workers WHERE worker_id = 'w-2' ORDER BY seq")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(first_column_strings(&batches), vec!["w-2", "w-2"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -326,7 +579,12 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let ctx = SessionContext::new();
         register_scalar_udfs(&ctx);
         ctx.register_table(
@@ -394,12 +652,26 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_table(
             datafusion::common::TableReference::bare("iris.worker"),
-            Arc::new(NamespaceProvider::build(worker_arrow(), &wpaths).unwrap()),
+            Arc::new(
+                NamespaceProvider::build(
+                    worker_arrow(),
+                    &wpaths,
+                    crate::query::index_cache::test_index_cache(),
+                )
+                .unwrap(),
+            ),
         )
         .unwrap();
         ctx.register_table(
             datafusion::common::TableReference::bare("iris.task"),
-            Arc::new(NamespaceProvider::build(task_arrow, &tpaths).unwrap()),
+            Arc::new(
+                NamespaceProvider::build(
+                    task_arrow,
+                    &tpaths,
+                    crate::query::index_cache::test_index_cache(),
+                )
+                .unwrap(),
+            ),
         )
         .unwrap();
 
@@ -419,6 +691,21 @@ mod tests {
         std::fs::remove_dir_all(&tdir).ok();
     }
 
+    /// The first column of `batches` as strings, in row order — what a
+    /// single-column projection assertion compares against.
+    fn first_column_strings(batches: &[RecordBatch]) -> Vec<String> {
+        batches
+            .iter()
+            .flat_map(|b| {
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     /// Log-form schema: seq, key, data (the columns the trigram prune touches).
     fn log_arrow() -> SchemaRef {
         Arc::new(ArrowSchema::new(vec![
@@ -428,40 +715,183 @@ mod tests {
         ]))
     }
 
-    /// Write one segment whose `data` column is `rg0` rows of `filler` followed
-    /// by `rg1`, then build its trigram sidecar — so row group 0 lacks the needle
-    /// and row group 1 carries it. Returns the segment path.
-    fn write_two_rg_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
-        use crate::store::segment::ROW_GROUP_SIZE;
-        let n0 = ROW_GROUP_SIZE;
-        let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
-        data.extend(rg1.iter().map(|s| s.to_string()));
-        let n = data.len() as i64;
+    /// Write one segment whose `column` ("key" or "data") is a full span of
+    /// `filler` followed by `span1`, so source span 0 lacks the needle and span 1
+    /// carries it. The other string column is constant, which makes any prune
+    /// attributable to `column`. Returns the segment path.
+    fn write_two_span_log_segment(
+        dir: &std::path::Path,
+        column: &str,
+        filler: &str,
+        span1: &[&str],
+    ) -> String {
+        let mut varying: Vec<String> = (0..SIDECAR_SPAN_ROWS).map(|_| filler.to_string()).collect();
+        varying.extend(span1.iter().map(|s| s.to_string()));
+        let n = varying.len();
+        let (keys, data) = match column {
+            "key" => (varying, vec!["idle heartbeat ok".to_string(); n]),
+            "data" => (vec!["/system/controller".to_string(); n], varying),
+            other => panic!("unsupported varying column {other:?}"),
+        };
         let batch = RecordBatch::try_new(
             log_arrow(),
             vec![
-                Arc::new(Int64Array::from_iter_values(1..=n)),
-                Arc::new(StringArray::from(vec!["/system/controller"; data.len()])),
+                Arc::new(Int64Array::from_iter_values(1..=n as i64)),
+                Arc::new(StringArray::from(keys)),
                 Arc::new(StringArray::from(data)),
             ],
         )
         .unwrap();
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        // Build the sidecar the way the compactor would.
-        assert!(
-            crate::store::trigram::write_sidecar(&path, &[batch], &["data"], Some("key")).unwrap(),
-            "sidecar should be written for a data column"
-        );
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                ["key", "data"],
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+        )
+        .unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// Assert the scan injected a trigram access plan selecting exactly
+    /// `span1_rows`. These segments fit one byte-sized row group, so the prune
+    /// lands as a row selection inside it, not a skipped row group.
+    fn assert_prunes_to_span1(
+        plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        span1_rows: usize,
+    ) {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
+
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached to the partitioned file");
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    span1_rows,
+                    "only the needle's span may be selected"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked, 1,
+            "exactly one partitioned file with an access plan"
+        );
+    }
+
+    /// Whether any expression in `plan` casts the `data` column. Walks the tree
+    /// rather than the rendered text, which qualifies column names inconsistently
+    /// across plan stages and would make a substring check pass vacuously.
+    fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::logical_expr::Expr;
+
+        let mut found = false;
+        plan.apply(|node| {
+            for e in node.expressions() {
+                e.apply(|sub| {
+                    if let Expr::Cast(cast) = sub {
+                        if matches!(cast.expr.as_ref(), Expr::Column(c) if c.name == "data") {
+                            found = true;
+                        }
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .unwrap();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        found
+    }
+
+    #[tokio::test]
+    async fn string_predicates_read_the_scan_layout_without_casting() {
+        // The scan reads strings as Utf8View, and the finelog UDFs accept that
+        // layout. A UDF with an exact-Utf8 signature would instead make the
+        // planner cast the whole column ahead of the predicate — materializing
+        // every value precisely to throw most of them away.
+        let dir = tempdir("no_cast");
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["needle here"; 4]);
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        assert_eq!(
+            provider
+                .schema()
+                .field_with_name("data")
+                .unwrap()
+                .data_type(),
+            &DataType::Utf8View,
+        );
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        for predicate in [
+            "contains(data, 'needle')",
+            "prefix(data, 'needle')",
+            "regexp_matches(data, 'needle')",
+            "json_get(data, 'k') IS NOT NULL",
+        ] {
+            let plan = ctx
+                .sql(&format!("SELECT seq FROM \"log\" WHERE {predicate}"))
+                .await
+                .unwrap()
+                .into_optimized_plan()
+                .unwrap();
+            assert!(
+                !casts_the_data_column(&plan),
+                "{predicate} planned a whole-column cast:\n{}",
+                plan.display_indent()
+            );
+        }
+
+        // The detector must actually fire on a cast, or the assertions above pass
+        // for the wrong reason.
+        let cast_plan = ctx
+            .sql("SELECT seq FROM \"log\" WHERE CAST(data AS int) = 1")
+            .await
+            .unwrap()
+            .into_optimized_plan()
+            .unwrap();
+        assert!(casts_the_data_column(&cast_plan));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
         use datafusion::logical_expr::{col, lit};
         use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-        use datafusion_datasource_parquet::ParquetAccessPlan;
 
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
@@ -472,12 +902,18 @@ mod tests {
             "idle heartbeat ok",
             "another Bootstrap completed for TPU-xyz here",
         ];
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
         let ctx = crate::query::make_ctx();
-        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         ctx.register_table(
             datafusion::common::TableReference::bare("log"),
             Arc::new(provider),
@@ -492,15 +928,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec![
@@ -519,40 +947,14 @@ mod tests {
         };
         let filter =
             Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
-        let probe = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
+        let probe = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
-        let exec = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("scan returns a parquet DataSourceExec");
-        let cfg = exec
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached to the partitioned file");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(
-            checked, 1,
-            "exactly one partitioned file with an access plan"
-        );
+        assert_prunes_to_span1(&plan, rg1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -562,10 +964,6 @@ mod tests {
         // expression survives the simplifier as `Expr::Like` and the prune
         // extracts the framed substring. Asserts both the matching rows and the
         // injected skip of the needle-free row group 0.
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion_datasource_parquet::ParquetAccessPlan;
-
         let dir = tempdir("like_prune");
         let needle = "Bootstrap completed for TPU-xyz";
         let rg1 = vec![
@@ -573,10 +971,16 @@ mod tests {
             "E0601 Bootstrap completed for TPU-xyz started",
             "idle heartbeat ok",
         ];
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
-        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         ctx.register_table(
             datafusion::common::TableReference::bare("log"),
             Arc::new(provider),
@@ -591,15 +995,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()],
@@ -607,47 +1003,79 @@ mod tests {
         );
 
         // The injected access plan skips the needle-free row group 0.
-        let plan = NamespaceProvider::build(log_arrow(), &[path])
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(
+            &ctx.state(),
+            None,
+            std::slice::from_ref(
+                &datafusion::prelude::col("data")
+                    .like(datafusion::prelude::lit(format!("%{needle}%"))),
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn key_substring_query_prunes_row_groups() {
+        // The job sits mid-key, so the `(key, seq)` sort and its min/max
+        // statistics cannot bound it. Only the key's trigram section prunes.
+        let dir = tempdir("key_substring_prune");
+        let filler_key = "/power/other-run-coord/other-run/0:0";
+        let span1_key = "/power/hs-final2-adoptedbatch-coord/grug-train/3:0";
+        let span1_rows = 5;
+        let path =
+            write_two_span_log_segment(&dir, "key", filler_key, &vec![span1_key; span1_rows]);
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(
+                NamespaceProvider::build(
+                    log_arrow(),
+                    std::slice::from_ref(&path),
+                    crate::query::index_cache::test_index_cache(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql("SELECT key FROM \"log\" WHERE key LIKE '%final2-adoptedbatch%' ORDER BY seq")
+            .await
             .unwrap()
-            .scan(
-                &ctx.state(),
-                None,
-                std::slice::from_ref(
-                    &datafusion::prelude::col("data")
-                        .like(datafusion::prelude::lit(format!("%{needle}%"))),
-                ),
-                None,
-            )
+            .collect()
             .await
             .unwrap();
-        let cfg = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("a parquet DataSourceExec")
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached for the LIKE query");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 1);
+        assert_eq!(
+            first_column_strings(&batches),
+            vec![span1_key.to_string(); span1_rows],
+            "the key substring query must return exactly the matching job's rows"
+        );
+
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(
+            &ctx.state(),
+            None,
+            std::slice::from_ref(&col("key").like(lit("%final2-adoptedbatch%"))),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, span1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -659,9 +1087,15 @@ mod tests {
         use datafusion::logical_expr::{col, lit};
 
         let dir = tempdir("no_contains");
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["one match here"]);
         let ctx = crate::query::make_ctx();
-        let provider = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let state = ctx.state();
         let plan = provider
             .scan(&state, None, &[col("seq").gt(lit(0_i64))], None)

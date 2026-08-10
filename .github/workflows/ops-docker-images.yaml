@@ -16,15 +16,13 @@ permissions:
   packages: write
 
 jobs:
-  # Tags shared by every iris image, resolved once so the per-arch builds and the
-  # manifest merge agree (recomputing the date in each job can straddle midnight).
+  # The commit tag is resolved once so the per-arch builds and manifest merge agree.
   iris-tags:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     outputs:
-      date: ${{ steps.set-tags.outputs.DATE_TAG }}
       hash: ${{ steps.set-tags.outputs.HASH_TAG }}
     steps:
       - name: Checkout repository
@@ -33,7 +31,6 @@ jobs:
       - name: Set tags
         id: set-tags
         run: |
-          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
           echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
 
   # Iris Images - Worker, controller, and task images pushed to GHCR
@@ -125,7 +122,6 @@ jobs:
       - name: Merge ${{ matrix.image }} manifests
         env:
           IMAGE: ghcr.io/marin-community/${{ matrix.image }}
-          DATE_TAG: ${{ needs.iris-tags.outputs.date }}
           HASH_TAG: ${{ needs.iris-tags.outputs.hash }}
         run: |
           SOURCES=("$IMAGE:$HASH_TAG-amd64")
@@ -134,8 +130,6 @@ jobs:
             SOURCES+=("$IMAGE:$HASH_TAG-arm64")
           fi
           docker buildx imagetools create \
-            --tag "$IMAGE:latest" \
-            --tag "$IMAGE:$DATE_TAG" \
             --tag "$IMAGE:$HASH_TAG" \
             "${SOURCES[@]}"
 

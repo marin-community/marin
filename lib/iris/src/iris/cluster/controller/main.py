@@ -85,7 +85,7 @@ def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
     return True
 
 
-def _prepare_local_db_dir(
+def prepare_controller_state(
     db_dir: Path,
     remote_state_dir: str,
     *,
@@ -222,7 +222,7 @@ def run_controller_serve(
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
     db_dir = local_state_dir / "db"
-    _prepare_local_db_dir(db_dir, remote_state_dir, fresh=fresh, checkpoint_path=checkpoint_path)
+    prepare_controller_state(db_dir, remote_state_dir, fresh=fresh, checkpoint_path=checkpoint_path)
 
     db = ControllerDB(db_dir=db_dir)
 

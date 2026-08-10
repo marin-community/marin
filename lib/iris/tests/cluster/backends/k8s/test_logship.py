@@ -4,7 +4,6 @@
 """Tests for the log-shipper sidecar: CRI parsing, tailing, rotation, key derivation."""
 
 import threading
-import time
 
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
@@ -16,6 +15,7 @@ from iris.cluster.backends.k8s.logship import (
     log_key_and_attempt,
     parse_cri_line,
 )
+from iris.test_util import wait_for_condition
 
 
 class FakeLogWriter:
@@ -167,7 +167,7 @@ def test_tail_ships_full_lines(tmp_path):
     shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0:1", attempt_id=1, stop=stop)
     thread = _run_shipper_until_drained(shipper)
     try:
-        _wait_until(lambda: len(writer.entries()) >= 2)
+        wait_for_condition(lambda: len(writer.entries()) >= 2)
     finally:
         stop.set()
         thread.join(timeout=5)
@@ -195,13 +195,13 @@ def test_tail_continues_across_rotation_without_duplicates(tmp_path):
     shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0", attempt_id=0, stop=stop)
     thread = _run_shipper_until_drained(shipper)
     try:
-        _wait_until(lambda: any(e.data == "line-before-rotation" for e in writer.entries()))
+        wait_for_condition(lambda: any(e.data == "line-before-rotation" for e in writer.entries()))
 
         # Rotate: move the old file aside and create a fresh 0.log (new inode).
         active.rename(log_dir / "0.log.20260624")
         _write_cri_lines(active, ["2026-06-24T12:00:02.000000000Z stdout F line-after-rotation"])
 
-        _wait_until(lambda: any(e.data == "line-after-rotation" for e in writer.entries()))
+        wait_for_condition(lambda: any(e.data == "line-after-rotation" for e in writer.entries()))
     finally:
         stop.set()
         thread.join(timeout=5)
@@ -209,12 +209,3 @@ def test_tail_continues_across_rotation_without_duplicates(tmp_path):
     messages = [e.data for e in writer.entries()]
     assert messages.count("line-before-rotation") == 1
     assert messages.count("line-after-rotation") == 1
-
-
-def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.05) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(interval)
-    raise AssertionError("condition not met within timeout")
