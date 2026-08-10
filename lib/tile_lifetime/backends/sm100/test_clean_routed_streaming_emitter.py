@@ -21,6 +21,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 import jax_right_resource_runtime  # noqa: E402
+import smoke_jax_right_resource_runtime  # noqa: E402
 import torch_free_physical_support  # noqa: E402
 from clean_routed_streaming_emitter import (  # noqa: E402
     GENERATED_PHYSICAL_CLASS,
@@ -267,6 +268,24 @@ def test_runtime_work_count_overflow_is_rejected_before_launch() -> None:
     assert jax_right_resource_runtime.validate_runtime_work_capacity(valid) == 8
     with pytest.raises(ValueError, match="exceeds the host-specialized launch capacity"):
         jax_right_resource_runtime.validate_runtime_work_capacity(overflow)
+
+
+def test_jax_device_smoke_relation_mutation_preserves_occupancy_and_empty_resource() -> None:
+    baseline, mutation, empty = smoke_jax_right_resource_runtime._selected_right_items(
+        left_count=64,
+        partition_count=2,
+        right_count=8,
+        selected_count=4,
+        seed=17,
+    )
+    baseline_counts = np.bincount(baseline.reshape(-1), minlength=8)
+    mutation_counts = np.bincount(mutation.reshape(-1), minlength=8)
+
+    assert empty == 7
+    assert baseline_counts[empty] == 0
+    assert mutation_counts[empty] == 0
+    assert np.array_equal(np.sort(baseline_counts), np.sort(mutation_counts))
+    assert not np.array_equal(baseline, mutation)
 
 
 def test_physical_support_loads_only_audited_quack_sources(
