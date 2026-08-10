@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "job": {
+    "id": "/dlwh/shuttle-attn-training-h100-reviewed-20260809",
+    "cluster": "cw-rno2a",
+    "duration_seconds": 31.66,
+    "failures": 1,
+    "preemptions": 0,
+    "state": "failed",
+    "task_exit_code": 1
+  },
+  "claim_scope": {
+    "boundary": "component-only natural JAX Q/K/V/output-cotangent to output plus Q/K/V cotangents",
+    "gb200_run_performed": false,
+    "parity_ratio_established": false,
+    "timing_samples_recorded": 0
+  },
+  "configuration": {
+    "batch": 1,
+    "block_m": 32,
+    "block_n": 32,
+    "causal": true,
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "num_stages": 3,
+    "num_warps": 8,
+    "query_heads": 32,
+    "sequence": 2048
+  },
+  "execution": {
+    "actual_benchmark_invocations": 1,
+    "benchmark_invocation_started": true,
+    "failed_before_warmup": true,
+    "retry_performed": false,
+    "tuning_performed": false
+  },
+  "gates": {
+    "generated_numerical_acceptance": "passed; exact errors were not serialized before the later oracle failure",
+    "generated_repeat_determinism": "passed",
+    "logical_input_contract": "passed",
+    "logical_output_contract": "passed",
+    "oracle_numerical_acceptance": "not reached because repeat determinism is checked first",
+    "oracle_repeat_determinism": "failed",
+    "terminal_error": "Flash-SDPA oracle violates the declared deterministic execution contract"
+  },
+  "logical_buffer_contracts": {
+    "key_value_family": {
+      "buffers": ["key", "value", "key_cotangent", "value_cotangent"],
+      "minor_to_major": [3, 2, 1, 0],
+      "shape": [1, 2048, 8, 128],
+      "strides": [2097152, 1024, 128, 1]
+    },
+    "query_family": {
+      "buffers": ["query", "output_cotangent", "forward_output", "query_cotangent"],
+      "minor_to_major": [3, 2, 1, 0],
+      "shape": [1, 2048, 32, 128],
+      "strides": [8388608, 4096, 128, 1]
+    }
+  },
+  "numerical_contract": {
+    "maximum_absolute_error": 0.125,
+    "mean_absolute_error": 0.01,
+    "numerical_policy": "allow_rounding_reorder",
+    "require_determinism": true
+  },
+  "runtime_count_audit": {
+    "generated_executions_before_failure": 2,
+    "oracle_executions_before_failure": 2,
+    "registered_ffi_handler_counter": "not read because the fail-closed gate exits before result assembly"
+  },
+  "build": {
+    "registered_dso": {
+      "sha256": "317a77664728f022c5e8c1719560c9e597dd64f3ac65f10ca12982a5eb87fc97"
+    },
+    "generated_handler_source": {
+      "sha256": "9ef1fd1a09281303e2f4085e2f198c5ad92b1f055a9e87b50b94d4be8ee6fa76"
+    },
+    "source_vjp_stablehlo": {
+      "sha256": "4cdcbb469f36c8ebf821621cef929f27ac0a9fd1a6dc3f5e33ed464ad8d2d3a3"
+    },
+    "triton_aot": {
+      "dkdv": {
+        "cubin_bytes": 85440,
+        "cubin_sha256": "6860e45675762b547d862d14d30892bb9fc62b9058e4959382081cfaa728ce46",
+        "source_sha256": "fa4639c6e71ef22f8f48c14e1cf78c2b58f576d13faed4e2b8181ca894835368"
+      },
+      "dq": {
+        "cubin_bytes": 78528,
+        "cubin_sha256": "91b26b057e8b46699618f3677b012df16b9f275917bd498cde6ca205f9ad3584",
+        "source_sha256": "11d98b3f9d16cf0c154d5fee6aa6ddc7b242a5b3dac9799c3b92e4da32d249bd"
+      },
+      "forward": {
+        "cubin_bytes": 91592,
+        "cubin_sha256": "d52fc60f6aa61a140f3c5cc5782c5117916413fadf0d65fb76b68f1947d2b45d",
+        "source_sha256": "cd741304d0fc85977dc55f7b9dd394a82bf1fbbc795c8df8d2c526ec3148e97e"
+      }
+    }
+  },
+  "environment": {
+    "cccl": "13.3.3.4.1",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvcc": "13.2.78",
+    "torch": "2.11.0+cu128",
+    "torch_cuda": "12.8",
+    "triton": "3.6.0"
+  },
+  "revisions": {
+    "reproduction": "ef1c8f1288",
+    "shuttle": "11e8dca05ed4e2207cc02312c9d6265ea1c32c58"
+  }
+}
