@@ -92,7 +92,7 @@ EXTERNAL_PROJECTS = (
         "harbor",
         "harbor",
         "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
+        runtime_distributions=("daytona", "pydantic-settings"),
     ),
     ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
 )

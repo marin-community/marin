@@ -67,7 +67,7 @@ HARBOR = ExternalDependency(
     repository="https://github.com/harbor-framework/harbor.git",
     version="0.20.0",
     commit="0348989adffbb43bf0b410fd36197333239633f1",
-    runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
+    runtime_requirements=("daytona==0.200.2", "pydantic-settings==2.14.2"),
 )
 
 MARIN_SKYRL = ExternalDependency(

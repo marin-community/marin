@@ -35,12 +35,9 @@ def _model_request_should_retry(exc: Exception) -> bool:
 
 
 def _request_json(request: urllib.request.Request, *, timeout: float, max_attempts: int, retry_initial: float) -> object:
-    """POST ``request`` and return the parsed JSON body, retrying transient failures with backoff.
-
-    The retry is inlined instead of reusing ``rigging.timing`` so this agent stays importable in
-    Harbor's isolated driver environment, which installs only upstream Harbor and the standard
-    library.
-    """
+    """POST ``request`` and return the parsed JSON body, retrying transient failures with backoff."""
+    # Hand-rolled rather than ``rigging.timing`` so this agent stays importable in Harbor's isolated
+    # driver environment, which installs only upstream Harbor and the standard library.
     delay = min(retry_initial, _MAX_RETRY_DELAY)
     for attempt in range(max_attempts):
         try:

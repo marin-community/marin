@@ -8,9 +8,10 @@ Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on
 sandbox environment, and normalizes each finished trial into the shared eval
 contract: one agentic :class:`~finestore.eval.EvalSample` per task (its reward, its grading,
 and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
-back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
-the durable output path as it finishes, so a completed trial survives a driver killed before the job
-returns and Harbor's own per-trial resume reads it back from that path on the next run.
+back for the record's metrics. Upstream Harbor writes each trial's ``result.json`` and trajectory to a
+pod-local ``jobs_dir`` (it does local-filesystem I/O and cannot write to a remote URI); the runner
+hydrates any prior trials from the durable output path before the run and mirrors the finished job tree
+back to it after, so a completed run's trials are durable and a re-launch resumes them.
 
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """
@@ -285,13 +286,16 @@ def _run_harbor_job(
             break
         except HarborBackendsUnavailable as exc:
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
+            # Drop incomplete trials locally so Harbor re-runs them; the pod-local tree persists across
+            # this in-process pause, so no durable mirror is needed here. Mirroring mid-run would also
+            # leak these deletions: the additive upload cannot remove a trial from the durable tree.
             _remove_unscored_trials(local_job_dir)
-            # Checkpoint completed trials durably before the recovery wait so a pod lost during it resumes.
-            _persist_trials(local_job_dir, remote_job_dir)
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(local_job_dir)
+    # Mirror the finished job tree to durable storage once, after the run returns with every trial
+    # scored, so the durable copy never carries an unscored trial that a fresh pod would re-hydrate.
     _persist_trials(local_job_dir, remote_job_dir)
     archive_path = _write_archive(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, archive_path)
