@@ -25,6 +25,7 @@ from clean_routed_streaming_emitter import (
     import_extracted_python_sources,
     render_partial_merge_ffi_cuda,
 )
+from torch_free_physical_support import TorchFreePhysicalSupport, install_torch_free_physical_support
 
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
 from tile_lifetime.right_resource_jax_tables import (
@@ -57,9 +58,10 @@ class JaxRightResourceInputs:
 
 @dataclass(frozen=True)
 class CompiledRightResourcePhysicalCall:
-    """CUTLASS JAX callable with its host-specialized launch capacity."""
+    """CUTLASS JAX callable with audited support and launch capacity."""
 
     call: Any
+    physical_support: TorchFreePhysicalSupport
     work_capacity: int
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -208,6 +210,7 @@ def compile_right_resource_physical_call(
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     cuda = importlib.import_module("cuda.bindings.driver")
+    physical_support = install_torch_free_physical_support()
     physical_module = import_extracted_python_sources(
         plan.sources,
         msa_root=msa_root,
@@ -291,6 +294,7 @@ def compile_right_resource_physical_call(
             output_spec=output_spec,
             use_static_tensors=True,
         ),
+        physical_support=physical_support,
         work_capacity=work_capacity,
     )
 
