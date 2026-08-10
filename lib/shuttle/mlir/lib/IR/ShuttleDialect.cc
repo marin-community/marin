@@ -28,6 +28,8 @@
 #define GET_OP_CLASSES
 #include "shuttle/IR/ShuttleOps.cc.inc"
 
+#include "shuttle/IR/ShuttleDialect.cc.inc"
+
 namespace mlir::shuttle {
 namespace {
 

@@ -197,16 +197,31 @@ The exact native run compiled operation generation, `ShuttleDialect`, and
 registration code. The generated dialect-definition include contract should be
 checked against the pinned MLIR examples before another run.
 
+Include `ShuttleDialect.cc.inc` after the generated attribute and operation
+definitions and before the `mlir::shuttle` namespace containing handwritten
+methods.
+
 ## Results 6
 
+- The generated-definition audit found one enum definition include, one
+  attribute class-definition include, and one operation class-definition
+  include. Attribute and operation files are additionally included under
+  `GET_ATTRDEF_LIST` and `GET_OP_LIST`; those expansions register types and do
+  not duplicate definitions.
+- `ShuttleDialect.h.inc` is included once by the public header. The matching
+  `ShuttleDialect.cc.inc` had no include and is now included once by the dialect
+  implementation, following the exact-pin MLIR pattern.
 - `@shuttle_mlir//:shuttle_ops_inc_gen`,
   `@shuttle_mlir//:ShuttleDialect`, and
   `@shuttle_mlir//:ShuttlePasses` passed against the exact XLA and LLVM pins.
 - `@shuttle_mlir//:shuttle-opt` failed only at link time on the missing dialect
-  constructor and type ID.
-- The MLIR lit suite and all four patched XLA tests did not run.
+  constructor and type ID. The MLIR lit suite and all four patched XLA tests did
+  not run.
 - The native artifact is retained under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-link/`.
+- Repository formatting and lint gates run on the changed files.
+- Native linking remains pending. This debugging task does not claim the
+  unresolved dialect symbols are fixed until the exact-pin binary links.
 
 ## Follow-up
 
