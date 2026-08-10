@@ -69,6 +69,7 @@ V = TypeVar("V")
 # Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
+EXECUTION_ABORT_TIMEOUT = 15.0
 
 
 def _generate_execution_id() -> str:
@@ -572,7 +573,9 @@ class ZephyrContext:
         remove_callback = None
         if cancellation_token is not None:
             remove_callback = cancellation_token.add_callback(
-                lambda reason: coordinator.abort_execution(execution_id, reason)
+                lambda reason: coordinator.abort_execution.remote(execution_id, reason).result(
+                    timeout=EXECUTION_ABORT_TIMEOUT
+                )
             )
         try:
             operation.result()

@@ -77,6 +77,26 @@ flushes its counters.
 Matches the parent's heartbeat cadence so each beat reads at most one stale
 snapshot before a fresh flush lands.
 """
+SUBPROCESS_TERMINATE_TIMEOUT = 5.0
+
+
+def _kill_process_after_timeout(process: sp.Popen) -> None:
+    try:
+        process.wait(timeout=SUBPROCESS_TERMINATE_TIMEOUT)
+    except sp.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            process.kill()
+
+
+def _terminate_process(process: sp.Popen) -> None:
+    with suppress(ProcessLookupError):
+        process.terminate()
+    threading.Thread(
+        target=_kill_process_after_timeout,
+        args=(process,),
+        daemon=True,
+        name=f"zephyr-kill-{process.pid}",
+    ).start()
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +411,7 @@ class InlineRunner:
         return dict(ctx._counters) if ctx is not None else {}
 
     def cancel(self) -> None:
-        """Prevent work from starting when execution has not begun."""
+        """Prevent new work from starting."""
         self._cancelled.set()
 
 
@@ -459,10 +479,12 @@ class SubprocessRunner:
                 with self._process_lock:
                     self._process = process
                     if self._cancelled.is_set():
-                        process.terminate()
+                        _terminate_process(process)
                 returncode = process.wait()
 
             if returncode != 0:
+                if self._cancelled.is_set():
+                    raise RuntimeError(f"Subprocess for shard {task.shard_idx} was cancelled")
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
                 # so callers/retries can react to memory pressure specifically.
                 if returncode == -signal.SIGKILL:
@@ -516,8 +538,4 @@ class SubprocessRunner:
         with self._process_lock:
             process = self._process
             if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5.0)
-                except sp.TimeoutExpired:
-                    process.kill()
+                _terminate_process(process)

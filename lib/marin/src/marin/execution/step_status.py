@@ -181,13 +181,14 @@ def should_run(
 
     while True:
         status = status_file.status
-        active_lock_holder = status_file.active_lock_holder() if status == STATUS_RUNNING else None
+        should_check_holder = status == STATUS_RUNNING or (status == STATUS_SUCCESS and not force_rerun)
+        active_lock_holder = status_file.active_lock_holder() if should_check_holder else None
 
         if log_once and active_lock_holder is None:
             logger.info(f"[{wid}] Status {step_name}: {status}")
             log_once = False
 
-        if status == STATUS_SUCCESS and not force_rerun:
+        if status == STATUS_SUCCESS and not force_rerun and active_lock_holder is None:
             logger.info(f"[{wid}] Step {step_name} has already succeeded.")
             return False
 
@@ -196,7 +197,7 @@ def should_run(
                 logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and active_lock_holder is not None:
+        elif active_lock_holder is not None:
             if wait_log_limiter.should_run():
                 logger.info(
                     "[%s] Status %s: %s. Another worker holds the active lock (owner=%s). "
@@ -237,6 +238,10 @@ def should_run(
 
 class StepAlreadyDone(Exception):
     """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
+
+
+class StepLeaseLostError(LeaseLostError):
+    """The current step lost its distributed lease."""
 
 
 @contextlib.contextmanager
@@ -286,7 +291,7 @@ def step_lock(
         if cancellation_token.cancelled:
             reason = cancellation_token.reason
             assert reason is not None
-            raise LeaseLostError(reason)
+            raise StepLeaseLostError(reason)
         status_file.release_lock()
 
 

@@ -51,6 +51,7 @@ from marin.execution.step_status import (
     PreviousTaskFailedError,
     StatusFile,
     StepAlreadyDone,
+    StepLeaseLostError,
     step_lock,
     worker_id,
 )
@@ -430,10 +431,19 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
     )
 
 
-def _raise_if_step_cancelled(output_path: str) -> None:
+def _raise_if_step_cancelled() -> None:
     token = current_cancellation_token()
     if token is not None and token.cancelled:
-        raise LeaseLostError(token.reason or f"Lease lost during execution of {output_path}")
+        reason = token.reason
+        assert reason is not None
+        raise StepLeaseLostError(reason)
+
+
+def _refresh_step_lease(status_file: StatusFile) -> None:
+    try:
+        status_file.refresh_lock()
+    except LeaseLostError as error:
+        raise StepLeaseLostError(str(error)) from error
 
 
 def run_step(step: StepSpec) -> None:
@@ -455,7 +465,6 @@ def run_step(step: StepSpec) -> None:
     if not mutable and check_cache(output_path):
         return
 
-    # 2. Acquire the lock. A lost owner waits for the current owner before it returns.
     lease_was_lost = False
     while True:
         try:
@@ -469,25 +478,25 @@ def run_step(step: StepSpec) -> None:
                         _run_remote_step(step, output_path)
                     else:
                         result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                        _raise_if_step_cancelled(output_path)
+                        _raise_if_step_cancelled()
                         # A lazy step writes its own full record; a plain step's return is saved
                         # with its identity + lineage (name, deps, config) so the output is traceable.
                         if not step.writes_record:
                             write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                     elapsed = timedelta(seconds=time.monotonic() - t0)
 
-                    # 4. Mark success only while this worker still owns the lease.
-                    _raise_if_step_cancelled(output_path)
-                    status_file.refresh_lock()
+                    # 4. Refresh the lease before writing terminal status.
+                    _raise_if_step_cancelled()
+                    _refresh_step_lease(status_file)
                     status_file.write_status(STATUS_SUCCESS)
                     logger.info(f"Step {step_label} succeeded in {elapsed}")
-                except LeaseLostError:
+                except StepLeaseLostError:
                     raise
                 except Exception as error:
                     try:
-                        _raise_if_step_cancelled(output_path)
-                        status_file.refresh_lock()
-                    except LeaseLostError as lease_error:
+                        _raise_if_step_cancelled()
+                        _refresh_step_lease(status_file)
+                    except StepLeaseLostError as lease_error:
                         raise lease_error from error
                     status_file.write_status(STATUS_FAILED)
                     raise
@@ -495,9 +504,9 @@ def run_step(step: StepSpec) -> None:
         except StepAlreadyDone:
             logger.info(f"Step {step_label} completed by another worker")
             return
-        except LeaseLostError:
+        except StepLeaseLostError:
             lease_was_lost = True
-            logger.info("Step %s lost its lease; waiting for the current owner", step_label)
+            logger.warning("Step %s lost its lease; waiting for the current owner", step_label)
 
 
 def _submit_iris_job(

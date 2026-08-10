@@ -387,21 +387,28 @@ def test_abort_execution_does_not_abort_other_execution(coordinator):
     assert not cancelled.task_queue
     assert active.fatal_error is None
     assert list(active.task_queue) == [task]
+    assert coordinator.get_fatal_error() is None
 
 
 def test_abort_execution_does_not_charge_shard_failure_budget(coordinator):
     task = _make_task("cancelled")
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    worker_handle = MagicMock()
+    coordinator.register_worker("worker-0", worker_handle)
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
     assert work is not None
 
     coordinator.abort_execution(_TEST_EXECUTION_ID, "step lease lost")
+    coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "stale", work.stage_generation - 1)
+    assert 0 in run.in_flight
     coordinator.report_error("worker-0", _TEST_EXECUTION_ID, 0, work.attempt, "terminated", work.stage_generation)
 
     assert run.task_error_attempts[0] == 0
     assert not run.in_flight
+    run.finish(storage_cleanup_safe=False)
+    coordinator.release_execution(_TEST_EXECUTION_ID)
+    worker_handle.release_execution.remote.assert_called_once_with(_TEST_EXECUTION_ID)
 
 
 def test_abort_execution_between_stages_remains_cancelled(coordinator):
@@ -418,6 +425,16 @@ def test_abort_execution_before_registration_rejects_pipeline(coordinator):
 
     with pytest.raises(ZephyrWorkerError, match="step lease lost"):
         coordinator.run_pipeline(plan, "not-registered", _TEST_TASK_COST, _TEST_TASK_COST)
+
+
+def test_worker_releases_execution_cancellation_state():
+    worker = ZephyrWorker.__new__(ZephyrWorker)
+    worker._resources_lock = threading.Lock()
+    worker._cancelled_executions = {"released", "active"}
+
+    worker.release_execution("released")
+
+    assert worker._cancelled_executions == {"active"}
 
 
 def test_duplicate_execution_id_joins_terminal_execution(coordinator):

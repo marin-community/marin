@@ -8,7 +8,6 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from pathlib import Path
 
 import polars as pl
 import pytest
@@ -199,7 +198,7 @@ def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_p
     os.mkfifo(gate)
 
     def wait_for_gate(value: int) -> int:
-        Path(marker).touch()
+        marker.touch()
         with open(gate, "rb") as stream:
             stream.read(1)
         return value
@@ -211,21 +210,18 @@ def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_p
         with cancellation_scope(token):
             ctx.execute(Dataset.from_list([1]).map(wait_for_gate))
 
-    try:
-        with ctx, ThreadPoolExecutor(max_workers=1) as executor:
-            blocked = executor.submit(run_blocked_pipeline)
-            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-                marker.exists,
-                timeout=Duration.from_seconds(10),
-            )
+    with ctx, ThreadPoolExecutor(max_workers=1) as executor:
+        blocked = executor.submit(run_blocked_pipeline)
+        assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+            marker.exists,
+            timeout=Duration.from_seconds(10),
+        )
 
-            token.cancel("step lease lost")
+        token.cancel("step lease lost")
 
-            with pytest.raises(ZephyrWorkerError, match="step lease lost"):
-                blocked.result(timeout=10)
-            assert ctx.execute(Dataset.from_list([2]).map(lambda value: value * 3)).results == [6]
-    finally:
-        ctx.shutdown()
+        with pytest.raises(ZephyrWorkerError, match="step lease lost"):
+            blocked.result(timeout=10)
+        assert ctx.execute(Dataset.from_list([2]).map(lambda value: value * 3)).results == [6]
 
 
 @pytest.fixture()

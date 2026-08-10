@@ -61,8 +61,8 @@ class Lease:
 
 
 def default_worker_id() -> str:
-    """Return a unique holder ID for the current host and thread."""
-    return f"{os.uname()[1]}-{threading.get_ident()}"
+    """Return a unique holder ID for the current host, process, and thread."""
+    return f"{os.uname()[1]}-{os.getpid()}-{threading.get_ident()}"
 
 
 def _is_local_path(path: str) -> bool:
