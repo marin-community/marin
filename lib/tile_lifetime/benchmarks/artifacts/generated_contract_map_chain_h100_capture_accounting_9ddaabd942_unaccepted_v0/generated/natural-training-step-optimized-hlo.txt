@@ -1,0 +1,234 @@
+HloModule jit__natural_training_step, is_scheduled=true, entry_computation_layout={(bf16[8,32]{1,0}, bf16[32,128]{1,0}, bf16[128,32]{1,0}, bf16[8,32]{1,0})->(bf16[8,32]{1,0}, bf16[8,32]{1,0}, bf16[32,128]{1,0}, bf16[128,32]{1,0})}, allow_spmd_sharding_propagation_to_parameters={true,true,true,true}, allow_spmd_sharding_propagation_to_output={true,true,true,true}, frontend_attributes={fingerprint_before_lhs="951ef2ea5d36aa9f64b4fc9a6acc60b4"}
+
+FileNames
+1 "/tmp/source/lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "_gpu_run"
+4 "_gpu_run.<locals>.execute_natural"
+5 "_natural_training_step"
+6 "_natural_forward"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=625 end_line=625 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=604 end_line=604 column=52 end_column=75}
+3 {file_name_id=1 function_name_id=3 line=358 end_line=358 column=22 end_column=39}
+4 {file_name_id=1 function_name_id=4 line=355 end_line=355 column=15 end_column=94}
+5 {file_name_id=1 function_name_id=5 line=99 end_line=99 column=23 end_column=89}
+6 {file_name_id=1 function_name_id=6 line=81 end_line=81 column=6 end_column=26}
+7 {file_name_id=1 function_name_id=6 line=75 end_line=81 column=12 end_column=5}
+8 {file_name_id=1 function_name_id=6 line=83 end_line=89 column=13 end_column=5}
+9 {file_name_id=1 function_name_id=6 line=89 end_line=89 column=6 end_column=26}
+10 {file_name_id=1 function_name_id=6 line=90 end_line=90 column=47 end_column=54}
+11 {file_name_id=1 function_name_id=6 line=90 end_line=90 column=39 end_column=55}
+12 {file_name_id=1 function_name_id=6 line=90 end_line=90 column=12 end_column=57}
+13 {file_name_id=1 function_name_id=6 line=90 end_line=90 column=26 end_column=56}
+14 {file_name_id=1 function_name_id=6 line=90 end_line=90 column=33 end_column=55}
+15 {file_name_id=1 function_name_id=6 line=82 end_line=82 column=44 end_column=50}
+16 {file_name_id=1 function_name_id=6 line=82 end_line=82 column=36 end_column=51}
+17 {file_name_id=1 function_name_id=6 line=82 end_line=82 column=23 end_column=52}
+18 {file_name_id=1 function_name_id=6 line=82 end_line=82 column=14 end_column=53}
+19 {file_name_id=1 function_name_id=6 line=82 end_line=82 column=30 end_column=51}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=6}
+8 {file_location_id=8 parent_frame_id=6}
+9 {file_location_id=9 parent_frame_id=6}
+10 {file_location_id=10 parent_frame_id=6}
+11 {file_location_id=11 parent_frame_id=6}
+12 {file_location_id=12 parent_frame_id=6}
+13 {file_location_id=13 parent_frame_id=6}
+14 {file_location_id=5 parent_frame_id=14}
+15 {file_location_id=13 parent_frame_id=15}
+16 {file_location_id=14 parent_frame_id=6}
+17 {file_location_id=15 parent_frame_id=6}
+18 {file_location_id=16 parent_frame_id=6}
+19 {file_location_id=17 parent_frame_id=6}
+20 {file_location_id=5 parent_frame_id=20}
+21 {file_location_id=17 parent_frame_id=21}
+22 {file_location_id=18 parent_frame_id=6}
+23 {file_location_id=19 parent_frame_id=6}
+
+
+%gemm_fusion_dot_general.10_computation (parameter_0: bf16[8,32], parameter_1: bf16[32,128]) -> bf16[8,128] {
+  %parameter_1 = bf16[32,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1"}
+  %parameter_0 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="parameter_0"}
+  %dot.4 = f32[128,8]{0,1} dot(%parameter_1, %parameter_0), lhs_contracting_dims={0}, rhs_contracting_dims={1}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/jvp()/dot_general" scheduling_name="dot.4" stack_frame_id=7}, backend_config={"sizes":["32"]}
+  %bitcast = f32[8,128]{1,0} bitcast(%dot.4), metadata={op_name="jit(_natural_training_step)/jvp()/dot_general" scheduling_name="bitcast" stack_frame_id=7}
+  ROOT %convert_element_type.0 = bf16[8,128]{1,0} convert(%bitcast), metadata={op_name="jit(_natural_training_step)/jvp()/convert_element_type" scheduling_name="convert_element_type.0" stack_frame_id=6}
+}
+
+%gemm_fusion_dot_general.11_computation (parameter_0.1: bf16[8,128], parameter_1.1: bf16[128,32]) -> bf16[8,32] {
+  %parameter_0.1 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="parameter_0.1"}
+  %parameter_1.1 = bf16[128,32]{1,0} parameter(1), metadata={scheduling_name="parameter_1.1"}
+  %dot_general.1 = f32[8,32]{1,0} dot(%parameter_0.1, %parameter_1.1), lhs_contracting_dims={1}, rhs_contracting_dims={0}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/jvp()/dot_general" scheduling_name="dot_general.1" stack_frame_id=8}, backend_config={"sizes":["32"]}
+  %convert_element_type.1 = bf16[8,32]{1,0} convert(%dot_general.1), metadata={op_name="jit(_natural_training_step)/jvp()/convert_element_type" scheduling_name="convert_element_type.1" stack_frame_id=9}
+  %neg.0 = bf16[8,32]{1,0} negate(%convert_element_type.1), metadata={op_name="jit(_natural_training_step)/jvp()/neg" scheduling_name="neg.0" stack_frame_id=10}
+  ROOT %exp.0 = bf16[8,32]{1,0} exponential(%neg.0), metadata={op_name="jit(_natural_training_step)/jvp()/exp" scheduling_name="exp.0" stack_frame_id=11}
+}
+
+%gemm_fusion_dot_general.15_computation (parameter_0.2: bf16[8,32], parameter_1.2: bf16[8,32], parameter_2: bf16[8,32], parameter_3: bf16[8,32], parameter_4: bf16[128,32]) -> bf16[8,128] {
+  %parameter_4 = bf16[128,32]{1,0} parameter(4), metadata={scheduling_name="parameter_4"}
+  %dot_general.2 = f32[128,32]{1,0} convert(%parameter_4), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot_general.2" stack_frame_id=8}
+  %parameter_0.2 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="parameter_0.2"}
+  %parameter_1.2 = bf16[8,32]{1,0} parameter(1), metadata={scheduling_name="parameter_1.2"}
+  %mul.0 = bf16[8,32]{1,0} multiply(%parameter_0.2, %parameter_1.2), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.0" stack_frame_id=12}
+  %parameter_2 = bf16[8,32]{1,0} parameter(2), metadata={scheduling_name="parameter_2"}
+  %mul.1 = bf16[8,32]{1,0} multiply(%mul.0, %parameter_2), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.1" stack_frame_id=13}
+  %neg.1 = bf16[8,32]{1,0} negate(%mul.1), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.1" stack_frame_id=13}
+  %parameter_3 = bf16[8,32]{1,0} parameter(3), metadata={scheduling_name="parameter_3"}
+  %mul.2 = bf16[8,32]{1,0} multiply(%neg.1, %parameter_3), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.2" stack_frame_id=11}
+  %neg.2 = bf16[8,32]{1,0} negate(%mul.2), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.2" stack_frame_id=10}
+  %convert_element_type.2 = f32[8,32]{1,0} convert(%neg.2), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.2" stack_frame_id=9}
+  %dot.5 = f32[128,8]{0,1} dot(%dot_general.2, %convert_element_type.2), lhs_contracting_dims={1}, rhs_contracting_dims={1}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot.5" stack_frame_id=8}, backend_config={"sizes":["16"]}
+  %bitcast.1 = f32[8,128]{1,0} bitcast(%dot.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="bitcast.1" stack_frame_id=8}
+  ROOT %convert_element_type.3 = bf16[8,128]{1,0} convert(%bitcast.1), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.3" stack_frame_id=8}
+}
+
+%gemm_fusion_dot_general.19_computation (parameter_0.3: bf16[8,128], parameter_1.3: bf16[32,128]) -> bf16[8,32] {
+  %parameter_0.3 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="parameter_0.3"}
+  %convert_element_type.4 = f32[8,128]{1,0} convert(%parameter_0.3), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.4" stack_frame_id=6}
+  %parameter_1.3 = bf16[32,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1.3"}
+  %dot_general.4 = f32[32,128]{1,0} convert(%parameter_1.3), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot_general.4" stack_frame_id=7}
+  %dot_general.5 = f32[8,32]{1,0} dot(%convert_element_type.4, %dot_general.4), lhs_contracting_dims={1}, rhs_contracting_dims={1}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot_general.5" stack_frame_id=7}, backend_config={"sizes":["16"]}
+  ROOT %convert_element_type.5 = bf16[8,32]{1,0} convert(%dot_general.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.5" stack_frame_id=7}
+}
+
+%gemm_fusion_dot_computation (parameter_0.4: bf16[8,32], parameter_1.4: bf16[8,128]) -> bf16[32,128] {
+  %parameter_1.4 = bf16[8,128]{1,0} parameter(1), metadata={scheduling_name="parameter_1.4"}
+  %convert_element_type.6 = f32[8,128]{1,0} convert(%parameter_1.4), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.6" stack_frame_id=6}
+  %parameter_0.4 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="parameter_0.4"}
+  %dot_general.6 = f32[8,32]{1,0} convert(%parameter_0.4), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot_general.6" stack_frame_id=7}
+  %dot.6 = f32[128,32]{0,1} dot(%convert_element_type.6, %dot_general.6), lhs_contracting_dims={0}, rhs_contracting_dims={0}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/transpose" scheduling_name="dot.6" stack_frame_id=7}, backend_config={"sizes":["16"]}
+  %bitcast.2 = f32[32,128]{1,0} bitcast(%dot.6), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/transpose" scheduling_name="bitcast.2" stack_frame_id=7}
+  ROOT %convert_element_type.7 = bf16[32,128]{1,0} convert(%bitcast.2), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.7" stack_frame_id=7}
+}
+
+%gemm_fusion_dot.1_computation (parameter_0.5: bf16[8,128], parameter_1.5: bf16[8,32], parameter_2.1: bf16[8,32], parameter_3.1: bf16[8,32], parameter_4.1: bf16[8,32]) -> bf16[128,32] {
+  %parameter_0.5 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="parameter_0.5"}
+  %dot_general.7 = f32[8,128]{1,0} convert(%parameter_0.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="dot_general.7" stack_frame_id=8}
+  %parameter_1.5 = bf16[8,32]{1,0} parameter(1), metadata={scheduling_name="parameter_1.5"}
+  %parameter_2.1 = bf16[8,32]{1,0} parameter(2), metadata={scheduling_name="parameter_2.1"}
+  %mul.3 = bf16[8,32]{1,0} multiply(%parameter_1.5, %parameter_2.1), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.3" stack_frame_id=12}
+  %parameter_3.1 = bf16[8,32]{1,0} parameter(3), metadata={scheduling_name="parameter_3.1"}
+  %mul.4 = bf16[8,32]{1,0} multiply(%mul.3, %parameter_3.1), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.4" stack_frame_id=13}
+  %neg.3 = bf16[8,32]{1,0} negate(%mul.4), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.3" stack_frame_id=13}
+  %parameter_4.1 = bf16[8,32]{1,0} parameter(4), metadata={scheduling_name="parameter_4.1"}
+  %mul.5 = bf16[8,32]{1,0} multiply(%neg.3, %parameter_4.1), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.5" stack_frame_id=11}
+  %neg.4 = bf16[8,32]{1,0} negate(%mul.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.4" stack_frame_id=10}
+  %convert_element_type.16 = f32[8,32]{1,0} convert(%neg.4), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.16" stack_frame_id=9}
+  %dot.3 = f32[128,32]{1,0} dot(%dot_general.7, %convert_element_type.16), lhs_contracting_dims={0}, rhs_contracting_dims={0}, operand_precision={highest,highest}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/transpose" scheduling_name="dot.3" stack_frame_id=8}, backend_config={"sizes":["16"]}
+  ROOT %convert_element_type.17 = bf16[128,32]{1,0} convert(%dot.3), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/convert_element_type" scheduling_name="convert_element_type.17" stack_frame_id=8}
+}
+
+%fused_convert (param_0.69: bf16[8,32]) -> bf16[8,32] {
+  %constant_2_4 = bf16[] constant(1)
+  %convert.12.13 = f32[] convert(%constant_2_4), metadata={scheduling_name="convert.12.13"}
+  %broadcast.1.7 = f32[8,32]{1,0} broadcast(%convert.12.13), dimensions={}, metadata={scheduling_name="broadcast.1.7"}
+  %param_0.69 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="param_0.69"}
+  %broadcast.2.6 = bf16[8,32]{1,0} broadcast(%constant_2_4), dimensions={}, metadata={scheduling_name="broadcast.2.6"}
+  %add.3.5 = bf16[8,32]{1,0} add(%param_0.69, %broadcast.2.6), metadata={op_name="jit(_natural_training_step)/jvp()/add" scheduling_name="add.3.5" stack_frame_id=16}
+  %mul.14.1 = bf16[8,32]{1,0} multiply(%add.3.5, %add.3.5), metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="mul.14.1" stack_frame_id=15}
+  %convert.7.1 = f32[8,32]{1,0} convert(%mul.14.1), metadata={scheduling_name="convert.7.1"}
+  %div.7.3 = f32[8,32]{1,0} divide(%broadcast.1.7, %convert.7.1), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.7.3" stack_frame_id=15}
+  ROOT %convert.8.1 = bf16[8,32]{1,0} convert(%div.7.3), metadata={scheduling_name="convert.8.1"}
+}
+
+%fused_add (param_0.70: bf16[8,128], param_1.89: bf16[8,128]) -> bf16[8,128] {
+  %param_1.89 = bf16[8,128]{1,0} parameter(1), metadata={scheduling_name="param_1.89"}
+  %constant_2_5 = bf16[] constant(1)
+  %convert.12.29 = f32[] convert(%constant_2_5), metadata={scheduling_name="convert.12.29"}
+  %broadcast.5.20 = f32[8,128]{1,0} broadcast(%convert.12.29), dimensions={}, metadata={scheduling_name="broadcast.5.20"}
+  %param_0.70 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="param_0.70"}
+  %neg.6.10 = bf16[8,128]{1,0} negate(%param_0.70), metadata={op_name="jit(_natural_training_step)/jvp()/neg" scheduling_name="neg.6.10" stack_frame_id=17}
+  %exp.2.10 = bf16[8,128]{1,0} exponential(%neg.6.10), metadata={op_name="jit(_natural_training_step)/jvp()/exp" scheduling_name="exp.2.10" stack_frame_id=18}
+  %broadcast.3.10 = bf16[8,128]{1,0} broadcast(%constant_2_5), dimensions={}, metadata={scheduling_name="broadcast.3.10"}
+  %add.2.9 = bf16[8,128]{1,0} add(%exp.2.10, %broadcast.3.10), metadata={op_name="jit(_natural_training_step)/jvp()/add" scheduling_name="add.2.9" stack_frame_id=23}
+  %convert.1.5 = f32[8,128]{1,0} convert(%add.2.9), metadata={scheduling_name="convert.1.5"}
+  %div.4.7 = f32[8,128]{1,0} divide(%broadcast.5.20, %convert.1.5), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.4.7" stack_frame_id=19}
+  %convert.2.5 = bf16[8,128]{1,0} convert(%div.4.7), metadata={scheduling_name="convert.2.5"}
+  %mul.21.1 = bf16[8,128]{1,0} multiply(%param_1.89, %convert.2.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.21.1" stack_frame_id=22}
+  %mul.20.1 = bf16[8,128]{1,0} multiply(%param_0.70, %param_1.89), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.20.1" stack_frame_id=22}
+  %mul.12.11 = bf16[8,128]{1,0} multiply(%add.2.9, %add.2.9), metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="mul.12.11" stack_frame_id=21}
+  %convert.10.11 = f32[8,128]{1,0} convert(%mul.12.11), metadata={scheduling_name="convert.10.11"}
+  %div.5.13 = f32[8,128]{1,0} divide(%broadcast.5.20, %convert.10.11), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.5.13" stack_frame_id=21}
+  %convert.11.11 = bf16[8,128]{1,0} convert(%div.5.13), metadata={scheduling_name="convert.11.11"}
+  %mul.22.9 = bf16[8,128]{1,0} multiply(%mul.20.1, %convert.11.11), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.22.9" stack_frame_id=19}
+  %neg.10.7 = bf16[8,128]{1,0} negate(%mul.22.9), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.10.7" stack_frame_id=19}
+  %mul.23.5 = bf16[8,128]{1,0} multiply(%neg.10.7, %exp.2.10), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.23.5" stack_frame_id=18}
+  %neg.11.3 = bf16[8,128]{1,0} negate(%mul.23.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/neg" scheduling_name="neg.11.3" stack_frame_id=17}
+  ROOT %add_any.2.1 = bf16[8,128]{1,0} add(%mul.21.1, %neg.11.3), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/add_any" scheduling_name="add_any.2.1" stack_frame_id=17}
+}
+
+%fused_add.1 (param_0.57: bf16[8,32], param_1.70: bf16[8,32], param_2.44: bf16[8,32]) -> bf16[8,32] {
+  %param_1.70 = bf16[8,32]{1,0} parameter(1), metadata={scheduling_name="param_1.70"}
+  %constant_2_6 = bf16[] constant(1)
+  %convert.12.33 = f32[] convert(%constant_2_6), metadata={scheduling_name="convert.12.33"}
+  %broadcast.1.13 = f32[8,32]{1,0} broadcast(%convert.12.33), dimensions={}, metadata={scheduling_name="broadcast.1.13"}
+  %param_2.44 = bf16[8,32]{1,0} parameter(2), metadata={scheduling_name="param_2.44"}
+  %broadcast.2.10 = bf16[8,32]{1,0} broadcast(%constant_2_6), dimensions={}, metadata={scheduling_name="broadcast.2.10"}
+  %add.3.9 = bf16[8,32]{1,0} add(%param_2.44, %broadcast.2.10), metadata={op_name="jit(_natural_training_step)/jvp()/add" scheduling_name="add.3.9" stack_frame_id=16}
+  %convert.4.5 = f32[8,32]{1,0} convert(%add.3.9), metadata={scheduling_name="convert.4.5"}
+  %div.6.7 = f32[8,32]{1,0} divide(%broadcast.1.13, %convert.4.5), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.6.7" stack_frame_id=13}
+  %convert.5.5 = bf16[8,32]{1,0} convert(%div.6.7), metadata={scheduling_name="convert.5.5"}
+  %mul.17.1 = bf16[8,32]{1,0} multiply(%param_1.70, %convert.5.5), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/mul" scheduling_name="mul.17.1" stack_frame_id=12}
+  %param_0.57 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="param_0.57"}
+  ROOT %add_any.3.1 = bf16[8,32]{1,0} add(%mul.17.1, %param_0.57), metadata={op_name="jit(_natural_training_step)/transpose(jvp())/add_any" scheduling_name="add_any.3.1" stack_frame_id=7}
+}
+
+%fused_multiply (param_0.61: bf16[8,128]) -> bf16[8,128] {
+  %param_0.61 = bf16[8,128]{1,0} parameter(0), metadata={scheduling_name="param_0.61"}
+  %constant_2_3 = bf16[] constant(1)
+  %convert.12.27 = f32[] convert(%constant_2_3), metadata={scheduling_name="convert.12.27"}
+  %broadcast.5.18 = f32[8,128]{1,0} broadcast(%convert.12.27), dimensions={}, metadata={scheduling_name="broadcast.5.18"}
+  %neg.6.8 = bf16[8,128]{1,0} negate(%param_0.61), metadata={op_name="jit(_natural_training_step)/jvp()/neg" scheduling_name="neg.6.8" stack_frame_id=17}
+  %exp.2.8 = bf16[8,128]{1,0} exponential(%neg.6.8), metadata={op_name="jit(_natural_training_step)/jvp()/exp" scheduling_name="exp.2.8" stack_frame_id=18}
+  %broadcast.3.8 = bf16[8,128]{1,0} broadcast(%constant_2_3), dimensions={}, metadata={scheduling_name="broadcast.3.8"}
+  %add.2.7 = bf16[8,128]{1,0} add(%exp.2.8, %broadcast.3.8), metadata={op_name="jit(_natural_training_step)/jvp()/add" scheduling_name="add.2.7" stack_frame_id=23}
+  %convert.1.3 = f32[8,128]{1,0} convert(%add.2.7), metadata={scheduling_name="convert.1.3"}
+  %div.4.5 = f32[8,128]{1,0} divide(%broadcast.5.18, %convert.1.3), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.4.5" stack_frame_id=19}
+  %convert.2.3 = bf16[8,128]{1,0} convert(%div.4.5), metadata={scheduling_name="convert.2.3"}
+  ROOT %mul.13.1 = bf16[8,128]{1,0} multiply(%param_0.61, %convert.2.3), metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="mul.13.1" stack_frame_id=22}
+}
+
+%fused_multiply.1 (param_0.66: bf16[8,32], param_1.87: bf16[8,32]) -> bf16[8,32] {
+  %param_0.66 = bf16[8,32]{1,0} parameter(0), metadata={scheduling_name="param_0.66"}
+  %constant_2_7 = bf16[] constant(1)
+  %convert.12.31 = f32[] convert(%constant_2_7), metadata={scheduling_name="convert.12.31"}
+  %broadcast.1.11 = f32[8,32]{1,0} broadcast(%convert.12.31), dimensions={}, metadata={scheduling_name="broadcast.1.11"}
+  %param_1.87 = bf16[8,32]{1,0} parameter(1), metadata={scheduling_name="param_1.87"}
+  %broadcast.2.8 = bf16[8,32]{1,0} broadcast(%constant_2_7), dimensions={}, metadata={scheduling_name="broadcast.2.8"}
+  %add.3.7 = bf16[8,32]{1,0} add(%param_1.87, %broadcast.2.8), metadata={op_name="jit(_natural_training_step)/jvp()/add" scheduling_name="add.3.7" stack_frame_id=16}
+  %convert.4.3 = f32[8,32]{1,0} convert(%add.3.7), metadata={scheduling_name="convert.4.3"}
+  %div.6.5 = f32[8,32]{1,0} divide(%broadcast.1.11, %convert.4.3), metadata={op_name="jit(_natural_training_step)/jvp()/div" scheduling_name="div.6.5" stack_frame_id=13}
+  %convert.5.3 = bf16[8,32]{1,0} convert(%div.6.5), metadata={scheduling_name="convert.5.3"}
+  ROOT %mul.15.1 = bf16[8,32]{1,0} multiply(%param_0.66, %convert.5.3), metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="mul.15.1" stack_frame_id=12}
+}
+
+ENTRY %main.1 (activation.1: bf16[8,32], first_weight.1: bf16[32,128], second_weight.1: bf16[128,32], output_cotangent.1: bf16[8,32]) -> (bf16[8,32], bf16[8,32], bf16[32,128], bf16[128,32]) {
+  %activation.1 = bf16[8,32]{1,0} parameter(0), metadata={op_name="activation" scheduling_name="activation.1"}
+  %output_cotangent.1 = bf16[8,32]{1,0} parameter(3), metadata={op_name="output_cotangent" scheduling_name="output_cotangent.1"}
+  %second_weight.1 = bf16[128,32]{1,0} parameter(2), metadata={op_name="second_weight" scheduling_name="second_weight.1"}
+  %first_weight.1 = bf16[32,128]{1,0} parameter(1), metadata={op_name="first_weight" scheduling_name="first_weight.1"}
+  %gemm_fusion_dot_general.10 = bf16[8,128]{1,0} fusion(%activation.1, %first_weight.1), kind=kCustom, calls=%gemm_fusion_dot_general.10_computation, frontend_attributes={xla.pdl_launch="true"}, metadata={op_name="jit(_natural_training_step)/jvp()/dot_general" scheduling_name="gemm_fusion_dot_general.10" stack_frame_id=7}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"4","output_tiles":[{"sizes":["8","64"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %loop_multiply_fusion = bf16[8,128]{1,0} fusion(%gemm_fusion_dot_general.10), kind=kLoop, calls=%fused_multiply, frontend_attributes={xla.no_invariant_operands="0"}, metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="loop_multiply_fusion" stack_frame_id=22}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot_general.11 = bf16[8,32]{1,0} fusion(%loop_multiply_fusion, %second_weight.1), kind=kCustom, calls=%gemm_fusion_dot_general.11_computation, frontend_attributes={xla.pdl_launch="true"}, metadata={op_name="jit(_natural_training_step)/jvp()/dot_general" scheduling_name="gemm_fusion_dot_general.11" stack_frame_id=8}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":3,"num_warps":"2","output_tiles":[{"sizes":["16","32"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %loop_convert_fusion = bf16[8,32]{1,0} fusion(%gemm_fusion_dot_general.11), kind=kLoop, calls=%fused_convert, frontend_attributes={xla.no_invariant_operands="0"}, metadata={scheduling_name="loop_convert_fusion"}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %loop_multiply_fusion.1 = bf16[8,32]{1,0} fusion(%activation.1, %gemm_fusion_dot_general.11), kind=kLoop, calls=%fused_multiply.1, metadata={op_name="jit(_natural_training_step)/jvp()/mul" scheduling_name="loop_multiply_fusion.1" stack_frame_id=12}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot_general.15 = bf16[8,128]{1,0} fusion(%activation.1, %output_cotangent.1, %loop_convert_fusion, %gemm_fusion_dot_general.11, %second_weight.1), kind=kCustom, calls=%gemm_fusion_dot_general.15_computation, frontend_attributes={xla.pdl_launch="true"}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="gemm_fusion_dot_general.15" stack_frame_id=8}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"2","output_tiles":[{"sizes":["8","16"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %loop_add_fusion = bf16[8,128]{1,0} fusion(%gemm_fusion_dot_general.10, %gemm_fusion_dot_general.15), kind=kLoop, calls=%fused_add, frontend_attributes={xla.no_invariant_operands="1"}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/add_any" scheduling_name="loop_add_fusion" stack_frame_id=17}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot_general.19 = bf16[8,32]{1,0} fusion(%loop_add_fusion, %first_weight.1), kind=kCustom, calls=%gemm_fusion_dot_general.19_computation, frontend_attributes={xla.pdl_launch="true"}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/dot_general" scheduling_name="gemm_fusion_dot_general.19" stack_frame_id=7}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"2","output_tiles":[{"sizes":["16","8"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %loop_add_fusion.1 = bf16[8,32]{1,0} fusion(%gemm_fusion_dot_general.19, %output_cotangent.1, %gemm_fusion_dot_general.11), kind=kLoop, calls=%fused_add.1, frontend_attributes={xla.no_invariant_operands="0"}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/add_any" scheduling_name="loop_add_fusion.1" stack_frame_id=7}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"native_emitter_backend_config":{"type":"NATIVE_EMITTER_TYPE_INVALID","unroll_factor":0},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot.1 = bf16[128,32]{1,0} fusion(%loop_multiply_fusion, %activation.1, %output_cotangent.1, %loop_convert_fusion, %gemm_fusion_dot_general.11), kind=kCustom, calls=%gemm_fusion_dot.1_computation, frontend_attributes={xla.pdl_launch="true"}, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/transpose" scheduling_name="gemm_fusion_dot.1" stack_frame_id=8}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"2","output_tiles":[{"sizes":["16","8"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  %gemm_fusion_dot = bf16[32,128]{1,0} fusion(%activation.1, %loop_add_fusion), kind=kCustom, calls=%gemm_fusion_dot_computation, metadata={op_name="jit(_natural_training_step)/transpose(jvp())/transpose" scheduling_name="gemm_fusion_dot" stack_frame_id=7}, backend_config={"device_type":"DEVICE_TYPE_INVALID","force_earliest_schedule":false,"fusion_backend_config":{"block_level_fusion_config":{"is_tma_allowed":false,"is_warp_specialization_allowed":false,"num_ctas":1,"num_stages":1,"num_warps":"4","output_tiles":[{"sizes":["32","64"]}],"waves_per_eu":0},"kind":"__triton_nested_gemm_fusion"},"operation_queue_id":"0","reification_cost":[]}
+  ROOT %tuple.1.0 = (bf16[8,32]{1,0}, bf16[8,32]{1,0}, bf16[32,128]{1,0}, bf16[128,32]{1,0}) tuple(%loop_multiply_fusion.1, %loop_add_fusion.1, %gemm_fusion_dot, %gemm_fusion_dot.1), metadata={scheduling_name="tuple.1.0"}
+}
+

@@ -1,0 +1,31 @@
+Source revision:
+9ddaabd9420d96eb06cb11f5d2efb7085677bb5e
+
+Holder:
+uv run --frozen --package marin-iris --extra controller scripts/iris/dev_gpu.py \
+  --config lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-contract-map-capture-accounting-h100 allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 1 --memory 32GB --disk 50GB --timeout 1800 --pod-timeout 300
+
+Environment:
+PYTHONPATH=/tmp/source/lib/tile_lifetime/src:/tmp/source
+XLA_FLAGS=--xla_gpu_enable_command_buffer=CUSTOM_CALL --xla_gpu_graph_min_graph_size=1
+
+Measured process (invoked exactly once):
+/app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py \
+  --hlo-fixture lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/transformed-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-contract-map-capture-accounting/run/generated \
+  --json-output /tmp/shuttle-contract-map-capture-accounting/run/result.json \
+  --shuttle-revision 9ddaabd9420d96eb06cb11f5d2efb7085677bb5e \
+  --require-jax-version 0.11.0 \
+  --threads 256 \
+  --physical-candidate command_buffer_capture_safe \
+  --seed 20260809 \
+  --warmups 4 \
+  --repeats 30 \
+  --iterations 1000
+
