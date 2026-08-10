@@ -4,12 +4,20 @@
 """Check acceptance fingerprints against the independently audited fixtures."""
 
 import argparse
+import hashlib
 import re
 from pathlib import Path
 
+import jax
+import jaxlib
 from acceptance_contract import FORWARD_EXPECTATION, VJP_EXPECTATION, FixtureExpectation
+from jax._src.interpreters.mlir import make_ir_context
+from jaxlib.mlir import ir, passmanager
+from jaxlib.mlir.dialects import stablehlo
 
-FINGERPRINT_PATTERN = re.compile(r"(?m)^// Normalized StableHLO SHA-256: ([0-9A-F]{64})$")
+FINGERPRINT_PATTERN = re.compile(r"(?m)^// XLA hook-boundary normalized StableHLO SHA-256: ([0-9A-F]{64})$")
+HOOK_BOUNDARY_PATTERN = re.compile(r"(?m)^// XLA hook-boundary StableHLO SHA-256: ([0-9A-F]{64})$")
+JAX_VERSION = "0.10.1"
 FIXTURE_FILENAMES = {
     "forward": "jax-0.10.1-tanh-dot-forward.mlir",
     "vjp": "jax-0.10.1-tanh-dot-vjp.mlir",
@@ -20,8 +28,29 @@ EXPECTATIONS = (FORWARD_EXPECTATION, VJP_EXPECTATION)
 def audited_fingerprint(fixture_path: Path) -> str:
     matches = FINGERPRINT_PATTERN.findall(fixture_path.read_text())
     if len(matches) != 1:
-        raise ValueError(f"{fixture_path}: expected one normalized StableHLO audit fingerprint")
+        raise ValueError(f"{fixture_path}: expected one XLA hook-boundary normalized StableHLO audit fingerprint")
     return matches[0].lower()
+
+
+def audited_hook_boundary_fingerprint(fixture_path: Path) -> str:
+    matches = HOOK_BOUNDARY_PATTERN.findall(fixture_path.read_text())
+    if len(matches) != 1:
+        raise ValueError(f"{fixture_path}: expected one XLA hook-boundary StableHLO audit fingerprint")
+    return matches[0].lower()
+
+
+def derived_hook_boundary_fingerprint(fixture_path: Path) -> str:
+    if jax.__version__ != JAX_VERSION or jaxlib.__version__ != JAX_VERSION:
+        raise RuntimeError(
+            f"fixture audit requires JAX/jaxlib {JAX_VERSION}; found {jax.__version__}/{jaxlib.__version__}"
+        )
+    stablehlo.register_stablehlo_passes()
+    with make_ir_context():
+        module = ir.Module.parse(fixture_path.read_text())
+        pipeline = passmanager.PassManager.parse("builtin.module(func.func(stablehlo-complex-math-expander))")
+        pipeline.run(module.operation)
+        payload = f"{module}".rstrip() + "\n"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def fixture_path(fixture_directory: Path, expectation: FixtureExpectation) -> Path:
@@ -32,6 +61,10 @@ def verify_oracles(fixture_directory: Path) -> None:
     mismatches = []
     for expectation in EXPECTATIONS:
         path = fixture_path(fixture_directory, expectation)
+        audited_boundary = audited_hook_boundary_fingerprint(path)
+        derived_boundary = derived_hook_boundary_fingerprint(path)
+        if audited_boundary != derived_boundary:
+            mismatches.append(f"{path.name}: audited boundary={audited_boundary}, derived boundary={derived_boundary}")
         audited = audited_fingerprint(path)
         if audited != expectation.final_normalized_fingerprint:
             mismatches.append(f"{path.name}: acceptance={expectation.final_normalized_fingerprint}, fixture={audited}")

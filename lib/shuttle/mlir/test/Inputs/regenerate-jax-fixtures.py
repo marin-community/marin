@@ -15,6 +15,9 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import jaxlib
+from jax._src.interpreters.mlir import make_ir_context
+from jaxlib.mlir import ir, passmanager
+from jaxlib.mlir.dialects import stablehlo
 
 JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
@@ -113,10 +116,23 @@ def normalized_fingerprint(payload: str, normalizer: Path) -> str:
     return match.group(1).upper()
 
 
+def xla_hook_boundary_stablehlo(payload: str) -> str:
+    """Apply the only pinned XLA pre-hook pass that changes these fixtures."""
+    stablehlo.register_stablehlo_passes()
+    with make_ir_context():
+        module = ir.Module.parse(payload)
+        pipeline = passmanager.PassManager.parse("builtin.module(func.func(stablehlo-complex-math-expander))")
+        pipeline.run(module.operation)
+        return f"{module}".rstrip() + "\n"
+
+
 def audited_fixture(fixture: Fixture, normalizer: Path) -> str:
     payload = export_stablehlo(fixture)
     raw_digest = hashlib.sha256(payload.encode()).hexdigest().upper()
     normalized_digest = normalized_fingerprint(payload, normalizer)
+    hook_boundary_payload = xla_hook_boundary_stablehlo(payload)
+    hook_boundary_digest = hashlib.sha256(hook_boundary_payload.encode()).hexdigest().upper()
+    hook_boundary_normalized_digest = normalized_fingerprint(hook_boundary_payload, normalizer)
     shapes = ", ".join(f"{shape}:f32" for shape in fixture.shapes)
     header = f"""// Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
@@ -129,6 +145,9 @@ def audited_fixture(fixture: Fixture, normalizer: Path) -> str:
 // JAX: {JAX_VERSION}; jaxlib: {JAXLIB_VERSION}; XLA: {PINNED_XLA_REVISION}
 // Raw StableHLO SHA-256: {raw_digest}
 // Normalized StableHLO SHA-256: {normalized_digest}
+// XLA hook-boundary preprocessing: stablehlo-complex-math-expander
+// XLA hook-boundary StableHLO SHA-256: {hook_boundary_digest}
+// XLA hook-boundary normalized StableHLO SHA-256: {hook_boundary_normalized_digest}
 
 """
     return header + payload

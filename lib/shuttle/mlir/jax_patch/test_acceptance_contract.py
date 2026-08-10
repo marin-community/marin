@@ -19,7 +19,14 @@ from acceptance_contract import (
     match_fixture_contract,
     validate_success_events,
 )
-from verify_acceptance_fixture_oracles import EXPECTATIONS, audited_fingerprint, fixture_path, verify_oracles
+from verify_acceptance_fixture_oracles import (
+    EXPECTATIONS,
+    audited_fingerprint,
+    audited_hook_boundary_fingerprint,
+    derived_hook_boundary_fingerprint,
+    fixture_path,
+    verify_oracles,
+)
 
 IDENTITY = ObserverIdentity(
     policy="source_ordered",
@@ -110,7 +117,17 @@ def test_vjp_oracle_is_the_exact_audited_unsupported_chain():
     assert excluded.count('reason = "unsupported_operation"') == 3
     assert excluded.index('name = "stablehlo.constant"') < excluded.index('name = "stablehlo.broadcast_in_dim"')
     assert excluded.index('name = "stablehlo.broadcast_in_dim"') < excluded.index('name = "stablehlo.subtract"')
-    assert VJP_EXPECTATION.unsupported_fingerprint == "ef0a137534d479ad4a98caf0250938782bb874c4f0f13e2c3c5e8930667c7d05"
+    assert VJP_EXPECTATION.unsupported_fingerprint == "1a9aad82650111cbc134fcc17d1afcb051f9ae729f6cdfd48105d1e8dc210201"
+
+
+def test_rejects_pre_xla_hook_vjp_oracle():
+    events = valid_events(VJP_EXPECTATION)
+    old_region_membership = VJP_EXPECTATION.region_membership.replace("<0, 0, 1, 0>", "<0, 0, 0, 0>", 1)
+    events[0]["region_membership"] = old_region_membership
+    events[1]["region_membership"] = old_region_membership
+
+    with pytest.raises(AssertionError, match="selected-region membership"):
+        validate_success_events(events, IDENTITY, VJP_EXPECTATION)
 
 
 def test_accepts_only_the_complete_fixture_contract():
@@ -174,12 +191,30 @@ def test_acceptance_fingerprint_matches_independent_fixture_audit(expectation):
     assert audited_fingerprint(fixture_path(FIXTURE_DIRECTORY, expectation)) == expectation.final_normalized_fingerprint
 
 
+@pytest.mark.parametrize("expectation", EXPECTATIONS)
+def test_xla_hook_boundary_fingerprint_is_rederived_from_pinned_jaxlib(expectation):
+    path = fixture_path(FIXTURE_DIRECTORY, expectation)
+
+    assert derived_hook_boundary_fingerprint(path) == audited_hook_boundary_fingerprint(path)
+
+
 def test_fixture_audit_tool_rejects_oracle_drift(tmp_path):
     for expectation in EXPECTATIONS:
         source = fixture_path(FIXTURE_DIRECTORY, expectation).read_text()
         fixture_path(tmp_path, expectation).write_text(source)
     vjp_path = fixture_path(tmp_path, VJP_EXPECTATION)
-    vjp_path.write_text(vjp_path.read_text().replace("2D557BD5", "0D557BD5"))
+    vjp_path.write_text(vjp_path.read_text().replace("D4DAD86C", "04DAD86C"))
+
+    with pytest.raises(ValueError, match="acceptance fixture fingerprint drift"):
+        verify_oracles(tmp_path)
+
+
+def test_fixture_audit_tool_rejects_preprocessing_drift(tmp_path):
+    for expectation in EXPECTATIONS:
+        source = fixture_path(FIXTURE_DIRECTORY, expectation).read_text()
+        fixture_path(tmp_path, expectation).write_text(source)
+    vjp_path = fixture_path(tmp_path, VJP_EXPECTATION)
+    vjp_path.write_text(vjp_path.read_text().replace("B73249E4", "073249E4"))
 
     with pytest.raises(ValueError, match="acceptance fixture fingerprint drift"):
         verify_oracles(tmp_path)
