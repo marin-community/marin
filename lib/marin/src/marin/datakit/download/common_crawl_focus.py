@@ -3,11 +3,11 @@
 
 """Normalize the pre-staged Focus Crawl (CC-SUPPLEMENTAL-2026-22) extraction.
 
-``extract_focus_crawl`` pulled the indexed HTML response byte ranges out of all
-4,573 CC-SUPPLEMENTAL-2026-22 WARCs with XenonMolecule/jusText and wrote the text
-and WARC provenance as Parquet. Those shards are the input here, not the finished
-source: they hold duplicate ids and no row order, so the chain sends them through
-``normalize_step`` like every other datakit source.
+A one-off run outside this repository pulled the indexed HTML response byte ranges
+out of all 4,573 CC-SUPPLEMENTAL-2026-22 WARCs with XenonMolecule/jusText and wrote
+the text and WARC provenance as Parquet. Those shards are the input here, not the
+finished source: they hold duplicate ids and no row order, so the chain sends them
+through ``normalize_step`` like every other datakit source.
 
 The extraction is read from ``{MARIN_PREFIX}/<_FOCUS_CRAWL_EXTRACTION>``, so each
 cluster reads it from its own bucket and it must be copied in before a run. The
