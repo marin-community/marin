@@ -31,7 +31,11 @@ from zephyr.shard_keys import deterministic_hash
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
-from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
+from experiments.datakit.store.datakit_store import (
+    ClusteredStoreData,
+    _iter_tokenized_documents,
+    build_clustered_store,
+)
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
@@ -71,17 +75,47 @@ EXPECTED: dict[tuple[int, int], dict[int, int]] = {
 EXACT_DUPLICATES = {("part-00001-of-00002.parquet", "d6"), ("part-00001-of-00002.parquet", "d8")}
 DROPPED_TOKEN_VALUES = {902, 905, 906, 908}
 
+# Documents the tokenizer split across several Parquet rows, and how many rows
+# each one occupies. The tokenize dataset is the only input with such rows: the
+# other inputs stay one row per document. The expectations above do not change,
+# because the store must join these rows back into one document -- one that
+# survives (d1) and one that a filter drops (d2, contaminated).
+CHUNKED_DOCS = {"d1": 2, "d2": 3}
+
 
 def _write_parquet(path: str, table: pa.Table) -> None:
     pq.write_table(table, path)
 
 
+def _tokenize_rows(docs: list[_Doc]) -> tuple[list[str], list[int], list[list[int]]]:
+    """Build the tokenize shard's rows, splitting the documents in ``CHUNKED_DOCS``."""
+    ids: list[str] = []
+    chunk_indices: list[int] = []
+    token_rows: list[list[int]] = []
+    for doc in docs:
+        tokens = [doc[5]] * doc[6]
+        num_chunks = CHUNKED_DOCS.get(doc[0], 1)
+        size = -(-len(tokens) // num_chunks)  # ceiling, so the last chunk is the short one
+        for chunk_index, start in enumerate(range(0, len(tokens), size)):
+            ids.append(doc[0])
+            chunk_indices.append(chunk_index)
+            token_rows.append(tokens[start : start + size])
+    return ids, chunk_indices, token_rows
+
+
 def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
-    """Write one shard's co-partitioned Parquet inputs in the same row order."""
+    """Write one shard's co-partitioned Parquet inputs in the same document order."""
     ids = [d[0] for d in docs]
+    tok_ids, tok_chunk_indices, tok_token_rows = _tokenize_rows(docs)
     _write_parquet(
         f"{dirs['tokenize']}/{basename}",
-        pa.table({"id": ids, "input_ids": pa.array([[d[5]] * d[6] for d in docs])}),
+        pa.table(
+            {
+                "id": tok_ids,
+                "chunk_index": pa.array(tok_chunk_indices, type=pa.int32()),
+                "input_ids": pa.array(tok_token_rows),
+            }
+        ),
     )
     _write_parquet(
         f"{dirs['decon']}/{basename}",
@@ -326,3 +360,66 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
             reduce_shards=4,
             default_subshards=1,
         )
+
+
+def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
+    """Chunked rows rejoin into one document, and a chunk without its chunk 0 is an error.
+
+    Two adjacent documents that share an id stay two documents: the boundary comes
+    from ``chunk_index == 0``, not from a change of id.
+    """
+    path = str(tmp_path / "tokenize.parquet")
+    _write_parquet(
+        path,
+        pa.table(
+            {
+                "id": ["a", "a", "b", "b"],
+                "chunk_index": pa.array([0, 1, 0, 0], type=pa.int32()),
+                "input_ids": pa.array([[1, 2], [3], [4], [5, 6]]),
+            }
+        ),
+    )
+
+    documents = [(doc_id, list(tokens)) for doc_id, tokens in _iter_tokenized_documents(path)]
+    assert documents == [("a", [1, 2, 3]), ("b", [4]), ("b", [5, 6])]
+
+    orphan_path = str(tmp_path / "orphan.parquet")
+    _write_parquet(
+        orphan_path,
+        pa.table(
+            {
+                "id": ["a", "b"],
+                "chunk_index": pa.array([0, 1], type=pa.int32()),
+                "input_ids": pa.array([[1], [2]]),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk 1 of b, but chunk 1 of a must come next"):
+        list(_iter_tokenized_documents(orphan_path))
+
+    # Out of order within one id: concatenating in file order would silently
+    # reverse a document's tokens.
+    shuffled_path = str(tmp_path / "shuffled.parquet")
+    _write_parquet(
+        shuffled_path,
+        pa.table(
+            {
+                "id": ["a", "a", "a"],
+                "chunk_index": pa.array([0, 2, 1], type=pa.int32()),
+                "input_ids": pa.array([[1], [3], [2]]),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk 2 of a, but chunk 1 of a must come next"):
+        list(_iter_tokenized_documents(shuffled_path))
+
+
+def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
+    """A shard written before the column existed fails legibly, not with a KeyError."""
+    path = str(tmp_path / "old.parquet")
+    _write_parquet(path, pa.table({"id": ["a"], "input_ids": pa.array([[1, 2]])}))
+
+    with pytest.raises(RuntimeError, match="no chunk_index column"):
+        list(_iter_tokenized_documents(path))

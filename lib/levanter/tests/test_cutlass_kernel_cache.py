@@ -18,15 +18,9 @@ from typing import Any
 import pytest
 
 from rigging.cache import PersistentKvCache
-from rigging.provenance import Provenance
 
 from levanter import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import cute_launcher_factory, install
-
-
-def _provenance(*, tree_hash: str) -> Provenance:
-    """Launch provenance carrying only the field the cache key reads."""
-    return Provenance(tree_hash=tree_hash, base_commit="", dirty=False, branch=None, built_by=None)
 
 
 def _kernel_store(directory) -> PersistentKvCache:
@@ -82,16 +76,28 @@ def fake_cutlass(monkeypatch) -> FakeCutlass:
     cutlass = FakeCutlass()
     monkeypatch.setitem(sys.modules, "cutlass.jax.compile", cutlass.compile_module)
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", cutlass.primitive_module)
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: "source-v1")
     return cutlass
 
 
-@cute_launcher_factory
-def build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
+def _build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
     def launcher(stream):
         raise AssertionError("a launcher is never called on the host")
 
     launcher.kernel_name = f"tile{tile}-{dtype}"
     return launcher
+
+
+_build_launcher.__module__ = "levanter.grug.testing"
+build_launcher = cute_launcher_factory(_build_launcher)
+
+
+def test_launcher_factory_rejects_positional_configuration():
+    with pytest.raises(TypeError, match="positional parameter named 'modules'"):
+
+        @cute_launcher_factory
+        def invalid_factory(tile: int) -> int:
+            return tile
 
 
 def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_cutlass, tmp_path):
@@ -130,12 +136,68 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
 
 
 def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
-    monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=""))
+    def unavailable_revision() -> str:
+        raise ValueError("missing compiler file")
+
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", unavailable_revision)
     install(_kernel_store(tmp_path))
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
 
     assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tmp_path, monkeypatch):
+    revision = ["source-v1"]
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: revision[0])
+    spec = FakeFunctionSpec(shape=(8, 16))
+
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+
+    fake_cutlass.forget_process_state()
+    revision[0] = "source-v2"
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+
+    assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
+    assert len(list(tmp_path.iterdir())) == 2
+
+
+def test_cache_revision_combines_internal_source_and_dependency_lock(monkeypatch):
+    source_hash = ["source-v1"]
+    dependency_hash = ["dependencies-v1"]
+    monkeypatch.setattr(cutlass_kernel_cache, "directory_content_hash", lambda _path: source_hash[0])
+    monkeypatch.setattr(cutlass_kernel_cache, "workspace_lock_hash", lambda _path: dependency_hash[0])
+    cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+    try:
+        original = cutlass_kernel_cache._kernel_cache_revision()
+        source_hash[0] = "source-v2"
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_source = cutlass_kernel_cache._kernel_cache_revision()
+        dependency_hash[0] = "dependencies-v2"
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_dependency = cutlass_kernel_cache._kernel_cache_revision()
+    finally:
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+
+    assert len({original, changed_source, changed_dependency}) == 3
+
+
+def test_a_launcher_outside_the_covered_source_tree_is_not_stored(fake_cutlass, tmp_path):
+    @cute_launcher_factory
+    def external_launcher(modules, *, tile: int) -> Any:
+        def launcher(_stream):
+            raise AssertionError("a launcher is never called on the host")
+
+        launcher.kernel_name = f"external-{tile}"
+        return launcher
+
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(external_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+
+    assert fake_cutlass.compiled == ["external-128"]
     assert list(tmp_path.iterdir()) == []
 
 

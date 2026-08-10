@@ -17,7 +17,7 @@ import pytest
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.datakit.normalize import NormalizedData, generate_id
-from marin.processing.tokenize._core import IdPreservingPreprocessor, attach_id
+from marin.processing.tokenize._core import IdPreservingPreprocessor, attach_id, split_oversized_token_record
 from marin.processing.tokenize.attributes import (
     TokenizeAttributesConfig,
     TokenizedAttrData,
@@ -112,6 +112,60 @@ def test_id_preserving_preprocessor_raises_on_non_1_to_1():
         wrapped([{"id": "a"}, {"id": "b"}])
 
 
+def test_oversized_token_record_round_trips_as_ordered_chunks(tmp_path):
+    """A split document keeps its id and orders its rows with chunk_index.
+
+    The id stays the join key against the other datakit attribute datasets, so a
+    consumer that joins on id still matches every row of the document, and gets
+    the document back by a sort on (id, chunk_index).
+    """
+    record = {
+        "id": "0123456789abcdef0123456789abcdef",
+        "input_ids": list(range(11)),
+        "assistant_masks": [i % 2 for i in range(11)],
+    }
+
+    chunks = list(split_oversized_token_record(record, max_tokens=4))
+    output_path = tmp_path / "chunks.parquet"
+    pq.write_table(pa.Table.from_pylist(chunks), output_path)
+    rows = pq.read_table(output_path).to_pylist()
+
+    assert [row["id"] for row in rows] == [record["id"]] * 3
+    assert [row["chunk_index"] for row in rows] == [0, 1, 2]
+    assert [token for row in rows for token in row["input_ids"]] == record["input_ids"]
+    assert [mask for row in rows for mask in row["assistant_masks"]] == record["assistant_masks"]
+
+
+def test_oversized_ndarray_token_fields_are_split():
+    """Array token fields split too, not just lists.
+
+    Levanter's chat and prebuilt-cache processors return ``np.ndarray`` for
+    ``input_ids`` and ``assistant_masks``, and ndarray is not a ``Sequence``.
+    Copying such a field whole into each chunk would leave the oversized row
+    oversized and duplicate the document.
+    """
+    record = {
+        "id": "chat-doc",
+        "input_ids": np.arange(10, dtype=np.int32),
+        "assistant_masks": np.ones(10, dtype=np.int32),
+    }
+
+    chunks = list(split_oversized_token_record(record, max_tokens=4))
+
+    assert [len(c["input_ids"]) for c in chunks] == [4, 4, 2]
+    assert [len(c["assistant_masks"]) for c in chunks] == [4, 4, 2]
+    assert np.array_equal(np.concatenate([c["input_ids"] for c in chunks]), record["input_ids"])
+
+
+def test_unsplit_token_record_is_chunk_zero():
+    """A document that fits stays one row, so chunk_index is uniform across the dataset."""
+    record = {"id": "abc", "input_ids": [1, 2, 3]}
+
+    rows = list(split_oversized_token_record(record, max_tokens=16))
+
+    assert rows == [{"id": "abc", "input_ids": [1, 2, 3], "chunk_index": 0}]
+
+
 def _write_normalized_fixture(tmp_path, texts: list[str]) -> NormalizedData:
     """Write a small datakit-normalized parquet shard with {id, text} columns."""
     main_dir = tmp_path / "normalized" / "outputs" / "main"
@@ -156,8 +210,11 @@ def test_split_pipeline_matches_legacy_tokenize(tmp_path, monkeypatch):
     train_shards = tokenized.shard_paths("train")
     assert len(train_shards) == 1, f"expected 1 attribute shard, got {len(train_shards)}: {train_shards}"
     attr_table = pq.read_table(train_shards[0])
-    assert set(attr_table.column_names) == {"id", "input_ids"}
+    assert set(attr_table.column_names) == {"id", "chunk_index", "input_ids"}
+    # These texts are far below the token limit of one Parquet row, so each is a
+    # single row, chunk 0. The store below thus sees one cache row per text.
     assert attr_table.num_rows == len(texts)
+    assert attr_table["chunk_index"].to_pylist() == [0] * len(texts)
     # Datakit invariant: sorted by id within each partition.
     ids = attr_table["id"].to_pylist()
     assert ids == sorted(ids)

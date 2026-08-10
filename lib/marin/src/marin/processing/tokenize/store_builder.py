@@ -44,6 +44,7 @@ from zephyr.readers import load_file
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
+from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData
 
 logger = logging.getLogger(__name__)
@@ -88,11 +89,19 @@ class LevanterStoreData(BaseModel):
     tokenizer: str
 
 
-def _strip_id(record: dict) -> dict:
-    """Drop ``id`` from a record. Levanter ``TreeStore`` is positional, not keyed."""
-    if "id" not in record:
-        return record
-    return {k: v for k, v in record.items() if k != "id"}
+_JOIN_COLUMNS = frozenset({"id", CHUNK_INDEX_FIELD})
+
+
+def _strip_join_columns(record: dict) -> dict:
+    """Drop the join columns from a record. Levanter ``TreeStore`` is positional, not keyed.
+
+    ``chunk_index`` goes with ``id``: it orders the rows of a split document (see
+    :func:`marin.processing.tokenize._core.split_oversized_token_record`) and would
+    otherwise land in the cache as a data field. Dropping it is safe here because
+    this path writes shards positionally and never shuffles, so a split document's
+    rows stay adjacent and its token stream is unchanged.
+    """
+    return {k: v for k, v in record.items() if k not in _JOIN_COLUMNS}
 
 
 def _structural_exemplar(record: dict) -> dict:
@@ -122,9 +131,10 @@ def build_from_datasets(
 ) -> CacheLedger:
     """Write a Levanter cache from a tokenized records dataset.
 
-    The dataset is expected to yield per-doc records shaped like
-    ``{id, input_ids, ...}``. ``id`` is stripped before writing because
-    ``TreeStore`` stores positional concatenated arrays, not keyed rows.
+    The dataset is expected to yield records shaped like
+    ``{id, input_ids, ...}``, with an optional ``chunk_index``. ``id`` and
+    ``chunk_index`` are stripped before writing because ``TreeStore`` stores
+    positional concatenated arrays, not keyed rows.
 
     The dataset's shard structure determines the number of per-shard Levanter
     caches written under ``{output_path}/part-NNNNN-of-MMMMM``. Those shard
@@ -170,7 +180,7 @@ def build_from_datasets(
         exemplar = result["exemplar"]
         yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None)
 
-    temp_shards = dataset.map(_strip_id).map_shard(_write_shard)
+    temp_shards = dataset.map(_strip_join_columns).map_shard(_write_shard)
 
     tokenize_start = time.monotonic()
     shard_results = ctx.execute(temp_shards, map_task_resources=task_resources).results
