@@ -26,6 +26,7 @@ from acceptance_contract import (
     VJP_EXPECTATION,
     FixtureExpectation,
     ObserverIdentity,
+    decode_native_snapshot,
     validate_success_events,
 )
 from jaxlib import _jax
@@ -35,19 +36,6 @@ from shuttle import Materialization, Numerics, Tuning, compiler_options
 JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
 CACHE_HIT_EVENT = "/jax/compilation_cache/cache_hits"
-EVENT_FIELDS = (
-    "invocation_id",
-    "phase",
-    "policy",
-    "policy_digest",
-    "tuning_digest",
-    "region_membership",
-    "coverage_manifest",
-    "unsupported_fingerprint",
-    "normalized_module_fingerprint",
-    "no_shuttle_semantics",
-    "failure_pass",
-)
 WORKER_MODES = ("baseline", "concurrency", "populate", "reuse")
 
 
@@ -150,10 +138,7 @@ def bridge_module() -> Any:
 
 
 def decoded_events(capture: Any) -> tuple[dict[str, Any], ...]:
-    records = capture.snapshot()
-    if any(len(record) != len(EVENT_FIELDS) for record in records):
-        raise AssertionError("native observer record schema changed")
-    return tuple(dict(zip(EVENT_FIELDS, record, strict=True)) for record in records)
+    return decode_native_snapshot(capture.snapshot())
 
 
 def expected_identity(numerics: Numerics) -> ObserverIdentity:
