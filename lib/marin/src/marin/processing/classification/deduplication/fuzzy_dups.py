@@ -55,6 +55,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 
 logger = logging.getLogger(__name__)
 FUZZY_DUPS_ATTR_DATA_VERSION = 4
+DEFAULT_CC_MAX_ITERATIONS = 10
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -223,7 +224,7 @@ def compute_fuzzy_dups_attrs(
     *,
     inputs: list[MinHashAttrData],
     output_path: str,
-    cc_max_iterations: int = 10,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     cc_resume: bool = False,
     max_parallelism: int = MAX_IRIS_WORKER_REPLICAS,
     worker_resources: ResourceConfig | None = None,
@@ -394,7 +395,7 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
-    cc_max_iterations: int = 10,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -412,6 +413,12 @@ def compute_fuzzy_dups_attrs_step(
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
+        # Match the identity the Datakit DAG builds, so a step created here
+        # resolves to the artifacts that graph already produced. The MinHash
+        # content parameters reach this hash through the dependency IDs.
+        hash_attrs={
+            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
+            **({"cc_max_iterations": cc_max_iterations} if cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS else {}),
+        },
         override_output_path=override_output_path,
     )
