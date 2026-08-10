@@ -22,10 +22,7 @@ from tile_lifetime.autodiff import (
     scalar_expression_vjp,
 )
 from tile_lifetime.compiler import (
-    RMSScalePlacement,
-    RowScalePlacement,
     compile_erased_dense_program,
-    compile_region,
 )
 from tile_lifetime.contract_map_chain import (
     BoundCastScalarMap,
@@ -58,8 +55,6 @@ from tile_lifetime.cuda_prepared_contract_codegen import (
     PreparedContractOperandDelivery,
     PreparedContractSourceAudit,
     audit_cuda_prepared_contract_source,
-    execute_preparation_reference,
-    execute_prepared_contract_reference,
     generate_cuda_prepared_contract,
 )
 from tile_lifetime.dense_algebra import DenseSemanticErasureError, erase_dense_semantics
@@ -79,11 +74,8 @@ from tile_lifetime.dense_flow import (
     validate_erased_dense_flow,
 )
 from tile_lifetime.dense_flow_planner import compile_erased_dense_transformer_region
-from tile_lifetime.dense_region import compile_dense_transformer_region
 from tile_lifetime.expert_parallel import (
     ExpertParallelConfig,
-    ExpertParallelLegalityError,
-    compile_expert_parallel_region,
 )
 from tile_lifetime.expert_parallel_plan import (
     ExchangeRowMode,
@@ -110,7 +102,6 @@ from tile_lifetime.expert_parallel_training_runtime import (
     DistributedExpertBackwardResult,
     ExpertBackwardRankABI,
     derive_distributed_expert_backward_abi,
-    execute_distributed_expert_backward_reference,
     verify_distributed_expert_backward_abi,
 )
 from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
@@ -123,17 +114,14 @@ from tile_lifetime.fold_placement import (
     verify_owner_preparation_fold_attachment,
 )
 from tile_lifetime.gated_delta_scan import (
-    chunkwise_gated_delta_reference,
     compile_gated_delta_scan,
-    recurrent_gated_delta_reference,
-    summarize_gated_delta_chunk,
 )
 from tile_lifetime.gemm_program import (
     GENERIC_H100_GEMM_BACKEND,
     GemmProgram,
     compile_gemm_program,
 )
-from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.ir import DType
 from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
     build_jax_collective_execution_plan,
@@ -174,10 +162,7 @@ from tile_lifetime.jax_streaming_attention_forward_ffi import (
     register_streaming_attention_forward_ffi,
 )
 from tile_lifetime.kimi_delta_scan import (
-    chunkwise_kimi_delta_reference,
     compile_kimi_delta_scan,
-    recurrent_kimi_delta_reference,
-    summarize_kimi_delta_chunk,
 )
 from tile_lifetime.linear_pair_map import (
     LinearPairMapTrainingProgram,
@@ -187,11 +172,6 @@ from tile_lifetime.linear_pair_map import (
     compile_linear_pair_map_training,
     pair_silu_product_expression,
     pair_tanh_product_expression,
-)
-from tile_lifetime.moe_recovery import (
-    MoESemanticRecoveryError,
-    RecoveredMoERegion,
-    recover_moe_region,
 )
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
@@ -213,11 +193,9 @@ from tile_lifetime.pipeline import (
     FrontendSourceKind,
     StableHLOStreamingAttentionCompilation,
     compile_stablehlo_dense_transformer_region,
-    compile_stablehlo_expert_parallel_region,
     compile_stablehlo_projected_routed_attention_program,
     compile_stablehlo_routed_attention_program,
     compile_stablehlo_streaming_attention_program,
-    recover_stablehlo_moe_region,
     recover_stablehlo_projected_routed_attention_program,
     recover_stablehlo_routed_attention_program,
     validate_stablehlo_streaming_attention_compilation,
@@ -298,17 +276,6 @@ from tile_lifetime.row_normalization_training import (
     build_row_normalized_contract_program,
     compile_row_normalization_training,
     lower_row_normalization_axis_folds,
-)
-from tile_lifetime.runtime import (
-    PlanRuntimeError,
-    RuntimeBufferSpec,
-    RuntimeDiagnostic,
-    RuntimeDiagnosticCode,
-    RuntimeResult,
-    TensorBinding,
-    execute_region_plan,
-    required_input_specs,
-    validate_region_plan,
 )
 from tile_lifetime.semantic_erasure import (
     ErasedTensorProgram,
@@ -404,14 +371,6 @@ from tile_lifetime.stateful_scan_recovery import (
     solve_factored_affine_chunk,
     summarize_factored_affine_chunk,
 )
-from tile_lifetime.stateful_scan_reference import (
-    NATURAL_AFFINE_SCAN_INPUT_NAMES,
-    NaturalAffineScanConfig,
-    ScanDecayAxes,
-    ScanDiagonalOperation,
-    export_natural_affine_scan,
-    natural_affine_scan_region,
-)
 from tile_lifetime.streaming_attention import (
     AttentionScoreAxis,
     OnlineAttentionState,
@@ -451,7 +410,6 @@ from tile_lifetime.streaming_attention_backward import (
     execute_streaming_attention_backward,
     verify_streaming_attention_backward_score_map_vjp,
 )
-from tile_lifetime.swiglu import compile_swiglu_region
 from tile_lifetime.tensor_program import (
     AxisIndexMap,
     ContractPrimitive,

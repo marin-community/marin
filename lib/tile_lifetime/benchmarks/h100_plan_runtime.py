@@ -37,14 +37,10 @@ from tile_lifetime import (
     GemmSkeleton,
     NumericalPolicy,
     ReductionSkeleton,
-    RMSScalePlacement,
-    RuntimeBufferSpec,
     StreamingAttentionSkeleton,
-    TensorBinding,
     compile_stablehlo_dense_transformer_region,
-    execute_region_plan,
-    required_input_specs,
 )
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, compile_gemm_program
 from tile_lifetime.quack_gemm_codegen import (
     GeneratedQuackGemm,
@@ -54,6 +50,7 @@ from tile_lifetime.quack_gemm_codegen import (
     safe_module_name,
 )
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
+from tile_lifetime.runtime import RuntimeBufferSpec, TensorBinding, execute_region_plan, required_input_specs
 from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,
     apply_causal_score_mask,
@@ -565,9 +562,9 @@ def main() -> None:
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
             rms_scale_placement=placement,
         )
-        for placement in (RMSScalePlacement.CONSUMER_PROLOGUE, RMSScalePlacement.CONSUMER_EPILOGUE)
+        for placement in (RowScalePlacement.CONSUMER_PROLOGUE, RowScalePlacement.CONSUMER_EPILOGUE)
     }
-    inputs = _input_bindings(plans[RMSScalePlacement.CONSUMER_PROLOGUE.value], config)
+    inputs = _input_bindings(plans[RowScalePlacement.CONSUMER_PROLOGUE.value], config)
     backends = {name: H100DenseBackend(config, attention_backend=args.attention_backend) for name in plans}
     outputs = {}
     deterministic_hashes: dict[str, dict[str, str]] = {}
@@ -589,12 +586,12 @@ def main() -> None:
         if first_hashes != second_hashes:
             raise AssertionError(f"generated dense plan {name!r} is not bitwise deterministic")
         deterministic_hashes[name] = first_hashes
-    prologue_x2, prologue_qkv = outputs[RMSScalePlacement.CONSUMER_PROLOGUE.value]
-    delayed_x2, delayed_qkv = outputs[RMSScalePlacement.CONSUMER_EPILOGUE.value]
+    prologue_x2, prologue_qkv = outputs[RowScalePlacement.CONSUMER_PROLOGUE.value]
+    delayed_x2, delayed_qkv = outputs[RowScalePlacement.CONSUMER_EPILOGUE.value]
     x2_difference = (prologue_x2.float() - delayed_x2.float()).abs()
     qkv_difference = (prologue_qkv.float() - delayed_qkv.float()).abs()
     print(f"gpu={torch.cuda.get_device_name(0)} torch={torch.__version__}")
-    print(f"stablehlo_bytes={len(artifact)} skeletons={len(plans[RMSScalePlacement.CONSUMER_PROLOGUE.value].skeletons)}")
+    print(f"stablehlo_bytes={len(artifact)} skeletons={len(plans[RowScalePlacement.CONSUMER_PROLOGUE.value].skeletons)}")
     print(
         f"prologue_vs_delayed x2_max_abs={x2_difference.max().item():.6f} "
         f"x2_mean_abs={x2_difference.mean().item():.6f} "
@@ -688,7 +685,7 @@ def main() -> None:
             "comparison": {
                 "historical_manual_oracle_ms": historical_oracle_ms,
                 "generated_delayed_ratio": (
-                    float(measurements[RMSScalePlacement.CONSUMER_EPILOGUE.value]["median_ms"]) / historical_oracle_ms
+                    float(measurements[RowScalePlacement.CONSUMER_EPILOGUE.value]["median_ms"]) / historical_oracle_ms
                     if historical_oracle_ms is not None
                     else None
                 ),

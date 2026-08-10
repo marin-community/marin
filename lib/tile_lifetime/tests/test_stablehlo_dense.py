@@ -9,11 +9,11 @@ from tile_lifetime import (
     GemmSkeleton,
     NumericalPolicy,
     ReductionSkeleton,
-    RMSScalePlacement,
     StreamingAttentionSkeleton,
     TransformSkeleton,
     compile_stablehlo_dense_transformer_region,
 )
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
 from tile_lifetime.semantic_recovery import recover_dense_transformer_region
@@ -118,7 +118,7 @@ def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_EPILOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_EPILOGUE,
     )
 
     gate_up = plan.skeletons[4]

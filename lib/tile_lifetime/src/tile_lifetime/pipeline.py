@@ -9,12 +9,9 @@ from enum import StrEnum
 
 import numpy as np
 
-from tile_lifetime.compiler import RMSScalePlacement
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_region import compile_dense_transformer_region
-from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_parallel_region
-from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
 from tile_lifetime.ir import DType, ScaledDotProductAttentionOp
-from tile_lifetime.moe_recovery import RecoveredMoERegion, recover_moe_region
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
     RecoveredProjectedRoutedAttentionProgram,
@@ -70,38 +67,6 @@ class StableHLOStreamingAttentionCompilation:
     program: StreamingAttentionProgram
     provenance: FrontendProvenance
     semantic_erasure_report: SemanticErasureReport
-
-
-def recover_stablehlo_moe_region(
-    artifact: bytes,
-    *,
-    input_names: tuple[str, ...],
-    gemm_accumulation_dtype: DType,
-) -> RecoveredMoERegion:
-    """Import and recover the bounded ordinary JAX MoE semantic region."""
-    stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
-    return recover_moe_region(stablehlo_graph, gemm_accumulation_dtype=gemm_accumulation_dtype)
-
-
-def compile_stablehlo_expert_parallel_region(
-    artifact: bytes,
-    *,
-    input_names: tuple[str, ...],
-    gemm_accumulation_dtype: DType,
-    config: ExpertParallelConfig,
-    numerical_policy: NumericalPolicy,
-) -> ExpertParallelPlan:
-    """Recover ordinary StableHLO MoE math and lower it to generic EP stages."""
-    recovered = recover_stablehlo_moe_region(
-        artifact,
-        input_names=input_names,
-        gemm_accumulation_dtype=gemm_accumulation_dtype,
-    )
-    return compile_expert_parallel_region(
-        recovered.graph,
-        config=config,
-        numerical_policy=numerical_policy,
-    )
 
 
 def compile_stablehlo_streaming_attention_program(
@@ -217,7 +182,7 @@ def compile_stablehlo_dense_transformer_region(
     input_names: tuple[str, ...],
     gemm_accumulation_dtype: DType,
     numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_PROLOGUE,
+    rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE,
 ) -> RegionPlan:
     """Recover and compile the connected dense debug region."""
     stablehlo_graph = import_stablehlo(artifact, input_names=input_names)

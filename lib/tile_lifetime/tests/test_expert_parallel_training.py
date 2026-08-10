@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_stablehlo_expert_parallel_region
+from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.cuda_expert_parallel_training_codegen import (
     expert_parallel_training_scalar_program,
     render_cuda_expert_parallel_training_include,
@@ -29,6 +29,7 @@ from tile_lifetime.moe_training_reference import (
     export_debug_moe_training_boundary_text,
     moe_training_boundary,
 )
+from tile_lifetime.reference_pipeline import compile_reference_stablehlo_expert_parallel_region
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_input, serialize_scalar_expression
 
@@ -38,7 +39,7 @@ _PRIMARY_FIXTURE = (
 
 
 def _primary_forward_plan():
-    return compile_stablehlo_expert_parallel_region(
+    return compile_reference_stablehlo_expert_parallel_region(
         base64.b64decode(_PRIMARY_FIXTURE.read_text()),
         input_names=(
             "x",

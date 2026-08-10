@@ -9,11 +9,8 @@ from tile_lifetime import (
     MaterializationDisposition,
     NumericalPolicy,
     ReductionSkeleton,
-    RMSScalePlacement,
     StreamingAttentionSkeleton,
-    TensorGraph,
     TransformSkeleton,
-    compile_dense_transformer_region,
     compile_erased_dense_transformer_region,
     compile_gemm_program,
     erase_dense_transformer_semantics,
@@ -21,8 +18,11 @@ from tile_lifetime import (
     pairwise_silu_product_expression,
     validate_plan_semantic_erasure,
 )
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_flow import FlowMap, FlowMapIteration
+from tile_lifetime.dense_region import compile_dense_transformer_region
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.quack_gemm_codegen import generate_quack_gemm
 from tile_lifetime.tensor_program import deserialize_scalar_expression
 
@@ -203,7 +203,7 @@ def test_dense_transformer_region_can_delay_rms_scale_in_consumer_epilogues() ->
     plan = compile_dense_transformer_region(
         _dense_llama_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_EPILOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_EPILOGUE,
     )
 
     gate_up = plan.skeletons[4]
@@ -249,7 +249,7 @@ def test_full_dense_pairwise_semantic_mutation_uses_the_same_generator() -> None
 
     plan = compile_erased_dense_transformer_region(
         mutated,
-        row_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        row_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     skeleton = plan.skeletons[4]
@@ -269,7 +269,7 @@ def test_full_dense_recovery_uses_dataflow_instead_of_operation_slots() -> None:
 
     plan = compile_erased_dense_transformer_region(
         reordered,
-        row_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        row_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [

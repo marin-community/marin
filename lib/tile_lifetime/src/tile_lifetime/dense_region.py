@@ -3,7 +3,7 @@
 
 """Compile a connected dense region after frontend names erase to Flow."""
 
-from tile_lifetime.compiler import RMSScalePlacement
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_flow import erase_dense_transformer_semantics
 from tile_lifetime.dense_flow_planner import compile_erased_dense_transformer_region
 from tile_lifetime.ir import TensorGraph
@@ -14,7 +14,7 @@ def compile_dense_transformer_region(
     graph: TensorGraph,
     *,
     numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_PROLOGUE,
+    rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE,
 ) -> RegionPlan:
     """Compile one connected dense region exclusively from erased Flow algebra."""
     if numerical_policy is NumericalPolicy.BITWISE_EXACT:

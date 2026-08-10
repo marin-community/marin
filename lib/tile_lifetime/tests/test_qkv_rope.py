@@ -9,10 +9,10 @@ from tile_lifetime import (
     MaterializationDisposition,
     NumericalPolicy,
     StreamingAttentionSkeleton,
-    TensorGraph,
     TransformSkeleton,
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.qkv_rope import compile_reference_qkv_rope_attention_region
 
 BATCH = 1

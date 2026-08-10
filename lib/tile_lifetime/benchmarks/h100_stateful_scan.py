@@ -19,7 +19,8 @@ from typing import Any
 import numpy as np
 import torch
 
-from tile_lifetime import compile_gated_delta_scan, recurrent_gated_delta_reference
+from tile_lifetime import compile_gated_delta_scan
+from tile_lifetime.gated_delta_scan import recurrent_gated_delta_reference
 
 FLA_REVISION = "9c8e42e762fce087c27b673af4922795d9edb85e"
 FLASH_QLA_REVISION = "050c6bbee9e03efbbfe41063fe4e33742c4a87cb"

@@ -22,8 +22,6 @@ from tile_lifetime import (
     apply_affine_transform,
     apply_factored_affine_chunk,
     binary_expression,
-    chunkwise_gated_delta_reference,
-    chunkwise_kimi_delta_reference,
     compile_affine_scan_candidates,
     compile_gated_delta_scan,
     compile_kimi_delta_scan,
@@ -33,14 +31,14 @@ from tile_lifetime import (
     explain_stateful_scan,
     input_expression,
     recover_affine_state_update,
-    recurrent_gated_delta_reference,
-    recurrent_kimi_delta_reference,
     solve_factored_affine_chunk,
     stateful_scan_scheduling_keys,
     summarize_factored_affine_chunk,
     validate_stateful_scan_semantic_erasure,
 )
 from tile_lifetime.delta_rule_reference import delta_rule_update_expression
+from tile_lifetime.gated_delta_scan import chunkwise_gated_delta_reference, recurrent_gated_delta_reference
+from tile_lifetime.kimi_delta_scan import chunkwise_kimi_delta_reference, recurrent_kimi_delta_reference
 from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
 from tile_lifetime.stateful_scan_reference import (
     NATURAL_AFFINE_SCAN_INPUT_NAMES,

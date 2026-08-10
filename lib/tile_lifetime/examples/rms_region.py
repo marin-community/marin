@@ -6,7 +6,9 @@
 import json
 from dataclasses import asdict
 
-from tile_lifetime import DType, NumericalPolicy, TensorGraph, compile_region
+from tile_lifetime.compiler import compile_reference_region
+from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.plan import NumericalPolicy
 
 
 def build_example_graph() -> TensorGraph:
@@ -33,7 +35,7 @@ def build_example_graph() -> TensorGraph:
 
 
 def main() -> None:
-    plan = compile_region(build_example_graph(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+    plan = compile_reference_region(build_example_graph(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
     print(json.dumps(asdict(plan), indent=2))
 
 

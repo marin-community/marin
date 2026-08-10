@@ -13,20 +13,19 @@ from tile_lifetime import (
     MaterializationDisposition,
     NumericalPolicy,
     ReductionSkeleton,
-    RMSScalePlacement,
     StreamingAttentionSkeleton,
-    TensorGraph,
     TransformSkeleton,
     compile_erased_dense_program,
     compile_gemm_program,
-    compile_region,
     erase_dense_semantics,
     execute_tensor_program,
     validate_erased_tensor_program,
     validate_plan_semantic_erasure,
 )
 from tile_lifetime.attention import compile_reference_attention_region
+from tile_lifetime.compiler import RowScalePlacement, compile_reference_region
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.plan import NumericalEquivalence
 from tile_lifetime.semantic_erasure import SemanticErasureError
 from tile_lifetime.tensor_program import MapPrimitive, ScalarExpressionKind, scalar_binary, scalar_constant
@@ -93,10 +92,10 @@ def _layer_norm_region(*, output_features: int = 24, epsilon: float = 1e-5) -> T
 
 
 def test_centered_affine_normalization_uses_consumer_preparation_under_reassociation_policy() -> None:
-    plan = compile_region(
+    plan = compile_reference_region(
         _layer_norm_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [
@@ -156,10 +155,10 @@ def test_centered_affine_normalization_uses_consumer_preparation_under_reassocia
 
 
 def test_centered_affine_normalization_delayed_output_has_column_corrections() -> None:
-    plan = compile_region(
+    plan = compile_reference_region(
         _layer_norm_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_EPILOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_EPILOGUE,
     )
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [
@@ -192,15 +191,15 @@ def test_centered_affine_normalization_delayed_output_has_column_corrections() -
 
 
 def test_changed_centered_variance_map_uses_same_generic_placement() -> None:
-    first = compile_region(
+    first = compile_reference_region(
         _layer_norm_region(epsilon=1e-5),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
-    changed = compile_region(
+    changed = compile_reference_region(
         _layer_norm_region(epsilon=3e-5),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     assert [type(skeleton) for skeleton in first.skeletons] == [type(skeleton) for skeleton in changed.skeletons]
@@ -264,7 +263,7 @@ def test_delayed_centered_affine_identity_is_real_exact_but_changes_bf16_order()
 
 
 def test_centered_affine_bitwise_policy_materializes() -> None:
-    plan = compile_region(_layer_norm_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
+    plan = compile_reference_region(_layer_norm_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
 
     assert not plan.rewrites[0].applied
     assert plan.materialization("normalized").disposition is MaterializationDisposition.MATERIALIZE
@@ -283,7 +282,7 @@ def test_sum_and_sum_squares_variance_is_not_source_order_two_pass_variance() ->
 
 
 def test_compile_region_legal_rms_region_delays_scale() -> None:
-    plan = compile_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+    plan = compile_reference_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [GemmSkeleton, ReductionSkeleton, GemmSkeleton]
     assert [attachment.operation for attachment in plan.skeletons[0].epilogue] == [
@@ -309,10 +308,10 @@ def test_compile_region_legal_rms_region_delays_scale() -> None:
 
 
 def test_compile_region_can_scale_rms_in_consumer_prologue() -> None:
-    plan = compile_region(
+    plan = compile_reference_region(
         _rms_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     consumer = plan.skeletons[2]
@@ -329,10 +328,10 @@ def test_compile_region_can_scale_rms_in_consumer_prologue() -> None:
 
 
 def test_consumer_prologue_uses_measured_wide_projection_cluster() -> None:
-    plan = compile_region(
+    plan = compile_reference_region(
         _rms_region(output_features=28_672),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        rms_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        rms_scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     consumer = plan.skeletons[2]
@@ -342,7 +341,7 @@ def test_consumer_prologue_uses_measured_wide_projection_cluster() -> None:
 
 
 def test_compile_region_observed_normalized_activation_uses_materialized_fallback() -> None:
-    plan = compile_region(
+    plan = compile_reference_region(
         _rms_region(add_normalized_consumer=True), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER
     )
 
@@ -353,14 +352,14 @@ def test_compile_region_observed_normalized_activation_uses_materialized_fallbac
 
 
 def test_compile_region_non_hidden_rms_axis_uses_materialized_fallback() -> None:
-    plan = compile_region(_rms_region(axis=0), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+    plan = compile_reference_region(_rms_region(axis=0), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
 
     assert not plan.rewrites[0].applied
     assert any("reduction axis" in reason for reason in plan.rewrites[0].rejection_reasons)
 
 
 def test_compile_region_bitwise_policy_uses_materialized_fallback() -> None:
-    plan = compile_region(_rms_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
+    plan = compile_reference_region(_rms_region(), numerical_policy=NumericalPolicy.BITWISE_EXACT)
 
     assert not plan.rewrites[0].applied
     assert plan.rewrites[0].numerical_equivalence is NumericalEquivalence.BITWISE_EXACT
@@ -368,7 +367,7 @@ def test_compile_region_bitwise_policy_uses_materialized_fallback() -> None:
 
 
 def test_dense_frontend_names_erase_before_candidate_selection() -> None:
-    plan = compile_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+    plan = compile_reference_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
 
     report = plan.semantic_erasure_report
     assert report is not None
@@ -421,7 +420,7 @@ def test_changed_row_scalar_expression_uses_same_generic_placement() -> None:
     plan = compile_erased_dense_program(
         changed,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-        scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+        scale_placement=RowScalePlacement.CONSUMER_PROLOGUE,
     )
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [GemmSkeleton, ReductionSkeleton, GemmSkeleton]

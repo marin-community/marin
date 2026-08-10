@@ -18,8 +18,8 @@ from pathlib import Path
 import torch
 from backends.h100.cute_streaming_emitter import compile_h100_streaming_program
 
-from tile_lifetime import DType, TensorGraph
-from tile_lifetime.ir import ScaledDotProductAttentionOp
+from tile_lifetime import DType
+from tile_lifetime.ir import ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,
     apply_causal_score_mask,

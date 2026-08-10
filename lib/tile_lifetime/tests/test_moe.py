@@ -6,8 +6,8 @@ import pytest
 from tile_lifetime import (
     DType,
     NumericalPolicy,
-    TensorGraph,
 )
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.moe import MoELegalityError, MoERoutedPrecision, MoKOracleConfig, compile_mok_oracle_region
 from tile_lifetime.plan import OpaqueMoKOracleSkeleton, PersistentTaskPlacement
 

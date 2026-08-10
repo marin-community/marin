@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_stablehlo_expert_parallel_region
+from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,
@@ -29,6 +29,7 @@ from tile_lifetime.distributed_expert_jax_module import (
 )
 from tile_lifetime.expert_parallel_training import derive_expert_parallel_training_plan
 from tile_lifetime.jax_routed_reverse_ffi import segmented_input_adjoint_cuda_compile_plan
+from tile_lifetime.reference_pipeline import compile_reference_stablehlo_expert_parallel_region
 from tile_lifetime.relation import RelationPlanError, build_fixed_capacity_relation_plan
 from tile_lifetime.xla_routed_shared_map_training_ffi import plan_routed_shared_map_training_typed_ffi
 from tile_lifetime.xla_segmented_input_adjoint_ffi import (
@@ -51,7 +52,7 @@ def _templates():
 
 @lru_cache(maxsize=1)
 def _training_plan():
-    forward = compile_stablehlo_expert_parallel_region(
+    forward = compile_reference_stablehlo_expert_parallel_region(
         base64.b64decode(_PRIMARY_FIXTURE.read_text()),
         input_names=(
             "x",

@@ -18,7 +18,7 @@ import numpy as np
 from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_stablehlo_expert_parallel_region
+from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,
@@ -34,6 +34,7 @@ from tile_lifetime.distributed_expert_jax_module import (
     plan_distributed_expert_jax_module,
 )
 from tile_lifetime.expert_parallel_training import derive_expert_parallel_training_plan
+from tile_lifetime.reference_pipeline import compile_reference_stablehlo_expert_parallel_region
 from tile_lifetime.xla_routed_shared_map_training_ffi import plan_routed_shared_map_training_typed_ffi
 from tile_lifetime.xla_segmented_input_adjoint_ffi import (
     audit_segmented_input_adjoint_resources,
@@ -52,7 +53,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _training_plan():
-    forward = compile_stablehlo_expert_parallel_region(
+    forward = compile_reference_stablehlo_expert_parallel_region(
         base64.b64decode(_PRIMARY_FIXTURE.read_text()),
         input_names=(
             "x",

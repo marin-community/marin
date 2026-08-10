@@ -10,11 +10,47 @@ workload kernel.
 """
 
 from tile_lifetime.attention import compile_reference_attention_region
-from tile_lifetime.compiler import RMSScalePlacement, compile_region
+from tile_lifetime.compiler import RowScalePlacement, compile_reference_region
+from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_parallel_region
+from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
 from tile_lifetime.ir import DType
+from tile_lifetime.moe_recovery import RecoveredMoERegion, recover_moe_region
 from tile_lifetime.plan import NumericalPolicy, RegionPlan
-from tile_lifetime.semantic_recovery import recover_attention_region, recover_rms_region
+from tile_lifetime.reference_semantic_recovery import recover_reference_rms_region
+from tile_lifetime.semantic_recovery import recover_attention_region
 from tile_lifetime.stablehlo_import import import_stablehlo
+
+
+def recover_reference_stablehlo_moe_region(
+    artifact: bytes,
+    *,
+    input_names: tuple[str, ...],
+    gemm_accumulation_dtype: DType,
+) -> RecoveredMoERegion:
+    """Recover the bounded named MoE TensorGraph used by the reference planner."""
+    graph = import_stablehlo(artifact, input_names=input_names)
+    return recover_moe_region(graph, gemm_accumulation_dtype=gemm_accumulation_dtype)
+
+
+def compile_reference_stablehlo_expert_parallel_region(
+    artifact: bytes,
+    *,
+    input_names: tuple[str, ...],
+    gemm_accumulation_dtype: DType,
+    config: ExpertParallelConfig,
+    numerical_policy: NumericalPolicy,
+) -> ExpertParallelPlan:
+    """Run the historical named MoE planner for comparison tests."""
+    recovered = recover_reference_stablehlo_moe_region(
+        artifact,
+        input_names=input_names,
+        gemm_accumulation_dtype=gemm_accumulation_dtype,
+    )
+    return compile_expert_parallel_region(
+        recovered.graph,
+        config=config,
+        numerical_policy=numerical_policy,
+    )
 
 
 def compile_reference_stablehlo_rms_region(
@@ -24,16 +60,16 @@ def compile_reference_stablehlo_rms_region(
     output_name: str,
     gemm_accumulation_dtype: DType,
     numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_EPILOGUE,
+    rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_EPILOGUE,
 ) -> RegionPlan:
     """Run the historical named RMS/GEMM planner for reference tests."""
     graph = import_stablehlo(artifact, input_names=input_names)
-    recovered = recover_rms_region(
+    recovered = recover_reference_rms_region(
         graph,
         gemm_accumulation_dtype=gemm_accumulation_dtype,
         output_name=output_name,
     )
-    return compile_region(
+    return compile_reference_region(
         recovered.graph,
         numerical_policy=numerical_policy,
         rms_scale_placement=rms_scale_placement,
@@ -61,11 +97,11 @@ def compile_reference_stablehlo_rms_attention_program(
     attention_output_name: str,
     gemm_accumulation_dtype: DType,
     numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_EPILOGUE,
+    rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_EPILOGUE,
 ) -> RegionPlan:
     """Run the historical combined named RMS and attention planners."""
     graph = import_stablehlo(artifact, input_names=input_names)
-    recovered_rms = recover_rms_region(
+    recovered_rms = recover_reference_rms_region(
         graph,
         gemm_accumulation_dtype=gemm_accumulation_dtype,
         output_name=rms_output_name,
@@ -76,7 +112,7 @@ def compile_reference_stablehlo_rms_attention_program(
         output_name=attention_output_name,
         output_index=1,
     )
-    rms_plan = compile_region(
+    rms_plan = compile_reference_region(
         recovered_rms.graph,
         numerical_policy=numerical_policy,
         rms_scale_placement=rms_scale_placement,

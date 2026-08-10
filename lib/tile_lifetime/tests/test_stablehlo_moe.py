@@ -11,11 +11,8 @@ from tile_lifetime import (
     DType,
     ExpertParallelConfig,
     ExpertParallelStageKind,
-    MoESemanticRecoveryError,
     NumericalPolicy,
     TransportSemantics,
-    compile_stablehlo_expert_parallel_region,
-    recover_stablehlo_moe_region,
 )
 from tile_lifetime.cuda_map_fold_codegen import render_cuda_map_fold_include, shuttle_map_fold_program
 from tile_lifetime.ir import (
@@ -25,12 +22,16 @@ from tile_lifetime.ir import (
     TopKRouterOp,
     WeightedExpertCombineOp,
 )
-from tile_lifetime.moe_recovery import recover_moe_region
+from tile_lifetime.moe_recovery import MoESemanticRecoveryError, recover_moe_region
 from tile_lifetime.moe_reference import (
     MOE_REGION_INPUT_NAMES,
     MOE_UNIMPORTED_PRIVATE_OPERATIONS,
     MoEDebugConfig,
     export_debug_moe_region,
+)
+from tile_lifetime.reference_pipeline import (
+    compile_reference_stablehlo_expert_parallel_region,
+    recover_reference_stablehlo_moe_region,
 )
 from tile_lifetime.stablehlo_import import (
     CompositeAttributes,
@@ -69,7 +70,7 @@ def test_moe_export_uses_versioned_top_k_and_static_expert_gathers() -> None:
 
 
 def test_public_stablehlo_path_recovers_global_semantic_moe_region() -> None:
-    recovered = recover_stablehlo_moe_region(
+    recovered = recover_reference_stablehlo_moe_region(
         _fixture_artifact(),
         input_names=MOE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -97,7 +98,7 @@ def test_public_stablehlo_path_recovers_global_semantic_moe_region() -> None:
 
 
 def test_public_stablehlo_path_compiles_generic_expert_parallel_plan() -> None:
-    plan = compile_stablehlo_expert_parallel_region(
+    plan = compile_reference_stablehlo_expert_parallel_region(
         _fixture_artifact(),
         input_names=MOE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -135,7 +136,7 @@ def test_public_stablehlo_path_compiles_generic_expert_parallel_plan() -> None:
 
 
 def test_primary_benchmark_fixture_compiles_without_route_metadata() -> None:
-    plan = compile_stablehlo_expert_parallel_region(
+    plan = compile_reference_stablehlo_expert_parallel_region(
         base64.b64decode(PRIMARY_FIXTURE.read_text()),
         input_names=MOE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
