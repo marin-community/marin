@@ -137,14 +137,18 @@ def test_build_schedule_reports_capacity_overflow():
 
 
 @pytest.mark.parametrize(
-    ("implementation_name", "symmetric_collectives", "device_kernel"),
+    ("implementation_name", "symmetric_collectives", "one_shot", "nccl_barrier", "device_kernel"),
     [
-        ("PRIVATE", None, "false"),
-        ("DEVICE", "raggedalltoall", "true"),
+        ("ONE_SHOT", None, "true", "true", "false"),
+        ("DEVICE", "raggedalltoall", "false", "false", "true"),
     ],
 )
 def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
-    implementation_name: str, symmetric_collectives: str | None, device_kernel: str
+    implementation_name: str,
+    symmetric_collectives: str | None,
+    one_shot: str,
+    nccl_barrier: str,
+    device_kernel: str,
 ):
     implementation = getattr(train.RaggedAllToAllImplementation, implementation_name)
     existing = {
@@ -155,6 +159,9 @@ def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
                 "--xla_gpu_ragged_all_to_all_mode=stale",
                 "--xla_enable_nccl_symmetric_buffers_for_collectives=stale",
                 "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=stale",
+                "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=stale",
+                "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=stale",
+                "--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback=stale",
             ]
         )
     }
@@ -165,7 +172,10 @@ def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
     assert "--unrelated=true" in flags
     assert "--xla_gpu_experimental_enable_nccl_symmetric_buffers=false" in flags
     assert "--xla_gpu_ragged_all_to_all_mode=private" in flags
+    assert f"--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel={one_shot}" in flags
+    assert f"--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl={nccl_barrier}" in flags
     assert f"--xla_gpu_experimental_ragged_all_to_all_use_device_kernel={device_kernel}" in flags
+    assert "--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback=false" in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=false" in flags
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=1" in flags
     targeted = [flag for flag in flags if flag.startswith("--xla_enable_nccl_symmetric_buffers_for_collectives=")]
@@ -177,6 +187,9 @@ def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
     assert sum(flag.startswith("--xla_gpu_experimental_enable_nccl_symmetric_buffers=") for flag in flags) == 1
     assert sum(flag.startswith("--xla_gpu_ragged_all_to_all_mode=") for flag in flags) == 1
     assert sum(flag.startswith("--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=") for flag in flags) == 1
+    assert sum(flag.startswith("--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=") for flag in flags) == 1
+    assert sum(flag.startswith("--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=") for flag in flags) == 1
+    assert sum(flag.startswith("--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback=") for flag in flags) == 1
 
 
 def test_run_grug_pins_the_xla_nightly_for_training(monkeypatch):
@@ -235,7 +248,7 @@ def test_gate_keeps_the_per_gpu_batch_constant(num_nodes: int, expected_batch_si
     step = launch.build_mok_run(
         run_id=f"batch-{num_nodes}",
         num_steps=1,
-        implementation=train.RaggedAllToAllImplementation.PRIVATE,
+        implementation=train.RaggedAllToAllImplementation.ONE_SHOT,
         num_nodes=num_nodes,
         version="dev",
     )
@@ -253,7 +266,7 @@ def test_expert_bank_must_divide_requested_topology():
         launch.build_mok_run(
             run_id="bad-bank",
             num_steps=1,
-            implementation=train.RaggedAllToAllImplementation.PRIVATE,
+            implementation=train.RaggedAllToAllImplementation.ONE_SHOT,
             num_nodes=1,
             num_experts=10,
             version="dev",

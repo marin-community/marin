@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The first GPU gate compares private ragged all-to-all with XLA's device-initiated NCCL LSA kernel on one four-GPU GB200 worker.
+The first implementation reproduces the deterministic 256-row-padded schedule. The first GPU gate compares XLA's one-shot NCCL-barrier kernel with its device-initiated NCCL LSA kernel on one four-GPU GB200 worker.
 
 Both arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
@@ -141,3 +141,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: Ten focused tests passed. The contract suite passed 18 tests and skipped one test. The all-files check passed. The plan records all four nightly wheel URLs and hashes in its fingerprint.
 - Interpretation: The local implementation is ready for one-node GB200 correctness screens. Accelerator behavior remains untested.
 - Next action: Push the snapshot, publish the issue update, and submit the private arm before the device arm.
+
+### 2026-08-10 06:34 UTC - One-shot profile isolated the transfer boundary
+
+- Hypothesis: The initial device-kernel-off arm measures the current XLA ragged all-to-all path and can isolate its cost.
+- Commit Hash: `07b1c65a6` for the run; `ec83dc2e4` for the next profile configuration.
+- Commands: One four-GPU GB200 Iris run; 10 completed steps; five-step XProf capture; local XPlane summary on the worker.
+- Config: JAX `0.11.1.dev20260809`, XLA `7c3dd1936addd297d7c6fa46f6183986fc4160c3`, NCCL 2.30.7, E8, top-4, global batch 64, BF16 compute.
+- Result: Loss decreased from 11.8 at step 2 to 7.44 at step 10. Steps 3 through 5 took 119 to 123 seconds, or about 2.8% MFU. The trace shows that XLA selected `RaggedAllToAllWithSymmetricMemoryKernelImpl`, its one-shot copy kernel with the NCCL device barrier. The copy kernel used 74% of XLA device time, and the barrier used 14%. The XProf session and normalized summary are under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-private-1n-25-20260810-0600`.
+- Interpretation: The path name `private` was not correct for the current nightly. The device-kernel comparison remains valid, but both paths must be selected explicitly and NCCL fallback must be off.
+- Next action: Run the device kernel with the one-shot path and fallback disabled. Require its distinct device-kernel trace before performance acceptance.

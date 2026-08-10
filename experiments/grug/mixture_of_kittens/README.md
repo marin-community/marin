@@ -17,12 +17,12 @@ Each run requires one XLA implementation:
 
 | Implementation | XLA flags |
 | --- | --- |
-| `private` | Broad symmetric buffers off, private ragged mode, and device kernel off |
-| `device` | Broad symmetric buffers off, private ragged mode, symmetric buffers for `raggedalltoall`, and device kernel on |
+| `one-shot` | One-shot copies and the NCCL device barrier on; device kernel and NCCL fallback off |
+| `device` | One-shot path, NCCL barrier, and NCCL fallback off; symmetric buffers for `raggedalltoall` and device kernel on |
 
 The launcher replaces existing values for all controlled flags. It keeps unrelated `XLA_FLAGS` values. Both arms disable the latency-hiding scheduler and use one collective-overlap stream. These common settings keep the first backward pass finite at larger expert banks.
 
-The broad NCCL switch stays off because it can change other collectives. The device arm requests symmetric allocation only for ragged all-to-all. It does not use `xla_gpu_ragged_all_to_all_mode=symmetric`, which selects a different Put and Signal path.
+The broad NCCL switch stays off because it can change other collectives. The device arm requests symmetric allocation only for ragged all-to-all. It does not use `xla_gpu_ragged_all_to_all_mode=symmetric`, which selects a different Put and Signal path. The device arm disables the one-shot path and NCCL fallback, so missing device-kernel requirements cause a clear error.
 
 ## Local checks
 
@@ -39,8 +39,8 @@ Print each plan before submission:
 
 ```bash
 uv run python -m experiments.grug.mixture_of_kittens.launch \
-  --run-id mok-jax-002-private-25 \
-  --implementation private \
+  --run-id mok-jax-002-one-shot-25 \
+  --implementation one-shot \
   --num-nodes 1 \
   --num-steps 25 \
   --version 2026.08.10

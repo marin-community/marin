@@ -80,7 +80,7 @@ def build_mok_run(
 ) -> ArtifactStep[MokThroughputResult]:
     """Build one arm of the XLA ragged all-to-all comparison.
 
-    The overrides keep the hidden dimension fixed. Private and symmetric arms
+    The overrides keep the hidden dimension fixed. One-shot and device arms
     must use identical overrides and step counts.
     """
     if not run_id.strip():

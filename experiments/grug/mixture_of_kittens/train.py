@@ -83,12 +83,15 @@ _NCCL_SYMMETRIC_BUFFERS_FLAG = "--xla_gpu_experimental_enable_nccl_symmetric_buf
 _TARGETED_SYMMETRIC_BUFFERS_FLAG = "--xla_enable_nccl_symmetric_buffers_for_collectives"
 _RAGGED_ALL_TO_ALL_MODE_FLAG = "--xla_gpu_ragged_all_to_all_mode"
 _RAGGED_ALL_TO_ALL_DEVICE_KERNEL_FLAG = "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel"
+_RAGGED_ALL_TO_ALL_ONE_SHOT_FLAG = "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel"
+_RAGGED_ALL_TO_ALL_NCCL_BARRIER_FLAG = "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl"
+_RAGGED_ALL_TO_ALL_NCCL_FALLBACK_FLAG = "--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback"
 
 
 class RaggedAllToAllImplementation(StrEnum):
     """XLA implementation for ragged all-to-all transfers."""
 
-    PRIVATE = "private"
+    ONE_SHOT = "one-shot"
     DEVICE = "device"
 
 
@@ -104,6 +107,9 @@ def runtime_environment(
         _TARGETED_SYMMETRIC_BUFFERS_FLAG,
         _RAGGED_ALL_TO_ALL_MODE_FLAG,
         _RAGGED_ALL_TO_ALL_DEVICE_KERNEL_FLAG,
+        _RAGGED_ALL_TO_ALL_ONE_SHOT_FLAG,
+        _RAGGED_ALL_TO_ALL_NCCL_BARRIER_FLAG,
+        _RAGGED_ALL_TO_ALL_NCCL_FALLBACK_FLAG,
     }
     xla_flags = [flag for flag in updated.get("XLA_FLAGS", "").split() if flag.partition("=")[0] not in controlled_flags]
     flag_defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
@@ -113,8 +119,13 @@ def runtime_environment(
         [
             f"{_NCCL_SYMMETRIC_BUFFERS_FLAG}=false",
             f"{_RAGGED_ALL_TO_ALL_MODE_FLAG}=private",
+            f"{_RAGGED_ALL_TO_ALL_ONE_SHOT_FLAG}="
+            f"{'true' if implementation is RaggedAllToAllImplementation.ONE_SHOT else 'false'}",
+            f"{_RAGGED_ALL_TO_ALL_NCCL_BARRIER_FLAG}="
+            f"{'true' if implementation is RaggedAllToAllImplementation.ONE_SHOT else 'false'}",
             f"{_RAGGED_ALL_TO_ALL_DEVICE_KERNEL_FLAG}="
             f"{'true' if implementation is RaggedAllToAllImplementation.DEVICE else 'false'}",
+            f"{_RAGGED_ALL_TO_ALL_NCCL_FALLBACK_FLAG}=false",
         ]
     )
     if implementation is RaggedAllToAllImplementation.DEVICE:
@@ -135,7 +146,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    ragged_all_to_all_implementation: RaggedAllToAllImplementation = RaggedAllToAllImplementation.PRIVATE
+    ragged_all_to_all_implementation: RaggedAllToAllImplementation = RaggedAllToAllImplementation.ONE_SHOT
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
