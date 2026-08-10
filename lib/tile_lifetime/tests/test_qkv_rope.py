@@ -11,9 +11,9 @@ from tile_lifetime import (
     StreamingAttentionSkeleton,
     TensorGraph,
     TransformSkeleton,
-    compile_qkv_rope_attention_region,
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.qkv_rope import compile_reference_qkv_rope_attention_region
 
 BATCH = 1
 SEQUENCE = 128
@@ -61,7 +61,7 @@ def _qkv_rope_attention_region() -> TensorGraph:
 
 
 def test_qkv_rope_plan_feeds_selected_fa3_layout_without_conversion() -> None:
-    plan = compile_qkv_rope_attention_region(
+    plan = compile_reference_qkv_rope_attention_region(
         _qkv_rope_attention_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
@@ -89,7 +89,7 @@ def test_qkv_rope_plan_feeds_selected_fa3_layout_without_conversion() -> None:
 
 
 def test_qkv_rope_plan_keeps_only_unrotated_qk_inside_epilogue() -> None:
-    plan = compile_qkv_rope_attention_region(
+    plan = compile_reference_qkv_rope_attention_region(
         _qkv_rope_attention_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
@@ -104,7 +104,7 @@ def test_qkv_rope_plan_keeps_only_unrotated_qk_inside_epilogue() -> None:
 
 
 def test_bitwise_qkv_rope_plan_retains_source_boundaries() -> None:
-    plan = compile_qkv_rope_attention_region(
+    plan = compile_reference_qkv_rope_attention_region(
         _qkv_rope_attention_region(),
         numerical_policy=NumericalPolicy.BITWISE_EXACT,
     )

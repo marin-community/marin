@@ -20,14 +20,16 @@ from backends.h100.cuda_kv_reuse_emitter import compile_h100_bounded_kv_reuse_pr
 from backends.h100.cute_routed_streaming_emitter import compile_h100_routed_streaming_program
 
 from tile_lifetime import (
-    RoutedAttentionDebugConfig,
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
     StreamingTileSchedule,
     compile_stablehlo_routed_attention_program,
+)
+from tile_lifetime.routed_attention_frontend import (
+    ROUTED_ATTENTION_INPUT_NAMES,
+    RoutedAttentionDebugConfig,
     export_debug_routed_attention,
 )
-from tile_lifetime.routed_attention_frontend import ROUTED_ATTENTION_INPUT_NAMES
 
 try:
     from block_sparse_attn import block_sparse_attn_func

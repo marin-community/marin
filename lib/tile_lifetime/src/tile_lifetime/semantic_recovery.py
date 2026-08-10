@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic semantic recovery from normalized StableHLO."""
+"""Frontend canonicalization from normalized StableHLO.
+
+The named ``TensorGraph`` operations returned here are transitional frontend
+objects. Current scheduling must erase them into generic Flow or TensorProgram
+algebra first. ``reference_pipeline`` contains the historical callers that
+schedule these names directly for comparison artifacts.
+"""
 
 import math
 import re

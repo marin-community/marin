@@ -33,8 +33,8 @@ from tile_lifetime import (
     build_routed_attention_relation,
     compile_bounded_kv_major_candidate,
     make_causal_block_relation,
-    routed_attention_reference,
 )
+from tile_lifetime.routed_attention import routed_attention_reference
 
 try:
     import torch

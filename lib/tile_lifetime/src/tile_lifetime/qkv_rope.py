@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plan a combined QKV projection and RoPE boundary into streaming attention."""
+"""Historical named QKV/RoPE/attention planner retained for comparisons."""
 
 from dataclasses import dataclass
 
-from tile_lifetime.attention import compile_attention_region, select_hopper_attention_config
+from tile_lifetime.attention import (
+    compile_reference_attention_region,
+    select_reference_hopper_attention_config,
+)
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import QKVProjectionOp, RoPEOp, ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.plan import (
@@ -29,12 +32,12 @@ class _QKVRoPEAttentionRegion:
     attention: ScaledDotProductAttentionOp
 
 
-def compile_qkv_rope_attention_region(
+def compile_reference_qkv_rope_attention_region(
     graph: TensorGraph,
     *,
     numerical_policy: NumericalPolicy,
 ) -> RegionPlan:
-    """Compile QKV projection, adjacent-pair RoPE, and exact attention."""
+    """Compile the historical named QKV/RoPE/attention comparison path."""
     region, rejection_reasons = _find_region(graph)
     if region is None:
         raise ValueError("QKV/RoPE/attention region is not legal: " + "; ".join(rejection_reasons))
@@ -85,8 +88,11 @@ def _fused_plan(graph: TensorGraph, region: _QKVRoPEAttentionRegion) -> RegionPl
     projection = region.projection
     rope = region.rope
     attention = region.attention
-    attention_plan = compile_attention_region(graph, numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
-    config = select_hopper_attention_config(attention)
+    attention_plan = compile_reference_attention_region(
+        graph,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+    config = select_reference_hopper_attention_config(attention)
     batch, sequence, hidden = projection.input.shape
 
     qkv_gemm = GemmSkeleton(
@@ -208,7 +214,7 @@ def _fused_plan(graph: TensorGraph, region: _QKVRoPEAttentionRegion) -> RegionPl
 def _materialized_plan(graph: TensorGraph, region: _QKVRoPEAttentionRegion) -> RegionPlan:
     projection = region.projection
     rope = region.rope
-    attention_plan = compile_attention_region(graph, numerical_policy=NumericalPolicy.BITWISE_EXACT)
+    attention_plan = compile_reference_attention_region(graph, numerical_policy=NumericalPolicy.BITWISE_EXACT)
     batch, sequence, hidden = projection.input.shape
     qkv_gemm = GemmSkeleton(
         name=f"{projection.output.name}.materialized_qkv_projection",
