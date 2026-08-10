@@ -231,5 +231,25 @@ run. A benchmark gate for the exact Grug shapes now exists at
 - Next environment fix: request the metapackage extras `core_cu13,jax`; set `CUDA_VERSION=13.0`;
   force NVIDIA-wheel include discovery; add `/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl`
   to `CPLUS_INCLUDE_PATH`; compile only SM100; and disable the unused NCCL expert-parallel extension.
+- Path probe: job `/dlwh/grug-cp-cuda-path-probe-20260810-1506` used one GB200 for 11.47 seconds
+  and succeeded. The child received `CUDA_VERSION=13.0` and `CPLUS_INCLUDE_PATH`, but no `nv/target`
+  file existed anywhere in the environment. NVTX existed at
+  `/app/.venv/lib/python3.12/site-packages/nvidia/nvtx/include/nvtx3/nvToolsExt.h`; NVCC was
+  `/app/.venv/bin/nvcc`. JAX, jaxlib, the CUDA plugin, and PJRT were all 0.11.0;
+  `cuda_runtime_get_version()` returned 13000; runtime CUDA was 13.0.96 and NVCC was 13.2.78. The
+  node was released.
+- Path-probe interpretation: `nvidia-cuda-cccl` is absent from Marin's GPU environment. PyPI resolves
+  a Linux aarch64 wheel for `nvidia-cuda-cccl==13.3.3.4.1`. Install CCCL and the CUDA 13 TE core in a
+  completed setup phase before building the JAX extension without isolation; installing them in the
+  same resolver transaction does not guarantee the headers exist before the sdist build.
+- Successful import gate: `/dlwh/grug-cp-te-staged-import4-20260810-1520` succeeded in 2m27.94s on
+  one GB200 and released it. Install `nvidia-cuda-cccl==13.3.3.4.1`,
+  `nvidia-cudnn-frontend==1.25.0`, and `transformer_engine_cu13==2.17.1` first. Create a task-local
+  `libnccl.so -> libnccl.so.2` symlink in the NVIDIA NCCL wheel directory, expose that directory via
+  `LIBRARY_PATH` and `LD_LIBRARY_PATH`, then install `transformer_engine_jax==2.17.1` with
+  `--no-build-isolation --no-deps` and the `transformer_engine==2.17.1` metapackage with `--no-deps`.
+  TE, TE-JAX, and TE-cu13 reported version 2.17.1; all ten benchmark attention symbols,
+  `MeshResource`, and TE autocast imported successfully. The only warning was the expected missing
+  optional PyTorch extension.
 - Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
   64-GPU job when the environment gate passes.

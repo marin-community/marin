@@ -13,6 +13,7 @@ from pathlib import Path
 
 import click
 from fray.cluster import ResourceConfig
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -24,17 +25,31 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 HERO_NODES_PER_RACK = 16
 HERO_GPUS_PER_NODE = 4
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
-TRANSFORMER_ENGINE_PIP_ARGS = (
-    # The aarch64 JAX package is an sdist. Its isolated build omits the NVTX headers and cannot
-    # detect the CUDA 13 toolchain already installed by Marin's GPU extra.
-    "--no-build-isolation",
-    "transformer_engine[core_cu13,jax]==2.17.1",
-)
+TRANSFORMER_ENGINE_SETUP_SCRIPT = r"""set -e
+cd "$IRIS_WORKDIR"
+uv pip install --python "$IRIS_VENV/bin/python" \
+  nvidia-cuda-cccl==13.3.3.4.1 \
+  nvidia-cudnn-frontend==1.25.0 \
+  transformer_engine_cu13==2.17.1
+nccl_lib="$IRIS_VENV/lib/python3.12/site-packages/nvidia/nccl/lib"
+if [ ! -e "$nccl_lib/libnccl.so" ]; then
+  ln -s libnccl.so.2 "$nccl_lib/libnccl.so"
+fi
+uv pip install --python "$IRIS_VENV/bin/python" \
+  --no-build-isolation --no-deps transformer_engine_jax==2.17.1
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps transformer_engine==2.17.1
+"""
 TRANSFORMER_ENGINE_BUILD_ENV = {
     # TE 2.17.1 falls back to CUDA 12 when JAX 0.11 does not expose its private runtime-version API.
     "CUDA_VERSION": "13.0",
     # CUDA 13's unified pip layout nests the CCCL headers below the directory TE discovers.
-    "CPLUS_INCLUDE_PATH": "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl",
+    "CPLUS_INCLUDE_PATH": (
+        "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl:"
+        "/app/.venv/lib/python3.12/site-packages/nvidia/nvtx/include:"
+        "/app/.venv/lib/python3.12/site-packages/include"
+    ),
+    "LIBRARY_PATH": "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
+    "LD_LIBRARY_PATH": "/app/.venv/lib/python3.12/site-packages/nvidia/nccl/lib",
     "NVTE_BUILD_USE_NVIDIA_WHEELS": "1",
     "NVTE_CUDA_ARCHS": "100",
     "NVTE_WITH_NCCL_EP": "0",
@@ -108,8 +123,12 @@ def run_context_parallel_attention_benchmark(config: ContextParallelAttentionBen
         resources=config.resources,
         max_retries_failure=0,
         processes_per_task=HERO_PROCESSES_PER_TASK,
-        pip_packages=TRANSFORMER_ENGINE_PIP_ARGS,
         extra_env_vars=TRANSFORMER_ENGINE_BUILD_ENV,
+        setup_scripts=(
+            default_setup_script(extras=("gpu",), python_version=f"{sys.version_info.major}.{sys.version_info.minor}"),
+            cuda_toolchain_setup_script(),
+            TRANSFORMER_ENGINE_SETUP_SCRIPT,
+        ),
     )
 
 
