@@ -11,26 +11,26 @@ It does establish that the dependency-preflight path reaches CUTLASS CuTe
 compilation on a real GB200 without Torch or an opaque semantic kernel.
 
 The first compile at Shuttle revision `7a0891feef` exposed an obvious wrapper
-ABI error: the JAX wrapper passed two generic relation-layout operands through
-to an extracted physical method that does not accept them. Revision
-`728d0dfcd4` removes those two physical-call arguments while retaining the
-operands in the generic JAX/EventTensor boundary. Focused EventTensor tests and
-the changed-file checks pass.
+ABI error: the JAX wrapper supplied one extra optional-metadata placeholder.
+Revision `728d0dfcd4` removed the positional mismatch, but did so incorrectly by
+removing the two generic sequence-offset operands required by the extracted
+physical ABI.
 
 The single rerun advanced into the extracted SM100 method body, then stopped
-while constructing the launch configuration. The extracted physical template
-uses `grid=(work_capacity,)`; under `cutlass.jax.cutlass_call`, that value was
-represented as an MLIR `BlockArgument`, while the CUTLASS DSL launcher requires
-a compile-time integer grid dimension.
+while constructing the launch configuration. Because the interim fix shifted
+the remaining arguments, the JAX stream block argument occupied the physical
+`work_capacity` position and appeared in `grid=(work_capacity,)`. CUTLASS
+correctly rejected that MLIR `BlockArgument` as a grid dimension. This was a
+second ABI symptom, not evidence that a correctly positioned Python capacity
+would itself become dynamic.
 
-The smallest next experiment is host-side specialization of the bounded work
-capacity in the generic physical launch ABI. It should preserve the runtime
-`work_count` operand for tail work while making only the maximum grid extent a
-compile-time schedule parameter. Before another GB200 allocation, a Linux
-preflight should lower far enough to prove that the launch grid is a constant.
+The smallest next experiment is a corrected positional ABI plus explicit
+host-side specialization of the bounded work capacity. It should preserve the
+runtime `work_count` operand for tail work while making only the maximum grid
+extent a compile-time schedule parameter. Before another GB200 allocation, a
+Linux preflight should prove the constant-grid source and ABI contract.
 
 The outer EventTensor schedule remains Shuttle-owned. Internal TMA/tcgen05
 `mbarrier` sites and phase advancement remain primitive-owned. `result.json`
 contains the source pins, exact failure stages, fingerprints inherited from the
 identical green host preflight, and the explicit absence of device results.
-

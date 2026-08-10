@@ -63,6 +63,7 @@ class CompiledRightResourcePhysicalCall:
 
     call: Any
     physical_support: TorchFreePhysicalSupport
+    work_capacity: int
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.call(*args, **kwargs)
@@ -203,6 +204,7 @@ def compile_right_resource_physical_call(
     source_directory: Path | None = None,
 ) -> CompiledRightResourcePhysicalCall:
     """Compile the extracted grouped body through CUTLASS JAX TVM-FFI."""
+    validate_runtime_work_capacity(plan.tables)
     if plan.lowering.head_group_size in (1, 2, 4):
         raise ValueError("the first JAX binding excludes the optional gather-descriptor operand")
     cutlass = importlib.import_module("cutlass")
@@ -254,13 +256,14 @@ def compile_right_resource_physical_call(
             None,
             None,
             None,
-            None,
+            left_offsets,
+            right_payload_offsets,
             cutlass.Float32(lowering.score_map.scale),
             cutlass.Float32(1.0),
             cutlass.Int32(lowering.right_block_count),
             cutlass.Int32(lowering.key_value_heads),
             cutlass.Int32(lowering.query_length),
-            cutlass.Int32(work_capacity),
+            work_capacity,
             stream,
         )
 
@@ -293,11 +296,12 @@ def compile_right_resource_physical_call(
             use_static_tensors=True,
         ),
         physical_support=physical_support,
+        work_capacity=work_capacity,
     )
 
 
 def call_right_resource_physical(
-    compiled: Any,
+    compiled: CompiledRightResourcePhysicalCall,
     plan: JaxRightResourceRuntimePlan,
     inputs: JaxRightResourceInputs,
 ) -> tuple[jax.Array, jax.Array]:
@@ -306,6 +310,12 @@ def call_right_resource_physical(
     query_heads = lowering.key_value_heads * lowering.head_group_size
     resident = inputs.resident.reshape(lowering.query_length * query_heads, 128)
     tables = plan.tables
+    validate_runtime_work_capacity(tables)
+    if tables.work_capacity != compiled.work_capacity:
+        raise ValueError(
+            "right-resource plan capacity does not match the host-specialized physical launch: "
+            f"plan={tables.work_capacity}, compiled={compiled.work_capacity}"
+        )
     value_state, scalar_state = compiled(
         inputs.first_streamed,
         inputs.second_streamed,
@@ -319,3 +329,17 @@ def call_right_resource_physical(
         tables.right_payload_offsets,
     )
     return value_state.reshape(lowering.selected_count, lowering.query_length, query_heads, 128), scalar_state
+
+
+def validate_runtime_work_capacity(tables: JaxRightResourceWorkTables) -> int:
+    """Reject runtime work metadata that exceeds the specialized launch."""
+    work_count = np.asarray(jax.device_get(tables.work_count))
+    if work_count.shape != (1,) or not np.issubdtype(work_count.dtype, np.integer):
+        raise ValueError(f"runtime work count must be one integer scalar, found {work_count.dtype}{work_count.shape}")
+    count = int(work_count[0])
+    if count < 0 or count > tables.work_capacity:
+        raise ValueError(
+            "runtime work count exceeds the host-specialized launch capacity: "
+            f"count={count}, capacity={tables.work_capacity}"
+        )
+    return count

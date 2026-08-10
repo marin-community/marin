@@ -34,12 +34,14 @@ from clean_routed_streaming_emitter import (  # noqa: E402
     PartialValueDType,
     SM100RelationEncoding,
     audit_python_source,
+    audit_static_launch_grid,
     emitter_plan_from_lowering,
     import_extracted_python_sources,
     render_partial_merge_cuda,
     render_partial_merge_ffi_cuda,
     render_relation_builder_source,
     render_relation_scheduler_source,
+    specialize_static_launch_grid,
 )
 
 from tile_lifetime.ir import DType  # noqa: E402
@@ -228,6 +230,44 @@ def test_jax_runtime_keeps_cutlass_lazy_and_has_no_torch_import() -> None:
     assert 'importlib.import_module("cutlass")' in source
     assert 'importlib.import_module("cutlass.jax")' in source
     assert "cjax.cutlass_call(" in source
+
+
+def test_static_launch_grid_specializes_capacity_and_preserves_runtime_work_count() -> None:
+    source = f"""
+import cutlass
+from cutlass import Int32
+
+class {GENERATED_PHYSICAL_CLASS}:
+    def __call__(
+        self,
+        mWorkCount,
+        work_capacity: Int32,
+        stream=None,
+    ):
+        num_ctas = work_capacity
+        self.kernel(mWorkCount, work_capacity).launch(grid=(num_ctas,))
+
+    def kernel(self, mWorkCount, work_capacity: Int32):
+        return mWorkCount, work_capacity
+"""
+
+    specialized = specialize_static_launch_grid(source)
+    audit = audit_static_launch_grid(specialized)
+
+    assert audit.clean
+    assert audit.capacity_annotation == "cutlass.Constexpr[int]"
+    assert audit.grid_expression == "num_ctas"
+    assert audit.runtime_work_count_forwarded
+    assert specialized.count("work_capacity: Int32") == 1
+
+
+def test_runtime_work_count_overflow_is_rejected_before_launch() -> None:
+    valid = SimpleNamespace(work_count=np.asarray([8], dtype=np.int32), work_capacity=8)
+    overflow = SimpleNamespace(work_count=np.asarray([9], dtype=np.int32), work_capacity=8)
+
+    assert jax_right_resource_runtime.validate_runtime_work_capacity(valid) == 8
+    with pytest.raises(ValueError, match="exceeds the host-specialized launch capacity"):
+        jax_right_resource_runtime.validate_runtime_work_capacity(overflow)
 
 
 def test_jax_device_smoke_relation_mutation_preserves_occupancy_and_empty_resource() -> None:

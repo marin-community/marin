@@ -379,7 +379,7 @@ class SM100RoutedStreamingCallable:
             cutlass.Int32(self._lowering.right_block_count),
             cutlass.Int32(self._lowering.key_value_heads),
             cutlass.Int32(self._lowering.query_length),
-            cutlass.Int32(relation.work_capacity),
+            relation.work_capacity,
             cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
             options="--enable-tvm-ffi",
         )
