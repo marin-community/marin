@@ -43,6 +43,12 @@ from tile_lifetime.quack_partitioned_gemm_adapter import (
     QuackPartitionFinalizationKind,
     plan_quack_partitioned_gemm_adapter,
 )
+from tile_lifetime.quack_partitioned_mainloop import (
+    QUACK_0_5_0_WHEEL_SHA256,
+    QUACK_PARTITIONED_SM90_PATCH_SHA256,
+    audit_quack_partitioned_extension_patch,
+    plan_quack_partitioned_mainloop,
+)
 from tile_lifetime.xla_low_rank_gated_product_ffi import (
     plan_generated_low_rank_contract_map_training,
     replace_generated_low_rank_contract_map_training,
@@ -313,6 +319,76 @@ def test_quack_adapter_rejects_a_partition_source_with_the_wrong_physical_extent
 
     with pytest.raises(ValueError, match="physical shape"):
         plan_quack_partitioned_gemm_adapter(invalid)
+
+
+def test_quack_partitioned_mainloop_reuses_one_a_stage_and_one_k_loop() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+
+    physical = plan_quack_partitioned_mainloop(family.program)
+
+    assert physical.base_revision == QUACK_PARTITION_ADAPTER_BASE_REVISION
+    assert physical.inspected_wheel_sha256 == QUACK_0_5_0_WHEEL_SHA256
+    assert physical.one_kernel
+    assert physical.one_k_loop
+    assert physical.shared_a_stage
+    assert tuple(
+        (group.logical_n_start, group.logical_n_limit, group.mma_n, group.valid_n) for group in physical.rhs_groups
+    ) == ((0, 32, 32, 32), (32, 64, 32, 32), (64, 68, 8, 4))
+    assert tuple(
+        (group.logical_n_start, group.logical_n_limit, group.mma_n, group.valid_n)
+        for group in physical.accumulator_groups
+    ) == ((0, 32, 32, 32), (32, 64, 32, 32), (64, 68, 8, 4))
+    assert all(group.boundary_dtype == "bf16" for group in physical.accumulator_groups)
+    assert all(group.boundary_rounding == "round_to_nearest_even" for group in physical.accumulator_groups)
+    assert tuple((store.kind, store.source_groups, store.valid_n) for store in physical.stores) == (
+        (QuackPartitionFinalizationKind.SCALAR_MAP, (0, 1), 32),
+        (QuackPartitionFinalizationKind.PASSTHROUGH, (2,), 4),
+    )
+    assert physical.stores[0].scalar_body is not None
+    assert "expf" in physical.stores[0].scalar_body
+    assert physical.stores[1].scalar_body is None
+    assert physical.requires_external_quack_extension
+
+
+def test_quack_partitioned_mainloop_activation_mutation_preserves_tiled_structure() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    original = plan_attached_partitioned_contract_maps(hlo, target_prefix=_TARGET_PREFIX).families[0]
+    mutated = plan_attached_partitioned_contract_maps(_tanh_gate_mutation(hlo), target_prefix=_TARGET_PREFIX).families[0]
+
+    original_physical = plan_quack_partitioned_mainloop(original.program)
+    mutated_physical = plan_quack_partitioned_mainloop(mutated.program)
+
+    assert original_physical.rhs_groups == mutated_physical.rhs_groups
+    assert original_physical.accumulator_groups == mutated_physical.accumulator_groups
+    assert tuple(
+        (store.kind, store.source_groups, store.valid_n, store.output_shape) for store in original_physical.stores
+    ) == tuple((store.kind, store.source_groups, store.valid_n, store.output_shape) for store in mutated_physical.stores)
+    assert original_physical.physical_digest != mutated_physical.physical_digest
+    assert original_physical.stores[0].scalar_body is not None
+    assert mutated_physical.stores[0].scalar_body is not None
+    assert "expf" in original_physical.stores[0].scalar_body
+    assert "tanhf" in mutated_physical.stores[0].scalar_body
+
+
+def test_quack_partitioned_extension_patch_is_pinned_and_workload_independent() -> None:
+    patch = Path(__file__).parents[1] / "backends/h100/quack_partitioned_sm90.patch"
+
+    audit = audit_quack_partitioned_extension_patch(patch)
+
+    assert audit.sha256 == QUACK_PARTITIONED_SM90_PATCH_SHA256
+    assert audit.required_symbols == (
+        "validate_rhs_segments",
+        "partition_accumulator_groups",
+        "gemm_groups_w_idx",
+        "round_group_to_bf16_rne",
+    )
+    assert audit.missing_symbols == ()
+    assert audit.forbidden_tokens == ()
+    assert audit.creates_one_module
+    assert audit.syntax_compiles
+    assert audit.clean
 
 
 def test_partitioned_contract_reference_preserves_ordered_bf16_partition_boundaries() -> None:

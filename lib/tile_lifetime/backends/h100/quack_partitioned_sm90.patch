@@ -1,0 +1,74 @@
+diff --git a/quack/partitioned_sm90.py b/quack/partitioned_sm90.py
+new file mode 100644
+index 0000000..089e001
+--- /dev/null
++++ b/quack/partitioned_sm90.py
+@@ -0,0 +1,68 @@
++# Copyright (c) 2026, QuACK team.
++
++"""Generic SM90 helpers for one Contract with static RHS N segments."""
++
++from typing import Tuple
++
++import cutlass
++import cutlass.cute as cute
++from cutlass import Boolean
++
++from quack import sm90_utils
++
++
++def validate_rhs_segments(mbs: Tuple[cute.Tensor, ...], logical_n: int) -> None:
++    """Validate independently allocated, K-congruent RHS N segments."""
++    assert mbs, "segmented RHS requires at least one tensor"
++    k_extent = cute.size(mbs[0], mode=[1])
++    batch_extent = cute.size(mbs[0], mode=[2])
++    assert sum(cute.size(mb, mode=[0]) for mb in mbs) == logical_n
++    for mb in mbs:
++        assert cute.size(mb, mode=[1]) == k_extent
++        assert cute.size(mb, mode=[2]) == batch_extent
++        assert mb.element_type == mbs[0].element_type
++
++
++@cute.jit
++def partition_accumulator_groups(
++    thr_mmas: Tuple[cute.ThrMma, ...],
++    tile_shapes_mnk: Tuple[cute.Shape, ...],
++    sA: cute.Tensor,
++    sBs: Tuple[cute.Tensor, ...],
++):
++    """Create congruent accumulator/B groups that share one staged A tile."""
++    assert len(thr_mmas) == len(tile_shapes_mnk) == len(sBs)
++    return tuple(
++        sm90_utils.partition_fragment_ABC(thr_mma, tile_shape, sA, sB)
++        for thr_mma, tile_shape, sB in zip(thr_mmas, tile_shapes_mnk, sBs)
++    )
++
++
++@cute.jit
++def gemm_groups_w_idx(
++    tiled_mmas: Tuple[cute.TiledMma, ...],
++    groups,
++    zero_init: Boolean,
++    stage_idx,
++) -> None:
++    """Issue every RHS group's WGMMA work in one ordered K iteration."""
++    assert len(tiled_mmas) == len(groups)
++    for tiled_mma, (acc, tCrA, tCrB) in zip(tiled_mmas, groups):
++        sm90_utils.gemm_w_idx(
++            tiled_mma,
++            acc,
++            tCrA,
++            tCrB,
++            zero_init,
++            B_idx=stage_idx,
++            wg_wait=-1,
++        )
++    # All groups read the same A/B pipeline stage. Release may occur only
++    # after every group's committed WGMMA work has retired.
++    cute.nvgpu.warpgroup.wait_group(0)
++
++
++@cute.jit
++def round_group_to_bf16_rne(group: cute.Tensor) -> cute.Tensor:
++    """Apply the declared BF16 round-to-nearest-even partition boundary."""
++    return group.to(cutlass.BFloat16).to(cutlass.Float32)
