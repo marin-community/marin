@@ -16,6 +16,7 @@ class VerificationRejection(StrEnum):
     CONTAINMENT = "containment_below_threshold"
     MEMBER_UNIQUE = "too_many_member_unique"
     UNDER_TOKENIZED = "under_tokenized_char_jaccard_below_threshold"
+    SATURATED = "saturated_char_jaccard_below_threshold"
 
 
 class FuzzyVerificationParams(BaseModel):
@@ -23,13 +24,22 @@ class FuzzyVerificationParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    rule_version: str = "whitespace_3gram_subset_v1"
+    rule_version: str = "whitespace_3gram_subset_v2"
     ngram_size: int = Field(default=3, ge=1)
     minimum_member_containment: float = Field(default=1.0, ge=0, le=1)
     maximum_member_unique_ngrams: int = Field(default=0, ge=0)
     maximum_chars_per_token: float = Field(default=10.0, gt=0)
     under_tokenized_char_ngram_size: int = Field(default=5, ge=1)
     under_tokenized_minimum_char_jaccard: float = Field(default=0.90, ge=0, le=1)
+    # A document that draws on a tiny vocabulary repeats its n-grams until the
+    # distinct set saturates. Two such documents then contain each other by
+    # exhaustion rather than by sharing text: 20,000 and 40,000 random digits
+    # score containment 1.0 and Jaccard 1.0 while sharing no 13-character run.
+    # Below this ratio of distinct n-grams to n-gram positions, the token test
+    # cannot separate them and the character test decides.
+    minimum_distinct_ngram_ratio: float = Field(default=0.5, ge=0, le=1)
+    saturated_char_ngram_size: int = Field(default=13, ge=1)
+    saturated_minimum_char_jaccard: float = Field(default=0.90, ge=0, le=1)
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,7 @@ class PreparedVerificationText:
     tokens: int
     ngrams: frozenset[tuple[str, ...]]
     under_tokenized: bool
+    saturated: bool
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,7 @@ class VerificationResult:
     member_containment: float
     jaccard: float
     under_tokenized: bool
+    saturated: bool
     char_jaccard: float | None
 
 
@@ -74,10 +86,12 @@ def prepare_verification_text(text: str, params: FuzzyVerificationParams) -> Pre
         ngrams = frozenset(
             tuple(tokens[index : index + params.ngram_size]) for index in range(len(tokens) - params.ngram_size + 1)
         )
+    positions = max(len(tokens) - params.ngram_size + 1, 1)
     chars = len(text)
     return PreparedVerificationText(
         text=text,
         chars=chars,
+        saturated=len(ngrams) / positions < params.minimum_distinct_ngram_ratio,
         tokens=len(tokens),
         ngrams=ngrams,
         under_tokenized=chars / max(len(tokens), 1) > params.maximum_chars_per_token,
@@ -116,6 +130,7 @@ def verify_prepared_candidate(
     jaccard = shared / union if union else 1.0
     member_unique = len(member.ngrams) - shared
     under_tokenized = member.under_tokenized or representative.under_tokenized
+    saturated = member.saturated or representative.saturated
 
     rejection = None
     char_jaccard = None
@@ -133,6 +148,14 @@ def verify_prepared_candidate(
         )
         if char_jaccard < params.under_tokenized_minimum_char_jaccard:
             rejection = VerificationRejection.UNDER_TOKENIZED
+    elif saturated:
+        char_jaccard = character_ngram_jaccard(
+            member.text,
+            representative.text,
+            params.saturated_char_ngram_size,
+        )
+        if char_jaccard < params.saturated_minimum_char_jaccard:
+            rejection = VerificationRejection.SATURATED
 
     return VerificationResult(
         accepted=rejection is None,
@@ -148,6 +171,7 @@ def verify_prepared_candidate(
         member_containment=member_containment,
         jaccard=jaccard,
         under_tokenized=under_tokenized,
+        saturated=saturated,
         char_jaccard=char_jaccard,
     )
 
