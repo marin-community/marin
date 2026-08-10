@@ -1,4 +1,4 @@
-import { INTERVAL_KIND, type PanelCell, type PanelRow } from '@/types/api'
+import { INTERVAL_KIND, type IntervalKind, type PanelCell, type PanelRow } from '@/types/api'
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
 // marker. Ranked by the interval's lower bound, like every other ordering in the app: a run that
@@ -36,9 +36,15 @@ export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string
   return out
 }
 
-// Whether a cell's run reports it graded less than it attempted. False when no attempted count was
-// reported at all: that is unknown coverage, not partial coverage, and the cell's interval kind
-// already says so.
-export function isPartialCoverage(cell: PanelCell): boolean {
+// The two fields any coverage question needs. A panel cell, a history point, and a run headline all
+// carry them, so the one predicate below serves every view instead of each hand-rolling it.
+export interface Covered {
+  interval_kind: IntervalKind
+  coverage: number | null
+}
+
+// Whether a run reports it graded less than it attempted. False when no attempted count was reported
+// at all: that is unknown coverage, not partial coverage, and the interval kind already says so.
+export function isPartialCoverage(cell: Covered): boolean {
   return cell.interval_kind === INTERVAL_KIND.IDENTIFIED && cell.coverage !== null && cell.coverage < 1
 }

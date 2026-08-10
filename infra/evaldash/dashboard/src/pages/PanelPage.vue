@@ -15,7 +15,7 @@ import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
-import { MAX_COMPARE } from '@/constants'
+import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
   INTERVAL_KIND,
@@ -172,7 +172,7 @@ function syncSelection(present: string[]) {
 watch(
   () => meta.value?.evals,
   (evals) => {
-    if (evals) syncSelection(evals.filter((name) => !name.endsWith('-smoke')))
+    if (evals) syncSelection(evals.filter((name) => !isSmokeEval(name)))
   },
   { immediate: true },
 )

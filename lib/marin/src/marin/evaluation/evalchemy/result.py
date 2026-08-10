@@ -81,13 +81,14 @@ class EvalchemyResult(EvalResult):
     def _task_metrics(self) -> dict[str, dict[str, float]]:
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
-        found = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
+        root = StoragePath(self.path)
+        found = sorted((root / "**/results_*.json").glob(), key=str)
         if not found:
             raise FileNotFoundError(f"no evalchemy results_*.json under {self.path}")
         # A retried evaluation leaves a second complete tree under the harness's scratch directory,
         # scoring the same items again. Reading both would key one benchmark's panel twice and double
         # its item count, so the canonical tree wins wherever there is one to prefer.
-        canonical = [path for path in found if not is_scratch_artifact(str(path)[len(str(self.path)) :])]
+        canonical = [path for path in found if not is_scratch_artifact(path.relative_to(root))]
         result_files = canonical or found
         metrics: dict[str, dict[str, float]] = {}
         for result_file in result_files:

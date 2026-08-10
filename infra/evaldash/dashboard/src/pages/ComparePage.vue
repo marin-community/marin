@@ -3,9 +3,9 @@
  * Head-to-head over the benchmarks the selected models share.
  *
  * Both the shared-panel score and each per-benchmark gap come from the server's statistics engine,
- * so a difference on screen is an interval rather than two bars a reader is invited to eyeball. This
- * page used to average whatever cells it had client-side and treat a missing shared cell as zero,
- * which turned a coverage gap into a score.
+ * so a difference on screen is an interval rather than two bars a reader is invited to eyeball. The
+ * page never averages cells itself: a benchmark only one model ran is excluded from the ranking
+ * rather than scored, so a coverage gap cannot read as a lead.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

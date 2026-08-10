@@ -13,6 +13,7 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
+import { isPartialCoverage } from '@/utils/panel'
 import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
@@ -57,7 +58,7 @@ const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
-  if (headline.coverage === null || headline.coverage >= 1) return { label: 'all items graded', warn: false }
+  if (!isPartialCoverage(headline)) return { label: 'all items graded', warn: false }
   return { label: formatCoverage(headline.coverage), warn: true }
 })
 

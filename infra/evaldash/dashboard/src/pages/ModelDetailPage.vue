@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
-import { fleetBest } from '@/utils/panel'
+import { fleetBest, isPartialCoverage } from '@/utils/panel'
+import { isSmokeEval } from '@/constants'
 import { INTERVAL_KIND, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -32,10 +33,6 @@ onViewRefresh(() => {
   refreshPanel()
 })
 
-// Smoke suites are capped-instance launcher validation runs; they stay out of the rail exactly as the
-// panel and cohorts exclude them (mirrors metrics.py SMOKE_SUFFIX). They remain in the Runs list.
-const SMOKE_SUFFIX = '-smoke'
-const isSmoke = (evalName: string) => evalName.endsWith(SMOKE_SUFFIX)
 
 // Cohort scope: a specific version (null = the unversioned cohort, distinct from ALL), or ALL for the
 // union across every run. Defaults to the current (newest) version once the record loads.
@@ -47,7 +44,7 @@ const scope = computed<string | null>(() =>
 
 // Benchmarks this model has runs for, in the panel's column order where known (no smoke).
 const tasks = computed<string[]>(() => {
-  const present = new Set((data.value?.runs ?? []).filter((r) => !isSmoke(r.eval_name)).map((r) => r.eval_name))
+  const present = new Set((data.value?.runs ?? []).filter((r) => !isSmokeEval(r.eval_name)).map((r) => r.eval_name))
   const ordered = (panel.value?.panel ?? []).filter((t) => present.has(t))
   const extra = [...present].filter((t) => !ordered.includes(t)).sort()
   return [...ordered, ...extra]
@@ -67,7 +64,7 @@ const scopedResults = computed<{ cells: Record<string, PanelCell>; missing: Reco
   const scored: Record<string, ModelRun> = {}
   const latest: Record<string, ModelRun> = {}
   for (const run of scopedRuns.value) {
-    if (isSmoke(run.eval_name)) continue
+    if (isSmokeEval(run.eval_name)) continue
     const key = run.eval_name
     if (!latest[key] || (run.created_at ?? '') > (latest[key].created_at ?? '')) latest[key] = run
     if (run.headline && (!scored[key] || (run.created_at ?? '') > (scored[key].created_at ?? ''))) scored[key] = run
@@ -106,8 +103,7 @@ const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.va
 const location = computed(() => data.value?.location ?? null)
 
 function coverageNote(cell: PanelCell): string {
-  if (cell.interval_kind !== INTERVAL_KIND.IDENTIFIED) return ''
-  return cell.coverage !== null && cell.coverage < 1 ? formatCoverage(cell.coverage) : ''
+  return isPartialCoverage(cell) ? formatCoverage(cell.coverage) : ''
 }
 </script>
 

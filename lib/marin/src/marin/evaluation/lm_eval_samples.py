@@ -343,17 +343,24 @@ def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
     )
 
 
-def _task_key(relative: str, group: bool) -> str:
-    """The ``metrics`` key a sample file's coverage belongs to.
+def _task_keys(sources: Sequence[str]) -> dict[str, str]:
+    """The ``metrics`` key each sample file's coverage belongs to.
 
     A run's records key metrics by the task-config directory (``<task_dir>/<model>/<file>``), and
     namespace them ``<task_dir>/<task>`` when one config evaluated several tasks -- see
     :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`. Coverage keys the same
-    way so a reader can line the two up.
+    way so a reader can line the two up, which is why the choice is made over the whole file set
+    rather than one file at a time.
     """
-    path = PurePosixPath(relative)
-    task_dir = path.parent.parent.name
-    return f"{task_dir}/{_task_from_filename(path.name, '.jsonl')}" if group else task_dir
+    by_directory: dict[PurePosixPath, list[str]] = {}
+    for relative in sources:
+        by_directory.setdefault(PurePosixPath(relative).parent.parent, []).append(relative)
+    keys: dict[str, str] = {}
+    for directory, files in by_directory.items():
+        for relative in files:
+            task = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
+            keys[relative] = f"{directory.name}/{task}" if len(files) > 1 else directory.name
+    return keys
 
 
 # --------------------------------------------------------------------------------------------------
@@ -398,7 +405,7 @@ class SampleExport:
 
     samples: int
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
-    """Per-task coverage keyed like the run's ``metrics`` (see :func:`_task_key`)."""
+    """Per-task coverage keyed like the run's ``metrics`` (see :func:`_task_keys`)."""
 
 
 def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
@@ -421,9 +428,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return SampleExport(samples=0)
     require_current_samples(out_path)
-    # A task config that evaluated several tasks wrote several sample files under one directory, and
-    # its metrics are namespaced to match.
-    grouped = {relative for relative in sources if _dir_source_count(sources, relative) > 1}
+    keys = _task_keys(sources)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     coverage: dict[str, TaskCoverage] = {}
@@ -433,22 +438,16 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-            if relative not in sources:
+            if relative not in keys:
                 continue
             samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
             count += len(samples)
             if samples:
-                coverage[_task_key(relative, relative in grouped)] = task_coverage(samples)
+                coverage[keys[relative]] = task_coverage(samples)
         store.seal()
     finally:
         store.close()
     return SampleExport(samples=count, coverage=coverage)
-
-
-def _dir_source_count(sources: Sequence[str], relative: str) -> int:
-    """How many sample files share ``relative``'s task-config directory."""
-    parent = PurePosixPath(relative).parent.parent
-    return sum(1 for other in sources if PurePosixPath(other).parent.parent == parent)
 
 
 def require_current_samples(out_path: str) -> None:
