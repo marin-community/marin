@@ -533,3 +533,32 @@ macro and already declares the corresponding include and dependency.
   pass `diff --check`, reverse in order, and leave a clean exact-pin tree.
 - Native compilation and execution of the four XLA tests remain pending. No
   remote build was launched for this source-only fix.
+
+## Hypothesis 14
+
+Direct status-macro includes and Bazel dependencies should let all four patched
+XLA test targets compile and execute after the six native Shuttle gates. Apply
+both reviewed patches, retain the seven-label proof, and stop at the first
+failed XLA test gate.
+
+## Results 14
+
+- Remote proof confirms both reviewed XLA patches applied at exact XLA commit
+  `9b635916ecc6`, both reverse-application checks passed, the combined diff was
+  clean, every expected anchored label was present, and the exact anchored
+  XLA-owned runtime-label count was seven.
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, `@shuttle_mlir//:ShuttlePasses`,
+  `@shuttle_mlir//:shuttle-opt`, and the separate
+  `bazel build @shuttle_mlir//:mlir_tests` gate passed against the exact pins.
+- Lit executed all 11 fixtures and all 11 passed.
+- All four patched XLA targets compiled and executed. The registry,
+  unregistered-transform, and PJRT executable targets passed.
+  `mlir_to_hlo_test` passed eight of nine internal tests.
+- `MlirToHloTest.EnabledModuleTransformReceivesOptions` failed because its
+  fixture defines `@negate`; conversion requires a module with `@main`. The
+  later `forwarded_options` false assertion is secondary to the conversion
+  failure.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-statusmacros/`.
+- This run used one submission with zero retries. No relaunch occurred.
