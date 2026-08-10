@@ -19,9 +19,11 @@ import argparse
 import json
 import subprocess
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from zephyr.readers import load_jsonl
@@ -41,14 +43,16 @@ class Outcome(StrEnum):
     IN_PROGRESS = "In progress"
 
 
-OUTCOME_DESCRIPTIONS = {
-    Outcome.WORKED: "Met the recorded effective-speedup gate or the experiment's narrower success criterion.",
-    Outcome.PROMISING: "Positive evidence, but missing a larger-scale anchor or clean isolation.",
-    Outcome.MIXED: "The answer changed by scale or metric, or a strict projection failed.",
-    Outcome.DID_NOT_WORK: "A completed comparison showed no net benefit.",
-    Outcome.NOT_EVALUATED: "No usable comparison was recorded, often because the work was superseded.",
-    Outcome.IN_PROGRESS: "The issue remains active without a final verdict.",
-}
+OUTCOME_DESCRIPTIONS: Mapping[Outcome, str] = MappingProxyType(
+    {
+        Outcome.WORKED: "Met the recorded effective-speedup gate or the experiment's narrower success criterion.",
+        Outcome.PROMISING: "Positive evidence, but missing a larger-scale anchor or clean isolation.",
+        Outcome.MIXED: "The answer changed by scale or metric, or a strict projection failed.",
+        Outcome.DID_NOT_WORK: "A completed comparison showed no net benefit.",
+        Outcome.NOT_EVALUATED: "No usable comparison was recorded, often because the work was superseded.",
+        Outcome.IN_PROGRESS: "The issue remains active without a final verdict.",
+    }
+)
 
 
 @dataclass(frozen=True)
