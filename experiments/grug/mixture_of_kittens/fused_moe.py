@@ -35,6 +35,20 @@ def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> N
         raise ValueError("Mixture-of-Kittens requires one JAX process with four visible GPUs")
 
 
+def _routed_schedule_capacity(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    w_gate: jax.Array,
+    config: MoKForwardConfig,
+) -> int:
+    return schedule_capacity(
+        x.shape[0] // _NUM_DEVICES,
+        selected_experts.shape[1],
+        w_gate.shape[0] // _NUM_DEVICES,
+        config,
+    )
+
+
 def _fused_forward_with_context(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -48,6 +62,7 @@ def _fused_forward_with_context(
     *,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     config: MoKForwardConfig,
+    routed_token_limit: int,
 ) -> tuple[jax.Array, jax.Array, MoKForwardContext]:
     _validate_topology(mesh)
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -90,6 +105,7 @@ def _fused_forward_with_context(
             schedule_capacity=capacity,
             rank=rank,
         )
+        kernel_num_tokens = jnp.minimum(schedule.num_tokens, routed_token_limit)
         output, context = forward_bf16_local(
             local_x,
             local_combine_weights,
@@ -101,7 +117,7 @@ def _fused_forward_with_context(
             jnp.transpose(local_w_down, (0, 2, 1)),
             schedule.peer_rank,
             schedule.peer_token_idx,
-            schedule.num_tokens,
+            kernel_num_tokens,
             schedule.tokens_per_expert,
             config=config,
         )
@@ -164,6 +180,7 @@ def _fused_forward(
         shared_down,
         mesh=mesh,
         config=config,
+        routed_token_limit=_routed_schedule_capacity(x, selected_experts, w_gate, config),
     )
     return output, dropped_assignments
 
@@ -421,7 +438,12 @@ def _custom_forward(
     def fused_fwd(
         *arguments: jax.Array,
     ) -> tuple[tuple[jax.Array, jax.Array], tuple[jax.Array, ...]]:
-        output, dropped_assignments, _ = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
+        output, dropped_assignments, _ = _fused_forward_with_context(
+            *arguments,
+            mesh=mesh,
+            config=config,
+            routed_token_limit=_routed_schedule_capacity(arguments[0], arguments[1], arguments[3], config),
+        )
         return (output, dropped_assignments), arguments
 
     def fused_bwd(
@@ -430,7 +452,12 @@ def _custom_forward(
     ) -> tuple[jax.Array | None, ...]:
         output_gradient, _ = output_gradients
         x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arguments
-        _, _, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
+        _, _, context = _fused_forward_with_context(
+            *arguments,
+            mesh=mesh,
+            config=config,
+            routed_token_limit=config.macrobatch_size,
+        )
         gradients = _fused_backward(
             output_gradient,
             x,
