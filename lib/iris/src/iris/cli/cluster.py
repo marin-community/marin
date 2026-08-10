@@ -33,6 +33,7 @@ from iris.cli.build import (
     DEFAULT_CARGO_PROFILE,
     _image_repository,
     _versioned_tag,
+    build_dashboard_assets,
     build_image,
     find_marin_root,
     get_git_provenance,
@@ -1221,6 +1222,10 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for controller serve")
+
+    dashboard_dir = VUE_DIST_DIR.parent
+    if dry_run and (dashboard_dir / "package.json").is_file():
+        build_dashboard_assets(dashboard_dir)
 
     run_controller_serve(
         config,

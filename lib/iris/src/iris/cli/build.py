@@ -478,21 +478,28 @@ def build_task_image(
     )
 
 
-@build.command("dashboard")
-def build_dashboard():
-    """Build Vue dashboard assets via Rsbuild."""
-    dashboard_dir = find_iris_root() / "dashboard"
+def build_dashboard_assets(dashboard_dir: Path) -> None:
+    """Build Vue dashboard assets from a source directory."""
     if not (dashboard_dir / "package.json").exists():
         raise click.ClickException(f"Dashboard source not found at {dashboard_dir}")
-    if not (dashboard_dir / "node_modules").exists():
-        click.echo("Installing dashboard dependencies...")
-        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
-    click.echo("Building dashboard...")
-    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    try:
+        if not (dashboard_dir / "node_modules").exists():
+            click.echo("Installing dashboard dependencies...")
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+        click.echo("Building dashboard...")
+        result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    except OSError as exc:
+        raise click.ClickException(f"Failed to run npm: {exc}") from exc
     if result.returncode != 0:
         click.echo(result.stderr, err=True)
         raise click.ClickException("Dashboard build failed")
     click.echo("Dashboard built successfully.")
+
+
+@build.command("dashboard")
+def build_dashboard():
+    """Build Vue dashboard assets via Rsbuild."""
+    build_dashboard_assets(find_iris_root() / "dashboard")
 
 
 @build.command("push")
