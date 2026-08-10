@@ -1,11 +1,16 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: shuttle-opt --allow-unregistered-dialect --split-input-file --shuttle-verify-no-shuttle-ops --verify-diagnostics %s
+// RUN: shuttle-opt --split-input-file --shuttle-verify-no-shuttle-ops --verify-diagnostics %s
 
 module {
   // expected-error @+1 {{Shuttle operation remains before HLO export}}
-  "shuttle.opaque"() : () -> ()
+  "shuttle.region"() ({
+    "shuttle.yield"() : () -> ()
+  }) {
+    policy = #shuttle.policy<source_ordered>,
+    source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+  } : () -> ()
 }
 
 // -----

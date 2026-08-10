@@ -50,6 +50,13 @@ Current implemented behavior is deliberately narrow:
 - `shuttle-verify-no-shuttle-ops` rejects all remaining Shuttle operations and
   attributes before HLO export.
 
+The export verifier keys operation rejection on the operation-name namespace,
+so it also covers opaque `shuttle.*` operations in a context where the Shuttle
+dialect is not registered. `shuttle-opt` always registers the dialect, and
+pinned MLIR rejects unknown operations in a registered dialect during parsing;
+that opaque-operation path therefore remains unexercised until a dedicated
+native test harness can construct the alternate context.
+
 The remaining declared passes emit an error and fail. No Python StableHLO
 parser or textual HLO transformation participates in this native target.
 Post-lowering provenance manifests and removal of `shuttle.source_refs` from
