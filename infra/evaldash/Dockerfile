@@ -48,12 +48,17 @@ RUN pip install --no-cache-dir \
     anthropic \
     && rm -rf /build
 
-# The record contract is the only bespoke Marin module in the image; the per-sample sample contract
-# now lives in finestore.eval, installed above with the finestore wheel. The private Postgres index
-# lives with the server under infra/evaldash/src.
+# The record contract, the statistics engine, and its record adapter are the only bespoke Marin
+# modules in the image; the per-sample contract lives in finestore.eval, installed above with the
+# finestore wheel, and the private Postgres index lives with the server under infra/evaldash/src.
+# All three are import-light by construction (pydantic, finestore.eval, and the standard library),
+# which is what lets the image vendor them instead of installing marin-core.
+# tests/evaluation/test_evaldash_image.py walks the server's imports and fails if one is missing here.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py
 COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
+COPY lib/marin/src/marin/evaluation/eval_stats.py /app/marin/evaluation/eval_stats.py
+COPY lib/marin/src/marin/evaluation/eval_measurements.py /app/marin/evaluation/eval_measurements.py
 # Copy the generated Connect clients and protobufs as package directories; evaldash does not need
 # the full Iris or finelog runtime packages.
 COPY lib/iris/src/iris/__init__.py /app/iris/__init__.py
