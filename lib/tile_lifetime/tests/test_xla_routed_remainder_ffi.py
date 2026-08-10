@@ -13,6 +13,7 @@ from tile_lifetime.cast_scalar_program import (
     CastScalarProgram,
     generate_cuda_scalar_body,
 )
+from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate, audit_ffi_command_buffer_eligibility
 from tile_lifetime.xla_hlo_recovery import EntryRegionValue, parse_hlo_module_text
 from tile_lifetime.xla_rank_two_contract_ffi import (
     audit_rank_two_contract_replacement,
@@ -120,6 +121,23 @@ def test_source_indexed_fold_recovery_generation_and_replacement_preserve_orderi
     assert audit.operands == ("broadcast.113", "broadcast_in_dim.428", "reshape.408")
     assert audit.external_users == ("psum.50",)
     assert "atomicAdd(" not in generated.source
+
+
+def test_source_indexed_fold_capture_safe_variant_passes_static_audit() -> None:
+    input_adjoint = plan_routed_input_adjoint_typed_ffi(_hlo())
+    plan = plan_source_indexed_fold_typed_ffi(_hlo(), input_adjoint, input_adjoint.contracts[1])
+    launch_checked = generate_cuda_source_indexed_fold_ffi(plan, target="shuttle.fold.checked")
+    capture_safe = generate_cuda_source_indexed_fold_ffi(
+        plan,
+        target="shuttle.fold.capture_safe",
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+    )
+
+    assert not launch_checked.command_buffer_compatible
+    assert not audit_ffi_command_buffer_eligibility(launch_checked.source).eligible
+    assert capture_safe.command_buffer_compatible
+    assert audit_ffi_command_buffer_eligibility(capture_safe.source).eligible
+    assert "cudaPeekAtLastError(" not in capture_safe.source
 
 
 def test_source_indexed_fold_cpu_semantics_are_source_ordered_and_deterministic() -> None:

@@ -60,6 +60,26 @@ and every timed callback delta is zero
 and workload correctness and determinism pass
 ```
 
+## Generic direct-launch candidates
+
+Launch-checked generation remains the default. A handler receives the
+command-buffer trait only after its complete generated source passes the static
+eligibility audit.
+
+The full 23-call Grug composition has an explicit generic direct-launch
+candidate covering 14 logical sites:
+
+- normalized-exp forward and reverse, one site each;
+- low-rank Contract/Map forward and reverse, six and four sites;
+- source-indexed Fold, one site;
+- fused Contract/relation Fold, one site.
+
+The candidate does not include AxisFold, handlers with runtime scratch, lazy
+cuBLAS handles, or the Triton attention wrapper. The compiled executable's final
+HLO must retain the exact `1+1+6+4+1+1` selected-site multiplicities. The
+manifest is derived from `compiled.as_text()` and the full final HLO is preserved
+with benchmark evidence.
+
 Repeated callback deltas equal to statically derived logical calls in two
 consecutive stabilization rounds are classified as `per_logical_call_fallback`.
 A finite set of initial recordings is allowed to settle and is not confused with

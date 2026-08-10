@@ -20,10 +20,10 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
-    ContractMapChainFfiPhysicalCandidate,
     audit_cuda_contract_map_chain_source,
     generate_cuda_contract_map_chain_ffi,
 )
+from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
 from tile_lifetime.xla_hlo_recovery import inline_elementwise_fusions, parse_hlo_module_text
 from tile_lifetime.xla_low_rank_gated_product import recover_low_rank_gated_product_training
 from tile_lifetime.xla_normalized_exp_contract_forward import (
@@ -161,7 +161,7 @@ def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries
         program,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
-        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
     )
     audit = audit_cuda_contract_map_chain_source(generated)
     capture_safe_audit = audit_cuda_contract_map_chain_source(capture_safe)
@@ -239,13 +239,13 @@ def test_hidden_map_mutation_regenerates_the_same_physical_family() -> None:
         program,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
-        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
     )
     mutated_source = generate_cuda_contract_map_chain_ffi(
         mutated,
         forward_target="shuttle.generic.contract_map_chain.forward",
         reverse_target="shuttle.generic.contract_map_chain.reverse",
-        physical_candidate=ContractMapChainFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
     )
 
     baseline_audit = audit_cuda_contract_map_chain_source(baseline_source)

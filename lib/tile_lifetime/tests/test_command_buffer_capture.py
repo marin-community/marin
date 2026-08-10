@@ -106,6 +106,53 @@ ENTRY main {
         derive_capture_site_manifest("generated", hlo, {"shuttle.expected": "handler"})
 
 
+def test_capture_site_manifest_validates_repeated_sites_in_full_composition() -> None:
+    selected = {
+        "shuttle.source_fold": 1,
+        "shuttle.weighted_fold": 1,
+        "shuttle.normalized_forward": 1,
+        "shuttle.normalized_reverse": 1,
+        "shuttle.low_rank_forward": 6,
+        "shuttle.low_rank_reverse": 4,
+    }
+    unselected = {"shuttle.remaining": 9}
+    targets = [target for target, count in {**selected, **unselected}.items() for _ in range(count)]
+    instructions = []
+    operand = "parameter"
+    for index, target in enumerate(targets):
+        name = f"call_{index}"
+        instructions.append(f'  {name} = f32[] custom-call({operand}), custom_call_target="{target}"')
+        operand = name
+    hlo = "\n".join(
+        (
+            "HloModule full_composition",
+            "",
+            "ENTRY main {",
+            "  parameter = f32[] parameter(0)",
+            *instructions,
+            f"  ROOT result = f32[] copy({operand})",
+            "}",
+        )
+    )
+
+    manifest = derive_capture_site_manifest(
+        "generated",
+        hlo,
+        {target: target for target in selected},
+        expected_target_occurrences=selected,
+    )
+
+    assert sum(site.occurrences for site in manifest.sites) == 14
+    assert manifest.handler_calls_per_execution["shuttle.low_rank_forward"] == 6
+    with pytest.raises(ValueError, match="multiplicities changed"):
+        derive_capture_site_manifest(
+            "generated",
+            hlo,
+            {target: target for target in selected},
+            expected_target_occurrences={**selected, "shuttle.low_rank_forward": 5},
+        )
+
+
 def test_counterbalanced_measurement_uses_manifest_occurrences_for_logical_calls() -> None:
     handler_counts = {"handler": 0}
     clock_value = 0.0

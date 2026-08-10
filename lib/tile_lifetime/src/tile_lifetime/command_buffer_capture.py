@@ -72,6 +72,8 @@ def derive_capture_site_manifest(
     executable: str,
     final_hlo: str,
     target_handlers: Mapping[str, str],
+    *,
+    expected_target_occurrences: Mapping[str, int] | None = None,
 ) -> CaptureSiteManifest:
     """Derive an instrumented callback-site manifest from final optimized HLO."""
     if not executable:
@@ -95,6 +97,17 @@ def derive_capture_site_manifest(
     missing = tuple(target for target in normalized_targets if occurrences[target] == 0)
     if missing:
         raise ValueError(f"final HLO is missing registered capture targets: {missing}")
+    if expected_target_occurrences is not None:
+        expected = dict(sorted(expected_target_occurrences.items()))
+        if expected.keys() != normalized_targets.keys():
+            raise ValueError("expected capture-site targets must exactly match registered targets")
+        mismatches = {
+            target: {"expected": count, "actual": occurrences[target]}
+            for target, count in expected.items()
+            if count <= 0 or occurrences[target] != count
+        }
+        if mismatches:
+            raise ValueError(f"final-HLO capture-site multiplicities changed: {mismatches}")
     sites = tuple(
         CaptureSite(handler=handler, target=target, occurrences=occurrences[target])
         for target, handler in normalized_targets.items()
