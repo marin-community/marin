@@ -3967,7 +3967,7 @@ author: dlwh
 - Hypothesis: the fixed-capacity reverse handlers, three payload transports,
   source Fold, and JAX router pullback can coexist in one four-rank shard-mapped
   graph without introducing a semantic communication combine.
-- Commit hash: `00a7504821fe5a5e9fcba90e29ff2b377bd3bd4a`.
+- Commit hash: `3c06846d37d2ec5a739895b89b6e481fa8aa856d`.
 - Command: `XLA_FLAGS=--xla_force_host_platform_device_count=4 uv run
   --frozen --package marin-tile-lifetime --group test python
   lib/tile_lifetime/benchmarks/cpu_distributed_expert_jax_module.py
