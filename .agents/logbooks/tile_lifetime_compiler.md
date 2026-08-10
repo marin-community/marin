@@ -3553,7 +3553,7 @@ author: dlwh
 
 ### 2026-08-09 - TLTC-XLA-069 partitioned Contract auxiliary Folds
 
-- Revision `c8053853d6` recovers two unambiguous scalar-contribution Folds from
+- Revision `ab9dc20971` recovers two unambiguous scalar-contribution Folds from
   the natural post-rewrite Contract `%dot.87`. The generic program retains all
   four raw BF16 partitions with widths `[32, 16, 16, 2]` and adds FP32 Fold
   outputs with shapes `[2, 4, 2]` and `[2, 4, 1]` from partitions 0 and 2.
