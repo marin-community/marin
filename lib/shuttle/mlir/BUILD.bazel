@@ -1,0 +1,129 @@
+load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@xla//xla:lit.bzl", "lit_test_suite")
+
+package(
+    default_visibility = ["//visibility:public"],
+    licenses = ["notice"],
+)
+
+td_library(
+    name = "shuttle_td_files",
+    srcs = glob(["include/shuttle/**/*.td"]),
+    includes = ["include"],
+    deps = [
+        "@llvm-project//mlir:OpBaseTdFiles",
+        "@llvm-project//mlir:PassBaseTdFiles",
+        "@llvm-project//mlir:SideEffectInterfacesTdFiles",
+    ],
+)
+
+gentbl_cc_library(
+    name = "shuttle_dialect_inc_gen",
+    strip_include_prefix = "include",
+    tbl_outs = {
+        "include/shuttle/IR/ShuttleDialect.cc.inc": ["-gen-dialect-defs"],
+        "include/shuttle/IR/ShuttleDialect.h.inc": ["-gen-dialect-decls"],
+    },
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "include/shuttle/IR/ShuttleDialect.td",
+    deps = [":shuttle_td_files"],
+)
+
+gentbl_cc_library(
+    name = "shuttle_attrs_inc_gen",
+    strip_include_prefix = "include",
+    tbl_outs = {
+        "include/shuttle/IR/ShuttleAttrs.cc.inc": ["-gen-attrdef-defs"],
+        "include/shuttle/IR/ShuttleAttrs.h.inc": ["-gen-attrdef-decls"],
+        "include/shuttle/IR/ShuttleEnums.cc.inc": ["-gen-enum-defs"],
+        "include/shuttle/IR/ShuttleEnums.h.inc": ["-gen-enum-decls"],
+    },
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "include/shuttle/IR/ShuttleAttrs.td",
+    deps = [":shuttle_td_files"],
+)
+
+gentbl_cc_library(
+    name = "shuttle_ops_inc_gen",
+    strip_include_prefix = "include",
+    tbl_outs = {
+        "include/shuttle/IR/ShuttleOps.cc.inc": ["-gen-op-defs"],
+        "include/shuttle/IR/ShuttleOps.h.inc": ["-gen-op-decls"],
+    },
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "include/shuttle/IR/ShuttleOps.td",
+    deps = [":shuttle_td_files"],
+)
+
+gentbl_cc_library(
+    name = "shuttle_passes_inc_gen",
+    strip_include_prefix = "include",
+    tbl_outs = {"include/shuttle/Transforms/Passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=Shuttle",
+    ]},
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "include/shuttle/Transforms/Passes.td",
+    deps = [":shuttle_td_files"],
+)
+
+cc_library(
+    name = "ShuttleDialect",
+    srcs = ["lib/IR/ShuttleDialect.cc"],
+    hdrs = glob(["include/shuttle/IR/*.h"]),
+    strip_include_prefix = "include",
+    deps = [
+        ":shuttle_attrs_inc_gen",
+        ":shuttle_dialect_inc_gen",
+        ":shuttle_ops_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:SideEffectInterfaces",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "ShuttlePasses",
+    srcs = ["lib/Transforms/Passes.cc"],
+    hdrs = ["include/shuttle/Transforms/Passes.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":ShuttleDialect",
+        ":shuttle_passes_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_binary(
+    name = "shuttle-opt",
+    srcs = ["tools/shuttle-opt.cc"],
+    deps = [
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:RegisterAllDialects",
+        "@llvm-project//mlir:RegisterAllExtensions",
+        "@llvm-project//mlir:RegisterAllPasses",
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_passes",
+    ],
+)
+
+lit_test_suite(
+    name = "mlir_tests",
+    srcs = glob(["test/**/*.mlir"]),
+    cfg = "test/lit.cfg.py",
+    tools = [
+        ":shuttle-opt",
+        "@llvm-project//llvm:FileCheck",
+    ],
+)
