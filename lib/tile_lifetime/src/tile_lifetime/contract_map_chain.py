@@ -54,6 +54,41 @@ class RankTwoContractShape:
 
 
 @dataclass(frozen=True)
+class ContractMapChainBufferLayout:
+    """One CUDA buffer's rank-two shape and XLA minor-to-major layout."""
+
+    name: str
+    shape: tuple[int, int]
+    minor_to_major: tuple[int, int]
+    dtype: str = "bf16"
+
+    def __post_init__(self) -> None:
+        if min(self.shape) <= 0:
+            raise ValueError(f"Contract/Map buffer {self.name!r} must have positive dimensions")
+        if sorted(self.minor_to_major) != [0, 1]:
+            raise ValueError(f"Contract/Map buffer {self.name!r} layout must be a rank-two permutation")
+        if self.dtype != "bf16":
+            raise ValueError(f"Contract/Map buffer {self.name!r} must preserve the BF16 boundary")
+
+    @property
+    def hlo_shape(self) -> str:
+        """Render direct HLO syntax, whose layout order is minor-to-major."""
+        dimensions = ",".join(str(value) for value in self.shape)
+        layout = ",".join(str(value) for value in self.minor_to_major)
+        return f"{self.dtype}[{dimensions}]{{{layout}}}"
+
+
+@dataclass(frozen=True)
+class ContractMapChainPhysicalAbi:
+    """CUDA indexing contract shared by direct HLO and JAX FFI call sites."""
+
+    forward_inputs: tuple[ContractMapChainBufferLayout, ...]
+    forward_outputs: tuple[ContractMapChainBufferLayout, ...]
+    reverse_inputs: tuple[ContractMapChainBufferLayout, ...]
+    reverse_outputs: tuple[ContractMapChainBufferLayout, ...]
+
+
+@dataclass(frozen=True)
 class BoundCastScalarMap:
     """A source-ordered scalar AST with explicit generic chain-value bindings."""
 
@@ -149,6 +184,53 @@ class TwoContractMapReverseResult:
     input_adjoint: np.ndarray
     first_weight_adjoint: np.ndarray
     second_weight_adjoint: np.ndarray
+
+
+def contract_map_chain_physical_abi(program: TwoContractMapTrainingProgram) -> ContractMapChainPhysicalAbi:
+    """Return the exact rank-two buffers indexed by the generated CUDA body."""
+    first = program.first_contract
+    row_major = (1, 0)
+    activation = (first.rows, first.reduction)
+    first_weight = (first.reduction, first.features)
+    second_weight = (first.features, first.reduction)
+    rank_value = (first.rows, first.features)
+
+    def buffer(
+        name: str,
+        shape: tuple[int, int],
+        layout: tuple[int, int] = row_major,
+    ) -> ContractMapChainBufferLayout:
+        return ContractMapChainBufferLayout(name=name, shape=shape, minor_to_major=layout)
+
+    forward_inputs = (
+        buffer("activation", activation),
+        buffer("first_weight", first_weight),
+        buffer("second_weight", second_weight),
+    )
+    forward_outputs = (
+        buffer("output", activation),
+        buffer("first_contract_output", rank_value),
+        buffer("hidden", rank_value),
+        buffer("second_contract_output", activation),
+    )
+    reverse_inputs = (
+        *forward_inputs,
+        forward_outputs[1],
+        forward_outputs[2],
+        forward_outputs[3],
+        buffer("output_cotangent", activation),
+    )
+    reverse_outputs = (
+        buffer("input_adjoint", activation),
+        buffer("first_weight_adjoint", first_weight, program.first_weight_adjoint_minor_to_major),
+        buffer("second_weight_adjoint", second_weight, program.second_weight_adjoint_minor_to_major),
+    )
+    return ContractMapChainPhysicalAbi(
+        forward_inputs=forward_inputs,
+        forward_outputs=forward_outputs,
+        reverse_inputs=reverse_inputs,
+        reverse_outputs=reverse_outputs,
+    )
 
 
 def form_two_contract_map_training_program(

@@ -8,6 +8,8 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from tile_lifetime.cast_scalar_program import (
     CastScalarExpression,
     CastScalarKind,
@@ -249,9 +251,86 @@ def test_generated_low_rank_contract_map_normalizes_ten_calls_to_one_physical_fa
     assert len(audit.collective_instructions) == 10
     assert all(len(call.inputs) == 3 and len(call.outputs) == 4 for call in audit.forward)
     assert all(len(call.inputs) == 7 and len(call.outputs) == 3 for call in audit.reverse)
+    assert all(call.input_layouts_minor_to_major == ((1, 0),) * 3 for call in audit.forward)
+    assert all(call.output_layouts_minor_to_major == ((1, 0),) * 4 for call in audit.forward)
+    assert all(call.input_layouts_minor_to_major == ((1, 0),) * 7 for call in audit.reverse)
+    assert all(call.output_layouts_minor_to_major == ((1, 0), (0, 1), (0, 1)) for call in audit.reverse)
     assert all(call.outputs[1].shape.endswith("{0,1}") for call in audit.reverse)
     assert rewritten.count(f'custom_call_target="{_GENERATED_FORWARD_TARGET}"') == 6
     assert rewritten.count(f'custom_call_target="{_GENERATED_REVERSE_TARGET}"') == 4
+    assert rewritten.count("custom_call_target=") == 23
+
+
+def test_generated_low_rank_contract_map_rejects_direct_hlo_input_layout_mismatch() -> None:
+    hlo = _current_training_hlo()
+    plan = plan_generated_low_rank_contract_map_training(
+        hlo,
+        forward_target_prefix=_GENERATED_FORWARD_TARGET,
+        reverse_target_prefix=_GENERATED_REVERSE_TARGET,
+    )
+    rewritten = replace_generated_low_rank_contract_map_training(hlo, plan)
+    call_name = plan.logical.forward[0].call_name
+    mutated = _replace_in_instruction(
+        rewritten,
+        call_name,
+        "operand_layout_constraints={bf16[8,32]{1,0}",
+        "operand_layout_constraints={bf16[8,32]{0,1}",
+    )
+
+    with pytest.raises(ValueError, match="direct-HLO input layouts"):
+        audit_generated_low_rank_contract_map_training(hlo, mutated, plan)
+
+
+@pytest.mark.parametrize(
+    ("output_index", "original", "mutated"),
+    (
+        (0, "bf16[8,32]{1,0}", "bf16[8,32]{0,1}"),
+        (1, "bf16[32,128]{0,1}", "bf16[32,128]{1,0}"),
+        (2, "bf16[128,32]{0,1}", "bf16[128,32]{1,0}"),
+    ),
+)
+def test_generated_low_rank_contract_map_rejects_direct_hlo_reverse_output_layout_mismatch(
+    output_index: int,
+    original: str,
+    mutated: str,
+) -> None:
+    hlo = _current_training_hlo()
+    plan = plan_generated_low_rank_contract_map_training(
+        hlo,
+        forward_target_prefix=_GENERATED_FORWARD_TARGET,
+        reverse_target_prefix=_GENERATED_REVERSE_TARGET,
+    )
+    rewritten = replace_generated_low_rank_contract_map_training(hlo, plan)
+    call_name = plan.logical.reverse[0].call_name
+    call = next(line for line in rewritten.splitlines() if line.lstrip().startswith(f"%{call_name} ="))
+    tuple_shape = call.split(" custom-call(", 1)[0]
+    shapes = ("bf16[8,32]{1,0}", "bf16[32,128]{0,1}", "bf16[128,32]{0,1}")
+    assert shapes[output_index] == original
+    mutated_tuple_shape = tuple_shape.replace(original, mutated, 1)
+    mutated_hlo = rewritten.replace(tuple_shape, mutated_tuple_shape, 1)
+
+    with pytest.raises(ValueError, match="physical output ABI"):
+        audit_generated_low_rank_contract_map_training(hlo, mutated_hlo, plan)
+
+
+def test_generated_low_rank_contract_map_rejects_noncontiguous_rank_three_adjoint_view() -> None:
+    hlo = _current_training_hlo()
+    plan = plan_generated_low_rank_contract_map_training(
+        hlo,
+        forward_target_prefix=_GENERATED_FORWARD_TARGET,
+        reverse_target_prefix=_GENERATED_REVERSE_TARGET,
+    )
+    rewritten = replace_generated_low_rank_contract_map_training(hlo, plan)
+    logical_adjoint = plan.logical.reverse[0].semantics.input_adjoint
+    mutated = _replace_in_instruction(
+        rewritten,
+        logical_adjoint.instruction,
+        logical_adjoint.shape,
+        logical_adjoint.shape.replace("{2,1,0}", "{1,2,0}"),
+    )
+
+    with pytest.raises(ValueError, match="changed its shape or layout"):
+        audit_generated_low_rank_contract_map_training(hlo, mutated, plan)
 
 
 def test_generated_low_rank_contract_map_mutation_reuses_targets_and_physical_abi() -> None:
@@ -294,3 +373,13 @@ def test_generated_low_rank_contract_map_mutation_reuses_targets_and_physical_ab
     assert "tanhf" in mutated.source
     assert not audit.has_atomics
     assert not audit.opaque_semantic_dependencies
+
+
+def _replace_in_instruction(hlo: str, instruction: str, original: str, mutated: str) -> str:
+    lines = hlo.splitlines(keepends=True)
+    matches = tuple(index for index, line in enumerate(lines) if line.lstrip().startswith(f"%{instruction} ="))
+    assert len(matches) == 1
+    index = matches[0]
+    assert original in lines[index]
+    lines[index] = lines[index].replace(original, mutated, 1)
+    return "".join(lines)

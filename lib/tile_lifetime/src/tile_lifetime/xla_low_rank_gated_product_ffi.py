@@ -8,11 +8,17 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 
 from tile_lifetime.cast_scalar_program import CastScalarProgram
-from tile_lifetime.contract_map_chain import TwoContractMapTrainingProgram, form_two_contract_map_training_program
+from tile_lifetime.contract_map_chain import (
+    ContractMapChainBufferLayout,
+    TwoContractMapTrainingProgram,
+    contract_map_chain_physical_abi,
+    form_two_contract_map_training_program,
+)
 from tile_lifetime.xla_hlo_recovery import (
     EntryRegionValue,
     HloComputation,
@@ -35,6 +41,7 @@ _DOT_DIMENSION = re.compile(
     r"(?P<name>lhs_contracting_dims|rhs_contracting_dims|lhs_batch_dims|rhs_batch_dims)=" r"\{(?P<dims>[0-9,]*)\}"
 )
 _INSTRUCTION_DEFINITION = re.compile(r"^\s*(?:ROOT\s+)?%?(?P<name>[^ =]+) =")
+_PHYSICAL_ARRAY_SHAPE = re.compile(r"(?P<dtype>[A-Za-z0-9]+)\[(?P<dims>[0-9,]*)\]\{(?P<layout>[0-9,]+)\}")
 
 
 @dataclass(frozen=True)
@@ -157,6 +164,8 @@ class GeneratedLowRankContractMapCallAudit:
     inputs: tuple[EntryRegionValue, ...]
     outputs: tuple[EntryRegionValue, ...]
     logical_outputs: tuple[EntryRegionValue, ...]
+    input_layouts_minor_to_major: tuple[tuple[int, int], ...]
+    output_layouts_minor_to_major: tuple[tuple[int, int], ...]
     removed_dot_instructions: tuple[str, ...]
 
 
@@ -1031,22 +1040,32 @@ def _generated_forward_hlo_lines(
     boundary: LowRankContractMapForwardHloReplacementPlan,
     family: GeneratedLowRankContractMapFamily,
 ) -> tuple[str, ...]:
-    program = family.program
-    first = program.first_contract
-    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
-    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    physical_abi = contract_map_chain_physical_abi(family.program)
     activation = boundary.semantics.down_contract.lhs
     first_weight = boundary.semantics.down_contract.rhs
     second_weight = boundary.semantics.up_contract.rhs
     inputs = (activation, first_weight, second_weight)
-    physical_outputs = (
-        EntryRegionValue(f"{boundary.call_name}.output_2d", output_shape),
-        EntryRegionValue(f"{boundary.call_name}.first_contract", rank_shape),
-        EntryRegionValue(f"{boundary.call_name}.hidden", rank_shape),
-        EntryRegionValue(f"{boundary.call_name}.second_contract", output_shape),
+    output_names = (
+        f"{boundary.call_name}.output_2d",
+        f"{boundary.call_name}.first_contract",
+        f"{boundary.call_name}.hidden",
+        f"{boundary.call_name}.second_contract",
+    )
+    physical_outputs = _abi_values(output_names, physical_abi.forward_outputs)
+    _require_values_match_physical_abi(boundary.call_name, inputs, physical_abi.forward_inputs)
+    _require_contiguous_view(
+        name=boundary.semantics.output.instruction,
+        logical_shape=boundary.semantics.output.shape,
+        physical_shape=physical_outputs[0].shape,
     )
     return (
-        _custom_call_line(boundary.call_name, inputs, physical_outputs, family.forward_target),
+        _custom_call_line(
+            boundary.call_name,
+            inputs,
+            physical_outputs,
+            family.forward_target,
+            input_layouts=physical_abi.forward_inputs,
+        ),
         *(
             f"%{output.instruction} = {output.shape} get-tuple-element(%{boundary.call_name}), index={index}"
             for index, output in enumerate(physical_outputs)
@@ -1063,10 +1082,9 @@ def _generated_reverse_hlo_lines(
     forward: LowRankContractMapForwardHloReplacementPlan,
     family: GeneratedLowRankContractMapFamily,
 ) -> tuple[str, ...]:
-    program = family.program
-    first = program.first_contract
-    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
-    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    physical_abi = contract_map_chain_physical_abi(family.program)
+    output_shape = physical_abi.reverse_outputs[0].hlo_shape
+    rank_shape = physical_abi.forward_outputs[1].hlo_shape
     if len(boundary.cotangent_inputs) != 1:
         raise ValueError("normalized Contract/Map reverse requires one logical output cotangent")
     cotangent = EntryRegionValue(f"{boundary.call_name}.output_cotangent_2d", output_shape)
@@ -1082,14 +1100,32 @@ def _generated_reverse_hlo_lines(
         *saved,
         cotangent,
     )
-    physical_outputs = (
-        EntryRegionValue(f"{boundary.call_name}.input_adjoint_2d", output_shape),
-        boundary.semantics.down_weight_adjoint.output,
-        boundary.semantics.up_weight_adjoint.output,
+    output_names = (
+        f"{boundary.call_name}.input_adjoint_2d",
+        boundary.semantics.down_weight_adjoint.output.instruction,
+        boundary.semantics.up_weight_adjoint.output.instruction,
+    )
+    physical_outputs = _abi_values(output_names, physical_abi.reverse_outputs)
+    _require_values_match_physical_abi(boundary.call_name, inputs, physical_abi.reverse_inputs)
+    _require_contiguous_view(
+        name=boundary.cotangent_inputs[0].instruction,
+        logical_shape=boundary.cotangent_inputs[0].shape,
+        physical_shape=cotangent.shape,
+    )
+    _require_contiguous_view(
+        name=boundary.semantics.input_adjoint.instruction,
+        logical_shape=boundary.semantics.input_adjoint.shape,
+        physical_shape=physical_outputs[0].shape,
     )
     return (
         (f"%{cotangent.instruction} = {cotangent.shape} " f"reshape(%{boundary.cotangent_inputs[0].instruction})"),
-        _custom_call_line(boundary.call_name, inputs, physical_outputs, family.reverse_target),
+        _custom_call_line(
+            boundary.call_name,
+            inputs,
+            physical_outputs,
+            family.reverse_target,
+            input_layouts=physical_abi.reverse_inputs,
+        ),
         f"%{physical_outputs[0].instruction} = {output_shape} get-tuple-element(%{boundary.call_name}), index=0",
         (
             f"%{boundary.semantics.input_adjoint.instruction} = {boundary.semantics.input_adjoint.shape} "
@@ -1107,9 +1143,11 @@ def _custom_call_line(
     inputs: tuple[EntryRegionValue, ...],
     outputs: tuple[EntryRegionValue, ...],
     target: str,
+    *,
+    input_layouts: tuple[ContractMapChainBufferLayout, ...],
 ) -> str:
     operands = ", ".join(f"%{value.instruction}" for value in inputs)
-    constraints = ", ".join(value.shape for value in inputs)
+    constraints = ", ".join(value.hlo_shape for value in input_layouts)
     output_shapes = ", ".join(value.shape for value in outputs)
     return (
         f"%{call_name} = ({output_shapes}) custom-call({operands}), "
@@ -1123,19 +1161,28 @@ def _audit_generated_forward_call(
     family: GeneratedLowRankContractMapFamily,
     instructions: dict[str, HloInstruction],
 ) -> GeneratedLowRankContractMapCallAudit:
-    first = family.program.first_contract
+    physical_abi = contract_map_chain_physical_abi(family.program)
     inputs = (
         boundary.semantics.down_contract.lhs,
         boundary.semantics.down_contract.rhs,
         boundary.semantics.up_contract.rhs,
     )
-    outputs = (
-        EntryRegionValue(f"{boundary.call_name}.output_2d", _rank_two_bf16_shape(first.rows, first.reduction)),
-        EntryRegionValue(f"{boundary.call_name}.first_contract", _rank_two_bf16_shape(first.rows, first.features)),
-        EntryRegionValue(f"{boundary.call_name}.hidden", _rank_two_bf16_shape(first.rows, first.features)),
-        EntryRegionValue(f"{boundary.call_name}.second_contract", _rank_two_bf16_shape(first.rows, first.reduction)),
+    output_names = (
+        f"{boundary.call_name}.output_2d",
+        f"{boundary.call_name}.first_contract",
+        f"{boundary.call_name}.hidden",
+        f"{boundary.call_name}.second_contract",
     )
-    _audit_generated_call(boundary.call_name, family.forward_target, inputs, outputs, instructions)
+    outputs = _abi_values(output_names, physical_abi.forward_outputs)
+    _audit_generated_call(
+        boundary.call_name,
+        family.forward_target,
+        inputs,
+        outputs,
+        instructions,
+        input_layouts=physical_abi.forward_inputs,
+        output_layouts=physical_abi.forward_outputs,
+    )
     output = boundary.semantics.output
     generated_output = instructions.get(output.instruction)
     if (
@@ -1144,12 +1191,15 @@ def _audit_generated_forward_call(
         or generated_output.operands != (outputs[0].instruction,)
     ):
         raise ValueError(f"generated forward %{boundary.call_name} did not restore its logical output view")
+    _audit_contiguous_view(output, outputs[0], generated_output)
     return GeneratedLowRankContractMapCallAudit(
         call_instruction=boundary.call_name,
         target=family.forward_target,
         inputs=inputs,
         outputs=outputs,
         logical_outputs=(output,),
+        input_layouts_minor_to_major=tuple(value.minor_to_major for value in physical_abi.forward_inputs),
+        output_layouts_minor_to_major=tuple(value.minor_to_major for value in physical_abi.forward_outputs),
         removed_dot_instructions=boundary.dot_instructions,
     )
 
@@ -1160,9 +1210,9 @@ def _audit_generated_reverse_call(
     family: GeneratedLowRankContractMapFamily,
     instructions: dict[str, HloInstruction],
 ) -> GeneratedLowRankContractMapCallAudit:
-    first = family.program.first_contract
-    output_shape = _rank_two_bf16_shape(first.rows, first.reduction)
-    rank_shape = _rank_two_bf16_shape(first.rows, first.features)
+    physical_abi = contract_map_chain_physical_abi(family.program)
+    output_shape = physical_abi.reverse_outputs[0].hlo_shape
+    rank_shape = physical_abi.forward_outputs[1].hlo_shape
     cotangent = EntryRegionValue(f"{boundary.call_name}.output_cotangent_2d", output_shape)
     inputs = (
         boundary.semantics.primal.down_contract.lhs,
@@ -1173,15 +1223,29 @@ def _audit_generated_reverse_call(
         EntryRegionValue(f"{forward.call_name}.second_contract", output_shape),
         cotangent,
     )
-    outputs = (
-        EntryRegionValue(f"{boundary.call_name}.input_adjoint_2d", output_shape),
-        boundary.semantics.down_weight_adjoint.output,
-        boundary.semantics.up_weight_adjoint.output,
+    output_names = (
+        f"{boundary.call_name}.input_adjoint_2d",
+        boundary.semantics.down_weight_adjoint.output.instruction,
+        boundary.semantics.up_weight_adjoint.output.instruction,
     )
-    _audit_generated_call(boundary.call_name, family.reverse_target, inputs, outputs, instructions)
+    outputs = _abi_values(output_names, physical_abi.reverse_outputs)
+    _audit_generated_call(
+        boundary.call_name,
+        family.reverse_target,
+        inputs,
+        outputs,
+        instructions,
+        input_layouts=physical_abi.reverse_inputs,
+        output_layouts=physical_abi.reverse_outputs,
+    )
     cotangent_instruction = instructions.get(cotangent.instruction)
-    if cotangent_instruction is None or cotangent_instruction.opcode != "reshape":
+    if (
+        cotangent_instruction is None
+        or cotangent_instruction.opcode != "reshape"
+        or cotangent_instruction.operands != (boundary.cotangent_inputs[0].instruction,)
+    ):
         raise ValueError(f"generated reverse %{boundary.call_name} did not normalize its cotangent view")
+    _audit_normalized_contiguous_view(boundary.cotangent_inputs[0], cotangent, cotangent_instruction)
     input_adjoint = boundary.semantics.input_adjoint
     generated_adjoint = instructions.get(input_adjoint.instruction)
     if (
@@ -1190,6 +1254,7 @@ def _audit_generated_reverse_call(
         or generated_adjoint.operands != (outputs[0].instruction,)
     ):
         raise ValueError(f"generated reverse %{boundary.call_name} did not restore its logical input-adjoint view")
+    _audit_contiguous_view(input_adjoint, outputs[0], generated_adjoint)
     return GeneratedLowRankContractMapCallAudit(
         call_instruction=boundary.call_name,
         target=family.reverse_target,
@@ -1200,6 +1265,8 @@ def _audit_generated_reverse_call(
             boundary.semantics.down_weight_adjoint.output,
             boundary.semantics.up_weight_adjoint.output,
         ),
+        input_layouts_minor_to_major=tuple(value.minor_to_major for value in physical_abi.reverse_inputs),
+        output_layouts_minor_to_major=tuple(value.minor_to_major for value in physical_abi.reverse_outputs),
         removed_dot_instructions=boundary.dot_instructions,
     )
 
@@ -1210,12 +1277,29 @@ def _audit_generated_call(
     inputs: tuple[EntryRegionValue, ...],
     outputs: tuple[EntryRegionValue, ...],
     instructions: dict[str, HloInstruction],
+    *,
+    input_layouts: tuple[ContractMapChainBufferLayout, ...],
+    output_layouts: tuple[ContractMapChainBufferLayout, ...],
 ) -> None:
     call = instructions.get(call_name)
     if call is None or call.opcode != "custom-call" or f'custom_call_target="{target}"' not in call.attributes:
         raise ValueError(f"missing generated Contract/Map call %{call_name}")
     if call.operands != tuple(value.instruction for value in inputs):
         raise ValueError(f"generated Contract/Map call %{call_name} changed its physical input ABI")
+    _require_values_match_physical_abi(call_name, inputs, input_layouts)
+    for value, layout in zip(inputs, input_layouts, strict=True):
+        actual = instructions.get(value.instruction)
+        if actual is None or actual.shape != layout.hlo_shape:
+            actual_shape = None if actual is None else actual.shape
+            raise ValueError(
+                f"generated Contract/Map call %{call_name} input %{value.instruction} has {actual_shape}; "
+                f"CUDA indexes {layout.hlo_shape}"
+            )
+    expected_outputs = tuple(value.hlo_shape for value in output_layouts)
+    if _tuple_array_shapes(call.shape) != expected_outputs:
+        raise ValueError(f"generated Contract/Map call %{call_name} changed its physical output ABI")
+    if _operand_layout_constraints(call.attributes) != tuple(value.hlo_shape for value in input_layouts):
+        raise ValueError(f"generated Contract/Map call %{call_name} changed its direct-HLO input layouts")
     if "api_version=API_VERSION_TYPED_FFI" not in call.attributes:
         raise ValueError(f"generated Contract/Map call %{call_name} is not typed FFI API version 1")
     for index, output in enumerate(outputs):
@@ -1233,8 +1317,135 @@ def _custom_call_target_occurrences(entry: HloComputation, target: str) -> int:
     )
 
 
-def _rank_two_bf16_shape(rows: int, columns: int) -> str:
-    return f"bf16[{rows},{columns}]{{1,0}}"
+def _abi_values(
+    names: tuple[str, ...],
+    layouts: tuple[ContractMapChainBufferLayout, ...],
+) -> tuple[EntryRegionValue, ...]:
+    if len(names) != len(layouts):
+        raise ValueError("Contract/Map ABI names and layouts disagree")
+    return tuple(
+        EntryRegionValue(instruction=name, shape=layout.hlo_shape) for name, layout in zip(names, layouts, strict=True)
+    )
+
+
+def _require_values_match_physical_abi(
+    call_name: str,
+    values: tuple[EntryRegionValue, ...],
+    layouts: tuple[ContractMapChainBufferLayout, ...],
+) -> None:
+    if len(values) != len(layouts):
+        raise ValueError(f"generated Contract/Map call %{call_name} changed its physical input count")
+    for value, layout in zip(values, layouts, strict=True):
+        if value.shape != layout.hlo_shape:
+            raise ValueError(
+                f"generated Contract/Map call %{call_name} input %{value.instruction} has {value.shape}; "
+                f"CUDA indexes {layout.hlo_shape}"
+            )
+
+
+def _audit_contiguous_view(
+    logical: EntryRegionValue,
+    physical: EntryRegionValue,
+    instruction: HloInstruction,
+) -> None:
+    if instruction.shape != logical.shape:
+        raise ValueError(f"generated logical view %{logical.instruction} changed its shape or layout")
+    _require_contiguous_view(
+        name=logical.instruction,
+        logical_shape=instruction.shape,
+        physical_shape=physical.shape,
+    )
+
+
+def _audit_normalized_contiguous_view(
+    logical: EntryRegionValue,
+    physical: EntryRegionValue,
+    instruction: HloInstruction,
+) -> None:
+    if instruction.shape != physical.shape:
+        raise ValueError(f"generated physical view %{physical.instruction} changed its shape or layout")
+    _require_contiguous_view(
+        name=logical.instruction,
+        logical_shape=logical.shape,
+        physical_shape=instruction.shape,
+    )
+
+
+def _require_contiguous_view(*, name: str, logical_shape: str, physical_shape: str) -> None:
+    logical_dtype, logical_dimensions, logical_layout = _physical_array_shape(logical_shape)
+    physical_dtype, physical_dimensions, physical_layout = _physical_array_shape(physical_shape)
+    if logical_dtype != physical_dtype or math.prod(logical_dimensions) != math.prod(physical_dimensions):
+        raise ValueError(f"logical view %{name} is not element-compatible with the CUDA physical buffer")
+    if logical_layout != tuple(reversed(range(len(logical_dimensions)))):
+        raise ValueError(f"logical view %{name} is not contiguous row-major")
+    if physical_layout != tuple(reversed(range(len(physical_dimensions)))):
+        raise ValueError(f"CUDA physical buffer for %{name} is not contiguous row-major")
+
+
+def _tuple_array_shapes(shape: str) -> tuple[str, ...]:
+    if not shape.startswith("(") or not shape.endswith(")"):
+        raise ValueError(f"expected a tuple of physical array shapes, found {shape!r}")
+    values = _split_top_level(shape[1:-1])
+    for value in values:
+        _physical_array_shape(value)
+    return values
+
+
+def _operand_layout_constraints(attributes: str) -> tuple[str, ...]:
+    marker = "operand_layout_constraints={"
+    start = attributes.find(marker)
+    if start < 0:
+        raise ValueError("generated Contract/Map call has no direct-HLO operand layouts")
+    start += len(marker)
+    depth = 1
+    for index in range(start, len(attributes)):
+        if attributes[index] == "{":
+            depth += 1
+        elif attributes[index] == "}":
+            depth -= 1
+            if depth == 0:
+                values = _split_top_level(attributes[start:index])
+                for value in values:
+                    _physical_array_shape(value)
+                return values
+    raise ValueError("generated Contract/Map operand-layout constraints are unterminated")
+
+
+def _split_top_level(value: str) -> tuple[str, ...]:
+    parts: list[str] = []
+    start = 0
+    square = round_depth = curly = 0
+    for index, character in enumerate(value):
+        if character == "[":
+            square += 1
+        elif character == "]":
+            square -= 1
+        elif character == "(":
+            round_depth += 1
+        elif character == ")":
+            round_depth -= 1
+        elif character == "{":
+            curly += 1
+        elif character == "}":
+            curly -= 1
+        elif character == "," and square == round_depth == curly == 0:
+            parts.append(value[start:index].strip())
+            start = index + 1
+    parts.append(value[start:].strip())
+    if any(not part for part in parts) or square or round_depth or curly:
+        raise ValueError(f"invalid physical shape list {value!r}")
+    return tuple(parts)
+
+
+def _physical_array_shape(shape: str) -> tuple[str, tuple[int, ...], tuple[int, ...]]:
+    match = _PHYSICAL_ARRAY_SHAPE.fullmatch(shape)
+    if match is None:
+        raise ValueError(f"expected an explicit physical array shape, found {shape!r}")
+    dimensions = tuple(int(value) for value in match.group("dims").split(",") if value)
+    layout = tuple(int(value) for value in match.group("layout").split(","))
+    if sorted(layout) != list(range(len(dimensions))):
+        raise ValueError(f"physical layout does not match rank in {shape!r}")
+    return match.group("dtype"), dimensions, layout
 
 
 def _physical_shape(shape: str) -> tuple[str, tuple[int, ...]]:

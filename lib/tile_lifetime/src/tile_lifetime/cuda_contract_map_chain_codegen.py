@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from tile_lifetime.cast_scalar_program import generate_cuda_scalar_body
-from tile_lifetime.contract_map_chain import BoundCastScalarMap, TwoContractMapTrainingProgram
+from tile_lifetime.contract_map_chain import (
+    BoundCastScalarMap,
+    ContractMapChainPhysicalAbi,
+    TwoContractMapTrainingProgram,
+    contract_map_chain_physical_abi,
+)
 from tile_lifetime.ffi_command_buffer import (
     audit_ffi_command_buffer_eligibility,
     finalize_ffi_handler_source,
@@ -53,6 +58,7 @@ class GeneratedCudaContractMapChainFfi:
     reverse_shared_bytes: int
     first_weight_adjoint_minor_to_major: tuple[int, int]
     second_weight_adjoint_minor_to_major: tuple[int, int]
+    physical_abi: ContractMapChainPhysicalAbi
     kernel_count: int = 2
     external_dependencies: tuple[str, ...] = ("CUDA BF16/runtime primitives", "XLA typed FFI")
 
@@ -91,6 +97,7 @@ def generate_cuda_contract_map_chain_ffi(
     if threads not in {128, 256, 512}:
         raise ValueError("bounded Contract/Map chains require 128, 256, or 512 threads")
     first = program.first_contract
+    physical_abi = contract_map_chain_physical_abi(program)
     rows = first.rows
     input_features = first.reduction
     rank = first.features
@@ -141,8 +148,8 @@ def generate_cuda_contract_map_chain_ffi(
     semantic_digest = hashlib.sha256(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    first_weight_adjoint_dimension_zero_minor = json.dumps(program.first_weight_adjoint_minor_to_major == (0, 1))
-    second_weight_adjoint_dimension_zero_minor = json.dumps(program.second_weight_adjoint_minor_to_major == (0, 1))
+    first_weight_adjoint_dimension_zero_minor = json.dumps(physical_abi.reverse_outputs[1].minor_to_major == (0, 1))
+    second_weight_adjoint_dimension_zero_minor = json.dumps(physical_abi.reverse_outputs[2].minor_to_major == (0, 1))
     forward_symbol = _target_symbol(forward_target)
     reverse_symbol = _target_symbol(reverse_target)
     forward_launch_status_check = _launch_status_check(physical_candidate, operation="forward")
@@ -438,6 +445,7 @@ extern "C" std::uint64_t shuttle_contract_map_chain_reverse_call_count() {{
         reverse_shared_bytes=reverse_shared_bytes,
         first_weight_adjoint_minor_to_major=program.first_weight_adjoint_minor_to_major,
         second_weight_adjoint_minor_to_major=program.second_weight_adjoint_minor_to_major,
+        physical_abi=physical_abi,
     )
 
 

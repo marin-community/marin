@@ -90,11 +90,7 @@ def call_cuda_contract_map_chain_reverse_ffi(
         generated.reverse_target,
         result_shapes,
         vmap_method="broadcast_all",
-        output_layouts=(
-            to_jax_ffi_layout((1, 0)),
-            to_jax_ffi_layout(generated.first_weight_adjoint_minor_to_major),
-            to_jax_ffi_layout(generated.second_weight_adjoint_minor_to_major),
-        ),
+        output_layouts=jax_contract_map_chain_reverse_output_layouts(generated),
     )(
         activation,
         first_weight,
@@ -105,6 +101,13 @@ def call_cuda_contract_map_chain_reverse_ffi(
         output_cotangent,
     )
     return results[0], results[1], results[2]
+
+
+def jax_contract_map_chain_reverse_output_layouts(
+    generated: GeneratedCudaContractMapChainFfi,
+) -> tuple[tuple[int, ...], ...]:
+    """Return JAX FFI major-to-minor layouts for CUDA reverse outputs."""
+    return tuple(to_jax_ffi_layout(output.minor_to_major) for output in generated.physical_abi.reverse_outputs)
 
 
 def to_jax_ffi_layout(minor_to_major: tuple[int, ...]) -> tuple[int, ...]:

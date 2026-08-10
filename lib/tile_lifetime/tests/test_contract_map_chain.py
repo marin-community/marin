@@ -14,6 +14,7 @@ import numpy as np
 from tile_lifetime.contract_map_chain import (
     BoundCastScalarMap,
     ContractMapChainValue,
+    contract_map_chain_physical_abi,
     execute_two_contract_map_forward,
     execute_two_contract_map_reverse,
     form_two_contract_map_training_program,
@@ -189,6 +190,34 @@ def test_contract_map_chain_source_owns_generic_maps_and_ordered_bf16_boundaries
     assert not audit.has_atomics
     assert not audit.opaque_semantic_dependencies
     assert generated.external_dependencies == ("CUDA BF16/runtime primitives", "XLA typed FFI")
+
+
+def test_contract_map_chain_physical_abi_matches_cuda_indexing() -> None:
+    program = _program()
+    physical_abi = contract_map_chain_physical_abi(program)
+    generated = generate_cuda_contract_map_chain_ffi(
+        program,
+        forward_target="shuttle.generic.contract_map_chain.forward",
+        reverse_target="shuttle.generic.contract_map_chain.reverse",
+    )
+
+    assert generated.physical_abi == physical_abi
+    assert tuple(value.hlo_shape for value in physical_abi.forward_inputs) == (
+        "bf16[8,32]{1,0}",
+        "bf16[32,128]{1,0}",
+        "bf16[128,32]{1,0}",
+    )
+    assert tuple(value.hlo_shape for value in physical_abi.forward_outputs) == (
+        "bf16[8,32]{1,0}",
+        "bf16[8,128]{1,0}",
+        "bf16[8,128]{1,0}",
+        "bf16[8,32]{1,0}",
+    )
+    assert tuple(value.hlo_shape for value in physical_abi.reverse_outputs) == (
+        "bf16[8,32]{1,0}",
+        "bf16[32,128]{0,1}",
+        "bf16[128,32]{0,1}",
+    )
 
 
 def test_hidden_map_mutation_regenerates_the_same_physical_family() -> None:

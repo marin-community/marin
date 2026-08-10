@@ -14,6 +14,7 @@ from tile_lifetime.cuda_contract_map_chain_codegen import generate_cuda_contract
 from tile_lifetime.jax_contract_map_chain_ffi import (
     call_cuda_contract_map_chain_forward_ffi,
     call_cuda_contract_map_chain_reverse_ffi,
+    jax_contract_map_chain_reverse_output_layouts,
     to_jax_ffi_layout,
 )
 from tile_lifetime.xla_low_rank_gated_product import recover_low_rank_gated_product_training
@@ -101,3 +102,18 @@ def test_jax_contract_map_chain_layout_converts_xla_order_for_ffi(
     expected_major_to_minor: tuple[int, ...],
 ) -> None:
     assert to_jax_ffi_layout(minor_to_major) == expected_major_to_minor
+
+
+def test_jax_contract_map_chain_reverse_uses_major_to_minor_output_layouts() -> None:
+    generated = _generated()
+
+    assert tuple(output.minor_to_major for output in generated.physical_abi.reverse_outputs) == (
+        (1, 0),
+        (0, 1),
+        (0, 1),
+    )
+    assert jax_contract_map_chain_reverse_output_layouts(generated) == (
+        (0, 1),
+        (1, 0),
+        (1, 0),
+    )

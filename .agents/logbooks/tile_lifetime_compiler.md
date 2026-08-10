@@ -3367,3 +3367,26 @@ author: dlwh
   absent, and the local session state is absent. Raw samples, generated source,
   StableHLO, optimized HLO, environment, invocation, and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.
+
+### 2026-08-09 - TLTC-XLA-063 natural-Grug Contract/Map ABI audit
+
+- The `shared_map_fused_reverses` HLO contains 13 existing calls. Generic
+  low-rank recovery adds six forward/rematerialization calls and four JAX-owned
+  reverse calls, for 23 calls total. The ten new calls share one shape/AST
+  family with target multiplicities 6 and 4 and remove 28 old Contracts.
+- The CUDA generator now exposes one physical ABI used by direct-HLO emission,
+  source auditing, and the JAX wrapper. Forward calls take three row-major
+  rank-two BF16 buffers and return four row-major buffers. Reverse calls take
+  seven row-major buffers and return row-major dX plus two recovered
+  column-major dW buffers.
+- Direct HLO retains XLA's minor-to-major spelling: dX is `{1,0}` and both dW
+  outputs are `{0,1}`. The standalone JAX wrapper reverses these only when
+  passing `output_layouts` to `jax.ffi.ffi_call`, yielding `(0,1)` for dX and
+  `(1,0)` for each dW.
+- Rank-three `[2,4,*]` logical outputs and cotangents are accepted only as
+  contiguous `{2,1,0}` views of the rank-two CUDA buffers. The pre-allocation
+  audit rejects mismatched operand constraints, dX layout, either dW layout,
+  and noncontiguous logical views.
+- Thirty-five focused CPU/static tests, including the capture-safe handler
+  checks, and all 559 package tests pass. No GPU allocation or performance
+  claim was made.
