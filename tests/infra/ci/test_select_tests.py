@@ -204,6 +204,48 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     assert classify(["experiments/grug/moe/model.py"], tmp_path).src_modules == {"experiments.grug.moe.model"}
 
 
+def test_evaldash_source_emits_both_dotted_and_bare_modules(tmp_path: Path) -> None:
+    """evaldash sits under two source roots, so a change to one file names both module forms:
+    the dotted path the marin-tree tests import and the bare name the image-layout test uses."""
+    write(tmp_path, "infra/evaldash/src/metrics.py")
+    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {
+        "infra.evaldash.src.metrics",
+        "metrics",
+    }
+
+
+def _evaldash_workspace(repo_root: Path) -> None:
+    """The two ways evaldash's tests reach its out-of-package sources."""
+    write(repo_root, "infra/evaldash/src/metrics.py", "def build_matrix():\n    pass\n")
+    write(repo_root, "infra/evaldash/src/samples.py", "def fetch_samples():\n    pass\n")
+    write(repo_root, "infra/evaldash/src/fixtures.py", "def build_fixtures():\n    pass\n")
+    write(repo_root, "infra/evaldash/src/server.py", "import samples\nfrom metrics import build_matrix\n")
+    # marin-tree tests import through the dotted package path...
+    write(
+        repo_root, "tests/evaluation/test_evaldash_metrics.py", "from infra.evaldash.src.metrics import build_matrix\n"
+    )
+    # ...while the local-store test mirrors the deployed image and imports the modules bare.
+    write(repo_root, "tests/evaluation/test_evaldash_local_store.py", "import server\nimport fixtures\n")
+
+
+def test_evaldash_dotted_import_change_selects_the_dotted_test(tmp_path: Path) -> None:
+    _evaldash_workspace(tmp_path)
+
+    matrix = select_matrix(["infra/evaldash/src/metrics.py"], tmp_path)
+
+    assert "tests/evaluation/test_evaldash_metrics.py" in leg_paths(matrix, "marin")
+
+
+def test_evaldash_bare_import_change_selects_the_local_store_test(tmp_path: Path) -> None:
+    """A change to a server module the local-store test imports bare must still select it, even
+    though the dotted-import graph never sees the bare name."""
+    _evaldash_workspace(tmp_path)
+
+    matrix = select_matrix(["infra/evaldash/src/server.py"], tmp_path)
+
+    assert "tests/evaluation/test_evaldash_local_store.py" in leg_paths(matrix, "marin")
+
+
 def test_extra_suites_follow_the_owning_package_directory() -> None:
     """Accelerator and browser suites drive whole subsystems, so directory membership gates them."""
     assert extra_suites(["lib/iris/dashboard/src/App.vue"]) == ["iris-e2e-smoke"]
