@@ -18,7 +18,7 @@ from marin.evaluation.model_config import (
     scan_model_configs,
     serve_config_vllm_args,
 )
-from marin.evaluation.serving_config import inference_config_for_model
+from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -160,90 +160,56 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
-def _write_checkpoint(root, files: dict[str, int]):
-    """Materialize a checkpoint layout as sparse files, so a 70 GiB shard costs no disk."""
-    for name, size in files.items():
-        path = root / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("wb") as handle:
-            handle.truncate(size)
-    return root
+def _gib(memory: str) -> int:
+    return int(memory.removesuffix("g"))
 
 
-def _lowered_ram_bytes(model: ModelConfig, gpu_count: int) -> int:
-    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=gpu_count)
-    resources = inference_config_for_model(
-        model,
-        choice,
-        env_vars={},
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
-    ).iris.worker_resources
-    assert resources.ram.endswith("g")
-    return int(resources.ram.removesuffix("g")) * 1024**3
-
-
-def _sized_model(location, **hint) -> ModelConfig:
-    return ModelConfig(
-        name="sized",
-        location=str(location),
-        resource_hint=ResourceHint(gpu={"H100": 2}, **hint),
-        serve=ServeConfig(auto_overrides=False),
-    )
-
-
-def test_serve_host_memory_covers_a_checkpoint_larger_than_the_flat_default(tmp_path):
+def test_serve_host_memory_covers_a_checkpoint_larger_than_the_flat_default():
     # Regression for the H100 serve killed with SIGKILL while loading: every model got a flat 64g
-    # host-memory request, so a checkpoint bigger than that was OOM-killed mid-load. The request
-    # has to leave room for the checkpoint the loader pulls through host memory.
-    weights = 67 * 1024**3
-    checkpoint = _write_checkpoint(
-        tmp_path / "qwen3.5-35b-a3b",
-        {f"model-0000{shard}-of-00002.safetensors": weights // 2 for shard in (1, 2)},
-    )
+    # host-memory request, so a checkpoint bigger than that was OOM-killed mid-load. The request has
+    # to leave room for the checkpoint the loader pulls through host memory.
+    shards = {f"model-0000{shard}-of-00002.safetensors": 34 * 1024**3 for shard in (1, 2)}
 
-    assert _lowered_ram_bytes(_sized_model(checkpoint), gpu_count=4) > weights
+    assert _gib(_serve_host_memory(shards, ranks=4)) > 68
 
 
-def test_serve_host_memory_grows_with_the_rank_count(tmp_path):
+def test_serve_host_memory_grows_with_the_rank_count():
     # Every rank on the host carries its own CUDA context and torch runtime, so the same checkpoint
     # spread over more devices needs more host memory than it does on one.
-    checkpoint = _write_checkpoint(tmp_path / "moe", {"model.safetensors": 40 * 1024**3})
-    model = _sized_model(checkpoint)
+    files = {"model.safetensors": 40 * 1024**3}
 
-    assert _lowered_ram_bytes(model, gpu_count=8) > _lowered_ram_bytes(model, gpu_count=1)
+    assert _gib(_serve_host_memory(files, ranks=8)) > _gib(_serve_host_memory(files, ranks=1))
 
 
-def test_serve_host_memory_ignores_a_duplicate_subdirectory_copy(tmp_path):
+def test_serve_host_memory_ignores_a_duplicate_subdirectory_copy():
     # The Llama repos ship a second copy of the weights under original/ that vLLM never reads.
     # Counting it would roughly double every request sized from such a checkpoint.
-    shard = 15 * 1024**3
-    plain = _write_checkpoint(tmp_path / "plain", {"model.safetensors": shard})
-    duplicated = _write_checkpoint(
-        tmp_path / "duplicated",
-        {"model.safetensors": shard, "original/consolidated.00.safetensors": shard},
-    )
+    plain = {"model.safetensors": 15 * 1024**3, "tokenizer.json": 11 * 1024**2}
+    duplicated = plain | {"original/consolidated.00.safetensors": 15 * 1024**3}
 
-    assert _lowered_ram_bytes(_sized_model(duplicated), gpu_count=1) == _lowered_ram_bytes(
-        _sized_model(plain), gpu_count=1
-    )
+    assert _serve_host_memory(duplicated, ranks=1) == _serve_host_memory(plain, ranks=1)
 
 
-def test_unmeasurable_checkpoint_fails_the_launch_instead_of_under_sizing(tmp_path):
-    # A layout with no weight file to measure would otherwise fall through to the floor and hand a
-    # large model a small request -- the failure this sizing exists to prevent. Fail at lowering,
-    # and say which knob resolves it.
-    checkpoint = _write_checkpoint(tmp_path / "opaque", {"model.gguf": 40 * 1024**3})
-
+def test_serve_host_memory_rejects_a_checkpoint_with_no_weight_file():
+    # An unreadable layout would otherwise sum to zero and hand a large model the floor -- the
+    # failure this sizing exists to prevent. Fail instead, and say which knob resolves it.
     with pytest.raises(ValueError, match=r"resource_hint\.memory"):
-        _lowered_ram_bytes(_sized_model(checkpoint), gpu_count=1)
+        _serve_host_memory({"model.gguf": 40 * 1024**3, "config.json": 1024}, ranks=1)
 
 
 def test_explicit_memory_hint_wins_without_measuring_the_checkpoint():
-    # The override is the escape hatch for a model that needs more than its weights imply, and it
-    # has to work for a location the launcher cannot list (an object-store export needing creds).
-    model = _sized_model("s3://marin-us-east-02a/marin/exports/absent/", memory="512g")
+    # The override is the escape hatch for a model needing more than its weights imply, and it has
+    # to work for a location the launcher cannot list (an object-store export needing credentials).
+    model = ModelConfig(
+        name="hinted",
+        location="s3://marin-us-east-02a/marin/exports/absent/",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
 
-    assert _lowered_ram_bytes(model, gpu_count=8) == 512 * 1024**3
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    assert lowered.iris.worker_resources.ram == "512g"
 
 
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):

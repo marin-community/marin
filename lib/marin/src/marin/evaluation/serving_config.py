@@ -121,40 +121,36 @@ def _is_weight_file(name: str) -> bool:
 
 
 @cache
-def _checkpoint_weight_bytes(location: str, revision: str | None = None) -> int:
-    """Total bytes of the weight files at ``location``.
+def _checkpoint_file_sizes(location: str, revision: str | None) -> dict[str, int]:
+    """Byte size of every file at ``location``, keyed by name relative to the checkpoint root.
 
     ``location`` is an object-store export directory, a local directory, or a Hugging Face repo id,
     matching :func:`auto_serve_overrides`. Reads metadata only: a directory listing or the Hub's
-    file-metadata API, never the weights themselves.
+    file-metadata API, never the weights themselves. The two directory listings are shallow; the Hub
+    reports a repo's whole tree, so its names can carry a subdirectory prefix.
     """
-    total = _weight_bytes(location, revision)
-    if not total:
-        raise ValueError(
-            f"found no {' or '.join(_WEIGHT_FILE_SUFFIXES)} weight files at {location!r}, so the serve child's "
-            "host memory cannot be sized from it; set resource_hint.memory for this model"
-        )
-    return total
-
-
-def _weight_bytes(location: str, revision: str | None) -> int:
     if "://" in location:
         fs, path = filesystem_for(location)
-        entries = fs.ls(path, detail=True)
-        return sum(entry.get("size") or 0 for entry in entries if _is_weight_file(PurePosixPath(entry["name"]).name))
+        return {PurePosixPath(entry["name"]).name: entry.get("size") or 0 for entry in fs.ls(path, detail=True)}
     directory = Path(location)
     if directory.is_dir():
-        return sum(child.stat().st_size for child in directory.iterdir() if _is_weight_file(child.name))
+        return {child.name: child.stat().st_size for child in directory.iterdir() if child.is_file()}
     info = HfApi().model_info(location, revision=revision, files_metadata=True)
-    return sum(sibling.size or 0 for sibling in info.siblings or () if _is_weight_file(sibling.rfilename))
+    return {sibling.rfilename: sibling.size or 0 for sibling in info.siblings or ()}
 
 
-def _serve_host_memory(weight_bytes: int, ranks: int) -> str:
-    """Host memory an inference worker needs to load ``weight_bytes`` across ``ranks`` local ranks.
+def _serve_host_memory(files: Mapping[str, int], ranks: int) -> str:
+    """Host memory an inference worker needs to load the checkpoint described by ``files``.
 
     The weights count once per host, not once per rank: page cache is charged to the cgroup once no
     matter how many ranks map the same shards.
     """
+    weight_bytes = sum(size for name, size in files.items() if _is_weight_file(name))
+    if not weight_bytes:
+        raise ValueError(
+            f"no {' or '.join(_WEIGHT_FILE_SUFFIXES)} weight files among {sorted(files)}, so the serve child's "
+            "host memory cannot be sized from the checkpoint; set resource_hint.memory for this model"
+        )
     weight_gb = weight_bytes / _BYTES_PER_GIB
     required_gb = _CHECKPOINT_MEMORY_FACTOR * weight_gb + _HOST_MEMORY_PER_RANK_GB * ranks
     return f"{max(_MIN_SERVE_MEMORY_GB, math.ceil(required_gb))}g"
@@ -166,7 +162,7 @@ def _serve_memory(model: ModelConfig, accelerator: AcceleratorChoice) -> str:
         return model.resource_hint.memory
     # A TPU slice serves one host process for the whole slice; a GPU slice runs one rank per device.
     ranks = accelerator.gpu_count if accelerator.platform is Platform.GPU else 1
-    memory = _serve_host_memory(_checkpoint_weight_bytes(model.location, model.revision), ranks)
+    memory = _serve_host_memory(_checkpoint_file_sizes(model.location, model.revision), ranks)
     logger.info("Sized %s serve host memory at %s from its checkpoint (%d ranks)", model.name, memory, ranks)
     return memory
 
