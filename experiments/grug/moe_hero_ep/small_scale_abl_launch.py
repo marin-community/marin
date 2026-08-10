@@ -6,7 +6,7 @@
 Downsized copies of the ``moe_hero_ep`` hero shape (128 experts, top-4, two shared, SConv,
 hybrid GQA, and a selectable MoE backend) at five sweep widths, each trained to its 60x token
 budget (60 tokens per active parameter). The architecture, data (datakit two-phase mixture), evals
-(paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid so these
+(paloma + uncheatable every 1k), and per-size step counts match the issue #7856 sweep grid so these
 runs are comparable to the FSDP sweep points; only the width/depth/head split and token budget
 shrink relative to the d6144 shape.
 
@@ -49,6 +49,8 @@ from experiments.grug.moe_hero_ep.launch import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
+    HERO_WORKER_CPU,
+    HERO_WORKER_RAM,
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
@@ -66,7 +68,7 @@ SLIDING_WINDOW = 512
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
 BASELINE_TOKENS_PER_ACTIVE_PARAM = 60
-GB200_FOUR_NODE_SCREEN_RAM = "128g"
+GB200_SCREEN_WORKER_RAM = "128g"
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -114,7 +116,7 @@ TARGETS: dict[str, Target] = {
         HERO_GPUS_PER_NODE,
         1,
         FOUR_NODE_EP_WORKER_CPU,
-        GB200_FOUR_NODE_SCREEN_RAM,
+        GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
         True,
@@ -127,7 +129,7 @@ TARGETS: dict[str, Target] = {
         HERO_GPUS_PER_NODE,
         2,
         FOUR_NODE_EP_WORKER_CPU,
-        GB200_FOUR_NODE_SCREEN_RAM,
+        GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
         True,
@@ -141,12 +143,14 @@ TARGETS: dict[str, Target] = {
         HERO_GPUS_PER_NODE,
         4,
         FOUR_NODE_EP_WORKER_CPU,
-        GB200_FOUR_NODE_SCREEN_RAM,
+        GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
         True,
     ),
-    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
+    "gb200-rack": Target(
+        "GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, HERO_WORKER_CPU, HERO_WORKER_RAM, "1t", "gpu_fa4_cute", True
+    ),
     # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
     # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
     # less on the same routing, which is not the behavior these runs are meant to reproduce.
@@ -202,12 +206,12 @@ def _small_model(
     capacity_factor: float,
     attention_implementation: str,
     moe_implementation: str,
-    expert_chunks: int,
     seq_len: int,
     num_experts: int,
     num_experts_per_token: int,
     intermediate_dim: int | None,
     latent_dim: int | None,
+    ragged_all_to_all_splits_per_peer: int = 1,
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
@@ -237,8 +241,8 @@ def _small_model(
         sconv=True,
         attention_implementation=attention_implementation,
         moe_implementation=moe_implementation,
-        expert_chunks=expert_chunks,
         latent_dim=latent_dim,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -265,6 +269,7 @@ def build_small_run(
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
+    ragged_all_to_all_splits_per_peer: int = 1,
     tokens_per_active_param: int = BASELINE_TOKENS_PER_ACTIVE_PARAM,
     watch_interval: int = 0,
     jax_nightly_version: str | None = None,
@@ -317,12 +322,12 @@ def build_small_run(
         capacity_factor,
         fleet.attention_implementation,
         sharding.moe_implementation,
-        1,
         seq_len,
         num_experts,
         num_experts_per_token,
         intermediate_dim,
         latent_dim,
+        ragged_all_to_all_splits_per_peer,
     )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
@@ -379,6 +384,7 @@ def build_small_run(
                     f"seq{seq_len}",
                     f"tok{tokens_per_step // 1024}k",
                     f"watch{watch_interval}",
+                    f"ragged-splits-{ragged_all_to_all_splits_per_peer}",
                     f"jax-{jax_nightly_version or 'stable'}",
                     flavor,
                     target,
@@ -505,6 +511,13 @@ def build_small_run(
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
 )
 @click.option(
+    "--ragged-all-to-all-splits-per-peer",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Split each peer transfer into this many ragged updates so large slices use more GPU blocks.",
+)
+@click.option(
     "--tokens-per-active-param",
     type=click.IntRange(min=1),
     default=BASELINE_TOKENS_PER_ACTIVE_PARAM,
@@ -535,6 +548,7 @@ def main(
     num_experts_per_token: int,
     intermediate_dim: int | None,
     latent_dim: int | None,
+    ragged_all_to_all_splits_per_peer: int,
     tokens_per_active_param: int,
     watch_interval: int,
     jax_nightly_version: str | None,
@@ -551,6 +565,7 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         latent_dim=latent_dim,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         tokens_per_active_param=tokens_per_active_param,
         watch_interval=watch_interval,
         jax_nightly_version=jax_nightly_version,

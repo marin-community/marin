@@ -842,3 +842,81 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - Neither attempt reached a training step, so S15c provides no ragged correctness or timing result. The coordinator was stopped after the second OOM to end the retry loop and release the nodes.
 - The 256 GiB four-node special case assumed node-shared host state. Process-per-GPU runs four independent Python/JAX processes per node, including four copies of initialization and host-offload state. Restored the four-node proxy to the standard hero reservation of 850 GiB. The assigned GB200 nodes expose about 955 GiB allocatable each, leaving about 105 GiB for system headroom.
 - Replacement S15d keeps the exact d6144/L48/E48 model, four-node EP16 process topology, latency hiding on, overlap limit 4, PGLE off, 1 MiB NCCL FIFO, and clean steps-5-through-24 timing contract. Only the per-worker host-memory reservation changes from 256 to 850 GiB.
+
+### 2026-08-09 23:36 UTC - Exact default control reaches 11.32% MFU
+
+- Run: `ra2a-s15d-exact-ep16-e48-oneshot-perf-20260809`; workers `s38vxs64`, `s45sxs64`, `s5xvxs64`, and `s69vxs64`, all previously verified in rack 129, NVLink domain `DH1-129-US-EAST-08A`, and IB leaf group `3799788302995`.
+- Runtime: d6144/L48, E48, expert width 6272, latent width 3072, top-4, capacity 1.33, EP16, 1,048,576 tokens/step, 16 one-device processes, stable JAX 0.11, PGLE off, 1 MiB NCCL FIFO, latency hiding on, overlap limit 4, command buffers off, and 850 GiB host RAM per node. Watch, eval, profile, and checkpoints were disabled.
+- Correctness: all 25 steps completed with finite loss. Across steps 5-24, mean loss was 11.8084345 and both dropped-assignment fraction and router capacity-overflow rate were exactly zero.
+- Timing: steps 5-24 averaged 33.7039685 seconds, 31,112.2092 tokens/s, and 11.3219861% MFU. Median duration was 33.669853 seconds. This is the requested exact clean baseline and is 8.68 percentage points below the 20% target.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s15d-exact-ep16-e48-oneshot-perf-20260809
+- Serialized treatment S24 changes only latency hiding to off and collective overlap limit from 4 to 1. It retains the exact model, process topology, 850 GiB worker reservation, and metric controls.
+
+### 2026-08-10 01:35 UTC - Ragged-safe flags do not recover exact-shape MFU
+
+- Run: `ra2a-s24-exact-ep16-e48-lhs-off-overlap1-perf-20260809`; the same `s38vxs64`, `s45sxs64`, `s5xvxs64`, and `s69vxs64` rack-129 workers as S15d. Effective process command and environment verified four one-device processes per node, PGLE off, 1 MiB NCCL FIFO, latency hiding off, overlap limit 1, and command buffers off.
+- Correctness: all 25 steps completed with finite loss. Steps 5-24 had mean loss 11.8084362, zero dropped assignments, and zero router overflow.
+- Timing: steps 5-24 averaged 33.818663 seconds, 31,006.1827 tokens/s, and 11.2834022% MFU. Median duration was 33.8144083 seconds.
+- Paired result: relative to S15d's 33.7039685-second mean and 11.3219861% MFU, the safe flags were 0.34% slower and 0.0386 MFU points lower. The exact-shape effect is within noise and does not reproduce the small EP8/E96 overlap-limit gain.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s24-exact-ep16-e48-lhs-off-overlap1-perf-20260809
+- Next arm: S25 is a nine-step exact-shape run on the safe flags with a rank-0 XProf capture over steps 5-7. It preserves disabled watch/eval/checkpoint work and is diagnostic rather than a timing candidate. Use the trace to distinguish exposed ragged transport from model compute/rematerialization before selecting any NCCL arm.
+
+### 2026-08-10 02:00 UTC - XProf isolates a 16-block ragged transfer kernel
+
+- Run: `ra2a-s25-exact-ep16-e48-profile-20260810`; the same exact d6144/L48/E48 process-per-GPU configuration and rack-129 topology as S24, shortened to nine steps with a rank-0 XProf capture over steps 5-7. The run completed with finite loss.
+- Profile: https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fra2a-s25-exact-ep16-e48-profile-20260810. Durable artifact: `s3://marin-us-east-02a/tmp/ttl=30d/xprof/ra2a-s25-exact-ep16-e48-profile-20260810/plugins/profile/steps-5-to-8`.
+- One full traced step attributes 43.92% of exclusive device time to communication. `RaggedAllToAllWithSymmetricMemoryKernelImpl<8>` alone consumes 13.6599 seconds, or 41.3% of the 33.1261-second device timeline. The two NCCL barrier kernels around each transfer consume 0.9519 seconds; all-gather, reduce-scatter, send/recv, and all-reduce are individually smaller.
+- The complete three-step XProf kernel table contains 864 ragged transfer launches totaling 41.4599 seconds: 47.986 milliseconds average, 43.744 minimum, and 55.200 maximum. Every launch uses only `grid=(16,1,1)` and `block=(128,1,1)` on a 152-SM GB200. Event metadata reports a 304-block minimum occupancy grid and a suggested 1,024-thread block.
+- HLO metadata shows each transfer moves a BF16 buffer with either 262,144 or 348,652 rows of width 3,072, approximately 1.61 or 2.14 GB per invocation. The six ragged calls per layer split evenly between those sizes, yielding roughly 39 GB/s of effective source-byte throughput per GPU.
+- The pinned OpenXLA implementation fixes the thread count at 128 and sets the block grid from `num_outputs` and `num_updates_per_output`. This workload has one update per destination, so it launches one block for each of 16 ranks; each block loops across its entire destination slice. Current OpenXLA `main` retains the same launch geometry. There is no XLA flag that increases blocks per large update.
+- This changes the experiment ranking. The dominant transfer is a custom direct peer-write kernel, not a NCCL all-to-all. NVLS, IB SHARP, NCCL protocols, and NCCL channel counts can only affect the surrounding barriers and smaller collectives. Even removing all measured communication gives an idealized ceiling of about 20.2% MFU from the 11.32% baseline, so an ordinary NCCL arm cannot plausibly clear 20%.
+- Next arm: on a two-node correctness/performance screen, disable the one-shot kernel and select the generic symmetric put/signal backend. This differs from the already-stalled private NCCL fallback and directly bypasses the 16-block kernel. If unavailable or slower, test whether the GXL backend is built before treating an upstream multi-block kernel change as the remaining path.
+
+### 2026-08-10 02:22 UTC - Generic symmetric put/signal rejects the source buffer
+
+- Run: `ra2a-s26-ep8-e96-generic-symmetric-clean-20260810`; d768/L8, E96, top-4, capacity 1.33, EP8 across two four-GPU hosts, 524,288 tokens/step, process-per-GPU, watch disabled, latency hiding off, overlap limit 1, and command buffers off.
+- Treatment flags disabled the one-shot kernel and selected `--xla_gpu_ragged_all_to_all_mode=symmetric`. The job admitted on `s5xvxs64` and `s69vxs64`, compiled, and reached its first `jit_train_step` execution. It produced no completed training step.
+- Every rank failed in `ncclPutSignal` with `invalid argument`; NCCL reported `srcWinHost is not in a valid symmetric window`. Iris retried the gang once, and the second attempt failed identically. This backend's put/signal lowering requires the source allocation to be in a symmetric NCCL window, which the ordinary XLA input buffer is not.
+- The stock GXL collectives factory in the pinned OpenXLA source returns null and its interface marks the backend unimplemented, so there is no second packaged transport backend to screen.
+- `save_moe` is not an experiment arm for this ragged implementation: the ragged path does not attach the checkpoint names consumed by that policy. Even if added, the exact per-rank dispatch tensors are approximately 1.61-2.14 GB each per layer; retaining the four named MoE intermediates across 48 layers would exceed GB200 HBM.
+- Next arm: keep the working one-shot backend but split each destination's contiguous slice into 32 logical ragged updates. XLA's existing multi-update launch heuristic then raises the EP8 grid from 8 to 256 blocks and the exact EP16 grid from 16 to 512 blocks without changing routing capacity or tensor layout.
+
+### 2026-08-10 03:00 UTC - Multi-update shaping gives a 2.46x proxy speedup
+
+- Run: `ra2a-s27-ep8-e96-split32-clean-20260810`; the same `sbxsxs64` and `sdgwxs64` hosts as the S23 clean baseline. Their logged task IPs map back to the identical nodes, eliminating placement as an explanation for the result.
+- Treatment: keep the working one-shot symmetric-memory backend but divide each sender-to-peer slice into 32 contiguous logical updates. The logical routed tensor and per-peer capacity are unchanged; the pinned XLA launch heuristic raises the EP8 kernel grid from 8 to 256 cooperating blocks. Latency hiding remained off, overlap limit remained one, command buffers and PGLE remained off, and watch work remained disabled.
+- Correctness: the run remained finite through roughly 2,500 steps before it was stopped to release the two nodes. Across scored steps 5-24, mean loss was 11.7971860 and dropped assignments, dropped-token fraction, and router capacity overflow were all exactly zero.
+- Timing: steps 5-24 averaged 0.4951376 seconds and 1,059,088.99 tokens/s; median duration was 0.4979239 seconds. W&B's small-model MFU was 5.80256%, compared with 2.19616% for S23.
+- Controlled comparison: S23 averaged 1.21747 seconds and 430,693 tokens/s on the same nodes and runtime settings. Splitting the transfer therefore reduced mean step duration by 59.3% and increased throughput by 2.46x. This is large enough to justify the serialized exact-shape validation.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s27-ep8-e96-split32-clean-20260810
+- Next arm: run the exact four-node d6144/L48/E48 configuration with 32 updates per peer and score clean steps 5-24. On EP16, XLA should launch 512 blocks per ragged call instead of 16. Verify all four hosts share one NVLink domain before comparing with S24's 11.28% MFU.
+
+### 2026-08-10 03:18 UTC - Exact multi-update shaping recovers 60.2% throughput
+
+- Run: `ra2a-s28-exact-ep16-e48-split32-perf-20260810`; workers `s38vxs64`, `s69vxs64`, `s7htxs64`, and `s8mtxs64`. All four share rack 129, NVLink domain `DH1-129-US-EAST-08A`, and IB leaf group `3799788302995`, matching the S24 topology class. The first two workers also appeared in S24.
+- Runtime: exact d6144/L48/E48, expert width 6272, latent width 3072, top-4, capacity 1.33, EP16, 1,048,576 tokens/step, 16 one-device processes, 850 GiB host RAM per node, latency hiding off, overlap limit one, command buffers and PGLE off, and 1 MiB NCCL FIFO. Watch, eval, profile, and checkpoints were disabled. The only model/runtime change from S24 was 32 ragged updates per peer instead of one.
+- Correctness: all 25 steps completed with finite loss. Across steps 5-24, mean loss was 11.8084259 and dropped assignments, dropped-token fraction, and router capacity overflow were exactly zero.
+- Timing: steps 5-24 averaged 21.1090181 seconds, 49,674.6925 tokens/s, and 18.0770248% MFU. Median duration was 21.0983272 seconds and duration standard deviation was 0.0597790 seconds.
+- Paired result: S24 averaged 33.818663 seconds, 31,006.1827 tokens/s, and 11.2834022% MFU. Splitting each peer transfer into 32 updates therefore reduced step time by 37.58%, raised throughput by 60.21%, and recovered 6.794 MFU points. It remains 1.923 MFU points below the 20% target.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s28-exact-ep16-e48-split32-perf-20260810
+- Next arm: repeat a nine-step exact run with an XProf capture over steps 5-7. Confirm the expected 512-block launch, measure the residual ragged transfer and barriers, and use that evidence to decide whether 64 or 128 updates per peer can plausibly close the remaining 1.923-point gap.
+
+### 2026-08-10 03:34 UTC - Post-treatment XProf retires larger split counts
+
+- Run: `ra2a-s29-exact-ep16-e48-split32-profile-20260810`; the exact S28 configuration shortened to nine steps with rank-0 profiling over steps 5-7. It reused the exact same four workers as S28 and completed with finite loss.
+- Profile: https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fra2a-s29-exact-ep16-e48-split32-profile-20260810. Durable artifact: `s3://marin-us-east-02a/tmp/ttl=30d/xprof/ra2a-s29-exact-ep16-e48-split32-profile-20260810/plugins/profile/steps-5-to-8`.
+- Mechanism: the ragged kernel retained `block=(128,1,1)` and changed from `grid=(16,1,1)` to `grid=(16,1,32)`, exactly 512 cooperating blocks. Both profiles contain 864 launches over three steps. Average launch duration fell from 47.9861 to 2.6984 milliseconds, a 17.78x kernel speedup.
+- Per-step kernel totals: ragged transfer fell from 13.8200 to 0.7771 seconds and its NCCL barrier kernels fell from 0.8064 to 0.2949 seconds. Their combined exposed cost fell by 13.5543 seconds per step, from 14.6264 to 1.0721 seconds.
+- Ceiling: ragged transfer plus barriers now accounts for only 5.08% of S28's 21.1090-second clean step. Removing both entirely would reach 20.0370 seconds and about 19.044% MFU, still below the target. Splits 64 and 128 therefore cannot close the gap and are retired without another GPU run.
+- Remaining aggregate kernel time is 89.36% compute and 10.64% communication. Excluding the custom ragged transfer, ordinary NCCL kernels total about 1.4244 seconds per step; all communication plus the ragged barriers totals 2.4964 seconds. Reaching 20% needs 2.0296 seconds, or removal of 81% of all remaining communication, which rules out protocol/channel tuning as a target-closing arm.
+- Final NCCL arm: the working one-shot path still carries `NCCL_BUFFSIZE=1048576`, inherited from the OOMing fallback where smaller per-peer FIFOs were necessary. S30 changes only that value to NCCL's 4 MiB default. This cannot reach 20% by itself, but it tests the last clear EP-specific self-imposed penalty before sealing the sweep.
+
+### 2026-08-10 03:56 UTC - NCCL buffer size is neutral; sweep sealed
+
+- Run: `ra2a-s30-exact-ep16-e48-split32-buff4m-20260810`; the exact S28 split-32 configuration on the same four rack-129 workers as S28 and S29. The only treatment was increasing `NCCL_BUFFSIZE` from 1 MiB to 4 MiB.
+- Correctness: all 25 steps completed with finite loss. Across steps 5-24, mean loss was 11.8084264 and dropped assignments, dropped-token fraction, and router capacity overflow were exactly zero.
+- Timing: steps 5-24 averaged 21.1213289 seconds, 49,646.8362 tokens/s, and 18.0668877% MFU. Median duration was 21.1042245 seconds and duration standard deviation was 0.1192565 seconds.
+- Controlled comparison: S28's 1 MiB run averaged 21.1090181 seconds and 18.0770248% MFU. The 4 MiB treatment was 0.058% slower and 0.010 MFU points lower, so the effect is neutral.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s30-exact-ep16-e48-split32-buff4m-20260810
+- Decision: stop the serialized sweep. XProf shows that the custom ragged transfer is no longer the target-closing bottleneck after split-32, and the final conventional NCCL correction was neutral. Clearing 20% on this proxy now requires reducing model compute or a structural communication change capable of removing more than 81% of all remaining communication, not another obvious NCCL protocol, channel, buffer, NVLS, or SHARP setting.
+- Final report: https://github.com/marin-community/marin/issues/8077. Reusable incident record: https://echo.oa.dev/wiki/101.

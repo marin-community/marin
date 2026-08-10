@@ -38,10 +38,11 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_WORKER_CPU = 120
+FOUR_NODE_EP_NODES = 4
 FOUR_NODE_EP_WORKER_CPU = 16
 # Process-per-GPU creates four independent Python/JAX processes, so host-offloaded optimizer state
-# and initialization peaks are not node-shared. Keep the normal hero memory reservation here too.
-FOUR_NODE_EP_WORKER_RAM = "850g"
+# and initialization peaks are not node-shared.
+HERO_WORKER_RAM = "850g"
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
@@ -106,7 +107,7 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 
 
 class HeroThroughputResult(Artifact):
-    """Result of the rack-scale throughput hero run.
+    """Result of an explicitly sized throughput hero run.
 
     The run mirrors its tracker metrics to the output path. It writes no checkpoint by default, so
     this artifact is a plain path ref to those metrics rather than a promise of one; pass
@@ -128,6 +129,7 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    ragged_all_to_all_splits_per_peer: int = 1,
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -177,7 +179,7 @@ def build_hero_run(
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
     # carry the schedule length too -- passing `num_steps` there warms up in `0.01 * num_steps` and
     # decays to `min_lr_ratio` by the end of the short run, which is a whole miniature schedule
-    # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
+    # rather than the head of a long one. When omitted, the short run length also defines the schedule.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
     if schedule_steps is not None and schedule_steps < num_steps:
@@ -203,6 +205,7 @@ def build_hero_run(
     model = dataclasses.replace(
         model,
         moe_implementation=sharding.moe_implementation,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         # Every flavor here is chunk-free; `expert_chunks` above one is the local dropping path
         # that only the separate FSDP hero uses.
         expert_chunks=1,
@@ -236,8 +239,8 @@ def build_hero_run(
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=FOUR_NODE_EP_WORKER_CPU if ep_nodes == 4 else HERO_WORKER_CPU,
-        ram=FOUR_NODE_EP_WORKER_RAM if ep_nodes == 4 else "850g",
+        cpu=FOUR_NODE_EP_WORKER_CPU if ep_nodes == FOUR_NODE_EP_NODES else HERO_WORKER_CPU,
+        ram=HERO_WORKER_RAM,
         disk="1t",
         replicas=ep_nodes * dp_racks,
     )
@@ -274,6 +277,7 @@ def build_hero_run(
                     f"flavor-{flavor}",
                     capacity_tag,
                     size_tag,
+                    f"ragged-splits-{ragged_all_to_all_splits_per_peer}",
                     f"ep-nodes-{ep_nodes}",
                     f"jax-{jax_nightly_version or 'stable'}",
                     "gb200",
@@ -392,6 +396,13 @@ def build_hero_run(
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
 )
 @click.option(
+    "--ragged-all-to-all-splits-per-peer",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Split each peer transfer into this many ragged updates so large slices use more GPU blocks.",
+)
+@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -475,6 +486,7 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    ragged_all_to_all_splits_per_peer: int,
     flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -498,6 +510,7 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),

@@ -69,7 +69,7 @@ def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
     assert config.trainer.replica_axis_size == 1
     assert step.runtime_args["train_resources"].replicas == 4
     assert step.runtime_args["train_resources"].cpu == launch.FOUR_NODE_EP_WORKER_CPU
-    assert step.runtime_args["train_resources"].ram == launch.FOUR_NODE_EP_WORKER_RAM
+    assert step.runtime_args["train_resources"].ram == launch.HERO_WORKER_RAM
     assert config.processes_per_task == 4
     assert config.trainer.trainer.train_batch_size == 256
     assert config.stop_after_steps == 25
@@ -89,7 +89,7 @@ def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert step.runtime_args["train_resources"].cpu == launch.FOUR_NODE_EP_WORKER_CPU
-    assert step.runtime_args["train_resources"].ram == small_scale_abl_launch.GB200_FOUR_NODE_SCREEN_RAM
+    assert step.runtime_args["train_resources"].ram == small_scale_abl_launch.GB200_SCREEN_WORKER_RAM
     assert config.worker_pip_packages == (
         f"jax=={nightly}",
         f"jaxlib=={nightly}",
@@ -117,6 +117,22 @@ def test_small_ep_ring_control_preserves_expert_sharding_without_ragged_all_to_a
     assert config.model.moe_implementation == "ring"
     assert config.trainer.expert_axis_size == 8
     assert config.processes_per_task == 4
+
+
+def test_small_ragged_run_propagates_peer_transfer_splits():
+    step = small_scale_abl_launch.build_small_run(
+        run_id="split-ragged-transfers",
+        size="d768",
+        target="gb200-2node",
+        flavor="ep-ragged",
+        tokens_per_step=524_288,
+        num_experts=96,
+        ragged_all_to_all_splits_per_peer=32,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.ragged_all_to_all_splits_per_peer == 32
 
 
 @pytest.mark.parametrize(
@@ -421,19 +437,7 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide(size):
     # shape with local_kv_heads != global_kv_heads failed at trace time on a mesh whose model axis is
     # wider than one. d768 masked it by setting both counts to 1; d1024 and d1280 set 2 and 1.
     mesh = _abstract_mesh(1, 8, 4, 2)
-    shape = small_scale_abl_launch.SMALL_SHAPES[size]
-    cfg = small_scale_abl_launch._small_model(
-        shape,
-        capacity_factor=1.0,
-        attention_implementation="reference",
-        moe_implementation="fixed_all_to_all",
-        expert_chunks=1,
-        seq_len=128,
-        num_experts=128,
-        num_experts_per_token=4,
-        intermediate_dim=None,
-        latent_dim=None,
-    )
+    cfg = _latent_config(size=size)
     tokens = jax.ShapeDtypeStruct((64, 128), jnp.int32)
     with use_abstract_mesh(mesh):
         jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
@@ -454,7 +458,6 @@ def _latent_config(size="d768", latent_dim=None):
         capacity_factor=1.0,
         attention_implementation="reference",
         moe_implementation="fixed_all_to_all",
-        expert_chunks=1,
         seq_len=128,
         num_experts=128,
         num_experts_per_token=4,
