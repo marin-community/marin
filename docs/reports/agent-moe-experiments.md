@@ -10,7 +10,7 @@ tested at larger scales and projected with a scaling-law fit.
 
 This page summarizes the 77 `Agent MoE Experiment:` sub-issues attached to
 [the April MoE tracker](https://github.com/marin-community/marin/issues/4281)
-as of 2026-07-24. The
+as of 2026-08-09. The
 [Agent MoE playbook](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/agent.md)
 and [baseline table](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/README.md)
 define the gates and reference runs. The
@@ -30,10 +30,10 @@ The clearest architecture wins came from partial RoPE and partial key offset (PK
 |---|---:|---|
 | Worked | 14 | Met the recorded effective-speedup gate or the experiment's narrower success criterion. |
 | Promising | 9 | Positive evidence, but missing a larger-scale anchor or clean isolation. |
-| Mixed | 12 | The answer changed by scale or metric, or a strict projection failed. |
+| Mixed | 13 | The answer changed by scale or metric, or a strict projection failed. |
 | Did not work | 31 | A completed comparison showed no net benefit. |
 | Not evaluated | 5 | No usable comparison was recorded, often because the work was superseded. |
-| In progress | 6 | The issue remains active without a final verdict. |
+| In progress | 5 | The issue remains active without a final verdict. |
 
 Issue state is not used as an outcome: several closed issues contain positive
 results, and several open issues already have useful measurements.
@@ -118,7 +118,7 @@ results, and several open issues already have useful measurements.
 
 | Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
 |---|---|---:|---:|---|
-| [#5178 Depth-MuP LR sensitivity](https://github.com/marin-community/marin/issues/5178) | In progress | ≈0.96–1.04x | 0.963–1.040x | Small-scale evidence is split: about 0.963x at d512 and 1.040x at d768. Larger-scale LR optima are still being resolved. |
+| [#5178 Depth-MuP LR sensitivity](https://github.com/marin-community/marin/issues/5178) | Mixed | 0.960–1.035x | 0.963–1.040x | Depth MuP kept the best LR at 1x through d1024, but wall-clock speedup ranged from 0.963x at d512 to 1.040x at d768 and 1.039x at d1024; d1280 never finished. |
 | [#5203 AdamH embedding initialization](https://github.com/marin-community/marin/issues/5203) | Worked | ≈1.01–1.05x | 1.014–1.05x | Initializing embeddings at standard deviation 1.0 passed all four scales; the gain declined from about 5% to 1.4% but stayed positive. |
 | [#5235 Gradient clipping sweep](https://github.com/marin-community/marin/issues/5235) | Promising | ≈1.01–1.05x | Up to 1.045x | Clip values 0.1 and 0.3 marginally passed gate 1, with up to 1.045x, but the gain was too small to justify gate 2. |
 | [#5238 AdamH on the attention gate](https://github.com/marin-community/marin/issues/5238) | Did not work | <1x | <1x | Moving the attention gate into AdamH failed gate 1. |
