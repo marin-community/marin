@@ -3901,3 +3901,34 @@ author: dlwh
   transformed distributed natural-JAX module. Fixed-capacity relation shapes,
   transposed input-adjoint weight layouts, JAX collective payload return, and
   router-VJP wiring remain gates.
+
+### 2026-08-09 20:34 PDT - TLTC-MOE-005 fixed-capacity JAX module
+
+- Hypothesis: one routing-independent rank ABI can instantiate the existing
+  generic reverse families while JAX retains router AD and payload transport.
+- Commit hash: `4167571cca37c79751c773cf574780f7b281cd3e`.
+- Command: `XLA_FLAGS=--xla_force_host_platform_device_count=4 uv run
+  --frozen --package marin-tile-lifetime --group test python
+  lib/tile_lifetime/benchmarks/cpu_distributed_expert_jax_module.py
+  --output-directory
+  lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_module_cpu_v0`.
+- Config: four CPU devices, eight global sources, eight experts, two experts
+  per rank, top-2, hidden/intermediate size 32, BF16 storage, and five rows of
+  fixed capacity per expert. The exchange domain contains all 32 source/rank
+  pairs, so routing mutations preserve every generated handler shape.
+- Result (`exploratory`): transformed StableHLO contains one call for each of
+  relation-edge Map/Fold, input-adjoint Contract/Map/Contract/identity-Fold,
+  W13 weight Contract, W2 weight Contract, and post-return source Fold. The
+  separate shard-mapped transport HLO contains two `stablehlo.all_to_all`
+  operations and returns its integer payload exactly.
+- Correctness: maximum natural-JAX/decomposed error is `0.000716249`; maximum
+  mean error is `0.000133022`. Output, input/router cotangents, and all three
+  expert weight cotangents repeat bitwise. Forward-layout W2 and W13 operands
+  are transposed before the generated input-adjoint Contracts. The handler
+  HLO contains no Torch, DeepEP, or MoK target.
+- Interpretation: the previous generator-name-only composition is now an
+  instantiated static module. Handler calls and collectives are still lowered
+  in separate CPU modules, so this does not establish an integrated
+  shard-mapped CUDA executable or any GPU performance.
+- Next action: lower the handlers and payload return inside one shard-mapped
+  graph, then compile and execute that graph on CPU before requesting GB200.
