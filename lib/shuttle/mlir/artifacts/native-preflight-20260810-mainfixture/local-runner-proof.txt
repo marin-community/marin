@@ -1,0 +1,48 @@
+xla_revision=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+0e774117049a1c28bbf9023bb8bb81a24829cdfc0804cf382a2341eda15c0ef7  /private/tmp/shuttle-native-mainfixture-client-root.3c2Dtf/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99  /private/tmp/shuttle-native-mainfixture-client-root.3c2Dtf/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+patch_0001_apply=PASS
+patch_0002_apply=PASS
+patch_0002_reverse_check=PASS
+patch_0001_reverse_check=PASS
+combined_diff_check=PASS
+ xla/lit.bzl                                | 14 ++++----
+ xla/pjrt/BUILD                             | 57 ++++++++++++++++++++++++++++++
+ xla/pjrt/cpu/cpu_client.cc                 |  5 ++-
+ xla/pjrt/gpu/se_gpu_pjrt_compiler.cc       |  5 ++-
+ xla/pjrt/interpreter/interpreter_client.cc |  5 ++-
+ xla/pjrt/mlir_to_hlo.cc                    | 32 +++++++++++++++++
+ xla/pjrt/mlir_to_hlo.h                     | 11 ++++++
+ xla/pjrt/mlir_to_hlo_test.cc               | 54 ++++++++++++++++++++++++++++
+ xla/pjrt/pjrt_executable_test.cc           | 25 +++++++++++++
+ xla/pjrt/pjrt_stream_executor_client.cc    |  5 ++-
+ xla/xla.proto                              |  6 +++-
+ 11 files changed, 199 insertions(+), 20 deletions(-)
+ M xla/lit.bzl
+ M xla/pjrt/BUILD
+ M xla/pjrt/cpu/cpu_client.cc
+ M xla/pjrt/gpu/se_gpu_pjrt_compiler.cc
+ M xla/pjrt/interpreter/interpreter_client.cc
+ M xla/pjrt/mlir_to_hlo.cc
+ M xla/pjrt/mlir_to_hlo.h
+ M xla/pjrt/mlir_to_hlo_test.cc
+ M xla/pjrt/pjrt_executable_test.cc
+ M xla/pjrt/pjrt_stream_executor_client.cc
+ M xla/xla.proto
+?? xla/pjrt/mlir_to_hlo_unregistered_transform_test.cc
+?? xla/pjrt/stablehlo_module_transform.cc
+?? xla/pjrt/stablehlo_module_transform.h
+?? xla/pjrt/stablehlo_module_transform_test.cc
+225:            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+256:        cfg = Label("//xla:lit.cfg.py"),
+419:    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+451:            Label("//xla/stream_executor/cuda:all_runtime"),
+452:            Label("//xla/tsl/cuda:nvshmem_stub"),
+454:            Label("//xla/tsl/cuda:nccl"),
+510:                   Label("//xla:lit_google_cfg.py"),
+anchored_xla_runtime_label_count=7
+86:    func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
+220:    func.func @main(%arg0: tensor<f32>) -> tensor<f32> {
+100:      {"xla_shuttle_options", std::string("{\"numerics\":\"source_ordered\"}")},
+main_fixture_and_exact_options=PASS
+reverse_application_clean=PASS

@@ -1,0 +1,14 @@
+absolute_iris_client=/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris
+iris_client_version=0.2.0
+iris_client_git_sha=eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+iris_client_worktree_note=uv.lock was already modified; executed client source and installed version were unchanged
+iris_config=/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+iris_config_sha256=aa754a96b975d5e8889ad229100430462aed3b0ff752ff40ab63fea0615bb44e
+client_root=/private/tmp/shuttle-native-mainfixture-client-root.3c2Dtf
+client_root_pyproject_sha256=ca558c8cdb900b8871865568c2e2594b5a0778235c084a5ea0afe9240a1f6a76
+store_metadata_source=/private/tmp/shuttle-native-mainfixture-client-root.3c2Dtf/config/coreweave.yaml
+store_metadata_sha256=b85b7cf024f56e567f44324ad67f0df16b77d80df347eda08edc2494aa6024ed
+client_metadata_scope=client-root-only; outside upload payload
+initial_probe=failed locally before controller contact because client-root pyproject discovery marker was absent
+corrected_probe=job list --prefix /dlwh/shuttle-native-mlir-preflight-20260810-mainfixture
+corrected_probe_result=controller tunnel ready; no jobs found

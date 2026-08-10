@@ -1,0 +1,19 @@
+{
+  "ts": "2026-08-10T13:59:18Z",
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-mainfixture",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "resubmit_command": "/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml job run --no-wait --no-sync --enable-extra-resources --cpu 24 --memory 96GB --disk 250GB --max-retries 0 --timeout 14400 --priority interactive --job-name shuttle-native-mlir-preflight-20260810-mainfixture -- bash run_native_preflight.sh",
+  "restart_count": 0,
+  "submission_count": 1,
+  "submitted_utc": "2026-08-10T14:00:14Z",
+  "monitor_owner": "/root/mlir_native_build",
+  "dashboard": "https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fshuttle-native-mlir-preflight-20260810-mainfixture",
+  "terminal_state": "failed",
+  "terminal_utc": "2026-08-10T14:14:06Z",
+  "task_exit_code": 3,
+  "preflight_exit_code": 3,
+  "failure_gate": "//xla/pjrt:mlir_to_hlo_test",
+  "failure_test": "MlirToHloTest.EnabledModuleTransformReceivesOptions",
+  "restart_count_at_terminal": 0,
+  "submission_count_at_terminal": 1
+}

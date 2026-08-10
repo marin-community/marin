@@ -596,3 +596,19 @@ checks conversion and serialized-options forwarding through the public path.
   pass `diff --check`, reverse in order, and leave a clean exact-pin tree.
 - Native execution of this fixture correction remains pending. No remote build
   was launched for this source-only fix.
+
+## Results 16
+
+- The exact native run passed all six Shuttle gates, including 11/11 lit tests.
+  All four XLA targets compiled and executed: three targets passed, while
+  `//xla/pjrt:mlir_to_hlo_test` passed eight of nine internal tests.
+- `MlirToHloTest.EnabledModuleTransformReceivesOptions` was the only failure.
+  The preceding conversion assertion passed after the fixture rename to
+  `@main`. The post-call lookup of the `test.forwarded_options` module
+  attribute at `mlir_to_hlo_test.cc:110` returned false.
+- This result closes the missing-entry-point failure. It does not establish
+  that options forwarded through the public conversion call are observable on
+  the caller's original module.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-mainfixture/`.
+- This run used one submission with zero retries. No relaunch occurred.
