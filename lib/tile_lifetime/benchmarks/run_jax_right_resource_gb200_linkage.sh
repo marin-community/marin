@@ -15,6 +15,14 @@ readonly RESULT_OUTPUT="${ARTIFACT_DIRECTORY}/result.json"
 
 mkdir -p "${ARTIFACT_DIRECTORY}"
 
+if [[ ! -x "${PYTHON}" ]]; then
+  uv venv --python 3.12 "${SHUTTLE_ROOT}/.venv"
+fi
+
+uv pip install --python "${PYTHON}" \
+  "jax[cuda13]==0.10.1" \
+  "numpy>=2.0"
+
 print_results() {
   local path
   for path in "${PREFLIGHT_OUTPUT}" "${RESULT_OUTPUT}"; do
