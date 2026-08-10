@@ -1,0 +1,11 @@
+xla_revision=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+llvm_revision=9a4faee1068c09efbf837cfb7b0f5693b24635f4
+llvm_adt_directory_small_dense_header_matches=0
+dense_set_header=llvm/include/llvm/ADT/DenseSet.h
+dense_set_header_file_comment=This file defines the DenseSet and SmallDenseSet classes.
+small_dense_set_declaration_line=290
+small_dense_set_declaration=class SmallDenseSet
+source=https://github.com/llvm/llvm-project/tree/9a4faee1068c09efbf837cfb7b0f5693b24635f4/llvm/include/llvm/ADT
+source=https://github.com/llvm/llvm-project/blob/9a4faee1068c09efbf837cfb7b0f5693b24635f4/llvm/include/llvm/ADT/DenseSet.h#L286-L296
+conclusion=the pinned revision has no llvm/ADT/SmallDenseSet.h; llvm/ADT/DenseSet.h declares llvm::SmallDenseSet
+compile_claim=not_run_with_include_replacement

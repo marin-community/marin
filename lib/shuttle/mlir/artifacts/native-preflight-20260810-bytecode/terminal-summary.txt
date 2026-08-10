@@ -1,0 +1,26 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-bytecode (/dlwh/shuttle-native-mlir-preflight-20260810-bytecode)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: Woverloaded-virtual --copt=-Wno-invalid-offsetof --copt=-Wno-final-dtor-non-final-class --copt=-Wnon-virtual-dtor --copt=-Wimplicit-fallthrough --copt=-Wno-builtin-macro-redefined --copt=-Wno-macro-redefined --copt=-Wno-deprecated-register --copt=-Wno-register
+INFO: Found applicable config definition common:linux in file /app/sources/xla/tensorflow.bazelrc: --host_copt=-w --define=PREFIX=/usr --define=LIBDIR=$(PREFIX)/lib --define=INCLUDEDIR=$(PREFIX)/include --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include --cxxopt=-std=c++17 --host_cxxopt=-std=c++17 --experimental_guard_against_concurrent_changes
+WARNING: Option 'local_cpu_resources' is deprecated: --local_cpu_resources is deprecated, please use --local_resources=cpu= instead.
+WARNING: Option 'local_ram_resources' is deprecated: --local_ram_resources is deprecated, please use --local_resources=memory= instead.
+INFO: Analyzed target @@shuttle_mlir//:ShuttleDialect (0 packages loaded, 1577 targets configured).
+ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:75:11: Compiling lib/IR/ShuttleDialect.cc failed: (Exit 1): clang failed: error executing CppCompile command (from target @@shuttle_mlir//:ShuttleDialect) external/rules_ml_toolchain/cc/impls/linux_x86_64_linux_x86_64/wrappers/clang -MD -MF bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/ShuttleDialect/ShuttleDialect.d ... (remaining 212 arguments skipped)
+external/shuttle_mlir/lib/IR/ShuttleDialect.cc:18:10: fatal error: 'llvm/ADT/SmallDenseSet.h' file not found
+   18 | #include "llvm/ADT/SmallDenseSet.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~
+1 error generated.
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 36.096s, Critical Path: 13.38s
+INFO: 848 processes: 145 internal, 703 local.
+ERROR: Build did NOT complete successfully
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T09:20:55Z
+
+
+  TASK  STATE      EXIT  DURATION                    PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 28.15 seconds  -           -          Woverloaded-virtual --copt=-Wno-invalid-offsetof --copt=-Wno-final-dtor-non-final-class --copt=-Wnon-virtual-dtor --c...

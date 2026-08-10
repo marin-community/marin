@@ -93,3 +93,33 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   checkpoint does not authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-fixed/README.md`
+
+### 2026-08-10 - Native dialect compile after bytecode include correction
+
+- Hypothesis: declaring MLIR's bytecode operation interface in the public
+  Shuttle operations header allows the ordered native target matrix to reach
+  `shuttle-opt`, lit, and the four patched XLA tests.
+- Commit Hash: `412928d5aee2325d178b6a0efd1eb8383e46c7c6` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-bytecode/`, requesting
+  24 CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; LLVM
+  `9a4faee1068c09efbf837cfb7b0f5693b24635f4`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: `@shuttle_mlir//:shuttle_ops_inc_gen` passed. The following
+  `@shuttle_mlir//:ShuttleDialect` target failed compiling
+  `ShuttleDialect.cc:18` because `llvm/ADT/SmallDenseSet.h` does not exist at
+  the pinned LLVM revision. `shuttle-opt`, lit, and all four XLA tests did not
+  run.
+- Interpretation: the bytecode include correction advanced the ordered run to
+  the explicit dialect compile gate. The pinned LLVM revision declares
+  `llvm::SmallDenseSet` in `llvm/ADT/DenseSet.h` rather than a dedicated
+  `SmallDenseSet.h` header.
+- Next action: independently review an include-only correction against the
+  exact pin before any new native run. This checkpoint does not authorize a
+  relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-bytecode/README.md`
