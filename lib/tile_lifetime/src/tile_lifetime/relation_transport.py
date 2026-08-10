@@ -10,7 +10,7 @@ Map, Contract, Fold, and automatic differentiation remain outside transport.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -30,6 +30,7 @@ from tile_lifetime.event_dataflow import (
     TaskRelation,
     derive_event_tensor_plan,
     event_tensor_runtime_inputs,
+    execute_event_dataflow,
     phased_event_storage_binding,
     verify_event_dataflow_program,
 )
@@ -361,7 +362,29 @@ class RelationTilePipelinePlan:
     owned_events: tuple[OwnedEventTensorPlan, ...]
     stage_families: tuple[TaskFamily, ...]
     source_fold: TaskFamily
+    tile_domain: RelationTileTaskDomain
     kernelization_candidates: tuple[KernelGroupCandidate, ...]
+
+
+@dataclass(frozen=True)
+class RelationTileTaskDomain:
+    """Runtime-valid dynamic tiles or explicitly masked fixed-capacity tiles."""
+
+    logical_coordinate_by_task: tuple[tuple[int, int, int], ...]
+    active_by_task: tuple[bool, ...]
+    task_by_destination_row: tuple[int, ...]
+    padding_is_masked: bool
+
+    def __post_init__(self) -> None:
+        if len(self.logical_coordinate_by_task) != len(self.active_by_task):
+            raise ValueError("every tile task must have one logical coordinate and active predicate")
+        if any(task < -1 or task >= len(self.active_by_task) for task in self.task_by_destination_row):
+            raise ValueError("destination-row tile mapping is outside the tile task domain")
+        represented_tasks = {task for task in self.task_by_destination_row if task >= 0}
+        if represented_tasks != set(range(len(self.active_by_task))):
+            raise ValueError("every tile task must represent at least one destination row")
+        if not self.padding_is_masked and not all(self.active_by_task):
+            raise ValueError("inactive tile tasks require an explicit padding mask")
 
 
 @dataclass(frozen=True)
@@ -683,15 +706,17 @@ def derive_transport_field_flow(
         generation_policy=EventGenerationPolicy.PHASED,
         scheduling_mode=EventSchedulingMode.DYNAMIC,
     )
-    binding = phased_event_storage_binding(
-        plan,
-        slot=lambda coordinate: join_tasks.coordinates.index(coordinate),
-        generation=lambda _coordinate: epoch.stored_generation,
-    )
+    binding = _phase_strided_event_storage_binding(plan, epoch)
     runtime_inputs = event_tensor_runtime_inputs(plan, storage_binding=binding)
     dataflow = EventDataflowProgram((transfer_rows, join_tasks), (dependence,), (plan,))
     verify_event_dataflow_program(dataflow)
-    owned = OwnedEventTensorPlan(plan, runtime_inputs, tuple(owner_ranks), owner_placement, plan.name)
+    owned = OwnedEventTensorPlan(
+        plan,
+        runtime_inputs,
+        tuple(owner_ranks),
+        owner_placement,
+        f"{plan.name}.phase{epoch.phase}",
+    )
     return TransportFieldFlowPlan(
         name=name,
         field=field,
@@ -757,18 +782,8 @@ def derive_relation_tile_pipeline(
         raise ValueError("pipeline dispatch flows must move toward destination work")
     if any(flow.direction is not TransportDirection.DESTINATION_TO_SOURCE for flow in return_flows):
         raise ValueError("pipeline return flows must preserve exact source-edge identity")
-    template = runtime.template
-    macrobatch_count = max(
-        1,
-        max(template.destination_row_capacity_by_item, default=0) // template.macrobatch_rows
-        + int(max(template.destination_row_capacity_by_item, default=0) % template.macrobatch_rows != 0),
-    )
-    tile_count = template.macrobatch_rows // template.tile_rows
-    tile_axes = (
-        TaskAxis("destination_item", runtime.destination_item_count),
-        TaskAxis("macrobatch", macrobatch_count),
-        TaskAxis("tile", tile_count),
-    )
+    tile_domain = _derive_relation_tile_task_domain(runtime)
+    tile_axes = (TaskAxis("tile_task", len(tile_domain.logical_coordinate_by_task)),)
     stage_family_by_name = {
         stage.name: TaskFamily(stage.name, tile_axes, placement="destination_compute_workers") for stage in graph.stages
     }
@@ -798,7 +813,7 @@ def derive_relation_tile_pipeline(
     exit_stage = stage_family_by_name[graph.exit_stage]
     for flow in dispatch_flows:
         pairs = tuple(
-            ((row,), _destination_tile_coordinate(runtime, row)) for row in range(runtime.destination_row_count)
+            ((row,), (tile_task,)) for row, tile_task in enumerate(tile_domain.task_by_destination_row) if tile_task >= 0
         )
         dependences.append(TaskDependence(TaskRelation.from_pairs(flow.join_tasks, entry, pairs), visibility))
 
@@ -809,7 +824,9 @@ def derive_relation_tile_pipeline(
         dependences.append(
             TaskDependence(
                 TaskRelation.from_pairs(
-                    source, target, tuple((coordinate, coordinate) for coordinate in tile_coordinates)
+                    source,
+                    target,
+                    tuple((coordinate, coordinate) for coordinate in tile_coordinates),
                 ),
                 visibility,
             )
@@ -818,7 +835,7 @@ def derive_relation_tile_pipeline(
     for flow in return_flows:
         pairs = tuple(
             (
-                _destination_tile_coordinate(runtime, int(runtime.edge_to_destination_row[edge])),
+                (tile_domain.task_by_destination_row[int(runtime.edge_to_destination_row[edge])],),
                 (
                     (
                         int(runtime.exact_transport_row_to_capacity_slot[transport_row])
@@ -840,8 +857,8 @@ def derive_relation_tile_pipeline(
     stage_families = tuple(stage_family_by_name[stage.name] for stage in graph.stages)
     task_families.extend((*stage_families, source_fold))
     for family in stage_families:
-        owner_for_target[family] = lambda coordinate, runtime=runtime: int(
-            runtime.destination_rank_by_item[coordinate[0]]
+        owner_for_target[family] = lambda coordinate, runtime=runtime, tile_domain=tile_domain: int(
+            runtime.destination_rank_by_item[tile_domain.logical_coordinate_by_task[coordinate[0]][0]]
         )
     owner_for_target[source_fold] = lambda coordinate, runtime=runtime: int(runtime.source_rank_by_item[coordinate[0]])
     for flow in return_flows:
@@ -885,7 +902,7 @@ def derive_relation_tile_pipeline(
         KernelGroupCandidate(TransportKernelizationPolicy.TILE, (sequence[:split_index], sequence[split_index:])),
         KernelGroupCandidate(TransportKernelizationPolicy.FULL, (sequence,)),
     )
-    return RelationTilePipelinePlan(program, owned_events, stage_families, source_fold, candidates)
+    return RelationTilePipelinePlan(program, owned_events, stage_families, source_fold, tile_domain, candidates)
 
 
 def execute_dispatch_field(
@@ -965,6 +982,88 @@ def execute_return_field(
     return output
 
 
+def execute_transport_field_flow_reference(
+    runtime: RelationTransportRuntimeMetadata,
+    flow: TransportFieldFlowPlan,
+    payload: np.ndarray,
+) -> np.ndarray:
+    """Execute numerical gather/scatter actions through the EventDataflow interpreter."""
+    field = flow.field
+    if flow.direction is TransportDirection.SOURCE_TO_DESTINATION:
+        leading_shape = (
+            (runtime.source_item_count,)
+            if field.logical_domain is TransportPayloadDomain.SOURCE_ITEM
+            else (runtime.source_item_count, runtime.route_slots)
+        )
+        output_shape = (runtime.destination_row_count, *field.trailing_shape)
+    else:
+        leading_shape = (runtime.destination_row_count,)
+        output_shape = (runtime.source_item_count, runtime.route_slots, *field.trailing_shape)
+    _validate_payload(payload, leading_shape, field.trailing_shape, field.name)
+
+    compact_to_physical = (
+        runtime.coalesced_transport_row_to_capacity_slot
+        if flow.row_granularity is TransportRowGranularity.SOURCE_DESTINATION
+        else runtime.exact_transport_row_to_capacity_slot
+    )
+    if runtime.template.capacity_mode is TransportCapacityMode.DYNAMIC:
+        compact_to_physical = np.arange(compact_to_physical.shape[0], dtype=np.int32)
+    physical_to_compact = np.full(flow.transfer_rows.axes[0].extent, -1, dtype=np.int32)
+    physical_to_compact[compact_to_physical] = np.arange(compact_to_physical.shape[0], dtype=np.int32)
+    transported = np.zeros((flow.transfer_rows.axes[0].extent, *field.trailing_shape), dtype=payload.dtype)
+    output = np.zeros(output_shape, dtype=payload.dtype)
+
+    def transfer_action(coordinate: tuple[int, ...], _state: MutableMapping[str, object]) -> None:
+        physical_row = coordinate[0]
+        compact_row = int(physical_to_compact[physical_row])
+        if compact_row < 0:
+            return
+        if flow.direction is TransportDirection.DESTINATION_TO_SOURCE:
+            edge = int(runtime.exact_edge_by_transport_row[compact_row])
+            transported[physical_row] = payload[runtime.edge_to_destination_row[edge]]
+        elif field.logical_domain is TransportPayloadDomain.SOURCE_ITEM:
+            transported[physical_row] = payload[runtime.coalesced_source_item[compact_row]]
+        else:
+            edge = int(runtime.exact_edge_by_transport_row[compact_row])
+            transported[physical_row] = payload[
+                runtime.edge_source_item[edge],
+                runtime.edge_route_slot[edge],
+            ]
+
+    def join_action(coordinate: tuple[int, ...], _state: MutableMapping[str, object]) -> None:
+        if flow.direction is TransportDirection.SOURCE_TO_DESTINATION:
+            destination_row = coordinate[0]
+            edge = int(runtime.destination_row_to_edge[destination_row])
+            if edge < 0:
+                return
+            compact_row = (
+                runtime.edge_to_coalesced_transport_row[edge]
+                if flow.row_granularity is TransportRowGranularity.SOURCE_DESTINATION
+                else runtime.edge_to_exact_transport_row[edge]
+            )
+            output[destination_row] = transported[compact_to_physical[compact_row]]
+            return
+        source_item, route_slot = coordinate
+        edge = source_item * runtime.route_slots + route_slot
+        if not runtime.edge_valid[edge]:
+            return
+        compact_row = runtime.edge_to_exact_transport_row[edge]
+        output[source_item, route_slot] = transported[compact_to_physical[compact_row]]
+
+    execute_event_dataflow(
+        flow.dataflow,
+        actions={
+            flow.transfer_rows.name: transfer_action,
+            flow.join_tasks.name: join_action,
+        },
+        state={},
+        scheduling_mode=EventSchedulingMode.DYNAMIC,
+        generation=flow.epoch.stored_generation,
+        random_seed=17,
+    )
+    return output
+
+
 def _derive_invocation(
     runtime: RelationTransportRuntimeMetadata,
     *,
@@ -1003,22 +1102,76 @@ def _own_event_plan(
     owner: Callable[[tuple[int, ...]], int],
     epoch: TransportEpochBinding,
 ) -> OwnedEventTensorPlan:
-    binding = phased_event_storage_binding(
-        plan,
-        slot=lambda coordinate: plan.domain.coordinates.index(coordinate),
-        generation=lambda _coordinate: epoch.stored_generation,
-    )
+    binding = _phase_strided_event_storage_binding(plan, epoch)
     runtime_inputs = event_tensor_runtime_inputs(plan, storage_binding=binding)
     return OwnedEventTensorPlan(
         plan,
         runtime_inputs,
         tuple(owner(coordinate) for coordinate in plan.domain.coordinates),
         plan.trigger_relation.target.placement or "unspecified",
-        plan.name,
+        f"{plan.name}.phase{epoch.phase}",
     )
 
 
-def _destination_tile_coordinate(
+def _phase_strided_event_storage_binding(
+    plan: EventTensorPlan,
+    epoch: TransportEpochBinding,
+):
+    coordinates = plan.domain.coordinates
+    coordinate_index = {coordinate: index for index, coordinate in enumerate(coordinates)}
+    phase_offset = epoch.phase * len(coordinates)
+    return phased_event_storage_binding(
+        plan,
+        slot=lambda coordinate: phase_offset + coordinate_index[coordinate],
+        generation=lambda _coordinate: epoch.stored_generation,
+    )
+
+
+def _derive_relation_tile_task_domain(
+    runtime: RelationTransportRuntimeMetadata,
+) -> RelationTileTaskDomain:
+    task_by_row = np.full(runtime.destination_row_count, -1, dtype=np.int32)
+    logical_coordinates: list[tuple[int, int, int]] = []
+    active: list[bool] = []
+    if runtime.template.capacity_mode is TransportCapacityMode.DYNAMIC:
+        task_by_logical_coordinate: dict[tuple[int, int, int], int] = {}
+        for destination_row in np.flatnonzero(runtime.destination_row_valid):
+            logical_coordinate = _logical_tile_coordinate(runtime, int(destination_row))
+            tile_task = task_by_logical_coordinate.setdefault(logical_coordinate, len(task_by_logical_coordinate))
+            if tile_task == len(logical_coordinates):
+                logical_coordinates.append(logical_coordinate)
+                active.append(True)
+            task_by_row[destination_row] = tile_task
+        return RelationTileTaskDomain(
+            tuple(logical_coordinates),
+            tuple(active),
+            tuple(int(value) for value in task_by_row),
+            padding_is_masked=False,
+        )
+
+    for destination_item, capacity in enumerate(runtime.template.destination_row_capacity_by_item):
+        group_offset = int(runtime.destination_group_offset_by_item[destination_item])
+        for tile_start in range(0, capacity, runtime.template.tile_rows):
+            logical_coordinate = (
+                destination_item,
+                tile_start // runtime.template.macrobatch_rows,
+                tile_start % runtime.template.macrobatch_rows // runtime.template.tile_rows,
+            )
+            tile_task = len(logical_coordinates)
+            logical_coordinates.append(logical_coordinate)
+            tile_stop = min(tile_start + runtime.template.tile_rows, capacity)
+            rows = np.arange(group_offset + tile_start, group_offset + tile_stop, dtype=np.int32)
+            task_by_row[rows] = tile_task
+            active.append(bool(np.any(runtime.destination_row_valid[rows])))
+    return RelationTileTaskDomain(
+        tuple(logical_coordinates),
+        tuple(active),
+        tuple(int(value) for value in task_by_row),
+        padding_is_masked=True,
+    )
+
+
+def _logical_tile_coordinate(
     runtime: RelationTransportRuntimeMetadata,
     destination_row: int,
 ) -> tuple[int, int, int]:

@@ -35,6 +35,7 @@ from tile_lifetime.relation_transport import (
     derive_transport_field_flow,
     execute_dispatch_field,
     execute_return_field,
+    execute_transport_field_flow_reference,
 )
 
 _SOURCE_RANK = np.asarray([2, 0, 2, 0, 2, 0], dtype=np.int32)
@@ -263,19 +264,55 @@ def test_fixed_capacity_validates_rows_and_empty_destination_readiness() -> None
     assert tuple(index for index, count in enumerate(counts) if count == 0) == expected_ready
     assert flow.readiness.runtime_inputs.initially_ready_events == expected_ready
     assert flow.transfer_rows.axes[0].extent == sum(sum(row) for row in runtime.template.coalesced_capacity_by_rank_pair)
-    flow_execution = execute_event_dataflow(
-        flow.dataflow,
-        actions={family.name: lambda _coordinate, _state: None for family in flow.dataflow.task_families},
-        state={},
+    source = np.arange(18, dtype=np.float32).reshape(6, 3)
+    joined = execute_dispatch_field(runtime, flow.field, source)
+    scheduled_joined = execute_transport_field_flow_reference(runtime, flow, source)
+    assert np.array_equal(scheduled_joined, joined)
+    for row in np.flatnonzero(runtime.destination_row_valid):
+        assert np.array_equal(joined[row], source[runtime.destination_row_source_item[row]])
+
+    return_flow = derive_transport_field_flow(
+        runtime,
+        field=_field("edge_result", TransportPayloadDomain.RELATION_EDGE),
+        direction=TransportDirection.DESTINATION_TO_SOURCE,
+        name="fixed_return",
+        epoch=_epoch(),
+    )
+    fixed_pipeline = derive_relation_tile_pipeline(
+        runtime,
+        dispatch_flows=(flow,),
+        return_flows=(return_flow,),
+        graph=_pipeline_graph(),
+        epoch=_epoch(),
+    )
+    assert fixed_pipeline.tile_domain.padding_is_masked
+    assert any(not active for active in fixed_pipeline.tile_domain.active_by_task)
+    fixed_entry = fixed_pipeline.stage_families[0]
+    fixed_entry_events = tuple(
+        owned for owned in fixed_pipeline.owned_events if owned.plan.trigger_relation.target == fixed_entry
+    )
+    assert fixed_entry_events
+    assert all(count.value > 0 for owned in fixed_entry_events for count in owned.plan.initial_count.counts)
+    fixed_state: dict[str, object] = {"active_stage_tasks": 0}
+    fixed_actions = {family.name: lambda _coordinate, _state: None for family in fixed_pipeline.program.task_families}
+
+    def execute_masked_tile(coordinate, state) -> None:
+        if fixed_pipeline.tile_domain.active_by_task[coordinate[0]]:
+            state["active_stage_tasks"] = int(state["active_stage_tasks"]) + 1
+
+    for stage_family in fixed_pipeline.stage_families:
+        fixed_actions[stage_family.name] = execute_masked_tile
+    execute_event_dataflow(
+        fixed_pipeline.program,
+        actions=fixed_actions,
+        state=fixed_state,
         scheduling_mode=EventSchedulingMode.DYNAMIC,
         generation=flow.epoch.stored_generation,
         random_seed=5,
     )
-    assert len(flow_execution.executed_tasks) == sum(len(family.coordinates) for family in flow.dataflow.task_families)
-    source = np.arange(18, dtype=np.float32).reshape(6, 3)
-    joined = execute_dispatch_field(runtime, flow.field, source)
-    for row in np.flatnonzero(runtime.destination_row_valid):
-        assert np.array_equal(joined[row], source[runtime.destination_row_source_item[row]])
+    assert fixed_state["active_stage_tasks"] == sum(fixed_pipeline.tile_domain.active_by_task) * len(
+        fixed_pipeline.stage_families
+    )
 
 
 def test_epoch_protocol_requires_ordered_phase_and_wrap_resets() -> None:
@@ -289,6 +326,12 @@ def test_epoch_protocol_requires_ordered_phase_and_wrap_resets() -> None:
     assert first.phase == 0
     assert first.stored_generation == 0
     assert not first.reset_transitions
+    second_phase = bind_transport_epoch(
+        protocol,
+        1,
+        completed_epochs=frozenset(),
+        completed_resets=frozenset(),
+    )
 
     with pytest.raises(ValueError, match="live phase"):
         bind_transport_epoch(protocol, 2, completed_epochs=frozenset(), completed_resets=frozenset())
@@ -326,6 +369,73 @@ def test_epoch_protocol_requires_ordered_phase_and_wrap_resets() -> None:
     )
     assert all(transition.task_name.startswith("reset_") for transition in wrapped.reset_transitions)
     assert all(transition.ordered_before_initialization for transition in wrapped.reset_transitions)
+
+    runtime = _runtime()
+    source_field = _field("phase_source", TransportPayloadDomain.SOURCE_ITEM)
+    result_field = _field("phase_result", TransportPayloadDomain.RELATION_EDGE)
+
+    def field_pair(epoch_binding):
+        return (
+            derive_transport_field_flow(
+                runtime,
+                field=source_field,
+                direction=TransportDirection.SOURCE_TO_DESTINATION,
+                name="phase_dispatch",
+                epoch=epoch_binding,
+            ),
+            derive_transport_field_flow(
+                runtime,
+                field=result_field,
+                direction=TransportDirection.DESTINATION_TO_SOURCE,
+                name="phase_return",
+                epoch=epoch_binding,
+            ),
+        )
+
+    dispatch0, return0 = field_pair(first)
+    dispatch1, return1 = field_pair(second_phase)
+    dispatch2, return2 = field_pair(reused)
+    dispatch4, return4 = field_pair(wrapped)
+    slots0 = dispatch0.readiness.runtime_inputs.event_storage_slots
+    slots1 = dispatch1.readiness.runtime_inputs.event_storage_slots
+    assert set(slots0).isdisjoint(slots1)
+    assert dispatch0.readiness.storage_namespace != dispatch1.readiness.storage_namespace
+    assert dispatch2.readiness.runtime_inputs.event_storage_slots == slots0
+    assert dispatch2.readiness.storage_namespace == dispatch0.readiness.storage_namespace
+    assert dispatch2.readiness.runtime_inputs.event_generations == (1,) * len(slots0)
+    assert dispatch4.readiness.runtime_inputs.event_storage_slots == slots0
+    assert dispatch4.readiness.storage_namespace == dispatch0.readiness.storage_namespace
+    assert dispatch4.readiness.runtime_inputs.event_generations == (0,) * len(slots0)
+
+    pipelines = tuple(
+        derive_relation_tile_pipeline(
+            runtime,
+            dispatch_flows=(dispatch,),
+            return_flows=(returned,),
+            graph=_pipeline_graph(),
+            epoch=epoch_binding,
+        )
+        for dispatch, returned, epoch_binding in (
+            (dispatch0, return0, first),
+            (dispatch1, return1, second_phase),
+            (dispatch2, return2, reused),
+            (dispatch4, return4, wrapped),
+        )
+    )
+    owned_by_name = tuple({owned.plan.name: owned for owned in pipeline.owned_events} for pipeline in pipelines)
+    for name in owned_by_name[0]:
+        phase0 = owned_by_name[0][name].runtime_inputs
+        phase1 = owned_by_name[1][name].runtime_inputs
+        phase2 = owned_by_name[2][name].runtime_inputs
+        phase4 = owned_by_name[3][name].runtime_inputs
+        assert set(phase0.event_storage_slots).isdisjoint(phase1.event_storage_slots)
+        assert owned_by_name[0][name].storage_namespace != owned_by_name[1][name].storage_namespace
+        assert phase2.event_storage_slots == phase0.event_storage_slots
+        assert owned_by_name[2][name].storage_namespace == owned_by_name[0][name].storage_namespace
+        assert phase4.event_storage_slots == phase0.event_storage_slots
+        assert owned_by_name[3][name].storage_namespace == owned_by_name[0][name].storage_namespace
+        assert phase2.event_generations == (1,) * len(phase2.event_generations)
+        assert phase4.event_generations == (0,) * len(phase4.event_generations)
 
 
 def test_tile_pipeline_keeps_exact_graph_separate_from_kernelization_candidates() -> None:
@@ -365,8 +475,23 @@ def test_tile_pipeline_keeps_exact_graph_separate_from_kernelization_candidates(
     assert len(pipeline_execution.executed_tasks) == sum(
         len(family.coordinates) for family in pipeline.program.task_families
     )
-    assert pipeline.stage_families[0].axes[1].name == "macrobatch"
-    assert pipeline.stage_families[0].axes[2].name == "tile"
+    assert pipeline.stage_families[0].axes[0].name == "tile_task"
+    assert not pipeline.tile_domain.padding_is_masked
+    assert all(pipeline.tile_domain.active_by_task)
+    assert all(
+        pipeline.tile_domain.task_by_destination_row[row] == -1
+        for row in np.flatnonzero(~training.runtime.destination_row_valid)
+    )
+    entry_readiness = tuple(
+        owned for owned in pipeline.owned_events if owned.plan.trigger_relation.target == pipeline.stage_families[0]
+    )
+    assert entry_readiness
+    assert all(count.value > 0 for owned in entry_readiness for count in owned.plan.initial_count.counts)
+    assert all(not owned.runtime_inputs.initially_ready_events for owned in entry_readiness)
+    compute_readiness = tuple(
+        owned for owned in pipeline.owned_events if owned.plan.trigger_relation.target in pipeline.stage_families
+    )
+    assert all(count.value > 0 for owned in compute_readiness for count in owned.plan.initial_count.counts)
     candidates = {candidate.policy: candidate for candidate in pipeline.kernelization_candidates}
     assert set(candidates) == {
         TransportKernelizationPolicy.NONE,
