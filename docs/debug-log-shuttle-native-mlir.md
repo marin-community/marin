@@ -183,6 +183,36 @@ indexed access at zero.
 - Native compilation remains pending. This debugging task does not claim the
   verifier compiles after this source fix.
 
+## Hypothesis 6
+
+The generated Shuttle dialect declarations are compiled, but their generated
+definitions are never included in the dialect library.
+
+The exact-pin native build compiled `ShuttleDialect` and `ShuttlePasses`, then
+failed while linking `shuttle-opt`. The unresolved symbols were the
+`ShuttleDialect` constructor and its `TypeIDResolver` storage. The Bazel target
+generates `ShuttleDialect.cc.inc`, but no source includes it. Exact pinned MLIR
+dialect implementations include their generated dialect definition file once
+at global scope before handwritten dialect methods.
+
+Include `ShuttleDialect.cc.inc` after the generated attribute and operation
+definitions and before the `mlir::shuttle` namespace containing handwritten
+methods.
+
+## Results 6
+
+- The generated-definition audit found one enum definition include, one
+  attribute class-definition include, and one operation class-definition
+  include. Attribute and operation files are additionally included under
+  `GET_ATTRDEF_LIST` and `GET_OP_LIST`; those expansions register types and do
+  not duplicate definitions.
+- `ShuttleDialect.h.inc` is included once by the public header. The matching
+  `ShuttleDialect.cc.inc` had no include and is now included once by the dialect
+  implementation, following the exact-pin MLIR pattern.
+- Repository formatting and lint gates run on the changed files.
+- Native linking remains pending. This debugging task does not claim the
+  unresolved dialect symbols are fixed until the exact-pin binary links.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
