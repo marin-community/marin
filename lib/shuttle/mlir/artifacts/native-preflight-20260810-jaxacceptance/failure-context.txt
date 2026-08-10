@@ -1,0 +1,20 @@
+First failed gate: //jaxlib/tools:jaxlib_wheel
+Failure source: external/shuttle_mlir/lib/Transforms/PythonObserverTestBridge.cc
+Wheel result: no wheel produced
+Acceptance workers executed: 0
+
+external/shuttle_mlir/lib/Transforms/PythonObserverTestBridge.cc:19:13: error: no matching constructor for initialization of 'nb::tuple'
+   19 |   nb::tuple record(11);
+      |             ^      ~~
+external/shuttle_mlir/lib/Transforms/PythonObserverTestBridge.cc:37:13: error: no matching constructor for initialization of 'nb::tuple'
+   37 |   nb::tuple records(events.size());
+      |             ^       ~~~~~~~~~~~~~
+external/nanobind/include/nanobind/nb_accessor.h:200:23: error: static assertion failed due to requirement '!is_tuple': tuples are immutable!
+  200 |         static_assert(!is_tuple, "tuples are immutable!");
+      |                       ^~~~~~~~~
+
+Bazel summary:
+INFO: Analyzed target //jaxlib/tools:jaxlib_wheel (497 packages loaded, 44062 targets configured).
+INFO: Elapsed time: 899.814s, Critical Path: 128.26s
+INFO: 19354 processes: 6770 internal, 12584 local.
+ERROR: Build did NOT complete successfully

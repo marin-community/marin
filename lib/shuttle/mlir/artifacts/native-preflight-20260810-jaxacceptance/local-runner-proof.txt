@@ -1,0 +1,76 @@
++ readonly PAYLOAD=/private/tmp/shuttle-native-jaxacceptance-client-root/payload
++ PAYLOAD=/private/tmp/shuttle-native-jaxacceptance-client-root/payload
++ readonly CANONICAL=/private/tmp/shuttle-jax-acceptance-370efa95
++ CANONICAL=/private/tmp/shuttle-jax-acceptance-370efa95
++ readonly XLA=/private/tmp/shuttle-native-jaxacceptance-proof-370/xla
++ XLA=/private/tmp/shuttle-native-jaxacceptance-proof-370/xla
++ readonly JAX=/private/tmp/shuttle-native-jaxacceptance-proof-370/jax
++ JAX=/private/tmp/shuttle-native-jaxacceptance-proof-370/jax
++ readonly BAZEL=/private/tmp/bazel-7.7.0-darwin-arm64
++ BAZEL=/private/tmp/bazel-7.7.0-darwin-arm64
++ readonly OUTPUT_ROOT=/private/tmp/shuttle-native-jaxacceptance-proof-370/bazel-output
++ OUTPUT_ROOT=/private/tmp/shuttle-native-jaxacceptance-proof-370/bazel-output
+++ git -C /private/tmp/shuttle-jax-acceptance-370efa95 rev-parse HEAD
++ test 370efa95c9ceaac2f80bcd2b2357752659c31715 = 370efa95c9ceaac2f80bcd2b2357752659c31715
+++ git -C /private/tmp/shuttle-jax-acceptance-370efa95 status --short
++ test -z ''
+++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla rev-parse HEAD
++ test 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69 = 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax rev-parse HEAD
++ test 619764c15117fbefc4ba13ab941871cb514c23f6 = 619764c15117fbefc4ba13ab941871cb514c23f6
+++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla status --short
++ test -z ''
+++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax status --short
++ test -z ''
+++ find /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle -type f
+++ wc -l
+++ tr -d '[:space:]'
++ test 82 = 82
++ test '!' -e /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/artifacts
+++ find /private/tmp/shuttle-native-jaxacceptance-client-root/payload -type f '(' -path '*/config/*' -o -name coreweave.yaml ')'
+++ wc -l
+++ tr -d '[:space:]'
++ test 0 = 0
++ diff -ru --exclude=artifacts /private/tmp/shuttle-jax-acceptance-370efa95/lib/shuttle /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle
++ bash -n /private/tmp/shuttle-native-jaxacceptance-client-root/payload/run_jax_acceptance_preflight.sh
++ rg -n 'nvidia-smi|rocminfo|jax\.devices|jax\.local_devices|accelerator' /private/tmp/shuttle-native-jaxacceptance-client-root/payload/run_jax_acceptance_preflight.sh
++ XLA_PATCHES=("${PAYLOAD}/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch" "${PAYLOAD}/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch")
++ readonly -a XLA_PATCHES
++ JAX_PATCHES=("${PAYLOAD}/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch" "${PAYLOAD}/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch")
++ readonly -a JAX_PATCHES
++ for patch in '"${XLA_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ for patch in '"${XLA_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( index=2 - 1 ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply --reverse --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla apply --reverse --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/xla diff --check
++ for patch in '"${JAX_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ for patch in '"${JAX_PATCHES[@]}"'
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ (( index=2 - 1 ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply --reverse --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax apply --reverse --check /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
++ (( index-- ))
++ (( index >= 0 ))
++ git -C /private/tmp/shuttle-native-jaxacceptance-proof-370/jax diff --check
+++ grep -Fc 'Label("//xla' /private/tmp/shuttle-native-jaxacceptance-proof-370/xla/xla/lit.bzl
++ test 7 = 7
++ HERMETIC_PYTHON_VERSION=3.12
++ python3 /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir/jax_patch/verify_acceptance_patch.py --bazel /private/tmp/bazel-7.7.0-darwin-arm64 --jax-source /private/tmp/shuttle-native-jaxacceptance-proof-370/jax --xla-source /private/tmp/shuttle-native-jaxacceptance-proof-370/xla --shuttle-mlir /private/tmp/shuttle-native-jaxacceptance-client-root/payload/lib/shuttle/mlir --output-user-root /private/tmp/shuttle-native-jaxacceptance-proof-370/bazel-output
++ printf 'local_payload_proof=PASS\n'
+local_payload_proof=PASS

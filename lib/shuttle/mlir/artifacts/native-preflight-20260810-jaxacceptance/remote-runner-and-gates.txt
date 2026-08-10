@@ -1,0 +1,50 @@
+Remote runner proof and gate summary
+
+source=370efa95c9ceaac2f80bcd2b2357752659c31715
+jax=619764c15117fbefc4ba13ab941871cb514c23f6
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+llvm=9a4faee1068c09efbf837cfb7b0f5693b24635f4
+xla_patch_order=0001,0002
+jax_patch_order=0001,0002
+apply_check=PASS_ALL_FOUR
+reverse_apply_check=PASS_ALL_FOUR
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+configured_cquery_verifier=PASS
+pure_acceptance_and_verifier_tests=PASS_34_OF_34
+fixture_oracle=PASS
+bundled_shuttle_source_files=82
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=20.624s actions=1
+@shuttle_mlir//:ShuttleDialect PASS elapsed=54.388s actions=952
+@shuttle_mlir//:ShuttlePasses PASS elapsed=72.654s actions=498
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=4.193s actions=191
+@shuttle_mlir//:ShuttleXlaRegistryAdapter PASS elapsed=2.201s actions=12
+@shuttle_mlir//:ShuttleObserverTestBridge PASS elapsed=1.572s actions=9
+@shuttle_mlir//:shuttle-opt PASS elapsed=59.424s actions=778
+
+@shuttle_mlir//:xla_registration_test PASS_UNCACHED elapsed=39.557s tests=1/1 actions=397
+@shuttle_mlir//:xla_registry_adapter_test PASS_UNCACHED elapsed=13.180s tests=1/1 actions=24
+@shuttle_mlir//:pipeline_observer_test PASS_UNCACHED elapsed=4.582s tests=1/1 actions=9
+@shuttle_mlir//:observer_test_bridge_test PASS_UNCACHED elapsed=3.490s tests=1/1 actions=10
+
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=33.872s actions=591
+bazel test @shuttle_mlir//:mlir_tests PASS_UNCACHED elapsed=1.278s tests=17/17 actions=18
+
+//xla/pjrt:stablehlo_module_transform_test PASS_UNCACHED elapsed=325.466s
+//xla/pjrt:mlir_to_hlo_test PASS_UNCACHED elapsed=15.423s
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS_UNCACHED elapsed=17.000s
+//xla/pjrt:pjrt_executable_test PASS_UNCACHED elapsed=13.275s
+xla_tests=PASS_4_OF_4_UNCACHED
+
+//jaxlib/tools:jaxlib_wheel FAIL_COMPILE elapsed=899.814s actions=19354
+failed_target=@@shuttle_mlir//:ShuttlePythonObserverTestBridge
+wheel_produced=false
+wheel_sha256=not_applicable
+isolated_install=NOT_RUN
+acceptance_disabled_baseline=NOT_RUN
+acceptance_concurrency_lifetime=NOT_RUN
+acceptance_cache_populate=NOT_RUN
+acceptance_cache_reuse=NOT_RUN
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T19:27:41Z
