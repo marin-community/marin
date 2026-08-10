@@ -52,13 +52,17 @@ from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_tokenizer import marin_tokenizer
 
-# Shared with the FSDP sweep grid (issue #7856): 8192-token sequences, 512 sliding window with global
-# attention every 4th layer + the final layer, and the 60x token budget's step count per size.
-SEQ_LEN = 8192
-SMALL_BATCH_SIZE = 128
-# Sequence-length sweeps hold tokens per step constant, so the token budget and the per-shard
-# routing capacity stay fixed and only the context length moves.
+# The EP sweep (issue #8062) settings: 4096-token sequences at batch 1024, 2048 sliding window with
+# global attention every 4th layer plus the final layer, and the 750x token budget per size.
+SEQ_LEN = 4096
+SMALL_BATCH_SIZE = 1024
+# Tokens per step are fixed at ~4M (batch 1024 x seq 4096) to approximate the per-shard token-dropping
+# dynamics under the fixed_all_to_all EP MoE; a sequence-length sweep holds this constant and moves only
+# the context length.
 TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
+# shape.num_steps carry the 60x step count at the #7856 grid's 128x8192 tokens/step; the budget formula
+# rescales that base to the actual tokens/step and tokens-per-active-param.
+_STEP_BUDGET_CALIBRATION_TOKENS = 128 * 8192
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
@@ -256,7 +260,7 @@ def build_small_run(
     qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
-    watch_interval: int = 0,
+    watch_interval: int = 10,
     dp_racks: int = 1,
     steps_per_eval: int = 1000,
     version: str | None = None,
@@ -301,7 +305,9 @@ def build_small_run(
     # The 60x token budget is what the step count encodes, so a wider step needs proportionally
     # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
     # capacity is ceil(factor * tokens_per_shard * top-k / experts).
-    num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step * tokens_per_active_param / 60))
+    num_steps = max(
+        1, round(shape.num_steps * _STEP_BUDGET_CALIBRATION_TOKENS / tokens_per_step * tokens_per_active_param / 60)
+    )
     if num_train_steps_override is not None:
         # A shape that changes the active-param count sets its own budget to match a target compute,
         # so the token-per-active-param formula above does not apply.
