@@ -10,18 +10,17 @@ from tile_lifetime import (
     ExpertMaterializationSchedule,
     ExpertOverlapPolicy,
     ExpertParallelConfig,
-    ExpertParallelLegalityError,
     ExpertParallelStageKind,
     GateUpPhysicalLayout,
     NumericalPolicy,
     ReadinessGranularity,
-    TensorGraph,
     TileStorage,
     TransportSelection,
     TransportSemantics,
     build_expert_parallel_relation_plan,
-    compile_expert_parallel_region,
 )
+from tile_lifetime.expert_parallel import ExpertParallelLegalityError, compile_expert_parallel_region
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.tile_program import TilePrimitive
 
 

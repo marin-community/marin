@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover SwiGLU projections and place pairwise activation in a GEMM epilogue."""
+"""Historical named-TensorGraph SwiGLU planner."""
 
 from dataclasses import dataclass
 
@@ -39,8 +39,8 @@ class _SwiGLURegion:
     mainloop_output_width: int
 
 
-def compile_swiglu_region(graph: TensorGraph, *, numerical_policy: NumericalPolicy) -> RegionPlan:
-    """Compile one gate/up-SwiGLU-down region into two GEMM skeletons."""
+def compile_reference_swiglu_region(graph: TensorGraph, *, numerical_policy: NumericalPolicy) -> RegionPlan:
+    """Compile one hand-built named SwiGLU graph for reference tests."""
     region, rejection_reasons = _find_swiglu_region(graph, numerical_policy=numerical_policy)
     if region is None:
         return _materialized_swiglu_fallback(graph, rejection_reasons=rejection_reasons)

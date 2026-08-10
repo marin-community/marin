@@ -52,10 +52,10 @@ from tile_lifetime import (  # noqa: E402
     ExpertParallelPlan,
     ExpertParallelStageKind,
     NumericalPolicy,
-    compile_stablehlo_expert_parallel_region,
 )
 from tile_lifetime.cuda_map_fold_codegen import shuttle_map_fold_program  # noqa: E402
 from tile_lifetime.moe_reference import MOE_REGION_INPUT_NAMES  # noqa: E402
+from tile_lifetime.reference_pipeline import compile_reference_stablehlo_expert_parallel_region  # noqa: E402
 from tile_lifetime.relation import build_partitioned_merge_rows  # noqa: E402
 
 SCHEMA_VERSION = 2
@@ -226,7 +226,7 @@ def _compile_natural_stablehlo_plan(args: argparse.Namespace) -> tuple[ExpertPar
     """Validate that the benchmark shape enters through ordinary JAX StableHLO."""
     assert args.stablehlo_fixture is not None
     artifact = base64.b64decode(args.stablehlo_fixture.read_text())
-    plan = compile_stablehlo_expert_parallel_region(
+    plan = compile_reference_stablehlo_expert_parallel_region(
         artifact,
         input_names=MOE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,

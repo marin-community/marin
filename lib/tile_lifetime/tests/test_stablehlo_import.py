@@ -25,8 +25,9 @@ from tile_lifetime.reference_pipeline import (
     compile_reference_stablehlo_rms_attention_program,
     compile_reference_stablehlo_rms_region,
 )
+from tile_lifetime.reference_semantic_recovery import recover_reference_rms_region
 from tile_lifetime.semantic_erasure import SemanticErasureError, validate_plan_semantic_erasure
-from tile_lifetime.semantic_recovery import recover_attention_region, recover_rms_region
+from tile_lifetime.semantic_recovery import recover_attention_region
 from tile_lifetime.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 
@@ -78,7 +79,7 @@ def test_import_stablehlo_preserves_reduction_semantics_and_provenance() -> None
 def test_reference_stablehlo_rms_region_selects_delayed_scale_plan() -> None:
     artifact = base64.b64decode(FIXTURE.read_text())
     imported = import_stablehlo(artifact, input_names=INPUT_NAMES)
-    recovered = recover_rms_region(
+    recovered = recover_reference_rms_region(
         imported,
         gemm_accumulation_dtype=DType.FP32,
         output_name="output",

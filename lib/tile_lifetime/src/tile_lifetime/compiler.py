@@ -96,16 +96,13 @@ class RowScalePlacement(StrEnum):
     CONSUMER_PROLOGUE = "consumer_prologue"
 
 
-RMSScalePlacement = RowScalePlacement
-
-
-def compile_region(
+def compile_reference_region(
     graph: TensorGraph,
     *,
     numerical_policy: NumericalPolicy,
     rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_EPILOGUE,
 ) -> RegionPlan:
-    """Erase frontend names, then compile generic algebra or retain a fallback."""
+    """Compile a hand-built named TensorGraph for historical reference tests."""
     erased: ErasedTensorProgram | None = None
     try:
         erased = erase_dense_semantics(graph)

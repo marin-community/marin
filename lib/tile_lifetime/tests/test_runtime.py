@@ -12,23 +12,25 @@ from tile_lifetime import (
     DType,
     GemmSkeleton,
     NumericalPolicy,
-    PlanRuntimeError,
     ReductionSkeleton,
-    RMSScalePlacement,
-    RuntimeBufferSpec,
-    RuntimeDiagnosticCode,
     StreamingAttentionSkeleton,
-    TensorBinding,
     compile_stablehlo_dense_transformer_region,
-    execute_region_plan,
-    required_input_specs,
-    validate_region_plan,
 )
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.plan import RegionPlan
 from tile_lifetime.reference import (
     DENSE_REGION_INPUT_NAMES,
     DenseDebugConfig,
     export_debug_dense_region,
+)
+from tile_lifetime.runtime import (
+    PlanRuntimeError,
+    RuntimeBufferSpec,
+    RuntimeDiagnosticCode,
+    TensorBinding,
+    execute_region_plan,
+    required_input_specs,
+    validate_region_plan,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "dense_region_v1_14_1.mlir.bc.b64"
@@ -62,7 +64,7 @@ class RecordingBackend:
         self.calls.append(("reduction", skeleton.name))
 
 
-def _plan(placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_PROLOGUE) -> RegionPlan:
+def _plan(placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE) -> RegionPlan:
     artifact = base64.b64decode(FIXTURE.read_text())
     return compile_stablehlo_dense_transformer_region(
         artifact,
@@ -82,9 +84,9 @@ def _inputs(plan: RegionPlan) -> dict[str, TensorBinding]:
 
 @pytest.mark.parametrize(
     "placement",
-    [RMSScalePlacement.CONSUMER_PROLOGUE, RMSScalePlacement.CONSUMER_EPILOGUE],
+    [RowScalePlacement.CONSUMER_PROLOGUE, RowScalePlacement.CONSUMER_EPILOGUE],
 )
-def test_runtime_dispatches_connected_plan_in_dependency_order(placement: RMSScalePlacement) -> None:
+def test_runtime_dispatches_connected_plan_in_dependency_order(placement: RowScalePlacement) -> None:
     plan = _plan(placement)
     backend = RecordingBackend()
 
@@ -194,8 +196,8 @@ def test_runtime_reports_missing_and_mismatched_input_bindings() -> None:
 
 
 def test_runtime_rejects_mismatched_rms_placement_families() -> None:
-    prologue_plan = _plan(RMSScalePlacement.CONSUMER_PROLOGUE)
-    epilogue_plan = _plan(RMSScalePlacement.CONSUMER_EPILOGUE)
+    prologue_plan = _plan(RowScalePlacement.CONSUMER_PROLOGUE)
+    epilogue_plan = _plan(RowScalePlacement.CONSUMER_EPILOGUE)
     mixed = replace(
         prologue_plan,
         skeletons=(*prologue_plan.skeletons[:7], epilogue_plan.skeletons[7]),

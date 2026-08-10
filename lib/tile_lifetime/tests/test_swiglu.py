@@ -8,12 +8,12 @@ from tile_lifetime import (
     GemmSkeleton,
     MaterializationDisposition,
     NumericalPolicy,
-    TensorGraph,
     TransformSkeleton,
-    compile_swiglu_region,
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.ir import TensorGraph
 from tile_lifetime.plan import AttachmentSite, NumericalEquivalence
+from tile_lifetime.swiglu import compile_reference_swiglu_region
 
 TOKENS = 8
 HIDDEN = 16
@@ -54,7 +54,7 @@ def _combined_swiglu_region() -> TensorGraph:
 
 
 def test_separate_gate_up_projections_fuse_pairwise_swiglu() -> None:
-    plan = compile_swiglu_region(
+    plan = compile_reference_swiglu_region(
         _separate_swiglu_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
@@ -80,7 +80,7 @@ def test_separate_gate_up_projections_fuse_pairwise_swiglu() -> None:
 
 
 def test_combined_adjacent_pair_projection_fuses_pairwise_swiglu() -> None:
-    plan = compile_swiglu_region(
+    plan = compile_reference_swiglu_region(
         _combined_swiglu_region(),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
@@ -95,7 +95,7 @@ def test_combined_adjacent_pair_projection_fuses_pairwise_swiglu() -> None:
 
 
 def test_bitwise_policy_retains_materialized_swiglu() -> None:
-    plan = compile_swiglu_region(
+    plan = compile_reference_swiglu_region(
         _separate_swiglu_region(),
         numerical_policy=NumericalPolicy.BITWISE_EXACT,
     )
@@ -108,7 +108,7 @@ def test_bitwise_policy_retains_materialized_swiglu() -> None:
 
 
 def test_observed_gate_retains_materialized_swiglu() -> None:
-    plan = compile_swiglu_region(
+    plan = compile_reference_swiglu_region(
         _separate_swiglu_region(observe_gate=True),
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )

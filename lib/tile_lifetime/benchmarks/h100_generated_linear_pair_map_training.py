@@ -25,7 +25,6 @@ from h100_plan_runtime import H100DenseBackend
 from tile_lifetime import (
     DType,
     PairMapSavePolicy,
-    TensorBinding,
     build_linear_pair_map_program,
     compile_linear_pair_map_training,
     pair_silu_product_expression,
@@ -33,6 +32,7 @@ from tile_lifetime import (
 )
 from tile_lifetime.cute_pair_map_codegen import GeneratedCutePairMapVjp, generate_cute_pair_map_vjp
 from tile_lifetime.reference import DenseDebugConfig
+from tile_lifetime.runtime import TensorBinding
 
 PINNED_CODA_REVISION = "8fa88065e541f6a5b52fb400d94d4be02f18c543"
 CODA_COMPATIBLE_QUACK_REVISION = "02c7f69881737731173a6a009aeb6f032e449b61"

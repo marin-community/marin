@@ -28,12 +28,11 @@ from tile_lifetime import (
     MaterializationDisposition,
     NumericalPolicy,
     ReductionSkeleton,
-    RMSScalePlacement,
-    RuntimeBufferSpec,
-    TensorBinding,
     compile_stablehlo_dense_transformer_region,
 )
+from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
+from tile_lifetime.runtime import RuntimeBufferSpec, TensorBinding
 
 
 @a_transform(vec_size=8, args={"inverse_rms": "colvec_ktile_fp32"})
@@ -154,7 +153,7 @@ def _benchmark_pair(
 
 def _named_oracle(
     skeleton: GemmSkeleton,
-    placement: RMSScalePlacement,
+    placement: RowScalePlacement,
     bindings: Mapping[str, TensorBinding],
     backend: H100DenseBackend,
 ) -> Callable[[], None]:
@@ -200,11 +199,11 @@ def _named_oracle(
             bindings,
             (
                 skeleton.prologue[0].inputs[1]
-                if placement is RMSScalePlacement.CONSUMER_PROLOGUE
+                if placement is RowScalePlacement.CONSUMER_PROLOGUE
                 else skeleton.epilogue[0].inputs[1]
             ),
         )
-        if placement is RMSScalePlacement.CONSUMER_EPILOGUE:
+        if placement is RowScalePlacement.CONSUMER_EPILOGUE:
             return partial(
                 rstd_swiglu_epi.gemm,
                 activation,
@@ -333,7 +332,7 @@ def _compare_outputs(
     return comparisons
 
 
-def _component_name(index: int, placement: RMSScalePlacement) -> str:
+def _component_name(index: int, placement: RowScalePlacement) -> str:
     if index == 0:
         return "qkv"
     if index == 2:
@@ -369,7 +368,7 @@ def main() -> None:
     timings: dict[str, object] = {}
     correctness: dict[str, object] = {}
     generated_sources: dict[str, str] = {}
-    for placement in (RMSScalePlacement.CONSUMER_PROLOGUE, RMSScalePlacement.CONSUMER_EPILOGUE):
+    for placement in (RowScalePlacement.CONSUMER_PROLOGUE, RowScalePlacement.CONSUMER_EPILOGUE):
         plan = compile_stablehlo_dense_transformer_region(
             artifact,
             input_names=DENSE_REGION_INPUT_NAMES,
@@ -380,7 +379,7 @@ def main() -> None:
         backend = H100DenseBackend(config)
         bindings = _bindings(plan, config, backend)
         for index in (0, 2, 4, 5, 7):
-            if placement is RMSScalePlacement.CONSUMER_EPILOGUE and index in (0, 2, 5):
+            if placement is RowScalePlacement.CONSUMER_EPILOGUE and index in (0, 2, 5):
                 continue
             skeleton = plan.skeletons[index]
             assert isinstance(skeleton, GemmSkeleton)
