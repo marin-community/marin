@@ -65,8 +65,8 @@ The launch gate requires all of the following:
 4. A review that removes the `architecture_nonconforming` status.
 
 The source-only runner is
-`lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py`. A reviewed
-launch uses an unset `XLA_FLAGS`, a clean exact source SHA, a fresh artifact
+`lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py`. Direct local
+execution uses an unset `XLA_FLAGS`, a clean exact source SHA, a fresh artifact
 directory, and explicit JAX and NVCC identities:
 
 ```bash
@@ -96,14 +96,49 @@ the tag alone, `latest`, and a date tag are not accepted. The launch overrides
 the task image and requests `--gpu H100x1` explicitly against
 `cw-us-west-04a`; it does not modify that cluster's shared default image.
 
-This image is necessary but not sufficient for launch. Ordinary Iris workspace
-bundles exclude `.git`, while this runner requires an exact Git HEAD and clean
-status. A reviewed source-payload wrapper must restore sanitized Git metadata,
-verify its archive and tree identities, delete the transport archive, and pass
-the clean preflight before invoking `--execute`. Until that wrapper is checked
-in, there is no accepted Iris launch command. Nsight Compute permission failure
-under the default container profile remains a fail-closed runtime result; this
-plan does not enable the privileged profile.
+This image is necessary but not sufficient for launch. The repository's full
+tracked tree exceeds Iris's 25 MiB bundle limit and includes historical evidence
+that the runner does not import. The checked-in source-capsule wrapper therefore
+does not claim to transport a clean Git worktree. It accepts only a globally
+clean checkout at the requested full commit, records that commit and its tree,
+and expands the checked-in closed allowlist: root and package configuration,
+the evidence plan, runner, training adapter, wrapper, and every tracked Python
+file in `lib/tile_lifetime/src/tile_lifetime`. Every capsule member has a closed
+path/type/mode/size/SHA-256 record in a canonical manifest. New package Python
+files are included mechanically; changes to the exact runtime/config list
+require an allowlist review.
+
+Preparation is local and does not query a device or submit a job:
+
+```bash
+python lib/tile_lifetime/benchmarks/h100_contract_map_source_payload.py prepare \
+  --source-root "$PWD" \
+  --source-sha "$(git rev-parse HEAD)" \
+  --output-directory /fresh/path/contract-map-source-capsule
+```
+
+The output contains only the deterministic capsule ZIP, canonical manifest,
+and stdlib-only launcher, and reports the SHA-256 of both manifest and launcher.
+The eventual submitted command must use trusted image tooling to verify both
+identities before invoking Python; launcher self-verification cannot establish
+its own trust. As defense in depth, `run` also requires the expected launcher
+SHA-256 explicitly before it verifies the trusted manifest hash,
+commit and tree, archive hash, exact member set, bounds, paths, modes, symlinks,
+and member hashes before starting the runner. Runner preflight repeats the
+manifest and extracted-file checks without asserting Git-clean status. After
+each local import boundary and again before acceptance, the coordinator and
+isolated workers reject any `tile_lifetime` or benchmark module loaded outside
+the capsule or with a hash not present in the manifest. This detects provenance
+drift but is not a sandbox: imported code has already executed. Accepted
+evidence records the commit, tree, and capsule-manifest digest.
+
+There is still no accepted Iris launch command in this checkpoint: the image
+must first be built, published under its full-Git-SHA tag, resolved to an OCI
+digest, and independently reviewed together with the source capsule. A future
+launch must use the default container profile, one explicit `H100x1`, no UV
+sync against the partial capsule, a fresh artifact path outside the capsule,
+and `max_retries=0`. Nsight Compute permission failure remains a fail-closed
+runtime result; this plan does not enable the privileged profile.
 
 ## Reused prototype evidence
 

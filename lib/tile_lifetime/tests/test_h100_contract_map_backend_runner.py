@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib
 import json
 import sqlite3
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -88,6 +89,40 @@ def test_runner_preflight_rejects_tracked_or_untracked_source_changes(tmp_path: 
 
     with pytest.raises(ValueError, match="no modifications or untracked files"):
         runner.require_clean_h100_preflight(config, run=run)
+
+
+def test_runner_capsule_preflight_records_manifest_identity_without_git_status(tmp_path: Path) -> None:
+    config = _capsule_runner_config(tmp_path)
+
+    def run(command, **kwargs):
+        arguments = tuple(str(value) for value in command)
+        assert "rev-parse" not in arguments and "status" not in arguments
+        if "--query-gpu=name,compute_cap" in arguments:
+            return subprocess.CompletedProcess(arguments, 0, "NVIDIA H100 80GB HBM3, 9.0\n", "")
+        return subprocess.CompletedProcess(arguments, 0, f"{Path(arguments[0]).name} exact-version\n", "")
+
+    evidence = runner.require_clean_h100_preflight(config, run=run)
+
+    assert evidence.source_tree == "2" * 40
+    assert evidence.source_capsule_manifest_sha256 == config.source_capsule_manifest_sha256
+
+
+def test_runner_capsule_module_audit_rejects_local_import_outside_manifest(tmp_path: Path) -> None:
+    config = _capsule_runner_config(tmp_path)
+    installed = tmp_path / "installed" / "tile_lifetime" / "omitted.py"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("VALUE = 1\n")
+    module = ModuleType("tile_lifetime.omitted")
+    module.__file__ = str(installed)
+    with pytest.raises(ValueError, match="loaded outside"):
+        runner.audit_imported_local_modules(config, {module.__name__: module})
+
+
+def test_runner_capsule_module_audit_accepts_exact_manifested_local_import(tmp_path: Path) -> None:
+    config = _capsule_runner_config(tmp_path)
+    module = ModuleType("tile_lifetime.local")
+    module.__file__ = str(config.source_root / "lib/tile_lifetime/local.py")
+    runner.audit_imported_local_modules(config, {module.__name__: module})
 
 
 def test_runner_ncu_parser_requires_every_closed_launch_metric(tmp_path: Path) -> None:
@@ -583,6 +618,38 @@ def _ncu_metric(name: str) -> Any:
         active_blocks_per_sm=2,
         limiting_occupancy_resource="registers",
         achieved_occupancy=0.5,
+    )
+
+
+def _capsule_runner_config(tmp_path: Path) -> Any:
+    config = _runner_config(tmp_path)
+    local = config.source_root / "lib/tile_lifetime/local.py"
+    local.parent.mkdir(parents=True)
+    local.write_text("VALUE = 1\n")
+    local.chmod(0o644)
+    contents = local.read_bytes()
+    manifest = {
+        "archive": {"filename": "h100-evidence-source-capsule.zip", "sha256": "3" * 64},
+        "members": [
+            {
+                "mode": "100644",
+                "path": "lib/tile_lifetime/local.py",
+                "sha256": hashlib.sha256(contents).hexdigest(),
+                "size": len(contents),
+                "type": "file",
+            }
+        ],
+        "schema_version": 1,
+        "source": {"commit": config.source_sha, "tree": "2" * 40},
+    }
+    raw = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    manifest_path = tmp_path / "source-manifest.json"
+    manifest_path.write_bytes(raw)
+    return replace(
+        config,
+        source_tree="2" * 40,
+        source_capsule_manifest=manifest_path,
+        source_capsule_manifest_sha256=hashlib.sha256(raw).hexdigest(),
     )
 
 
