@@ -278,8 +278,14 @@ path and SHA-256. Ordinary XLA may report `unavailable` only with
 `public_xla_dump_omits_cubin`; mixing unavailable and available fields or using
 another reason rejects the record. Ordinary-XLA SASS comes from the retained
 Nsight Compute report's public `--page source --print-source sass` export, not a
-private executable extractor. The run aborts if that SASS contains `LDL` or
-`STL` because the public profiler path does not provide spill-byte evidence.
+private executable extractor. Admission requires one exact `Kernel Name:`
+section for every profiled kernel, no duplicate or lookalike sections, and at
+least one address-bearing recognized SASS instruction in every section.
+Warnings, errors, unavailable-source notices, unknown mnemonics, malformed
+instruction rows, and unstructured text reject the run. The run aborts if a
+validated instruction record has an `LDL` or `STL` opcode because the public
+profiler path does not provide spill-byte evidence; incidental text cannot be
+mistaken for a spill instruction.
 
 Nsight Compute must report the closed launch, register, shared-memory,
 occupancy-limit, and achieved-occupancy metric set for every launch. Nsight
@@ -292,6 +298,14 @@ first-execution, and cache samples. A cache pair must preserve its content
 identity, and all nine isolated compile, cold, and hit roots must converge to
 the same identity. Their final optimized HLO must also equal the timing and
 profile worker HLO before their evidence can be merged.
+
+Each compile sample begins on the coordinator's monotonic clock immediately
+before spawning its isolated worker. The worker records the same host monotonic
+clock immediately after `.compile()` returns, before first execution,
+synchronization, cache scanning, HLO serialization, and result publication.
+The coordinator accepts the timestamp only when it falls between spawn and
+worker exit, computes compile time from spawn to that timestamp, and records
+the remaining worker lifetime separately as post-compile time.
 
 The machine result schema requires 24 records: one for each of the four reviewed
 structural cases, three backends, and two measurement boundaries. Kernel

@@ -50,6 +50,118 @@ _NCU_METRICS = (
     "launch__occupancy_limit_warps",
     "sm__warps_active.avg.pct_of_peak_sustained_active",
 )
+_SASS_OPCODE_BASES = frozenset(
+    {
+        "ATOM",
+        "B2R",
+        "BAR",
+        "BMOV",
+        "BRA",
+        "BREAK",
+        "BRX",
+        "BSYNC",
+        "BSSY",
+        "CALL",
+        "CCTL",
+        "CCTLL",
+        "CP",
+        "CS2R",
+        "DADD",
+        "DEPBAR",
+        "DFMA",
+        "DMUL",
+        "DSETP",
+        "ERRBAR",
+        "EXIT",
+        "F2F",
+        "F2I",
+        "FADD",
+        "FCHK",
+        "FFMA",
+        "FLO",
+        "FMNMX",
+        "FMUL",
+        "FSEL",
+        "FSET",
+        "FSETP",
+        "HADD2",
+        "HFMA2",
+        "HMMA",
+        "I2F",
+        "IABS",
+        "IADD",
+        "IADD3",
+        "IMAD",
+        "IMMA",
+        "IMNMX",
+        "IMUL",
+        "ISETP",
+        "LD",
+        "LDC",
+        "LDG",
+        "LDL",
+        "LDS",
+        "LEA",
+        "LOP3",
+        "MATCH",
+        "MEMBAR",
+        "MOV",
+        "MUFU",
+        "NANOSLEEP",
+        "NOP",
+        "P2R",
+        "PLOP3",
+        "POPC",
+        "PRMT",
+        "QSPC",
+        "R2B",
+        "RED",
+        "RET",
+        "S2R",
+        "SEL",
+        "SHF",
+        "SHFL",
+        "SHL",
+        "SHR",
+        "ST",
+        "STG",
+        "STL",
+        "STS",
+        "SUATOM",
+        "SULD",
+        "SURED",
+        "SUST",
+        "TEX",
+        "TLD",
+        "UIADD3",
+        "UIMAD",
+        "UISETP",
+        "ULDC",
+        "ULEA",
+        "ULOP3",
+        "ULDP",
+        "UMOV",
+        "USEL",
+        "UTMALDG",
+        "UTMASTG",
+        "VABSDIFF",
+        "VADD",
+        "VIMNMX",
+        "VSET",
+        "WARPSYNC",
+        "YIELD",
+    }
+)
+_NCU_SASS_SECTION_PATTERN = re.compile(r"^\s*Kernel Name\s*:\s*(?P<name>.+?)\s*$")
+_NCU_SASS_INSTRUCTION_PATTERN = re.compile(
+    r"^\s*(?:/\*)?(?P<address>(?:0x)?[0-9A-Fa-f]{4,16})(?:\*/)?(?:\s+|\s*:\s*)"
+    r"(?:@!?P[0-9]+(?:\.[A-Z0-9_]+)?\s+)?(?P<mnemonic>[A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\b"
+)
+_NCU_SASS_METADATA_PATTERN = re.compile(r"^\s*(?:Address\s+Source|Address|Source|[-=]+)\s*$")
+_NCU_SASS_FAILURE_PATTERN = re.compile(
+    r"(?:^|\b)(?:warning|error)(?::|\b)|(?:source|sass)\s+(?:is\s+)?(?:not|un)available|\bN/A\b",
+    flags=re.IGNORECASE,
+)
 
 
 class WorkerMode(StrEnum):
@@ -120,6 +232,22 @@ class NcuKernelMetrics:
     active_blocks_per_sm: int
     limiting_occupancy_resource: str
     achieved_occupancy: float
+
+
+@dataclass(frozen=True)
+class NcuSassInstruction:
+    """One validated instruction row from an Nsight Compute source page."""
+
+    address: int
+    mnemonic: str
+
+
+@dataclass(frozen=True)
+class NcuSassKernel:
+    """One exact Nsight Compute kernel section and its validated SASS rows."""
+
+    name: str
+    instructions: tuple[NcuSassInstruction, ...]
 
 
 @dataclass(frozen=True)
@@ -355,6 +483,60 @@ def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
             )
         )
     return tuple(records)
+
+
+def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassKernel, ...]:
+    """Parse a closed Nsight Compute SASS source-page export."""
+    expected = tuple(normalize_cuda_kernel_name(name) for name in expected_names)
+    if not expected or len(set(expected)) != len(expected):
+        raise ValueError("expected Nsight Compute SASS kernel identities must be unique and nonempty")
+    if _NCU_SASS_FAILURE_PATTERN.search(source):
+        raise ValueError("Nsight Compute SASS export contains a warning, error, or unavailable source")
+
+    sections: list[NcuSassKernel] = []
+    current_name: str | None = None
+    instructions: list[NcuSassInstruction] = []
+
+    def finish_section() -> None:
+        nonlocal current_name, instructions
+        if current_name is None:
+            return
+        if not instructions:
+            raise ValueError(f"Nsight Compute SASS section {current_name!r} contains no valid instructions")
+        sections.append(NcuSassKernel(name=current_name, instructions=tuple(instructions)))
+        current_name = None
+        instructions = []
+
+    for line in source.splitlines():
+        section = _NCU_SASS_SECTION_PATTERN.fullmatch(line)
+        if section is not None:
+            finish_section()
+            current_name = normalize_cuda_kernel_name(section.group("name"))
+            continue
+        if not line.strip() or _NCU_SASS_METADATA_PATTERN.fullmatch(line):
+            continue
+        instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
+        if instruction is None or current_name is None:
+            raise ValueError(f"unrecognized Nsight Compute SASS export line: {line!r}")
+        mnemonic = instruction.group("mnemonic")
+        if mnemonic.split(".", maxsplit=1)[0] not in _SASS_OPCODE_BASES:
+            raise ValueError(f"unrecognized SASS instruction mnemonic: {mnemonic!r}")
+        address_text = instruction.group("address")
+        instructions.append(
+            NcuSassInstruction(
+                address=int(address_text.removeprefix("0x"), 16),
+                mnemonic=mnemonic,
+            )
+        )
+    finish_section()
+
+    actual = tuple(section.name for section in sections)
+    if len(set(actual)) != len(actual):
+        raise ValueError("Nsight Compute SASS export repeats a kernel section")
+    if set(actual) != set(expected) or len(actual) != len(expected):
+        raise ValueError(f"Nsight Compute SASS kernel coverage differs: expected {expected}, got {actual}")
+    by_name = {section.name: section for section in sections}
+    return tuple(by_name[name] for name in expected)
 
 
 def _csv_field(row: Mapping[str | None, str | list[str] | None], name: str) -> str:
@@ -727,14 +909,13 @@ def _compiled_backend(context: _WorkerCaseContext, backend: str, *, jax: Any) ->
                 reverse.second_weight_adjoint,
             )
 
-    started = time.perf_counter_ns()
     compiled = jax.jit(step).lower(*context.inputs).compile()
-    compile_ns = time.perf_counter_ns() - started
-    return compiled, compile_ns
+    compile_done_monotonic_ns = time.monotonic_ns()
+    return compiled, compile_done_monotonic_ns
 
 
 def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
-    compiled, worker_compile_ns = _compiled_backend(context, args.backend, jax=jax)
+    compiled, compile_done_monotonic_ns = _compiled_backend(context, args.backend, jax=jax)
     started = time.perf_counter_ns()
     output = compiled(*context.inputs)
     jax.block_until_ready(output)
@@ -753,7 +934,7 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
         "case_id": args.case_id,
         "backend": args.backend,
         "cache_kind": args.cache_kind,
-        "worker_compile_ns": worker_compile_ns,
+        "compile_done_monotonic_ns": compile_done_monotonic_ns,
         "first_execution_ns": first_execution_ns,
         "persistent_cache_identity": identity.hexdigest(),
         "final_hlo": compiled.as_text(),
@@ -1427,12 +1608,12 @@ def run_timed_compile_worker_command(
     environment: Mapping[str, str],
     json_output: Path,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-    now: Callable[[], int] = time.perf_counter_ns,
+    now: Callable[[], int] = time.monotonic_ns,
 ) -> dict[str, Any]:
-    """Measure process spawn through compile-worker result publication."""
+    """Measure coordinator process spawn through worker compile completion."""
     started = now()
     completed = run(command, check=False, capture_output=True, text=True, env=environment)
-    elapsed = now() - started
+    worker_exited = now()
     if completed.returncode != 0:
         raise RuntimeError(
             f"compile worker failed with {completed.returncode}: {command}: {completed.stdout}\n{completed.stderr}"
@@ -1440,9 +1621,14 @@ def run_timed_compile_worker_command(
     if not json_output.is_file():
         raise RuntimeError(f"compile worker succeeded without structured output: {json_output}")
     result = json.loads(json_output.read_text())
-    if elapsed <= 0:
+    compile_done = result.get("compile_done_monotonic_ns")
+    if type(compile_done) is not int or not started <= compile_done <= worker_exited:
+        raise RuntimeError("compile worker completion timestamp must fall between coordinator spawn and exit")
+    compile_ns = compile_done - started
+    if compile_ns <= 0:
         raise RuntimeError("compile worker elapsed time must be positive")
-    result["compile_ns"] = elapsed
+    result["compile_ns"] = compile_ns
+    result["postcompile_ns"] = worker_exited - compile_done
     return result
 
 
@@ -1685,11 +1871,13 @@ def _run_ncu_profile(
         str(sass_source_path),
     )
     _run_retained(source_export)
-    if not sass_source_path.is_file() or not sass_source_path.read_text().strip():
+    if not sass_source_path.is_file():
         raise RuntimeError("Nsight Compute produced no public SASS/source export")
     worker_result = json.loads(result.read_text())
+    metrics = parse_ncu_metrics(csv_path)
+    parse_ncu_sass(sass_source_path.read_text(), tuple(metric.name for metric in metrics))
     return NcuProfileEvidence(
-        metrics=parse_ncu_metrics(csv_path),
+        metrics=metrics,
         report_path=str(report_path),
         report_sha256=file_sha256(report_path),
         sass_source_path=str(sass_source_path),
@@ -1990,8 +2178,14 @@ def ordinary_kernel_records(
     profile: NcuProfileEvidence,
     artifact: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    sass = Path(profile.sass_source_path).read_text()
-    if any(opcode in sass for opcode in (" LDL", " STL")):
+    sass_kernels = parse_ncu_sass(
+        Path(profile.sass_source_path).read_text(), tuple(metric.name for metric in profile.metrics)
+    )
+    if any(
+        instruction.mnemonic.split(".", maxsplit=1)[0] in {"LDL", "STL"}
+        for kernel in sass_kernels
+        for instruction in kernel.instructions
+    ):
         raise RuntimeError("ordinary-XLA profiler SASS contains local-memory spills without byte evidence")
     return [
         _kernel_record(
