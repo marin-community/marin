@@ -114,7 +114,7 @@ sites:
 
 The first isolated extension patch is
 `lib/tile_lifetime/backends/h100/quack_partitioned_sm90.patch` (SHA-256
-`79e276d3e2b60f53fd117277c3f0cb0a0ebf689f7feddd000d7398f4611f5e47`).
+`0bbb2354cff80b2fdf475fce12cef277f961591623b0c078160c27f09e5658db`).
 It adds reusable tuple validation, congruent accumulator partitioning,
 ordered group-WGMMA issue, BF16-boundary helpers, and a bounded
 `PartitionedGemmSm90` executor. The executor is intentionally nonpersistent:
