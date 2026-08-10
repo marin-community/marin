@@ -1,0 +1,1 @@
+{"cutlass_dsl": "4.6.1", "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd", "shuttle_revision": "233b253f4d", "submission_bundle": "e6d7f0c615a437b368752281d628fece6487cf3e", "torch": "2.13.0+cu130", "torch_cuda": "13.0"}

@@ -125,9 +125,13 @@ This avoids changing QuACK's persistent scheduler merely to preserve its
 existing class shape.
 
 The stock QuACK packages cannot execute this plan without the patch. The patch
-and generated authoring source pass host-side syntax and mutation/ABI tests,
-but have not yet been imported or compiled by CuTe DSL on an H100. This is not
-GPU correctness or performance evidence.
+and generated authoring source pass host-side syntax and mutation/ABI tests.
+The single authorized H100 invocation installed the pinned QuACK, Torch, and
+CUTLASS DSL environment, but stopped before the patched module import because
+the narrow preflight environment omitted JAX while Shuttle's package
+initializer eagerly imports a JAX transport module. CuTe device compilation
+and execution therefore remain untested. This is not GPU correctness or
+performance evidence.
 
 `benchmarks/h100_quack_partitioned_mainloop_preflight.py` checks the source
 revision, patch digest, patched-module import, and helper symbols on an H100
@@ -135,5 +139,5 @@ host without launching the device. It imports both the patched executor and a
 generated module recovered from the supplied HLO, and requires the generic
 entry point before any correctness or timing run. This prevents a stock
 single-RHS or split-GEMM fallback from being reported as the requested
-candidate. CuTe device compilation and execution remain the next gate after
-static review.
+candidate. The exact failed H100 gate and released-allocation proof are under
+`benchmarks/artifacts/quack_partitioned_sm90_h100_compile_gate_v0/`.

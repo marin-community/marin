@@ -1,0 +1,20 @@
+Iris terminal state:
+
+  Job: /dlwh/shuttle-quack-partitioned-sm90-h100-20260809
+  State: failed
+  Failures: 1
+  Preemptions: 0
+  Task 0 exit code: 1
+  Task 0 duration: 29.42 seconds
+  Maximum retries: 0
+
+Exact Kubernetes task-label query after artifact retrieval:
+
+  kubectl --kubeconfig ~/.kube/coreweave-iris \
+    --context marin-gpu_US-EAST-02A --namespace iris get pods \
+    -l iris.task_id=dlwh-shuttle-quack-partitioned-sm90-h100-20260809-0 \
+    -o name
+
+The query returned no pod names. This was a direct Iris batch job, so no local
+dev_gpu holder session was created.
+
