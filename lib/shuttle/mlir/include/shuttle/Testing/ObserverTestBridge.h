@@ -4,6 +4,7 @@
 #ifndef SHUTTLE_TESTING_OBSERVERTESTBRIDGE_H_
 #define SHUTTLE_TESTING_OBSERVERTESTBRIDGE_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,6 +40,13 @@ public:
 
   void close();
   std::vector<ShuttleObserverTestEvent> snapshot() const;
+
+  // Deterministic native-test controls. These are intentionally absent from
+  // the Python bridge and cannot affect pipeline options or cache identity.
+  void blockNextCallbackForTesting();
+  void waitForBlockedCallbackForTesting() const;
+  void waitForCloseCallersForTesting(std::size_t count) const;
+  void releaseBlockedCallbackForTesting();
 
 private:
   class Impl;
