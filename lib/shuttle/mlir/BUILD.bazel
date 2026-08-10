@@ -211,6 +211,7 @@ lit_test_suite(
         exclude = ["test/Inputs/**"],
     ),
     cfg = "test/lit.cfg.py",
+    data = glob(["test/Inputs/*.mlir"]),
     tools = [
         ":shuttle-opt",
         ":shuttle-test-opt",
