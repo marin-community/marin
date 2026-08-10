@@ -4122,3 +4122,32 @@ author: dlwh
 - Next action: implement the shared pipeline and the offline fixture gate after
   the native dialect's CPU Bazel preflight is green; then build the patched
   jaxlib and run the ordinary-JAX forward/VJP gate.
+
+### 2026-08-10 - TLTC-MLIR-003 vertical-slice design review corrections
+
+- Review result: independent review returned NO-GO on commit `b9ef181c5e`.
+  Region counts were stated without a complete partition rule, result-only
+  coverage could miss a return rewire or zero-result operation, native
+  diagnostics and cache isolation were underspecified, and the fixture set did
+  not establish genericity beyond the primary extents and graph.
+- Commit: `6e1b2652aefb3dc7b9bdd60423daee6e2642daab`.
+- Decision: partition each block into maximal contiguous supported intervals,
+  then take SSA weakly connected components in deterministic ordinal order.
+  This derives one forward and three VJP regions without a target-count input.
+- Coverage: the transient manifest now records zero-result operations,
+  terminator operands, and function-result anchors. A same-type VJP return
+  rewire must fail even when the represented source-result union is unchanged.
+- Instrumentation: immutable native observer events carry invocation ID,
+  normalized region membership, manifest and island state, policy digest, and
+  final erasure. Observer state is concurrency-safe and absent from compiler
+  options, policy digests, and cache identity.
+- Genericity: the gate regenerates audited JAX 0.10.1 sources, compares
+  normalized rename variants, repeats the proof at alternate extents, and
+  compiles unrelated Map-only and Contract-only graphs. Persistent-cache tests
+  use empty temporary directories, zero admission thresholds, separate policy
+  wrappers around the same callable, and a second process for cache hits.
+- Command: `./infra/pre-commit.py --changed-files --fix`.
+- Result: all repository pre-commit checks, including Markdown and Pyrefly,
+  pass. No compiler implementation or execution result is claimed.
+- Next action: obtain independent re-review, then use the corrected partition,
+  coverage, observer, and fixture contracts for implementation.
