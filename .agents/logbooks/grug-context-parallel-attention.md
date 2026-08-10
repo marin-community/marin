@@ -260,5 +260,44 @@ run. A benchmark gate for the exact Grug shapes now exists at
   failures as JSON and exited cleanly; no HBM allocation or timing occurred.
 - Runtime fix: set `CUDNN_FRONTEND_CUDART_LIB_NAME=libcudart.so.13`, the documented selector for
   environments containing more than one CUDA runtime, and rerun the same four-GB200 gate.
-- Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
-  64-GPU job when the environment gate passes.
+- Corrected 262144-token Ring gate: parent `/dlwh/grug-cp-te217-s262k-ring6-coord`, child
+  `/dlwh/grug-cp-te217-s262k-ring6-coord/grug-train-grug-cp-te217-s262k-ring6`, commit
+  `5ee751bb85`. The CUDA 12 selection warning disappeared, but both exact Grug cases failed at the
+  same TE/cuDNN graph-construction call with `CUDNN_STATUS_BAD_PARAM`. The failure occurs while
+  querying the backward workspace, before XLA compilation, device HBM allocation, or timing. The
+  child and coordinator completed, and the four GB200s were released. This rules out mixed CUDA
+  runtime selection as the root cause.
+- Official control: job `/dlwh/grug-cp-te217-official-ring-control2-20260810-1535` ran NVIDIA's
+  source-pinned CP4 Ring example from commit `598b9eacbe9fc34ec105cf8c12f303108ca434ca` with verified
+  Git blob `1557a30b7ccc216a7b52225f74a5cea26ed91fe6`. TE recognized the published B2/S65536/QH128/KVH8/
+  D128/SWA8192/four-segment shape as supported, then the first backward warmup failed in
+  `get_fused_attn_bwd_workspace_sizes` with the identical reshape-mode `CUDNN_STATUS_BAD_PARAM`.
+  No warmup, XLA compilation, timing, or HBM measurement completed. The task failed and released
+  all four GB200s. A preceding job with suffix `-1533` never imported TE because its ephemeral
+  `python -c` wrapper had invalid quoting; it was corrected and is not a kernel result.
+- Interpretation: TE 2.17.1's JAX CP backward is not qualified on Marin's JAX 0.11/CUDA 13/cuDNN
+  9.19 GB200 image. Because NVIDIA's unmodified 65536-token control reproduces the error, the current
+  blocker is not the 262144-token Grug shape or its descriptor sharding. Do not submit the 64-GPU
+  gang against this release build.
+- Exact-source build gate: four bounded one-GB200 tasks attempted to build commit
+  `598b9eacbe9fc34ec105cf8c12f303108ca434ca`; every allocation terminated and was released. Job
+  `/dlwh/grug-cp-te-source598-import-20260810-1541` failed before compilation because CMake was not
+  installed. Job suffix `-1542` installed the declared build requirements and reached nvcc, then
+  failed because the split CUDA package had not exposed `crt/host_config.h`. Job suffix `-1543`
+  stopped before the build because the ephemeral probe used the wrong wheel namespace. Final job
+  `/dlwh/grug-cp-te-source598-import4-20260810-1544` discovered the installed header, staged a
+  task-local `include/crt` symlink, and advanced through preprocessing. nvcc 13.2.78 then exited 127
+  because `/app/.venv/nvvm/bin/cicc` was absent. CMake inferred the CUDA root from the staged
+  `/app/.venv/bin/nvcc`, but the Iris split-wheel environment does not contain the internal device
+  compiler at the path nvcc requires. No TE source object, Python extension, or API imported.
+- Exact source-build tuple: Python 3.12.13; JAX, jaxlib, CUDA 13 plugin, and PJRT 0.11.0; CUDA runtime
+  13.0.96; nvcc, CUDA CRT, and NVVM packages 13.2.78; CCCL 13.3.3.4.1; cuDNN 9.19.0.56;
+  cuDNN frontend 1.25.0; NCCL 2.30.7; CMake 4.4.2; Ninja 1.13.0. The build used
+  `NVTE_FRAMEWORK=jax`, SM100, NVIDIA wheel headers, and the task-local NCCL link path.
+- Decision: stop the bounded TE gate. The 2.17.1 release build has a reproducible backward graph
+  failure even on NVIDIA's official control, while the newer source cannot be built with the CUDA
+  components staged by the current Iris image. No AllGather or 64-GPU data16-by-CP4 gang was
+  submitted. The next TE attempt requires a deliberate image/toolchain change that supplies a
+  complete CUDA development toolkit, not another benchmark retry. Otherwise proceed to the custom
+  Grug design: TE-or-ring global attention plus a bounded 511-token halo path for SWA512, with the
+  mesh, SConv halo, packed metadata, and loss/MoE sharding changes identified above.
