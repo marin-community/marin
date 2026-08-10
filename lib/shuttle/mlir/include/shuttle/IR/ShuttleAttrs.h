@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
 
 #include "shuttle/IR/ShuttleEnums.h.inc"
 
