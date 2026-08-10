@@ -77,7 +77,11 @@ PY
 )"
 
 export CUDA_VISIBLE_DEVICES=0
-export JAX_PLATFORMS=cuda
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  export JAX_PLATFORMS=cpu
+else
+  export JAX_PLATFORMS=cuda
+fi
 export PYTHONPATH="${SHUTTLE_ROOT}/lib/tile_lifetime/src:${SHUTTLE_ROOT}/lib/tile_lifetime/backends/sm100"
 
 "${PYTHON}" lib/tile_lifetime/backends/sm100/preflight_jax_right_resource_runtime.py \
