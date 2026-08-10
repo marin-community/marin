@@ -31,7 +31,7 @@ resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
   gpu: {}                       # alternatively, accepted exact GPU shapes, e.g. {H100: 8}
   cpu: null                     # optional inference-worker host CPU override
-  memory: null                  # optional inference-worker host memory override
+  memory: null                  # override; the default is sized from the checkpoint's weight files
   disk: null                    # optional inference-worker host disk override
 
 serve:                          # ServeConfig -> model-server behavior
