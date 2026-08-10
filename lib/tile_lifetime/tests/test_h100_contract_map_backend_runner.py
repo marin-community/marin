@@ -24,6 +24,14 @@ from tile_lifetime.h100_contract_map_benchmark import (
 runner = importlib.import_module("lib.tile_lifetime.benchmarks.h100_contract_map_backend_runner")
 
 
+def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
+    lines = []
+    for name, instructions in sections:
+        lines.extend((f"Kernel Name: {name}", "Address Source", "----------------"))
+        lines.extend(instructions)
+    return "\n".join(lines) + "\n"
+
+
 def test_runner_preflight_records_exact_clean_source_tools_and_h100(tmp_path: Path) -> None:
     config = _runner_config(tmp_path)
 
@@ -104,6 +112,123 @@ def test_runner_ncu_parser_requires_every_closed_launch_metric(tmp_path: Path) -
     output.write_text("\n".join(line for line in lines if "launch__registers_per_thread" not in line) + "\n")
     with pytest.raises(ValueError, match="omits metrics"):
         runner.parse_ncu_metrics(output)
+
+
+def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel_sections() -> None:
+    records = runner.parse_ncu_sass(
+        _ncu_sass_export(
+            ("KernelA", ("0000000000000000 MOV R1, R2", "0000000000000010 EXIT")),
+            ("KernelB", ("/*0020*/ FFMA R3, R4, R5, R6",)),
+        ),
+        ("KernelA", "KernelB"),
+    )
+
+    assert tuple(record.name for record in records) == ("KernelA", "KernelB")
+    assert tuple(instruction.mnemonic for instruction in records[0].instructions) == ("MOV", "EXIT")
+    assert records[1].instructions == (runner.NcuSassInstruction(address=0x20, mnemonic="FFMA"),)
+
+
+def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tmp_path: Path) -> None:
+    sass_path = tmp_path / "ordinary.sass"
+    sass_path.write_text(
+        _ncu_sass_export(
+            ("KernelA", ("0000000000000000 LDL.64 R2, [R4]", "0000000000000010 STL [R4], R2")),
+        )
+    )
+    profile = runner.NcuProfileEvidence(
+        metrics=(_ncu_metric("KernelA"),),
+        report_path="profile.ncu-rep",
+        report_sha256="1" * 64,
+        sass_source_path=str(sass_path),
+        sass_source_sha256="2" * 64,
+        final_hlo="hlo",
+    )
+
+    parsed = runner.parse_ncu_sass(sass_path.read_text(), ("KernelA",))
+    assert tuple(instruction.mnemonic for instruction in parsed[0].instructions) == ("LDL.64", "STL")
+    with pytest.raises(RuntimeError, match="local-memory spills"):
+        runner.ordinary_kernel_records(
+            profile,
+            {
+                "ptx_path": "ordinary.ptx",
+                "ptx_sha256": "3" * 64,
+                "cubin": {
+                    "availability": "unavailable",
+                    "unavailable_reason": "public_xla_dump_omits_cubin",
+                },
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_names", "message"),
+    [
+        (
+            _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
+            ("KernelA", "KernelB"),
+            "coverage differs",
+        ),
+        (
+            _ncu_sass_export(
+                ("KernelA", ("0000000000000000 MOV R1, R2",)),
+                ("KernelA", ("0000000000000010 EXIT",)),
+            ),
+            ("KernelA",),
+            "repeats a kernel section",
+        ),
+        (
+            _ncu_sass_export(("KernelA_suffix", ("0000000000000000 MOV R1, R2",))),
+            ("KernelA",),
+            "coverage differs",
+        ),
+        (
+            "Kernel Name: KernelA\nAddress Source\nnot-an-address MOV R1, R2\n",
+            ("KernelA",),
+            "unrecognized.*line",
+        ),
+        (
+            "Kernel Name: KernelA\nAddress Source\n0000000000000000 NOTREAL R1, R2\n",
+            ("KernelA",),
+            "unrecognized SASS instruction mnemonic",
+        ),
+        (
+            "==WARNING== Profiler output was truncated\n",
+            ("KernelA",),
+            "warning, error, or unavailable source",
+        ),
+        (
+            "==ERROR== Profiler report cannot be imported\n",
+            ("KernelA",),
+            "warning, error, or unavailable source",
+        ),
+        (
+            "SASS is unavailable for KernelA\n",
+            ("KernelA",),
+            "warning, error, or unavailable source",
+        ),
+        (
+            "ordinary plain text with no SASS structure\n",
+            ("KernelA",),
+            "unrecognized.*line",
+        ),
+    ],
+    ids=(
+        "missing",
+        "duplicate",
+        "lookalike",
+        "bad-address",
+        "bad-mnemonic",
+        "warning",
+        "error",
+        "source-unavailable",
+        "plain-text",
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_unverifiable_exports(
+    source: str, expected_names: tuple[str, ...], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        runner.parse_ncu_sass(source, expected_names)
 
 
 def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(tmp_path: Path) -> None:
@@ -219,32 +344,53 @@ def test_worker_environment_replaces_inherited_cache_configuration(
     assert isolated["JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"] == "0"
 
 
-def test_compile_timing_includes_process_setup_and_overrides_worker_only_time(tmp_path: Path) -> None:
+def test_compile_timing_stops_at_worker_compile_completion_before_delayed_publication(tmp_path: Path) -> None:
     output = tmp_path / "compile.json"
+    clock = [100]
 
     def run(command, **kwargs):
         output.write_text(
             json.dumps(
                 {
-                    "worker_compile_ns": 10,
+                    "compile_done_monotonic_ns": 400,
                     "persistent_cache_identity": "cache",
                     "final_hlo": "hlo",
                 }
             )
         )
+        clock[0] = 1_000
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    timestamps = iter((100, 500))
     record = runner.run_timed_compile_worker_command(
         ("worker",),
         environment={},
         json_output=output,
         run=run,
-        now=lambda: next(timestamps),
+        now=lambda: clock[0],
     )
 
-    assert record["compile_ns"] == 400
-    assert record["worker_compile_ns"] == 10
+    assert record["compile_ns"] == 300
+    assert record["postcompile_ns"] == 600
+
+
+@pytest.mark.parametrize("compile_done", [99, 1_001, True])
+def test_compile_timing_rejects_worker_timestamp_outside_spawn_and_exit(tmp_path: Path, compile_done: object) -> None:
+    output = tmp_path / "compile.json"
+    clock = [100]
+
+    def run(command, **kwargs):
+        output.write_text(json.dumps({"compile_done_monotonic_ns": compile_done}))
+        clock[0] = 1_000
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="between coordinator spawn and exit"):
+        runner.run_timed_compile_worker_command(
+            ("worker",),
+            environment={},
+            json_output=output,
+            run=run,
+            now=lambda: clock[0],
+        )
 
 
 def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch() -> None:
