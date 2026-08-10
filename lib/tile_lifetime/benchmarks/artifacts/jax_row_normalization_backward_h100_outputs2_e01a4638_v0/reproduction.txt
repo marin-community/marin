@@ -1,0 +1,42 @@
+Measured Shuttle checkpoint:
+
+  e01a4638093556769d575418c0414a44ff8d0953
+
+Submitted job:
+
+  MARIN_CLUSTER=coreweave iris --config lib/iris/config/cw-us-east-02a.yaml \
+    job run --no-wait \
+    --job-name shuttle-row-fold-output2-validation-h100-20260809 \
+    --enable-extra-resources --gpu H100x1 --cpu 1 --memory 16GB --disk 50GB \
+    --priority batch --max-retries 0 --timeout 3600 --extra gpu -- \
+    bash -lc '<benchmark command>'
+
+The single benchmark invocation was:
+
+  PYTHONPATH=/app/lib/tile_lifetime/src:/app /app/.venv/bin/python \
+    /app/lib/tile_lifetime/benchmarks/jax_generated_row_normalization_backward.py \
+    --rows 2048 --hidden 4096 --threads 256 \
+    --column-groups-per-block 32 --column-outputs-per-group 2 \
+    --compare-column-outputs-per-group \
+    --pipeline-schedule coalesce_compatible_row_stages \
+    --warmups 10 --repeats 30 --iterations 100 --seed 20260809 \
+    --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+    --architecture sm_90a \
+    --artifact-directory /tmp/shuttle-row-fold-output2/measurement \
+    --xla-dump-directory /tmp/shuttle-row-fold-output2/xla \
+    --json-output /tmp/shuttle-row-fold-output2/summary.json \
+    --shuttle-revision e01a4638093556769d575418c0414a44ff8d0953
+
+The bootstrap project declares an empty `dev` dependency group. Its source
+archive SHA-256 is:
+
+  f73c03383676a05fc4e7dc5f477458de5bab4a1dce2c964fa1e4cb735772e9ba
+
+The exact 521,060-byte Iris bundle SHA-256 is:
+
+  d4b0feed249d63fbda60db0fa286683374857aa9c723e662f4bb0fe404ab7f58
+
+The retrieved benchmark archive SHA-256 is:
+
+  ccba17724a8517190428b760b8cd18ec35482a1794fb8fb13f4cfbb37a9fc409
+

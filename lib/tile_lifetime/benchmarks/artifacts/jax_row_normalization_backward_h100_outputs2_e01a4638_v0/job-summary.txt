@@ -1,0 +1,12 @@
+Job: /dlwh/shuttle-row-fold-output2-validation-h100-20260809
+State: succeeded
+Exit code: 0
+Failures: 0
+Preemptions: 0
+Tasks: 1/1 completed, 1 succeeded
+Task 0 duration: 18.02 seconds
+Maximum retries: 0
+
+The job requested one H100, one CPU, 16 GB host memory, 50 GB disk, batch
+priority, and a one-hour timeout.
+

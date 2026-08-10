@@ -1,0 +1,13 @@
+Device: NVIDIA H100 80GB HBM3
+Driver: 595.71.05
+Power limit: 700 W
+SM clock: 1830 MHz
+Memory clock: 2619 MHz
+JAX: 0.10.1
+jaxlib: 0.10.1
+jax-cuda13-plugin: 0.10.1
+jax-cuda13-pjrt: 0.10.1
+NVCC: 13.3.73
+Python: CPython 3.12.13
+Runtime: JAX CUDA typed FFI; no Torch dependency
+
