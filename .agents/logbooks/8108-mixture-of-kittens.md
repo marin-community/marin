@@ -302,3 +302,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: Both gradient jobs passed with zero mismatches. Routed weight-gradient mean errors returned to about 0.083, the same result as the one-macro gate. The full run `/rav/mok-fused-fp32-wgrad-1n-1-20260810-1305-coord` completed one step at loss 11.8 without a retry or memory failure. Fifteen focused tests and all checks for the changed files passed.
 - Interpretation: The backward kernel can keep the small routed-activation ring and preserve one-macro gradient quality. The next long run can test whether this correction removes the non-finite result.
 - Next action: Run 25 steps with XProf, require finite completion, and measure steady MFU against the 25% gate.
+
+### 2026-08-10 13:15 UTC - The first FP32 update exposed a second numerical fault
+
+- Hypothesis: The FP32 routed partial fix removes the late drift in full training.
+- Commit Hash: `627322735` and `263b33618`.
+- Commands: One 25-step full E8 run with no retry; one eight-expert, top-4, four-GPU gradient gate with two local experts per GPU and uneven routes across eight macro-buffers.
+- Config: The full run used E8, top-4, global batch 64, BF16 compute, and the 32,768-row ring. The focused gate used a 3:1 route split between each rank's two experts.
+- Result: The full run completed its first step at loss 11.8, then failed with a non-finite loss at state step 2. The focused gate passed the forward and all eight gradient groups with zero mismatches. Routed-weight gradient mean errors were about 0.057.
+- Interpretation: The FP32 macrobatch and local-expert output layout is correct. The remaining fault occurs after the first full-shape optimizer update and is not reproduced by the small kernel gate.
+- Next action: Log per-parameter gradient, update, and parameter norms for a two-step full-shape run. Use the first non-finite boundary to separate a kernel gradient fault from an optimizer fault.
