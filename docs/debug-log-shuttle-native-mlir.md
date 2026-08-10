@@ -345,8 +345,9 @@ pass.
   `ShuttlePasses`, `shuttle-opt`, and the separate `mlir_tests` build gate.
 - Lit executed all 11 fixtures: eight passed and `fail-closed.mlir`,
   `map-errors.mlir`, and `no-shuttle-errors.mlir` failed as described above.
-- All 11 fixture RUN lines were audited. Their executable tool set is exactly
-  `shuttle-opt`, `FileCheck`, and `not`; the suite now stages all three.
+- All 14 RUN lines across 11 fixtures were audited. Their executable tool set
+  is exactly `shuttle-opt`, `FileCheck`, and `not`; the suite now stages all
+  three.
 - Source inspection confirms the deferred Map diagnostic still rejects
   projected result maps after scalar-only and unbound-domain validation.
 - Native lit validation of these changes remains pending. No remote build was
