@@ -7,9 +7,10 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+from haliax.jax_utils import tree_checkpoint_name
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.grug._moe.common import MoeImplementation
+from levanter.grug._moe.common import _CHECKPOINT_MOE_OUTPUT, MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _batch_spec_from_x, _reshard_for_shard_map
 from levanter.kernels.mixture_of_kittens.forward_ffi import (
@@ -470,7 +471,7 @@ def mixture_of_kittens_mlp(
         mesh=mesh,
         config=config,
     )
-    return forward(
+    output, dropped_assignments = forward(
         x,
         selected_experts,
         combine_weights,
@@ -481,3 +482,4 @@ def mixture_of_kittens_mlp(
         shared_up,
         shared_down,
     )
+    return tree_checkpoint_name(output, _CHECKPOINT_MOE_OUTPUT), dropped_assignments
