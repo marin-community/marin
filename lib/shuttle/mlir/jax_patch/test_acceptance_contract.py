@@ -3,6 +3,8 @@
 
 """Adversarial tests for the pure ordinary-JAX observer contract."""
 
+import hashlib
+import json
 import operator
 from copy import deepcopy
 from pathlib import Path
@@ -14,6 +16,7 @@ from acceptance_contract import (
     VJP_EXPECTATION,
     ObserverIdentity,
     decode_native_snapshot,
+    match_fixture_contract,
     validate_success_events,
 )
 from verify_acceptance_fixture_oracles import EXPECTATIONS, audited_fingerprint, fixture_path, verify_oracles
@@ -115,6 +118,55 @@ def test_accepts_only_the_complete_fixture_contract():
 
     assert evidence["fixture"] == "vjp"
     assert evidence["final_fingerprint"] == VJP_EXPECTATION.final_normalized_fingerprint
+
+
+def test_contract_mismatch_reports_every_field_and_fixture_without_structural_payloads():
+    events = valid_events(VJP_EXPECTATION)
+    structural_payload = "private-structural-payload-" * 40
+    events[1]["coverage_manifest"] = structural_payload
+
+    with pytest.raises(AssertionError) as failure:
+        match_fixture_contract(events, IDENTITY)
+
+    prefix = "observer invocation did not match exactly one audited fixture contract: "
+    message = str(failure.value)
+    assert message.startswith(prefix)
+    diagnostic = json.loads(message.removeprefix(prefix))
+    assert diagnostic["event_count"] == 3
+    assert diagnostic["omitted_event_count"] == 0
+    assert [result["fixture"] for result in diagnostic["contract_results"]] == ["forward", "vjp"]
+    assert all(result["status"] == "mismatch" and result["reason"] for result in diagnostic["contract_results"])
+    assert all(set(event["fields"]) == set(EVENT_FIELDS) for event in diagnostic["events"])
+    manifest = diagnostic["events"][1]["fields"]["coverage_manifest"]
+    assert manifest == {
+        "length": len(structural_payload),
+        "sha256": hashlib.sha256(structural_payload.encode()).hexdigest(),
+    }
+    assert structural_payload not in message
+    assert len(message.encode()) <= 12_000
+    with pytest.raises(AssertionError) as repeated:
+        match_fixture_contract(events, IDENTITY)
+    assert str(repeated.value) == message
+
+
+def test_contract_match_preserves_the_single_fixture_oracle():
+    evidence = match_fixture_contract(valid_events(VJP_EXPECTATION), IDENTITY)
+
+    assert evidence["fixture"] == "vjp"
+    assert evidence["final_fingerprint"] == VJP_EXPECTATION.final_normalized_fingerprint
+
+
+def test_contract_mismatch_bounds_anomalous_event_counts():
+    events = valid_events(VJP_EXPECTATION) * 100
+
+    with pytest.raises(AssertionError) as failure:
+        match_fixture_contract(events, IDENTITY)
+
+    diagnostic = json.loads(str(failure.value).partition(": ")[2])
+    assert diagnostic["event_count"] == 300
+    assert len(diagnostic["events"]) == 4
+    assert diagnostic["omitted_event_count"] == 296
+    assert len(str(failure.value).encode()) <= 12_000
 
 
 @pytest.mark.parametrize("expectation", EXPECTATIONS)

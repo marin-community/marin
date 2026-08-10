@@ -4,6 +4,7 @@
 """Pure structural expectations for the pinned ordinary-JAX fixtures."""
 
 import hashlib
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,9 @@ EVENT_FIELDS = (
     "no_shuttle_semantics",
     "failure_pass",
 )
+MAX_DIAGNOSTIC_EVENTS = 4
+MAX_DIAGNOSTIC_STRING_LENGTH = 160
+STRUCTURAL_DIAGNOSTIC_FIELDS = frozenset({"region_membership", "coverage_manifest"})
 
 
 @dataclass(frozen=True)
@@ -199,3 +203,59 @@ def validate_success_events(
         "unsupported_fingerprint": fixture.unsupported_fingerprint,
         "final_fingerprint": fixture.final_normalized_fingerprint,
     }
+
+
+def _summarize_diagnostic_string(value: str) -> dict[str, int | str]:
+    return {
+        "length": len(value),
+        "sha256": hashlib.sha256(value.encode()).hexdigest(),
+    }
+
+
+def _diagnostic_field(field: str, value: Any) -> Any:
+    if isinstance(value, str):
+        if value and (field in STRUCTURAL_DIAGNOSTIC_FIELDS or len(value) > MAX_DIAGNOSTIC_STRING_LENGTH):
+            return _summarize_diagnostic_string(value)
+        return value
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    return {"type": type(value).__name__[:MAX_DIAGNOSTIC_STRING_LENGTH]}
+
+
+def _contract_diagnostic(
+    events: Sequence[Mapping[str, Any]],
+    contract_results: Sequence[Mapping[str, str]],
+) -> str:
+    serialized_events = []
+    for event_index, event in enumerate(events[:MAX_DIAGNOSTIC_EVENTS]):
+        fields = {
+            field: _diagnostic_field(field, event[field]) if field in event else {"missing": True}
+            for field in EVENT_FIELDS
+        }
+        serialized_events.append({"event_index": event_index, "fields": fields})
+    diagnostic = {
+        "contract_results": contract_results,
+        "event_count": len(events),
+        "events": serialized_events,
+        "omitted_event_count": max(0, len(events) - MAX_DIAGNOSTIC_EVENTS),
+    }
+    return json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
+
+
+def match_fixture_contract(
+    events: Sequence[Mapping[str, Any]],
+    identity: ObserverIdentity,
+) -> dict[str, Any]:
+    """Match one invocation against exactly one audited fixture contract."""
+    matches = []
+    contract_results = []
+    for fixture in FIXTURE_EXPECTATIONS:
+        try:
+            matches.append(validate_success_events(events, identity, fixture))
+            contract_results.append({"fixture": fixture.name, "status": "matched", "reason": ""})
+        except AssertionError as error:
+            contract_results.append({"fixture": fixture.name, "status": "mismatch", "reason": str(error)})
+    if len(matches) != 1:
+        diagnostic = _contract_diagnostic(events, contract_results)
+        raise AssertionError("observer invocation did not match exactly one audited fixture contract: " + diagnostic)
+    return matches[0]
