@@ -315,13 +315,50 @@ limit the audit to the first failure exposed by Bazel.
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-cuda-label/`.
 - This run used one submission with zero retries. No relaunch occurred.
 
+## Hypothesis 9
+
+The repository-relative lit labels are fixed: the exact native run built all
+four compiler gates and `@shuttle_mlir//:mlir_tests`, then executed all 11 lit
+fixtures. Eight passed. The remaining failures are local fixture or verifier
+issues rather than another external-repository analysis failure.
+
+`fail-closed.mlir` invokes LLVM's `not` executable, but the suite stages only
+`shuttle-opt` and `FileCheck`. Exact LLVM commit `9a4faee1068` exports that tool
+as `@llvm-project//llvm:not`; add it to the suite's tools.
+
+The Map verifier reports a projected result map inside its per-map loop. That
+preempts the more fundamental scalar-domain and unbound-domain diagnostics in
+two existing negative cases. Record result projection while inspecting maps,
+then diagnose it only after the global domain checks. This preserves all three
+semantic rejections and makes each intended verifier branch reachable.
+
+`no-shuttle-errors.mlir` uses line-based diagnostic annotations for a recursive
+walk. The pass correctly stops at the nested `shuttle.yield`, prints a fused
+location as `<unknown>`, and attaches a nested attribute error to its owning
+module; none of those locations is part of the pass contract. Check the three
+stable rejection messages through `not` and `FileCheck` without weakening the
+pass.
+
+## Results 9
+
+- The exact native run passed operation generation, `ShuttleDialect`,
+  `ShuttlePasses`, `shuttle-opt`, and the separate `mlir_tests` build gate.
+- Lit executed all 11 fixtures: eight passed and `fail-closed.mlir`,
+  `map-errors.mlir`, and `no-shuttle-errors.mlir` failed as described above.
+- All 11 fixture RUN lines were audited. Their executable tool set is exactly
+  `shuttle-opt`, `FileCheck`, and `not`; the suite now stages all three.
+- Source inspection confirms the deferred Map diagnostic still rejects
+  projected result maps after scalar-only and unbound-domain validation.
+- Native lit validation of these changes remains pending. No remote build was
+  launched for this source-only fix.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
 - [x] Build the narrower `@shuttle_mlir//:ShuttleDialect` target.
 - [x] Build `@shuttle_mlir//:ShuttlePasses`.
 - [x] Link `@shuttle_mlir//:shuttle-opt`.
-- [ ] Make `bazel build @shuttle_mlir//:mlir_tests` pass analysis.
+- [x] Make `bazel build @shuttle_mlir//:mlir_tests` pass analysis.
 - [ ] Run `@shuttle_mlir//:mlir_tests`.
 - [ ] Run the four patched XLA tests.
 
