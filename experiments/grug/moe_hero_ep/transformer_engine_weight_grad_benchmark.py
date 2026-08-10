@@ -152,6 +152,19 @@ def _installed_nvidia_library_paths() -> tuple[Path, ...]:
     return tuple(sorted(library_paths))
 
 
+def _stage_linker_alias(target: Path, library: str) -> Path | None:
+    for package_root in site.getsitepackages():
+        nvidia_root = Path(package_root) / "nvidia"
+        versioned_libraries = sorted(nvidia_root.rglob(f"lib{library}.so.*"))
+        if not versioned_libraries:
+            continue
+        alias_directory = target / "lib"
+        alias_directory.mkdir(exist_ok=True)
+        (alias_directory / f"lib{library}.so").symlink_to(versioned_libraries[0])
+        return alias_directory
+    return None
+
+
 def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
@@ -218,7 +231,10 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
         )
     include_paths = (Path(target) / "include", cccl_include, *_installed_nvidia_include_paths())
     env["CPLUS_INCLUDE_PATH"] = f"{':'.join(str(path) for path in include_paths)}:{env.get('CPLUS_INCLUDE_PATH', '')}"
-    library_paths = (cuda_home / "lib", *_installed_nvidia_library_paths())
+    nccl_alias_path = _stage_linker_alias(Path(target), "nccl")
+    library_paths = tuple(
+        path for path in (nccl_alias_path, cuda_home / "lib", *_installed_nvidia_library_paths()) if path is not None
+    )
     joined_library_paths = ":".join(str(path) for path in library_paths)
     env["LIBRARY_PATH"] = f"{joined_library_paths}:{env.get('LIBRARY_PATH', '')}"
     env["LD_LIBRARY_PATH"] = f"{joined_library_paths}:{env.get('LD_LIBRARY_PATH', '')}"
