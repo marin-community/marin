@@ -15,10 +15,16 @@ workload-specific rewriter.
 
 The current native path under `lib/shuttle/mlir` forms generic f32 Contract and
 Map algebra and lowers it back to StableHLO inside XLA. It does not yet lower
-that algebra to an H100 kernel. The retained prototype under `lib/tile_lifetime`
-can generate a bounded BF16 two-Contract/Map FFI, but it is a one-CTA source-
-ordered proof. Treating it as the production Shuttle backend would bypass the
-ordinary-JAX seam and overstate the current architecture.
+that algebra to an H100 kernel. `contract_map_backend.py` now forms the
+anonymous BF16 graph `x @ w0 -> Map -> @ w1` and derives its reverse from the
+same `TensorProgram`. `cuda_contract_map_backend_codegen.py` emits multi-CTA
+direct FFI source for both policies and all four reviewed shapes. This direct
+FFI source is not connected to the native ordinary-JAX transform.
+
+`contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`, and
+`h100_generated_contract_map_chain_training.py` remain historical. They use a
+one-CTA shared-memory body and reconstruct a different residual-gated graph
+from an HLO artifact. Current H100 backend code must not import them.
 
 The launch gate therefore requires all of the following before it can be
 enabled:
@@ -41,11 +47,24 @@ The staging schema reuses behavior that already has focused tests:
 - `command_buffer_capture.py` records raw counterbalanced samples and handler
   count checkpoints.
 - `benchmark_metadata.py` records the command, toolchain, and device metadata.
-- `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`, and
-  `jax_contract_map_chain_ffi.py` define the retained direct generated family.
-- `h100_generated_contract_map_chain_training.py` provides ordinary-XLA and
-  generated forward/backward evidence, explicit saved tensors, and final-HLO
-  custom-call accounting.
+- `contract_map_backend.py` defines the anonymous forward graph, mechanical
+  reverse, semantic fingerprint, and source-ordered CPU reference.
+- `cuda_contract_map_backend_codegen.py` emits six global-intermediate kernels.
+  `SOURCE_ORDERED` assigns one output to one thread and folds each reduction
+  from index zero upward with explicit round-to-nearest operations. `FAST`
+  assigns one output to one warp and combines lane partials with a fixed shuffle
+  tree under the rounding-reorder policy.
+- `jax_contract_map_backend_ffi.py` defines the typed forward and reverse ABI.
+  The reverse exposes its preactivation-adjoint scratch result so XLA owns the
+  buffer; the handler does not allocate device memory.
+- `contract_map_backend_resources.py` defines retained CUDA artifact commands,
+  ptxas resource parsing, and the expected logical boundary. Profiler,
+  unexpected-copy, and ordinary-XLA collectors are still missing.
+- `h100_contract_map_backend_training.py` maps the reviewed structural cases to
+  scalar ASTs and creates both generated policies without reading HLO fixtures.
+- `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`,
+  `jax_contract_map_chain_ffi.py`, and
+  `h100_generated_contract_map_chain_training.py` are historical evidence.
 - `linear_pair_map.py`, `cute_pair_map_codegen.py`, and
   `h100_generated_linear_pair_map_training.py` provide realistic generated
   CuTe/QuACK Contract/Map components and saved-versus-recomputed boundaries.

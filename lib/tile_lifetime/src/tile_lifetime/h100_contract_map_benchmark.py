@@ -1046,12 +1046,13 @@ def staged_backend_wiring() -> tuple[BackendWiring, ...]:
             resource_collectors_wired=False,
             reviewed=False,
             evidence_paths=(
-                "lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_chain_codegen.py",
-                "lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py",
+                "lib/tile_lifetime/src/tile_lifetime/contract_map_backend.py",
+                "lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_backend_codegen.py",
+                "lib/tile_lifetime/benchmarks/h100_contract_map_backend_training.py",
             ),
             blockers=(
-                "the retained generated FFI is a bounded one-CTA prototype, not the ordinary-JAX Shuttle seam",
-                "resource collectors are not wired",
+                "the multi-CTA direct FFI is not reached through the ordinary-JAX Shuttle transform",
+                "profiler, copy, and ordinary-XLA resource collectors are not wired",
             ),
         ),
         BackendWiring(
@@ -1059,8 +1060,15 @@ def staged_backend_wiring() -> tuple[BackendWiring, ...]:
             generated_backend_wired=False,
             resource_collectors_wired=False,
             reviewed=False,
-            evidence_paths=(),
-            blockers=("no generic generated FAST Contract/Map backend exists", "resource collectors are not wired"),
+            evidence_paths=(
+                "lib/tile_lifetime/src/tile_lifetime/contract_map_backend.py",
+                "lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_backend_codegen.py",
+                "lib/tile_lifetime/benchmarks/h100_contract_map_backend_training.py",
+            ),
+            blockers=(
+                "the fixed-tree FAST direct FFI is not reached through the ordinary-JAX Shuttle transform",
+                "profiler, copy, and ordinary-XLA resource collectors are not wired",
+            ),
         ),
     )
 
