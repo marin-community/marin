@@ -15,10 +15,12 @@ from tile_lifetime import (
     StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProvenance,
     StreamingTileSchedule,
+    causal_gqa_attention_training,
     causal_gqa_attention_vjp,
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
     export_debug_streaming_attention_backward,
+    export_debug_streaming_attention_training,
     recover_stablehlo_streaming_attention_backward,
 )
 from tile_lifetime.plan import NumericalPolicy
@@ -105,6 +107,53 @@ def test_live_jax_vjp_recovery_executes_with_bf16_gradient_parity(scale: float) 
         error = np.abs(generated_bf16 - reference_bf16)
         assert float(error.max()) == 0.0
         assert float(error.mean()) == 0.0
+
+
+def test_natural_training_boundary_recovers_forward_output_by_data_dependencies() -> None:
+    config = StreamingAttentionBackwardDebugConfig(scale=0.375)
+    graph = import_stablehlo(
+        export_debug_streaming_attention_training(config),
+        input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
+    )
+    recovered = recover_stablehlo_streaming_attention_backward(graph, schedule=SCHEDULE)
+    rng = np.random.default_rng(72)
+    arguments = (
+        jnp.asarray(rng.normal(size=(1, 4, 4, 4)), dtype=jnp.bfloat16),
+        jnp.asarray(rng.normal(size=(1, 4, 2, 4)), dtype=jnp.bfloat16),
+        jnp.asarray(rng.normal(size=(1, 4, 2, 4)), dtype=jnp.bfloat16),
+        jnp.asarray(rng.normal(size=(1, 4, 4, 4)), dtype=jnp.bfloat16),
+    )
+
+    expected = causal_gqa_attention_training(config)(*arguments)
+    inputs = {
+        "query": np.asarray(arguments[0], dtype=np.float32),
+        "key": np.asarray(arguments[1], dtype=np.float32),
+        "value": np.asarray(arguments[2], dtype=np.float32),
+        "query.position": np.arange(4, dtype=np.int32),
+        "key.position": np.arange(4, dtype=np.int32),
+    }
+    generated_forward = execute_streaming_attention_with_state(recovered.program.forward, inputs)
+    generated_reverse = execute_streaming_attention_backward(
+        recovered.program,
+        inputs,
+        generated_forward,
+        np.asarray(arguments[3], dtype=np.float32),
+    )
+    generated_outputs = (
+        generated_forward.output,
+        generated_reverse.query_cotangent,
+        generated_reverse.key_cotangent,
+        generated_reverse.value_cotangent,
+    )
+
+    assert recovered.forward_output in graph.outputs
+    assert recovered.query_cotangent in graph.outputs
+    assert recovered.forward_output != recovered.query_cotangent
+    assert len(recovered.source_operation_ids) == len(graph.operations)
+    assert recovered.score_scale == 0.375
+    for generated, reference in zip(generated_outputs, expected, strict=True):
+        generated_bf16 = np.asarray(jnp.asarray(generated, dtype=jnp.bfloat16), dtype=np.float32)
+        np.testing.assert_array_equal(generated_bf16, np.asarray(reference, dtype=np.float32))
 
 
 def test_maximum_vjp_invariant_rewrite_requires_rounding_reorder_policy() -> None:

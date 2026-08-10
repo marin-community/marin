@@ -55,6 +55,7 @@ class RecoveredStableHLOStreamingAttentionBackward:
     key: int
     value: int
     output_cotangent: int
+    forward_output: int | None
     query_cotangent: int
     key_cotangent: int
     value_cotangent: int
@@ -75,13 +76,13 @@ def recover_stablehlo_streaming_attention_backward(
     """Recover a generic Contract/Map/Fold reverse from ordinary JAX VJP HLO.
 
     JAX remains the automatic-differentiation owner. This pass assigns generic
-    roles to the five Contracts and the normalized-exponential reverse Folds;
+    roles to the generic forward/reverse Contracts and normalized-exponential Folds;
     it never recognizes or dispatches on an attention/model name.
     """
-    if len(graph.inputs) != 4 or len(graph.outputs) != 3:
+    if len(graph.inputs) != 4 or len(graph.outputs) not in (3, 4):
         raise StableHLOStreamingAttentionBackwardError(
             "signature",
-            "expected four primal/cotangent inputs and three cotangent outputs",
+            "expected four primal/cotangent inputs and either three cotangents or forward output plus cotangents",
         )
     if any(len(graph.value(value_id).shape) != 4 for value_id in (*graph.inputs, *graph.outputs)):
         raise StableHLOStreamingAttentionBackwardError("signature", "all inputs and outputs must be rank four")
@@ -186,7 +187,32 @@ def recover_stablehlo_streaming_attention_backward(
     if value_shape[:3] != key_shape[:3]:
         raise StableHLOStreamingAttentionBackwardError("signature", "K/V batch, token, or head axes differ")
 
-    query_cotangent = _one_output_with_shape(graph, query_shape, stage="cotangent_outputs")
+    output_dependencies = {output_id: _ancestor_input_ids(graph, (output_id,)) for output_id in graph.outputs}
+    query_outputs = tuple(output_id for output_id in graph.outputs if graph.value(output_id).shape == query_shape)
+    expected_cotangent_dependencies = {query, key, value, output_cotangent}
+    query_cotangent_candidates = tuple(
+        output_id for output_id in query_outputs if output_dependencies[output_id] == expected_cotangent_dependencies
+    )
+    forward_output_candidates = tuple(
+        output_id for output_id in query_outputs if output_dependencies[output_id] == {query, key, value}
+    )
+    if len(query_cotangent_candidates) != 1:
+        raise StableHLOStreamingAttentionBackwardError(
+            "cotangent_outputs",
+            "could not identify one query cotangent by its generic data dependencies",
+        )
+    if len(graph.outputs) == 4 and len(forward_output_candidates) != 1:
+        raise StableHLOStreamingAttentionBackwardError(
+            "forward_output",
+            "could not identify one forward output independent of the output cotangent",
+        )
+    if len(graph.outputs) == 3 and forward_output_candidates:
+        raise StableHLOStreamingAttentionBackwardError(
+            "forward_output",
+            "reverse-only boundary unexpectedly returns a forward output",
+        )
+    query_cotangent = query_cotangent_candidates[0]
+    forward_output = forward_output_candidates[0] if forward_output_candidates else None
     key_value_outputs = tuple(output_id for output_id in graph.outputs if graph.value(output_id).shape == key_shape)
     if len(key_value_outputs) != 2:
         raise StableHLOStreamingAttentionBackwardError(
@@ -206,24 +232,24 @@ def recover_stablehlo_streaming_attention_backward(
         )
     key_cotangent = key_cotangent_candidates[0]
     value_cotangent = value_cotangent_candidates[0]
-    expected_dependencies = {query, key, value, output_cotangent}
     for output_id, role in ((query_cotangent, "query"), (key_cotangent, "key")):
-        if _ancestor_input_ids(graph, (output_id,)) != expected_dependencies:
+        if output_dependencies[output_id] != expected_cotangent_dependencies:
             raise StableHLOStreamingAttentionBackwardError(
                 "cotangent_outputs",
                 f"{role} cotangent omits a primal or output-cotangent dependency",
             )
-    if _ancestor_input_ids(graph, (value_cotangent,)) != {query, key, output_cotangent}:
+    if output_dependencies[value_cotangent] != {query, key, output_cotangent}:
         raise StableHLOStreamingAttentionBackwardError(
             "cotangent_outputs",
             "value cotangent has unexpected data dependencies",
         )
 
     dots = _operations(graph, "dot_general")
-    if len(dots) != 5:
+    expected_dot_count = 6 if forward_output is not None else 5
+    if len(dots) != expected_dot_count:
         raise StableHLOStreamingAttentionBackwardError(
             "contracts",
-            f"expected primal QK plus four reverse Contracts, found {len(dots)}",
+            f"expected {expected_dot_count} forward/reverse Contracts, found {len(dots)}",
             operation_ids=tuple(operation.id for operation in dots),
         )
     terminal_dots = tuple(
@@ -232,9 +258,11 @@ def recover_stablehlo_streaming_attention_backward(
     )
     if len({operation.id for operation in terminal_dots}) != 3:
         raise StableHLOStreamingAttentionBackwardError("contracts", "cotangent outputs do not have distinct Contracts")
-    remaining_dots = tuple(
-        operation for operation in dots if operation.id not in {qk.id, *(op.id for op in terminal_dots)}
-    )
+    forward_pv = _latest_ancestor_dot(graph, forward_output, exclude=qk.id) if forward_output is not None else None
+    assigned_dot_ids = {qk.id, *(operation.id for operation in terminal_dots)}
+    if forward_pv is not None:
+        assigned_dot_ids.add(forward_pv.id)
+    remaining_dots = tuple(operation for operation in dots if operation.id not in assigned_dot_ids)
     if len(remaining_dots) != 1 or _ancestor_input_ids(graph, remaining_dots[0].inputs) != {
         value,
         output_cotangent,
@@ -302,11 +330,17 @@ def recover_stablehlo_streaming_attention_backward(
         key=key,
         value=value,
         output_cotangent=output_cotangent,
+        forward_output=forward_output,
         query_cotangent=query_cotangent,
         key_cotangent=key_cotangent,
         value_cotangent=value_cotangent,
         score_scale=scale,
-        contract_operation_ids=(qk.id, d_probability.id, *(operation.id for operation in terminal_dots)),
+        contract_operation_ids=(
+            qk.id,
+            *((forward_pv.id,) if forward_pv is not None else ()),
+            d_probability.id,
+            *(operation.id for operation in terminal_dots),
+        ),
         normalized_exponential_fold_operation_ids=(maximum.id, row_sum.id),
         maximum_vjp_tie_fold_operation_id=tie_fold.id,
         broadcast_vjp_fold_operation_ids=tuple(operation.id for operation in broadcast_vjp_folds),
@@ -494,15 +528,6 @@ def _scalar_constant(graph: StableHLOGraph, value_id: int, *, stage: str) -> flo
         return float(literal)
     except ValueError as error:
         raise StableHLOStreamingAttentionBackwardError(stage, f"unsupported scalar literal {literal!r}") from error
-
-
-def _one_output_with_shape(graph: StableHLOGraph, shape: tuple[int, ...], *, stage: str) -> int:
-    outputs = tuple(output_id for output_id in graph.outputs if graph.value(output_id).shape == shape)
-    if len(outputs) != 1:
-        raise StableHLOStreamingAttentionBackwardError(
-            stage, f"expected one output with shape {shape}, found {len(outputs)}"
-        )
-    return outputs[0]
 
 
 def _latest_ancestor_dot(graph: StableHLOGraph, value_id: int, *, exclude: int) -> StableHLOOperation:

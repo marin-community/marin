@@ -56,6 +56,13 @@ class StreamingAttentionBackwardStatePolicy(StrEnum):
     SAVED_OUTPUT_AND_LOG_SUM_EXP = "saved_output_and_log_sum_exp"
 
 
+class StreamingAttentionBackwardResultPolicy(StrEnum):
+    """Which natural program results cross the generated FFI boundary."""
+
+    GRADIENTS_ONLY = "gradients_only"
+    FORWARD_OUTPUT_AND_GRADIENTS = "forward_output_and_gradients"
+
+
 @dataclass(frozen=True)
 class StreamingAttentionBackwardFfiBuffer:
     """One statically shaped buffer in the generated typed-FFI boundary."""
@@ -142,6 +149,7 @@ class GeneratedStreamingAttentionBackwardFfi:
     target_name: str
     handler_symbol: str
     state_policy: StreamingAttentionBackwardStatePolicy
+    result_policy: StreamingAttentionBackwardResultPolicy
     inputs: tuple[StreamingAttentionBackwardFfiBuffer, ...]
     outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...]
     aot_kernels: tuple[TritonAotKernelPlan, ...]
@@ -174,6 +182,7 @@ def generate_streaming_attention_backward_ffi(
     *,
     target_name: str,
     state_policy: StreamingAttentionBackwardStatePolicy = StreamingAttentionBackwardStatePolicy.RECOMPUTE,
+    result_policy: StreamingAttentionBackwardResultPolicy = StreamingAttentionBackwardResultPolicy.GRADIENTS_ONLY,
     output_layouts: tuple[StreamingAttentionBackwardFfiBufferLayout, ...] = (),
     num_warps: int = 8,
     num_stages: int = 3,
@@ -184,6 +193,11 @@ def generate_streaming_attention_backward_ffi(
         raise ValueError(f"FFI target does not map to a C identifier: {target_name!r}")
     if num_warps not in (4, 8) or num_stages not in (2, 3, 4):
         raise ValueError("streaming reverse AOT schedule requires 4/8 warps and 2-4 stages")
+    if (
+        result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS
+        and state_policy is not StreamingAttentionBackwardStatePolicy.RECOMPUTE
+    ):
+        raise ValueError("forward-plus-gradient result requires a recomputed forward state in the same boundary")
 
     query, key = program.forward.qk.inputs
     value = program.forward.pv.inputs[1]
@@ -210,11 +224,16 @@ def generate_streaming_attention_backward_ffi(
             )
         )
     inputs.append(StreamingAttentionBackwardFfiBuffer("output_cotangent", DType.BF16, output_shape))
-    output_shapes = {
-        "query_cotangent": query_shape,
-        "key_cotangent": key_shape,
-        "value_cotangent": value_shape,
-    }
+    output_shapes = {}
+    if result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS:
+        output_shapes["forward_output"] = output_shape
+    output_shapes.update(
+        {
+            "query_cotangent": query_shape,
+            "key_cotangent": key_shape,
+            "value_cotangent": value_shape,
+        }
+    )
     layout_by_name = _validated_output_layouts(output_shapes, output_layouts)
     outputs = tuple(
         StreamingAttentionBackwardFfiBuffer(name, DType.BF16, shape, layout_by_name[name])
@@ -222,10 +241,17 @@ def generate_streaming_attention_backward_ffi(
     )
     kernels: list[TritonAotKernelPlan] = []
     if state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE:
+        output_by_name = {output.name: output for output in outputs}
+        forward_output_strides = (
+            output_by_name["forward_output"].strides
+            if result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS
+            else _contiguous_strides(output_shape)
+        )
         kernels.append(
             _forward_aot_plan(
                 query_shape,
                 key_shape,
+                forward_output_strides,
                 parameters,
                 schedule,
                 num_warps=num_warps,
@@ -244,10 +270,11 @@ def generate_streaming_attention_backward_ffi(
             num_stages=num_stages,
         )
     )
-    semantic_fingerprint = _semantic_fingerprint(program, schedule, state_policy, outputs)
+    semantic_fingerprint = _semantic_fingerprint(program, schedule, state_policy, result_policy, outputs)
     handler_template = _handler_template(
         handler_symbol=handler_symbol,
         state_policy=state_policy,
+        result_policy=result_policy,
         inputs=tuple(inputs),
         outputs=outputs,
         query_shape=query_shape,
@@ -256,6 +283,7 @@ def generate_streaming_attention_backward_ffi(
         target_name=target_name,
         handler_symbol=handler_symbol,
         state_policy=state_policy,
+        result_policy=result_policy,
         inputs=tuple(inputs),
         outputs=outputs,
         aot_kernels=tuple(kernels),
@@ -289,6 +317,53 @@ def call_streaming_attention_backward_ffi(
     log_sum_exp: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Invoke the generated reverse on JAX-owned buffers and execution stream."""
+    if generated.result_policy is not StreamingAttentionBackwardResultPolicy.GRADIENTS_ONLY:
+        raise ValueError("reverse-only call requires the gradients-only result policy")
+    results = _call_streaming_attention_backward_ffi(
+        generated,
+        query=query,
+        key=key,
+        value=value,
+        output_cotangent=output_cotangent,
+        output=output,
+        log_sum_exp=log_sum_exp,
+    )
+    query_cotangent, key_cotangent, value_cotangent = results
+    return query_cotangent, key_cotangent, value_cotangent
+
+
+def call_streaming_attention_training_ffi(
+    generated: GeneratedStreamingAttentionBackwardFfi,
+    *,
+    query: jax.Array,
+    key: jax.Array,
+    value: jax.Array,
+    output_cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Invoke one generated forward-plus-JAX-owned-reverse training boundary."""
+    if generated.result_policy is not StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS:
+        raise ValueError("training call requires the forward-output-and-gradients result policy")
+    results = _call_streaming_attention_backward_ffi(
+        generated,
+        query=query,
+        key=key,
+        value=value,
+        output_cotangent=output_cotangent,
+    )
+    forward_output, query_cotangent, key_cotangent, value_cotangent = results
+    return forward_output, query_cotangent, key_cotangent, value_cotangent
+
+
+def _call_streaming_attention_backward_ffi(
+    generated: GeneratedStreamingAttentionBackwardFfi,
+    *,
+    query: jax.Array,
+    key: jax.Array,
+    value: jax.Array,
+    output_cotangent: jax.Array,
+    output: jax.Array | None = None,
+    log_sum_exp: jax.Array | None = None,
+) -> tuple[jax.Array, ...]:
     arrays: dict[str, jax.Array] = {
         "query": query,
         "key": key,
@@ -313,8 +388,7 @@ def call_streaming_attention_backward_ffi(
         input_layouts=tuple(specification.jax_layout for specification in generated.inputs),
         output_layouts=tuple(specification.jax_layout for specification in generated.outputs),
     )(*ordered)
-    query_cotangent, key_cotangent, value_cotangent = tuple(results)
-    return query_cotangent, key_cotangent, value_cotangent
+    return tuple(results)
 
 
 def compile_streaming_attention_backward_ffi(
@@ -500,6 +574,7 @@ def _validate_program(
 def _forward_aot_plan(
     query_shape: tuple[int, ...],
     key_shape: tuple[int, ...],
+    output_strides: tuple[int, ...],
     parameters: _ScoreMapParameters,
     schedule: StreamingAttentionBackwardTileSchedule,
     *,
@@ -533,7 +608,7 @@ def _forward_aot_plan(
         *(str(value) for value in q_strides),
         *(str(value) for value in k_strides),
         *(str(value) for value in k_strides),
-        *(str(value) for value in q_strides),
+        *(str(value) for value in output_strides),
         "0",
         "0",
         "0",
@@ -673,6 +748,7 @@ def _handler_template(
     *,
     handler_symbol: str,
     state_policy: StreamingAttentionBackwardStatePolicy,
+    result_policy: StreamingAttentionBackwardResultPolicy,
     inputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
     outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
     query_shape: tuple[int, ...],
@@ -701,14 +777,23 @@ def _handler_template(
     output_elements = batch * sequence * query_heads * dimension
     state_elements = batch * query_heads * sequence
     if state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE:
+        if result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS:
+            output_allocation = ""
+            output_allocation_check = ""
+            output_pointer = "  auto* output = forward_output_pointer;"
+        else:
+            output_allocation = f"""  auto output_storage = scratch.Allocate(
+      sizeof(__nv_bfloat16) * {output_elements}, alignof(__nv_bfloat16));"""
+            output_allocation_check = "!output_storage || "
+            output_pointer = "  auto* output = static_cast<__nv_bfloat16*>(*output_storage);"
         state_setup = f"""
-  auto output_storage = scratch.Allocate(sizeof(__nv_bfloat16) * {output_elements}, alignof(__nv_bfloat16));
+{output_allocation}
   auto lse_storage = scratch.Allocate(sizeof(float) * {state_elements}, alignof(float));
   auto position_storage = scratch.Allocate(sizeof(int32_t) * {sequence}, alignof(int32_t));
-  if (!output_storage || !lse_storage || !position_storage) {{
+  if ({output_allocation_check}!lse_storage || !position_storage) {{
     return ffi::Error::Internal("failed to allocate streaming reverse recompute state");
   }}
-  auto* output = static_cast<__nv_bfloat16*>(*output_storage);
+{output_pointer}
   auto* log_sum_exp = static_cast<float*>(*lse_storage);
   auto* positions = static_cast<int32_t*>(*position_storage);
   constexpr int kPositionThreads = 256;
@@ -890,6 +975,7 @@ def _semantic_fingerprint(
     program: StreamingAttentionBackwardProgram,
     schedule: StreamingAttentionBackwardTileSchedule,
     state_policy: StreamingAttentionBackwardStatePolicy,
+    result_policy: StreamingAttentionBackwardResultPolicy,
     outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
 ) -> str:
     payload = {
@@ -902,6 +988,7 @@ def _semantic_fingerprint(
         "maximum_vjp": program.maximum_vjp.value,
         "reassociation": program.reassociation.value,
         "state_policy": state_policy.value,
+        "result_policy": result_policy.value,
         "output_layouts": {output.name: output.layout for output in outputs},
         "schedule": {
             "query_tile": schedule.query_tile_size,

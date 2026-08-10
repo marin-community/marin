@@ -97,6 +97,18 @@ def causal_gqa_attention_vjp(config: StreamingAttentionBackwardDebugConfig):
     return reverse
 
 
+def causal_gqa_attention_training(config: StreamingAttentionBackwardDebugConfig):
+    """Return the natural forward plus JAX-owned reverse training boundary."""
+    attention = causal_gqa_attention(config)
+
+    def training(query, key, value, output_cotangent):
+        output, pullback = jax.vjp(attention, query, key, value)
+        query_cotangent, key_cotangent, value_cotangent = pullback(output_cotangent)
+        return output, query_cotangent, key_cotangent, value_cotangent
+
+    return training
+
+
 def export_debug_streaming_attention_backward(
     config: StreamingAttentionBackwardDebugConfig = StreamingAttentionBackwardDebugConfig(),
 ) -> bytes:
@@ -121,4 +133,31 @@ def export_debug_streaming_attention_backward(
         ),
     )
     exported = jax.export.export(jax.jit(causal_gqa_attention_vjp(config)))(*specifications)
+    return exported.mlir_module_serialized
+
+
+def export_debug_streaming_attention_training(
+    config: StreamingAttentionBackwardDebugConfig = StreamingAttentionBackwardDebugConfig(),
+) -> bytes:
+    """Export a natural forward-plus-reverse JAX training boundary."""
+    bf16 = jnp.bfloat16
+    specifications = (
+        jax.ShapeDtypeStruct(
+            (config.batch, config.query_length, config.query_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.key_length, config.key_value_heads, config.head_dimension),
+            bf16,
+        ),
+        jax.ShapeDtypeStruct(
+            (config.batch, config.query_length, config.query_heads, config.head_dimension),
+            bf16,
+        ),
+    )
+    exported = jax.export.export(jax.jit(causal_gqa_attention_training(config)))(*specifications)
     return exported.mlir_module_serialized
