@@ -175,3 +175,12 @@ Before another allocation, correct the positional ABI, specialize only the
 bounded maximum work capacity at the generic physical-launch boundary, retain
 runtime `work_count` for tail work, and extend the Linux preflight to prove the
 constant-grid source and ABI contract.
+
+That CPU-only gate passed at Shuttle commit `a21e0d0ecd` on Iris job
+`/dlwh/shuttle-event-jax-static-grid-preflight`. The preserved result is under
+`benchmarks/artifacts/event_tensor_right_resource_jax_preflight_sm100_v1`.
+The audit records `cutlass.Constexpr[int]` capacity, the `num_ctas` grid alias,
+compiled capacity 16, runtime `work_count` forwarding, and reject-before-launch
+overflow handling. It also rechecks the relation mutation, generated Fold FFI,
+CUTLASS JAX callable, source hashes, and Torch-free environment. This remains a
+host-side gate; device execution is still unproven.

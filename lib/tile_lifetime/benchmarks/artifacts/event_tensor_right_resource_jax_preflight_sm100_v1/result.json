@@ -1,0 +1,62 @@
+{
+  "architecture": "sm_100a",
+  "dependency_versions": {
+    "cuda-python": "13.3.1",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "nvidia-cuda-nvcc": "13.3.73",
+    "nvidia-cutlass-dsl": "4.5.3",
+    "quack-kernels": "0.2.10"
+  },
+  "event_program_fingerprint": "196b0f299c37c22559064f1fee88a1693173aa9211b8b3af33400d7c2f8dac57",
+  "event_runtime_fingerprint": "1788d488fe7e392af94408c3a2918784e32b42c479e34ab6abf181234badc1ca",
+  "external_semantic_kernels": [],
+  "iris_job": "/dlwh/shuttle-event-jax-static-grid-preflight",
+  "jax": "0.10.1",
+  "msa_revision": "80434d7f67877c6570ca19cac444b84bc9855dac",
+  "mutation_runtime_fingerprint": "a98f092e10480bd555d9e0b6986527f83fa594cc138b3347cefe696e457dd18e",
+  "partial_merge_handler": "shuttle_partial_state_fold_finalize_handler",
+  "partial_merge_source_sha256": "2679b86d8e5341f08a58f3a75a2d924bb0da81d59592df77376dc273c663834d",
+  "partial_slot_sources_shape": [2, 512],
+  "physical_call_type": "PjitFunction",
+  "physical_source_sha256": "84876cfe29bf90a8c0f16d8df3f4a61eba8ced13a9bce06b6129963df5ade646",
+  "physical_support": {
+    "distribution": "quack-kernels",
+    "loaded_modules": [
+      "quack.activation",
+      "quack.copy_utils",
+      "quack.layout_utils",
+      "quack.cute_dsl_utils",
+      "src.common.cute_dsl_utils"
+    ],
+    "source_sha256": {
+      "quack.activation": "4ffca9717a33e9ae303cf3595b680a66e123f097ae71a2ad2b1422425e57ad77",
+      "quack.copy_utils": "adda215e6f5b297a831e43077fc95640942709bd2130bbe1cc8b9d923d01c5e8",
+      "quack.cute_dsl_utils:ParamsBase": "93526e8d0692fde08469f4af4aae91d43b1dc0f36ce3ac7046e0ae2730fb9927",
+      "quack.layout_utils": "ebd375693cbef38d17dec78cb8b7cbc62577056f12695b0cdd37f455fe0d0922",
+      "src.common.cute_dsl_utils:alignment": "bb539460115aac1282b63ed2d217089c781679c26be65926fefb9c825821b434"
+    },
+    "version": "0.2.10"
+  },
+  "python": "3.12.13",
+  "right_to_left_offsets_shape": [2, 9],
+  "right_to_left_sources_shape": [2, 512],
+  "scheduler_metadata_shape": [16, 6],
+  "shuttle_revision": "a21e0d0ecd",
+  "split_counts_shape": [128, 2],
+  "static_launch_grid": {
+    "capacity_annotation": "cutlass.Constexpr[int]",
+    "compiled_work_capacity": 16,
+    "grid_expression": "num_ctas",
+    "runtime_capacity_overflow_policy": "reject before physical launch",
+    "runtime_work_count_forwarded": true,
+    "runtime_work_count_is_device_operand": true
+  },
+  "status": "linux_compile_import_preflight_passed",
+  "torch_installed": false,
+  "torch_loaded": false,
+  "work_capacity": 16,
+  "work_count": [16]
+}
+
