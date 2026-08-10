@@ -3459,3 +3459,36 @@ author: dlwh
   `JOB_STATE_KILLED` and no active matching job; local session state and the
   exact task-label pod are absent. Artifact:
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_capture_safe_870ce225_unaccepted_v0/`.
+
+### 2026-08-09 17:20 PDT - TLTC-XLA-067 two-output row Fold bootstrap failure
+
+- Source revision `e01a463809` adds one bounded comparison to the existing
+  ordinary-JAX row-normalization VJP harness: coalesced generic AxisFold with
+  one versus two feature outputs per logical group, plus matched XLA, in one
+  six-permutation counterbalanced process. The harness requires identical
+  deterministic hashes across physical candidates and exact typed-FFI handler
+  counts before reporting measurements.
+- Static generation at rows 2048, hidden 4096, 256 threads, and 32 groups per
+  block gives identical three-stage semantic fingerprints for both schedules.
+  Each output column retains the same eight-lane deterministic FP32 reduction
+  tree. The generated source is Torch-free and uses no reduction atomic RMW;
+  its only `std::atomic` is the FFI invocation counter. Nineteen focused tests
+  and changed-file pre-commit passed.
+- The only submitted job, `/dlwh/shuttle-row-fold-output2-h100-20260809`,
+  requested one H100, one CPU, 16 GB RAM, 50 GB disk, batch priority, and zero
+  retries. It failed in Iris setup after 6.32 seconds because the narrow
+  bootstrap omitted the empty `dev` dependency group required by the setup
+  command's `--no-group dev` argument. The benchmark process never started, so
+  correctness, determinism, handler counts, raw samples, and latency are all
+  unmeasured. The previous `0.089681 ms` one-output result remains the baseline.
+- Iris reports the job terminal failed. The exact task-label pod is absent, and
+  no `dev_gpu` holder session was created. No retry or tuning followed.
+- A corrected minimal bootstrap is prepared but not submitted. Linux-targeted
+  `uv sync --all-packages --no-group dev --extra gpu --dry-run` resolves the
+  required JAX/CUDA 0.10.1 environment. The 521,060-byte Iris bundle SHA-256 is
+  `d4b0feed249d63fbda60db0fa286683374857aa9c723e662f4bb0fe404ab7f58`;
+  the corrected source archive SHA-256 is
+  `f73c03383676a05fc4e7dc5f477458de5bab4a1dce2c964fa1e4cb735772e9ba`.
+- Failure evidence, source audit, exact intended command, release proof, and
+  corrected-bootstrap hashes are under
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_outputs2_bootstrap_failure_e01a4638_v0/`.

@@ -1,0 +1,16 @@
+Job: /dlwh/shuttle-row-fold-output2-h100-20260809
+State: failed
+Tasks: 0/1 completed, 1 failed
+Task 0 exit code: 2
+Task 0 duration: 6.32 seconds
+Maximum retries: 0
+
+[iris setup] step 1/3
+syncing deps
+Using CPython 3.12.13 interpreter at: /usr/local/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 32 packages in 628ms
+error: Group `dev` is not defined in any project's `dependency-groups` table
+
+No benchmark process started and no measurement artifact was produced.
+

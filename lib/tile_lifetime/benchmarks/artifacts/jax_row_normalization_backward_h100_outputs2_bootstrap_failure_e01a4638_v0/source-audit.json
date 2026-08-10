@@ -1,0 +1,36 @@
+{
+  "shuttle_revision": "e01a4638093556769d575418c0414a44ff8d0953",
+  "stablehlo_sha256": "ede6142e020548bfa3284594d126018a751f0ef01472f2d78f1bdf733dbc4211",
+  "schedule": {
+    "pipeline": "coalesce_compatible_row_stages",
+    "threads": 256,
+    "feature_groups_per_block": 32,
+    "reduction_lanes_per_group": 8,
+    "candidate_outputs_per_group": [1, 2]
+  },
+  "semantic_fingerprints": [
+    "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+    "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+    "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+  ],
+  "variants": [
+    {
+      "outputs_per_group": 1,
+      "source_sha256": "cda342a8445c934f30b8bb829b7aeb708016d587fa203e05358c1c7029cebe0f",
+      "source_bytes": 8566
+    },
+    {
+      "outputs_per_group": 2,
+      "source_sha256": "129a8586de148ce8159cccff4e8ce7d6637f1944249a581cc6f50de13139edc3",
+      "source_bytes": 8566
+    }
+  ],
+  "audit": {
+    "torch_runtime_dependency": false,
+    "reduction_atomic_rmw": false,
+    "typed_ffi_call_counter_uses_std_atomic": true,
+    "output_lane_indexing_present": true,
+    "semantic_fingerprints_identical": true
+  }
+}
+

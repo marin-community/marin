@@ -1,0 +1,13 @@
+Iris job query after failure:
+
+  /dlwh/shuttle-row-fold-output2-h100-20260809  failed
+
+Exact Kubernetes task-label query:
+
+  kubectl --kubeconfig ~/.kube/coreweave-iris \
+    --context marin-gpu_US-EAST-02A --namespace iris get pods \
+    -l iris.task_id=dlwh-shuttle-row-fold-output2-h100-20260809-0 -o name
+
+The query returned no pod names. This was a direct Iris job, so no local
+dev_gpu holder session was created.
+
