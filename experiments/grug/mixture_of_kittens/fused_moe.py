@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
@@ -168,7 +169,7 @@ def mixture_of_kittens_reference(
         "ti,id->td",
         jax.nn.silu(gate) * up,
         shared_down,
-        out_sharding=_batch_spec_from_x(x, mesh),
+        out_sharding=NamedSharding(mesh, _batch_spec_from_x(x, mesh)),
     )
     return (routed.astype(jnp.float32) + shared.astype(jnp.float32)).astype(x.dtype)
 
