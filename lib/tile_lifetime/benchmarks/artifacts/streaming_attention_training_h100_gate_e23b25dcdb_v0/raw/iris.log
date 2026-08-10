@@ -1,0 +1,11 @@
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | + rm -rf /tmp/attn-venv /tmp/cuda132-toolkit /tmp/attn-training-h100
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | + uv venv /tmp/attn-venv --python 3.12
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | Using CPython 3.12.13
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | Creating virtual environment at: /tmp/attn-venv
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | Activate with: source /tmp/attn-venv/bin/activate
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | + uv pip install --python /tmp/attn-venv/bin/python 'jax[cuda13]==0.10.1' torch==2.11.0 'triton>=3.6.0,<3.7' 'nvidia-cuda-cccl-cu13>=13.0'
+[02:08:59] task=/dlwh/shuttle-attn-training-h100-20260809/0 | Using Python 3.12.13 environment at: /tmp/attn-venv
+[02:09:00] task=/dlwh/shuttle-attn-training-h100-20260809/0 |   × No solution found when resolving dependencies:
+[02:09:00] task=/dlwh/shuttle-attn-training-h100-20260809/0 |   ╰─▶ Because only nvidia-cuda-cccl-cu13<=0.0.1 is available and you require
+[02:09:00] task=/dlwh/shuttle-attn-training-h100-20260809/0 |       nvidia-cuda-cccl-cu13>=13.0, we can conclude that your requirements
+[02:09:00] task=/dlwh/shuttle-attn-training-h100-20260809/0 |       are unsatisfiable.
