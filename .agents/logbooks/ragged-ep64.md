@@ -1109,3 +1109,14 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Correctness: all 52 optimizer steps completed with finite loss, decreasing from 11.8066559 to 5.5894032. The narrow model dropped as much as 24.066% at capacity 1.33, so its timing and drop rate are not promoted; the exact E48 model has already shown zero drops at the same capacity.
 - W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s46-ep16-e48-active-row-cudnn-correctness-20260810
 - Decision: promote the active-row backend to the exact d6144/L48/E48 zero-drop performance arm.
+
+## 2026-08-10: S47 active-row cuDNN reaches 21.66% MFU with zero drops
+
+- Run: `ra2a-s47-exact-ep16-e48-split32-active-row-cudnn-perf-20260810`; child `/power/ra2a-s47-exact-active-row-cudnn-perf-20260810-coord/grug-train-ra2a-s47-exact-ep16-e48-split32-active-row-cudnn-perf-20260810`. The coordinator and all four workers succeeded on their first attempts with exit 0.
+- Placement: workers `s2rsxs64`, `s2srxs64`, `s3qrxs64`, and `s4btxs64` all shared rack and NVLink domain `DH1-393-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `400.2-DH1`.
+- Contract: exact d6144/L48/E48, width 6272, latent width 3072, top-4, capacity 1.33, EP16, 1,048,576 tokens per step, split-32 ragged transport, cuDNN/QuACK expert compute, 16 one-device processes, and pinned-host optimizer state. Periodic watch, evaluation, profiling, metrics, and checkpoints were disabled.
+- Correctness: all 20 scored losses were finite. Mean loss was 11.8084241; dropped assignments, drop fraction, and mean router overflow were exactly zero on every scored step.
+- Timing: steps 5-24 averaged 17.6210045 seconds, 59,507.9319 tokens/s, and 21.6554206% MFU. Median duration was 17.6079399 seconds, median MFU was 21.6712094%, and duration sample standard deviation was 0.0650454 seconds.
+- Controlled comparison: S43's capacity-filled cuDNN path averaged 18.7795886 seconds, 55,836.4219 tokens/s, and 20.3193283% MFU. True active lengths reduced duration by 6.169%, raised throughput by 6.575%, and gained 1.3361 MFU points. Relative to S33's CuTe/Pallas baseline, the cumulative gain is 9.370% lower step time and 2.0263 MFU points.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s47-exact-ep16-e48-split32-active-row-cudnn-perf-20260810
+- Next arm: reduce capacity factor from 1.33 to the balanced-load boundary at 1.00. This tests static receiver-buffer savings after inactive compute has already been removed. Promote factor 0.98 only if measured drops leave headroom under the 2.5% ceiling.
