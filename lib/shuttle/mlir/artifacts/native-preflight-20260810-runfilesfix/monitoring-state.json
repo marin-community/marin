@@ -1,0 +1,23 @@
+{
+  "ts": "2026-08-10T15:51:03Z",
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-runfilesfix",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "resubmit_command": "/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml job run --no-wait --no-sync --enable-extra-resources --cpu 24 --memory 96GB --disk 250GB --max-retries 0 --timeout 14400 --priority interactive --job-name shuttle-native-mlir-preflight-20260810-runfilesfix -- bash run_native_preflight.sh",
+  "restart_count": 0,
+  "submission_count": 1,
+  "submitted_utc": "2026-08-10T15:28:14Z",
+  "monitor_owner": "/root/mlir_native_build",
+  "dashboard": "https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fshuttle-native-mlir-preflight-20260810-runfilesfix",
+  "terminal_state": "succeeded",
+  "terminal_utc": "2026-08-10T15:37:50Z",
+  "task_exit_code": 0,
+  "preflight_exit_code": 0,
+  "pipeline_observer_tests_passed": 1,
+  "pipeline_observer_tests_total": 1,
+  "mlir_tests_passed": 17,
+  "mlir_tests_total": 17,
+  "xla_tests_passed": 4,
+  "xla_tests_total": 4,
+  "restart_count_at_terminal": 0,
+  "submission_count_at_terminal": 1
+}

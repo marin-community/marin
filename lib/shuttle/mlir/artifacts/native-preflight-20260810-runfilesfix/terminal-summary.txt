@@ -1,0 +1,6 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-runfilesfix (/dlwh/shuttle-native-mlir-preflight-20260810-runfilesfix)
+State: succeeded  exit=0  failures=0  preemptions=0
+Tasks: 1/1 completed  succeeded=1
+
+  TASK  STATE        EXIT  DURATION                     PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  succeeded       0  9 minutes and 39.79 seconds  -           -
