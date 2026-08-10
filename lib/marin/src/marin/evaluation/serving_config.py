@@ -126,8 +126,7 @@ def _checkpoint_weight_bytes(location: str, revision: str | None = None) -> int:
 
     ``location`` is an object-store export directory, a local directory, or a Hugging Face repo id,
     matching :func:`auto_serve_overrides`. Reads metadata only: a directory listing or the Hub's
-    file-metadata API, never the weights themselves. The two directory listings are shallow, so a
-    nested duplicate copy never reaches :func:`_is_weight_file`; the Hub lists a repo's whole tree.
+    file-metadata API, never the weights themselves.
     """
     total = _weight_bytes(location, revision)
     if not total:
@@ -153,10 +152,8 @@ def _weight_bytes(location: str, revision: str | None) -> int:
 def _serve_host_memory(weight_bytes: int, ranks: int) -> str:
     """Host memory an inference worker needs to load ``weight_bytes`` across ``ranks`` local ranks.
 
-    The checkpoint passes through host memory once per host — page cache is charged to the cgroup
-    once no matter how many ranks map the same shards — so the weights are not multiplied by the
-    rank count; only the per-rank CUDA/torch runtime is. Device memory bounds the result: a
-    checkpoint has to fit in the slice's HBM, so this stays well inside a serving node's RAM.
+    The weights count once per host, not once per rank: page cache is charged to the cgroup once no
+    matter how many ranks map the same shards.
     """
     weight_gb = weight_bytes / _BYTES_PER_GIB
     required_gb = _CHECKPOINT_MEMORY_FACTOR * weight_gb + _HOST_MEMORY_PER_RANK_GB * ranks
