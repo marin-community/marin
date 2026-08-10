@@ -13,6 +13,7 @@ readonly MSA_ROOT="${ARTIFACT_DIRECTORY}/msa"
 readonly BUILD_DIRECTORY="${ARTIFACT_DIRECTORY}/build"
 readonly PREFLIGHT_OUTPUT="${ARTIFACT_DIRECTORY}/preflight.json"
 readonly RESULT_OUTPUT="${ARTIFACT_DIRECTORY}/result.json"
+readonly PREFLIGHT_ONLY="${SHUTTLE_PREFLIGHT_ONLY:-0}"
 
 mkdir -p "${ARTIFACT_DIRECTORY}"
 
@@ -44,11 +45,25 @@ if importlib.util.find_spec("torch") is not None or "torch" in sys.modules:
 PY
 
 uv pip install --python "${PYTHON}" \
+  "apache-tvm-ffi==0.1.13.post2" \
   "cuda-python==13.3.1" \
   "nvidia-cuda-cccl==13.3.3.4.1" \
   "nvidia-cuda-nvcc==13.3.73" \
-  "nvidia-cutlass-dsl==4.5.3" \
-  "quack-kernels==0.2.10"
+  "nvidia-cutlass-dsl==4.5.3"
+
+# QuACK's published wheel declares Torch and a Torch DLPack extension for its
+# public wrappers. Shuttle imports only the audited CuTe support sources, whose
+# complete runtime dependency set is pinned above. Keep the physical linkage
+# environment Torch-free and install the source package without wrapper deps.
+uv pip install --python "${PYTHON}" --no-deps "quack-kernels==0.2.10"
+
+"${PYTHON}" - <<'PY'
+import importlib.util
+import sys
+
+if importlib.util.find_spec("torch") is not None or "torch" in sys.modules:
+    raise RuntimeError("the physical linkage environment must not contain Torch")
+PY
 
 git clone --filter=blob:none --no-checkout https://github.com/MiniMax-AI/MSA.git "${MSA_ROOT}"
 git -C "${MSA_ROOT}" checkout --detach "${MSA_REVISION}"
@@ -71,6 +86,10 @@ export PYTHONPATH="${SHUTTLE_ROOT}/lib/tile_lifetime/src:${SHUTTLE_ROOT}/lib/til
   --build-directory "${BUILD_DIRECTORY}/preflight" \
   --architecture sm_100a \
   --output "${PREFLIGHT_OUTPUT}"
+
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  exit 0
+fi
 
 "${PYTHON}" lib/tile_lifetime/backends/sm100/smoke_jax_right_resource_runtime.py \
   --msa-root "${MSA_ROOT}" \
