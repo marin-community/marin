@@ -29,14 +29,13 @@ from triton_affine_chunk_pipeline import (
 )
 from triton_affine_scan import execute_recurrent_affine_scan
 
-from tile_lifetime.delta_rule_reference import delta_rule_update_expression
 from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
-from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate, recover_affine_state_update
+from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate
 from tile_lifetime.stateful_scan_reference import (
-    STATEFUL_SCAN_INPUT_NAMES,
+    NATURAL_AFFINE_SCAN_INPUT_NAMES,
+    NaturalAffineScanConfig,
     ScanDecayAxes,
-    StatefulScanDebugConfig,
-    export_debug_stateful_scan,
+    export_natural_affine_scan,
 )
 
 FLA_REVISION = "9c8e42e762fce087c27b673af4922795d9edb85e"
@@ -68,7 +67,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, choices=(16, 32, 64), default=64)
     parser.add_argument("--block-v", type=int, choices=(16, 32, 64), default=32)
     parser.add_argument(
-        "--input-family", type=InputFamily, choices=tuple(InputFamily), default=InputFamily.GENERIC_AFFINE
+        "--input-family",
+        type=InputFamily,
+        choices=tuple(InputFamily),
+        default=InputFamily.GENERIC_AFFINE,
     )
     parser.add_argument("--fla-root", type=Path)
     parser.add_argument("--mutation-length", type=int, default=64)
@@ -101,17 +103,33 @@ def _generic_inputs(
     generator = torch.Generator(device="cuda")
     generator.manual_seed(seed)
     prefix = (batch_size, sequence_length, heads)
-    read = torch.randn((*prefix, key_dimension), device="cuda", dtype=torch.bfloat16, generator=generator) * (
-        key_dimension**-0.5
-    )
+    read = torch.randn(
+        (*prefix, key_dimension),
+        device="cuda",
+        dtype=torch.bfloat16,
+        generator=generator,
+    ) * (key_dimension**-0.5)
     diagonal_width = 1 if decay_axes == "scalar" else key_dimension
-    log_decay = -torch.rand((*prefix, diagonal_width), device="cuda", dtype=torch.float32, generator=generator) * 0.01
+    log_decay = (
+        -torch.rand(
+            (*prefix, diagonal_width),
+            device="cuda",
+            dtype=torch.float32,
+            generator=generator,
+        )
+        * 0.01
+    )
     diagonal = torch.exp(log_decay).expand(*prefix, key_dimension).contiguous()
     vector_shape = (*prefix, update_rank, key_dimension)
     left = torch.randn(vector_shape, device="cuda", dtype=torch.bfloat16, generator=generator) * 0.03
     right = torch.randn(vector_shape, device="cuda", dtype=torch.bfloat16, generator=generator) * 0.03
     additive = (
-        torch.randn((*prefix, update_rank, value_dimension), device="cuda", dtype=torch.bfloat16, generator=generator)
+        torch.randn(
+            (*prefix, update_rank, value_dimension),
+            device="cuda",
+            dtype=torch.bfloat16,
+            generator=generator,
+        )
         * 0.1
     )
     residual_scale = torch.rand((*prefix, update_rank), device="cuda", dtype=torch.float32, generator=generator)
@@ -148,11 +166,30 @@ def _delta_rule_inputs(
     generator = torch.Generator(device="cuda")
     generator.manual_seed(seed)
     prefix = (batch_size, sequence_length, heads)
-    query = torch.randn((*prefix, key_dimension), device="cuda", dtype=torch.bfloat16, generator=generator) * (
-        key_dimension**-0.5
+    query = torch.randn(
+        (*prefix, key_dimension),
+        device="cuda",
+        dtype=torch.bfloat16,
+        generator=generator,
+    ) * (key_dimension**-0.5)
+    key = (
+        torch.randn(
+            (*prefix, key_dimension),
+            device="cuda",
+            dtype=torch.bfloat16,
+            generator=generator,
+        )
+        * 0.03
     )
-    key = torch.randn((*prefix, key_dimension), device="cuda", dtype=torch.bfloat16, generator=generator) * 0.03
-    value = torch.randn((*prefix, value_dimension), device="cuda", dtype=torch.bfloat16, generator=generator) * 0.1
+    value = (
+        torch.randn(
+            (*prefix, value_dimension),
+            device="cuda",
+            dtype=torch.bfloat16,
+            generator=generator,
+        )
+        * 0.1
+    )
     log_decay = -torch.rand((*prefix,), device="cuda", dtype=torch.float32, generator=generator) * 0.01
     beta = torch.rand((*prefix,), device="cuda", dtype=torch.float32, generator=generator)
     state = (
@@ -194,7 +231,7 @@ def _recovery(
     update_rank: int,
     decay_axes: str,
 ) -> tuple[RecoveredAffineStateUpdate, bytes, dict[str, Any]]:
-    config = StatefulScanDebugConfig(
+    config = NaturalAffineScanConfig(
         batch=batch_size,
         sequence=sequence_length,
         heads=heads,
@@ -203,10 +240,10 @@ def _recovery(
         update_rank=update_rank,
         decay_axes=ScanDecayAxes(decay_axes),
     )
-    stablehlo = export_debug_stateful_scan(config)
+    stablehlo = export_natural_affine_scan(config)
     compilation = compile_stablehlo_stateful_scan(
         stablehlo,
-        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(16, 32),
     )
     recovered = compilation.recovered_update
@@ -225,25 +262,26 @@ def _recovery(
     )
 
 
-def _expression_recovery(
+def _mutation_recovery(
     *,
     batch_size: int,
+    sequence_length: int,
     heads: int,
     key_dimension: int,
     value_dimension: int,
     update_rank: int,
     decay_axes: str,
 ) -> RecoveredAffineStateUpdate:
-    fixture = delta_rule_update_expression(
+    recovery, _, _ = _recovery(
         batch_size=batch_size,
+        sequence_length=sequence_length,
         heads=heads,
         key_dimension=key_dimension,
         value_dimension=value_dimension,
         decay_axes=decay_axes,
-        gate_operation="exp",
         update_rank=update_rank,
     )
-    return recover_affine_state_update(fixture.update, fixture.state_name)
+    return recovery
 
 
 def _timings(action: Callable[[], Any], warmups: int, repeats: int) -> list[float]:
@@ -292,7 +330,12 @@ def _interleaved_timings(
             end.record()
             end.synchronize()
             samples[name].append(start.elapsed_time(end))
-    return samples["generated"], samples["oracle"], warmup_launch_orders, measured_launch_orders
+    return (
+        samples["generated"],
+        samples["oracle"],
+        warmup_launch_orders,
+        measured_launch_orders,
+    )
 
 
 def _summary(samples: list[float]) -> dict[str, Any]:
@@ -326,7 +369,9 @@ def _source_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _load_fla_chunk(root: Path) -> Callable[..., tuple[torch.Tensor, torch.Tensor | None]]:
+def _load_fla_chunk(
+    root: Path,
+) -> Callable[..., tuple[torch.Tensor, torch.Tensor | None]]:
     actual_revision = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"],
         check=True,
@@ -361,7 +406,11 @@ def _invoke_fla_chunk(
 def _environment() -> dict[str, Any]:
     gpu = torch.cuda.get_device_properties(0)
     driver = subprocess.run(
-        ["nvidia-smi", "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit", "--format=csv,noheader"],
+        [
+            "nvidia-smi",
+            "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit",
+            "--format=csv,noheader",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -432,8 +481,9 @@ def _mutation_matrix(args: argparse.Namespace) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for decay_axes in ("scalar", "key"):
         for update_rank in (1, 2):
-            recovery = _expression_recovery(
+            recovery = _mutation_recovery(
                 batch_size=args.batch_size,
+                sequence_length=args.mutation_length,
                 heads=args.heads,
                 key_dimension=args.key_dimension,
                 value_dimension=args.value_dimension,

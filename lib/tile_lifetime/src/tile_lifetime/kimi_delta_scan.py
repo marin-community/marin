@@ -1,17 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi Delta Attention core represented as a generic ``StatefulScan``."""
+"""Natural per-key-decay frontend plus NumPy/reference scan utilities."""
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from tile_lifetime.delta_rule_reference import delta_rule_update_expression, prepare_delta_rule_inputs
+from tile_lifetime.delta_rule_reference import (
+    delta_rule_update_expression,
+    prepare_delta_rule_inputs,
+)
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import (
     ScanNumericalContract,
     StatefulScanSkeleton,
+)
+from tile_lifetime.stablehlo_scan_recovery import (
+    StableHLOStatefulScanCompilation,
+    compile_natural_affine_scan,
 )
 from tile_lifetime.stateful_scan import (
     AffineChunkSummary,
@@ -27,11 +34,12 @@ from tile_lifetime.stateful_scan import (
 )
 from tile_lifetime.stateful_scan_planner import compile_affine_scan_candidates
 from tile_lifetime.stateful_scan_recovery import recover_affine_state_update
+from tile_lifetime.stateful_scan_reference import NaturalAffineScanConfig, ScanDecayAxes
 
 
 @dataclass(frozen=True)
-class KimiDeltaScanCompilation:
-    """Recovered per-channel-decay scan and its bounded candidates."""
+class KimiDeltaReferencePlan:
+    """Hand-authored reference plan retained for isolated algebra tests."""
 
     program: StatefulScan
     candidates: tuple[StatefulScanSkeleton, ...]
@@ -47,8 +55,35 @@ def compile_kimi_delta_scan(
     input_dtype: DType = DType.BF16,
     state_dtype: DType = DType.FP32,
     chunk_sizes: tuple[int, ...] = (32, 64),
-) -> KimiDeltaScanCompilation:
-    """Recover the KDA matrix-state core without a KDA-specific semantic node."""
+) -> StableHLOStatefulScanCompilation:
+    """Compile natural per-key-decay JAX recurrence through StableHLO recovery."""
+    if input_dtype is not DType.BF16:
+        raise ValueError("the natural StatefulScan frontend currently requires BF16 inputs")
+    if state_dtype is not DType.FP32:
+        raise ValueError("the initial Kimi Delta prototype requires FP32 persistent state")
+    config = NaturalAffineScanConfig(
+        batch=batch_size,
+        sequence=sequence_length,
+        heads=heads,
+        key_dimension=key_dimension,
+        value_dimension=value_dimension,
+        decay_axes=ScanDecayAxes.KEY,
+    )
+    return compile_natural_affine_scan(config, chunk_sizes=chunk_sizes)
+
+
+def build_kimi_delta_reference_plan(
+    *,
+    batch_size: int,
+    sequence_length: int,
+    heads: int,
+    key_dimension: int,
+    value_dimension: int,
+    input_dtype: DType = DType.BF16,
+    state_dtype: DType = DType.FP32,
+    chunk_sizes: tuple[int, ...] = (32, 64),
+) -> KimiDeltaReferencePlan:
+    """Build the old hand-authored plan for reference-only algebra tests."""
     dimensions = (batch_size, sequence_length, heads, key_dimension, value_dimension)
     if any(dimension <= 0 for dimension in dimensions):
         raise ValueError("all Kimi Delta scan dimensions must be positive")
@@ -72,17 +107,33 @@ def compile_kimi_delta_scan(
         ScanValue("beta", (batch, position, head), DType.FP32, ScanValueRole.INPUT),
         ScanValue("state_prev", (batch, head, key, value), state_dtype, ScanValueRole.STATE),
         ScanValue("alpha", (batch, head, key), DType.FP32, ScanValueRole.TEMPORARY),
-        ScanValue("state_decayed", (batch, head, key, value), state_dtype, ScanValueRole.TEMPORARY),
+        ScanValue(
+            "state_decayed",
+            (batch, head, key, value),
+            state_dtype,
+            ScanValueRole.TEMPORARY,
+        ),
         ScanValue("prediction", (batch, head, value), DType.FP32, ScanValueRole.TEMPORARY),
         ScanValue("delta", (batch, head, value), DType.FP32, ScanValueRole.TEMPORARY),
         ScanValue("correction", (batch, head, key, value), DType.FP32, ScanValueRole.TEMPORARY),
         ScanValue("state_next", (batch, head, key, value), state_dtype, ScanValueRole.STATE),
         ScanValue("output", (batch, position, head, value), input_dtype, ScanValueRole.OUTPUT),
-        ScanValue("chunk_transition", (batch, head, key_out, key), DType.FP32, ScanValueRole.SUMMARY),
+        ScanValue(
+            "chunk_transition",
+            (batch, head, key_out, key),
+            DType.FP32,
+            ScanValueRole.SUMMARY,
+        ),
         ScanValue("chunk_bias", (batch, head, key, value), DType.FP32, ScanValueRole.SUMMARY),
     )
     update = (
-        ScanPrimitive("channel_decay", ScanPrimitiveKind.MAP, ("log_decay",), "alpha", "exp(log_decay)"),
+        ScanPrimitive(
+            "channel_decay",
+            ScanPrimitiveKind.MAP,
+            ("log_decay",),
+            "alpha",
+            "exp(log_decay)",
+        ),
         ScanPrimitive(
             "decay_state_rows",
             ScanPrimitiveKind.MAP,
@@ -223,7 +274,7 @@ def compile_kimi_delta_scan(
         state_layout="batch_head_key_value",
         chunk_sizes=chunk_sizes,
     )
-    return KimiDeltaScanCompilation(program=program, candidates=candidates)
+    return KimiDeltaReferencePlan(program=program, candidates=candidates)
 
 
 def recurrent_kimi_delta_reference(
@@ -326,7 +377,10 @@ def chunkwise_kimi_delta_reference(
         for offset, prefix in enumerate(summary.prefixes):
             prefix_state = apply_affine_transform(prefix, incoming)
             output[:, start + offset, :, :] = np.einsum(
-                "bhkv,bhk->bhv", prefix_state, q[:, start + offset, :, :], optimize=False
+                "bhkv,bhk->bhv",
+                prefix_state,
+                q[:, start + offset, :, :],
+                optimize=False,
             )
         state = apply_affine_transform(summary.final, incoming)
     return output, state

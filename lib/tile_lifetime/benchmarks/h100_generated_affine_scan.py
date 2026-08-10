@@ -15,8 +15,12 @@ from typing import Any
 import torch
 from triton_affine_scan import execute_recurrent_affine_scan
 
-from tile_lifetime.delta_rule_reference import delta_rule_update_expression
-from tile_lifetime.stateful_scan_recovery import recover_affine_state_update
+from tile_lifetime.stablehlo_scan_recovery import compile_natural_affine_scan
+from tile_lifetime.stateful_scan_reference import (
+    NaturalAffineScanConfig,
+    ScanDecayAxes,
+    ScanDiagonalOperation,
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -30,7 +34,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--decay-axes", choices=("scalar", "key"), default="scalar")
     parser.add_argument(
         "--gate-operation",
-        choices=("exp", "sigmoid", "clamped_softplus"),
+        choices=("exp", "exp_squared"),
         default="exp",
     )
     parser.add_argument("--block-v", type=int, choices=(8, 16, 32), default=16)
@@ -45,9 +49,8 @@ def _arguments() -> argparse.Namespace:
 def _gate(log_decay: torch.Tensor, operation: str) -> torch.Tensor:
     if operation == "exp":
         return torch.exp(log_decay)
-    if operation == "sigmoid":
-        return torch.sigmoid(log_decay)
-    return torch.clamp(torch.nn.functional.softplus(log_decay), min=0.05, max=0.99)
+    exponential = torch.exp(log_decay)
+    return exponential * exponential
 
 
 def _inputs(args: argparse.Namespace) -> dict[str, torch.Tensor]:
@@ -66,7 +69,7 @@ def _inputs(args: argparse.Namespace) -> dict[str, torch.Tensor]:
     diagonal = _gate(log_decay, args.gate_operation).expand(*prefix, args.key_dimension).contiguous()
     vector_shape = (*prefix, args.update_rank, args.key_dimension)
     left = torch.randn(vector_shape, device="cuda", dtype=factor_dtype, generator=generator) * 0.05
-    right = torch.randn(vector_shape, device="cuda", dtype=factor_dtype, generator=generator) * 0.05
+    right = left
     additive = (
         torch.randn(
             (*prefix, args.update_rank, args.value_dimension),
@@ -102,7 +105,9 @@ def _inputs(args: argparse.Namespace) -> dict[str, torch.Tensor]:
     }
 
 
-def _torch_reference(inputs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+def _torch_reference(
+    inputs: dict[str, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
     read = inputs["read"].float()
     diagonal = inputs["diagonal"].float()
     left = inputs["left"].float()
@@ -183,7 +188,11 @@ def _error(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, Any]:
 def _environment() -> dict[str, Any]:
     gpu = torch.cuda.get_device_properties(0)
     driver = subprocess.run(
-        ["nvidia-smi", "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit", "--format=csv,noheader"],
+        [
+            "nvidia-smi",
+            "--query-gpu=driver_version,clocks.sm,clocks.mem,power.limit",
+            "--format=csv,noheader",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -202,16 +211,20 @@ def _environment() -> dict[str, Any]:
 
 def main() -> None:
     args = _arguments()
-    fixture = delta_rule_update_expression(
-        batch_size=args.batch_size,
-        heads=args.heads,
-        key_dimension=args.key_dimension,
-        value_dimension=args.value_dimension,
-        decay_axes=args.decay_axes,
-        gate_operation=args.gate_operation,
-        update_rank=args.update_rank,
+    compilation = compile_natural_affine_scan(
+        NaturalAffineScanConfig(
+            batch=args.batch_size,
+            sequence=args.sequence_length,
+            heads=args.heads,
+            key_dimension=args.key_dimension,
+            value_dimension=args.value_dimension,
+            update_rank=args.update_rank,
+            decay_axes=ScanDecayAxes(args.decay_axes),
+            diagonal_operation=ScanDiagonalOperation(args.gate_operation),
+        ),
+        chunk_sizes=(32, 64),
     )
-    recovery = recover_affine_state_update(fixture.update, fixture.state_name)
+    recovery = compilation.recovered_update
     inputs = _inputs(args)
     expected_output, expected_state = _torch_reference(inputs)
     actual_output, actual_state = _invoke(recovery, inputs, inputs["state"].clone(), args.block_v)
@@ -236,6 +249,8 @@ def main() -> None:
             "seed": args.seed,
         },
         "recovery": {
+            "source_kind": compilation.provenance.source_kind.value,
+            "source_artifact_sha256": compilation.provenance.artifact_sha256,
             "transition_structure": recovery.transition_structure.value,
             "maximum_low_rank": recovery.maximum_low_rank,
             "diagonal_scale_axes": [axis.label for axis in recovery.diagonal_scale_axes],

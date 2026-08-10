@@ -22,7 +22,12 @@ from tile_lifetime.autodiff import (
     extract_backward_tensor_program,
     scalar_expression_vjp,
 )
-from tile_lifetime.compiler import RMSScalePlacement, RowScalePlacement, compile_erased_dense_program, compile_region
+from tile_lifetime.compiler import (
+    RMSScalePlacement,
+    RowScalePlacement,
+    compile_erased_dense_program,
+    compile_region,
+)
 from tile_lifetime.contract_map_chain import (
     BoundCastScalarMap,
     ContractMapChainValue,
@@ -119,13 +124,16 @@ from tile_lifetime.fold_placement import (
     verify_owner_preparation_fold_attachment,
 )
 from tile_lifetime.gated_delta_scan import (
-    GatedDeltaScanCompilation,
     chunkwise_gated_delta_reference,
     compile_gated_delta_scan,
     recurrent_gated_delta_reference,
     summarize_gated_delta_chunk,
 )
-from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, GemmProgram, compile_gemm_program
+from tile_lifetime.gemm_program import (
+    GENERIC_H100_GEMM_BACKEND,
+    GemmProgram,
+    compile_gemm_program,
+)
 from tile_lifetime.ir import DType, TensorGraph
 from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
@@ -167,7 +175,6 @@ from tile_lifetime.jax_streaming_attention_forward_ffi import (
     register_streaming_attention_forward_ffi,
 )
 from tile_lifetime.kimi_delta_scan import (
-    KimiDeltaScanCompilation,
     chunkwise_kimi_delta_reference,
     compile_kimi_delta_scan,
     recurrent_kimi_delta_reference,
@@ -188,8 +195,17 @@ from tile_lifetime.moe import (
     MoKOracleConfig,
     compile_mok_oracle_region,
 )
-from tile_lifetime.moe_recovery import MoESemanticRecoveryError, RecoveredMoERegion, recover_moe_region
-from tile_lifetime.msa_frontend import MSA_INPUT_NAMES, MSADebugConfig, export_debug_msa, msa_region
+from tile_lifetime.moe_recovery import (
+    MoESemanticRecoveryError,
+    RecoveredMoERegion,
+    recover_moe_region,
+)
+from tile_lifetime.msa_frontend import (
+    MSA_INPUT_NAMES,
+    MSADebugConfig,
+    export_debug_msa,
+    msa_region,
+)
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
     ProjectedRoutedAttentionRecoveryError,
@@ -363,6 +379,9 @@ from tile_lifetime.stablehlo_row_normalization_backward import (
 from tile_lifetime.stablehlo_scan_recovery import (
     StableHLOScanRecoveryError,
     StableHLOStatefulScanCompilation,
+    StatefulScanProvenance,
+    StatefulScanSourceKind,
+    compile_natural_affine_scan,
     compile_stablehlo_stateful_scan,
     stateful_scan_scheduling_keys,
     validate_stateful_scan_semantic_erasure,
@@ -407,11 +426,12 @@ from tile_lifetime.stateful_scan_recovery import (
     summarize_factored_affine_chunk,
 )
 from tile_lifetime.stateful_scan_reference import (
-    STATEFUL_SCAN_INPUT_NAMES,
+    NATURAL_AFFINE_SCAN_INPUT_NAMES,
+    NaturalAffineScanConfig,
     ScanDecayAxes,
-    StatefulScanDebugConfig,
-    export_debug_stateful_scan,
-    stateful_scan_region,
+    ScanDiagonalOperation,
+    export_natural_affine_scan,
+    natural_affine_scan_region,
 )
 from tile_lifetime.streaming_attention import (
     AttentionScoreAxis,

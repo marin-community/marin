@@ -16,6 +16,7 @@ from tile_lifetime import (
     LogicalAxis,
     SemanticErasureError,
     StatefulScanExecutionForm,
+    StatefulScanSourceKind,
     StateTransitionStructure,
     TensorExpressionKind,
     apply_affine_transform,
@@ -26,6 +27,7 @@ from tile_lifetime import (
     compile_affine_scan_candidates,
     compile_gated_delta_scan,
     compile_kimi_delta_scan,
+    compile_natural_affine_scan,
     compose_affine_transforms,
     execute_recurrent_factored_affine,
     explain_stateful_scan,
@@ -41,14 +43,21 @@ from tile_lifetime import (
 from tile_lifetime.delta_rule_reference import delta_rule_update_expression
 from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
 from tile_lifetime.stateful_scan_reference import (
-    STATEFUL_SCAN_INPUT_NAMES,
+    NATURAL_AFFINE_SCAN_INPUT_NAMES,
+    NaturalAffineScanConfig,
     ScanDecayAxes,
-    StatefulScanDebugConfig,
-    export_debug_stateful_scan,
-    stateful_scan_region,
+    ScanDiagonalOperation,
+    export_natural_affine_scan,
+    natural_affine_scan_region,
 )
 
 STABLEHLO_SCAN_FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "stateful_scan_v1_14_1.mlir.bc.b64"
+ACCEPTED_STATEFUL_SCAN_HARNESSES = (
+    Path(__file__).parents[1] / "benchmarks" / "h100_generated_affine_scan.py",
+    Path(__file__).parents[1] / "benchmarks" / "h100_generated_chunk_scan.py",
+    Path(__file__).parents[1] / "benchmarks" / "h100_affine_chunk_pipeline.py",
+    Path(__file__).parents[1] / "benchmarks" / "h100_stateful_scan.py",
+)
 
 
 def _inputs(
@@ -150,7 +159,11 @@ def test_gated_delta_scan_recovers_generic_update_and_bounded_candidates():
         StatefulScanExecutionForm.CHUNKWISE,
         StatefulScanExecutionForm.CHUNKWISE,
     )
-    assert tuple(candidate.chunk_size for candidate in compilation.candidates) == (1, 32, 64)
+    assert tuple(candidate.chunk_size for candidate in compilation.candidates) == (
+        1,
+        32,
+        64,
+    )
     assert compilation.candidates[0].summary_representation is ChunkSummaryRepresentation.NONE
     assert compilation.candidates[1].summary_representation is ChunkSummaryRepresentation.FACTORED_AFFINE
     assert {candidate.backend for candidate in compilation.candidates} == {
@@ -161,10 +174,15 @@ def test_gated_delta_scan_recovers_generic_update_and_bounded_candidates():
         StateTransitionStructure.DIAGONAL_PLUS_LOW_RANK
     }
     assert {candidate.maximum_update_rank for candidate in compilation.candidates} == {1}
+    assert compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+    assert compilation.semantic_erasure_report.source_semantics == (
+        "stablehlo.while",
+        "stablehlo.tensor_expression_body",
+    )
     dump = explain_stateful_scan(compilation.program)
-    assert "state_decayed + correction" in dump
-    assert "state_next^T @ query" in dump
-    assert "chunk_transition, chunk_bias" in dump
+    assert "StatefulScan stablehlo_affine_scan" in dump
+    assert "state_next = add" in dump
+    assert "output = dot_general" in dump
 
 
 def test_recurrent_gated_delta_matches_direct_source_order_reference():
@@ -249,9 +267,8 @@ def test_kimi_delta_uses_the_same_stateful_scan_abstraction():
         StatefulScanExecutionForm.CHUNKWISE,
         StatefulScanExecutionForm.CHUNKWISE,
     )
-    assert compilation.program.chunk_algebra is not None
-    assert not compilation.program.chunk_algebra.bounded_representation_closed_under_compose
-    assert "diag(alpha)" in compilation.program.chunk_algebra.summarize[0].equation
+    assert compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+    assert tuple(axis.extent for axis in compilation.recovered_update.diagonal_scale_axes) == (1, 4, 128)
     assert {candidate.backend for candidate in compilation.candidates} == {
         "shuttle_affine_scan_recurrent_template",
         "shuttle_factored_affine_scan_template",
@@ -264,7 +281,7 @@ def test_kimi_delta_uses_the_same_stateful_scan_abstraction():
 @pytest.mark.parametrize("decay_axes", ["scalar", "key"])
 @pytest.mark.parametrize("gate_operation", ["exp", "sigmoid", "clamped_softplus"])
 @pytest.mark.parametrize("update_rank", [1, 2, 4])
-def test_affine_recovery_reuses_one_factor_family_across_nearby_recurrences(
+def test_reference_expression_recovery_reuses_one_factor_family_across_nearby_recurrences(
     decay_axes: str,
     gate_operation: str,
     update_rank: int,
@@ -287,7 +304,11 @@ def test_affine_recovery_reuses_one_factor_family_across_nearby_recurrences(
         ("batch", "head") if decay_axes == "scalar" else ("batch", "head", "key")
     )
     assert recovered.term_signatures[0] == ("multiply",)
-    assert recovered.term_signatures[1][0:3] == ("multiply", "contract[key]", "multiply")
+    assert recovered.term_signatures[1][0:3] == (
+        "multiply",
+        "contract[key]",
+        "multiply",
+    )
 
     candidates = compile_affine_scan_candidates(
         recovered,
@@ -309,26 +330,38 @@ def test_affine_recovery_reuses_one_factor_family_across_nearby_recurrences(
 
 
 @pytest.mark.parametrize(
-    ("decay_axes", "update_rank", "expected_diagonal_extents"),
+    ("decay_axes", "update_rank", "diagonal_operation", "expected_diagonal_extents"),
     [
-        (ScanDecayAxes.SCALAR, 1, (1, 2)),
-        (ScanDecayAxes.KEY, 2, (1, 2, 8)),
+        (ScanDecayAxes.SCALAR, 1, ScanDiagonalOperation.EXP, (1, 2)),
+        (ScanDecayAxes.KEY, 2, ScanDiagonalOperation.EXP, (1, 2, 8)),
+        (ScanDecayAxes.SCALAR, 2, ScanDiagonalOperation.EXP_SQUARED, (1, 2)),
     ],
 )
 def test_natural_stablehlo_while_recovers_one_generic_affine_scan_family(
     decay_axes: ScanDecayAxes,
     update_rank: int,
+    diagonal_operation: ScanDiagonalOperation,
     expected_diagonal_extents: tuple[int, ...],
 ) -> None:
-    config = StatefulScanDebugConfig(decay_axes=decay_axes, update_rank=update_rank)
+    config = NaturalAffineScanConfig(
+        decay_axes=decay_axes,
+        update_rank=update_rank,
+        diagonal_operation=diagonal_operation,
+    )
 
     compilation = compile_stablehlo_stateful_scan(
-        export_debug_stateful_scan(config),
-        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        export_natural_affine_scan(config),
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2, 4),
     )
 
-    assert compilation.program.scan_inputs == ("query", "key", "value", "log_decay", "beta")
+    assert compilation.program.scan_inputs == (
+        "query",
+        "key",
+        "value",
+        "log_decay",
+        "beta",
+    )
     assert compilation.program.state_input == "state_prev"
     assert compilation.program.state_output == "state_next"
     assert compilation.recovered_update.transition_structure is StateTransitionStructure.DIAGONAL_PLUS_LOW_RANK
@@ -357,16 +390,67 @@ def test_natural_stablehlo_while_recovers_one_generic_affine_scan_family(
     validate_stateful_scan_semantic_erasure(compilation)
 
 
+def test_natural_jax_mutations_reuse_one_generator_family_and_change_provenance() -> None:
+    configurations = (
+        NaturalAffineScanConfig(decay_axes=ScanDecayAxes.SCALAR, update_rank=1),
+        NaturalAffineScanConfig(decay_axes=ScanDecayAxes.KEY, update_rank=2),
+        NaturalAffineScanConfig(
+            decay_axes=ScanDecayAxes.SCALAR,
+            update_rank=2,
+            diagonal_operation=ScanDiagonalOperation.EXP_SQUARED,
+        ),
+    )
+    compilations = tuple(compile_natural_affine_scan(config, chunk_sizes=(2,)) for config in configurations)
+
+    assert len({compilation.provenance.artifact_sha256 for compilation in compilations}) == len(compilations)
+    assert all(
+        compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+        for compilation in compilations
+    )
+    assert {tuple(candidate.backend for candidate in compilation.candidates) for compilation in compilations} == {
+        (
+            "shuttle_affine_scan_recurrent_template",
+            "shuttle_factored_affine_scan_template",
+        )
+    }
+    assert tuple(compilation.recovered_update.maximum_low_rank for compilation in compilations) == (1, 2, 2)
+    assert tuple(compilation.source_operation_count for compilation in compilations) == (19, 19, 20)
+
+
+def test_accepted_stateful_scan_provenance_rejects_hand_authored_expression_bypass() -> None:
+    compilation = compile_natural_affine_scan(NaturalAffineScanConfig(), chunk_sizes=(2,))
+    bypass = replace(
+        compilation,
+        provenance=replace(
+            compilation.provenance,
+            source_kind=StatefulScanSourceKind.REFERENCE_TENSOR_EXPRESSION,
+        ),
+    )
+
+    with pytest.raises(SemanticErasureError, match="must originate from structured StableHLO while"):
+        validate_stateful_scan_semantic_erasure(bypass)
+
+
+def test_accepted_stateful_scan_harnesses_do_not_import_reference_expression_fixture() -> None:
+    for harness in ACCEPTED_STATEFUL_SCAN_HARNESSES:
+        source = harness.read_text()
+        assert "delta_rule_update_expression" not in source
+        assert "tile_lifetime.delta_rule_reference" not in source
+
+
 def test_stateful_scan_erasure_validator_rejects_named_or_stale_scheduling_keys() -> None:
     compilation = compile_stablehlo_stateful_scan(
         base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
-        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),
     )
 
     named_report = replace(
         compilation.semantic_erasure_report,
-        scheduling_keys=(*compilation.semantic_erasure_report.scheduling_keys, "gdn_chunk_forward"),
+        scheduling_keys=(
+            *compilation.semantic_erasure_report.scheduling_keys,
+            "gdn_chunk_forward",
+        ),
     )
     with pytest.raises(SemanticErasureError, match="retains named semantics"):
         validate_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=named_report))
@@ -379,7 +463,7 @@ def test_stateful_scan_erasure_validator_rejects_named_or_stale_scheduling_keys(
 def test_frozen_stablehlo_while_fixture_recovers_without_invoking_jax_export() -> None:
     compilation = compile_stablehlo_stateful_scan(
         base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
-        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),
     )
 
@@ -389,19 +473,31 @@ def test_frozen_stablehlo_while_fixture_recovers_without_invoking_jax_export() -
 
 
 def test_natural_stablehlo_scan_factors_execute_the_exported_recurrence() -> None:
-    config = StatefulScanDebugConfig(sequence=5, key_dimension=4, value_dimension=6, update_rank=2)
+    config = NaturalAffineScanConfig(sequence=5, key_dimension=4, value_dimension=6, update_rank=2)
     compilation = compile_stablehlo_stateful_scan(
-        export_debug_stateful_scan(config),
-        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        export_natural_affine_scan(config),
+        input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),
     )
     rng = np.random.default_rng(19)
     query = rng.normal(size=(config.batch, config.sequence, config.heads, config.key_dimension)).astype(np.float32)
     key = rng.normal(
-        size=(config.batch, config.sequence, config.heads, config.update_rank, config.key_dimension)
+        size=(
+            config.batch,
+            config.sequence,
+            config.heads,
+            config.update_rank,
+            config.key_dimension,
+        )
     ).astype(np.float32)
     value = rng.normal(
-        size=(config.batch, config.sequence, config.heads, config.update_rank, config.value_dimension)
+        size=(
+            config.batch,
+            config.sequence,
+            config.heads,
+            config.update_rank,
+            config.value_dimension,
+        )
     ).astype(np.float32)
     log_decay = -np.abs(rng.normal(size=(config.batch, config.sequence, config.heads))).astype(np.float32)
     beta = rng.uniform(
@@ -416,7 +512,7 @@ def test_natural_stablehlo_scan_factors_execute_the_exported_recurrence() -> Non
     key_bf16 = np.asarray(jnp.asarray(key, dtype=jnp.bfloat16), dtype=np.float32)
     value_bf16 = np.asarray(jnp.asarray(value, dtype=jnp.bfloat16), dtype=np.float32)
 
-    natural_output, natural_state = stateful_scan_region(config)(
+    natural_output, natural_state = natural_affine_scan_region(config)(
         jnp.asarray(query_bf16, dtype=jnp.bfloat16),
         jnp.asarray(key_bf16, dtype=jnp.bfloat16),
         jnp.asarray(value_bf16, dtype=jnp.bfloat16),
@@ -662,7 +758,9 @@ def test_kimi_delta_affine_chunks_match_recurrent(chunk_size: int):
 
 
 @pytest.mark.parametrize("log_decay_value", [0.0, -0.1, -1.0, -8.0])
-def test_gated_delta_chunk_algebra_handles_distinct_decay_regimes(log_decay_value: float):
+def test_gated_delta_chunk_algebra_handles_distinct_decay_regimes(
+    log_decay_value: float,
+):
     query, key, value, _, beta = _inputs(batch=1, length=7, heads=2, key_dimension=4, value_dimension=6)
     log_decay = np.full(query.shape[:3], log_decay_value, dtype=np.float32)
     initial_state = np.random.default_rng(23).normal(size=(1, 2, 4, 6)).astype(np.float32) * 0.05

@@ -219,6 +219,13 @@ current core StatefulScan row. Projection, short-convolution, and output-gating
 work remain future whole-layer scope rather than part of this frozen matched
 boundary.
 
+A later provenance audit separated this matched natural-frontend result from
+the earlier 0.138544 ms recurrent-core artifact, whose recovery began at a
+hand-authored tensor-expression fixture. Public compilation and mutation
+harnesses now enter through JAX-exported `stablehlo.while`; the correction and
+remaining GPU replay requirement are recorded in
+[stateful_scan_frontend_provenance_20260809.md](stateful_scan_frontend_provenance_20260809.md).
+
 ## Backend boundary
 
 Allowed reusable components include:
