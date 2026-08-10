@@ -1,0 +1,56 @@
+diff --git a/jaxlib/BUILD b/jaxlib/BUILD
+--- a/jaxlib/BUILD
++++ b/jaxlib/BUILD
+@@ -360,11 +360,20 @@ nanobind_pywrap_extension(
+         "@tsl//tsl/platform",
+         "@xla//third_party/python_runtime:headers",
+     ],
++)
++
++config_setting(
++    name = "shuttle_test_observer",
++    define_values = {"SHUTTLE_TEST_OBSERVER": "1"},
+ )
+-
++
+ nanobind_pywrap_extension(
+     name = "_jax",
+     srcs = ["jax.cc"],
++    copts = select({
++        ":shuttle_test_observer": ["-DSHUTTLE_TEST_OBSERVER"],
++        "//conditions:default": [],
++    }),
+     additional_stubgen_deps = [
+         "//third_party/py/numpy",
+         "//jaxlib/mlir:ir",
+@@ -461,6 +470,9 @@ nanobind_pywrap_extension(
+         "@xla//xla/tsl/platform/cloud:gcs_file_system",
+         "@xla//xla/tsl/python/lib/core:numpy",
+     ] + select({
++        ":shuttle_test_observer": ["@shuttle_mlir//:ShuttlePythonObserverTestBridge"],
++        "//conditions:default": [],
++    }) + select({
+         # gloo tcp transport only builds on linux
+         "@xla//xla/tsl:macos": [
+             "@gloo//:transport_uv",
+diff --git a/jaxlib/jax.cc b/jaxlib/jax.cc
+--- a/jaxlib/jax.cc
++++ b/jaxlib/jax.cc
+@@ -135,3 +135,7 @@
+ #include "tsl/platform/platform.h"
+-
++
++#ifdef SHUTTLE_TEST_OBSERVER
++#include "shuttle/Testing/PythonObserverTestBridge.h"
++#endif
++
+ // TODO(phawkins): remove host_id properties after JAX is update to avoid them.
+@@ -298,3 +302,7 @@ NB_MODULE(_jax, m) {
+   nb::register_exception_translator(translate_xla_runtime_error);
+-
++
++#ifdef SHUTTLE_TEST_OBSERVER
++  mlir::shuttle::testing::registerShuttleObserverTestBindings(m);
++#endif
++
+   // Must be before PyClient.compile.

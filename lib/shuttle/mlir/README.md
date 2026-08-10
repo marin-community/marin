@@ -38,6 +38,7 @@ bazel build @shuttle_mlir//:ShuttleXlaRegistryAdapter
 bazel build @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:pipeline_observer_test
+bazel test @shuttle_mlir//:observer_test_bridge_test
 bazel test @shuttle_mlir//:xla_registration_test
 bazel test @shuttle_mlir//:xla_registry_adapter_test
 ```

@@ -10,6 +10,12 @@ public generic StableHLO transform registry and registers the `shuttle` key at
 static initialization. XLA's registry and `mlir_to_hlo` targets do not depend
 on Shuttle.
 
+The second patch contains an acceptance-only configuration selected with
+`--define=SHUTTLE_TEST_OBSERVER=1`. It compiles a guarded private
+`_jax._shuttle_test_observer` binding into the final `_jax` DSO and links the
+external observer bridge. Without that define, the binding and bridge target
+are absent. The registry adapter remains linked in both configurations.
+
 Apply the XLA patches from `../xla_patch` to an exact pinned XLA checkout, then
 build in JAX's default WORKSPACE mode with both local repositories injected at
 the command line:
@@ -23,6 +29,40 @@ bazel build \
   --override_repository=shuttle_mlir=/path/to/marin/lib/shuttle/mlir \
   //jaxlib:_jax
 ```
+
+Apply `0002-add-acceptance-observer-bridge.patch` after `0001` only for the
+acceptance wheel. The source/query proof expects both patches and checks that
+the test bridge is selected only with its build define.
+
+For the reviewed CPU acceptance wheel, first run the guarded source/query
+proof, then build a release-versioned jaxlib wheel:
+
+```bash
+git apply --check /path/to/0002-add-acceptance-observer-bridge.patch
+git apply /path/to/0002-add-acceptance-observer-bridge.patch
+python /path/to/verify_acceptance_patch.py \
+  --bazel /path/to/bazel-7.7.0 \
+  --jax-source /path/to/jax \
+  --xla-source /path/to/patched/xla \
+  --shuttle-mlir /path/to/marin/lib/shuttle/mlir \
+  --output-user-root /path/to/bazel-output
+python build/build.py build \
+  --wheels=jaxlib \
+  --python_version=3.12 \
+  --bazel_path=/path/to/bazel-7.7.0 \
+  --output_path=/path/to/dist \
+  --bazel_options=--override_repository=xla=/path/to/patched/xla \
+  --bazel_options=--override_repository=shuttle_mlir=/path/to/marin/lib/shuttle/mlir \
+  --bazel_options=--define=SHUTTLE_TEST_OBSERVER=1 \
+  --bazel_options=--repo_env=ML_WHEEL_TYPE=release
+```
+
+The expected output is one `jaxlib-0.10.1-cp312-*.whl`. Install that wheel,
+the matching JAX 0.10.1 source, and `lib/shuttle` into an isolated environment,
+then run `shuttle_jaxlib_acceptance.py` with an empty `--work-directory` and a
+`--report` path. The checked-in driver owns the two fresh persistent-cache
+workers and the separate cache-disabled concurrency/lifetime worker; the Iris
+runner must not replace those semantics with inline Python.
 
 The repository overrides avoid checked-in machine-specific paths. A Bazel
 dependency query against the exact JAX release and patched XLA revision proves
