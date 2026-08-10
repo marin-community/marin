@@ -234,14 +234,31 @@ The exact native run built and linked `shuttle-opt`, then failed before any lit
 test ran. Bazel reported that `@@shuttle_mlir//xla` has no BUILD file and traced
 the dependency from `test/verifier-errors.mlir.test` to Shuttle's BUILD file.
 
+Patch the unconditional OSS CPU runner datum to construct
+`Label("//xla:sh_test_with_runfiles.py")` inside `lit.bzl`. A Label constructed
+by the defining `.bzl` file is anchored to XLA instead of the external caller.
+Keep the macro implementation and Shuttle's fixture wiring unchanged.
+
 ## Results 7
 
+- The one-line patch applies cleanly to exact XLA commit `9b635916ecc6` and
+  changes only the unconditional OSS CPU runner label in `xla/lit.bzl`.
+- Shuttle still uses XLA's pinned `lit_test_suite`, `FileCheck`, `shuttle-opt`,
+  and the complete fixture glob.
+- `bazel build @shuttle_mlir//:mlir_tests` is documented as the analysis and
+  executable preflight before running the suite.
 - Operation generation, `ShuttleDialect`, `ShuttlePasses`, and `shuttle-opt`
   all passed against the exact pins.
-- `@shuttle_mlir//:mlir_tests` failed during target analysis; no lit case ran.
-- The four patched XLA tests did not run.
+- `@shuttle_mlir//:mlir_tests` failed during target analysis; no lit case ran,
+  and the four patched XLA tests did not run.
 - The retained evidence is under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-label/`.
+- Repository formatting and lint gates run on the changed files.
+- Native lit analysis and fixture execution remain pending. This debugging task
+  does not claim any lit test passed.
+- Default-config, GPU, CUDA/NCCL, and Google-only string labels remain relative
+  inside the pinned macro. They require the same audit before Shuttle uses
+  those modes.
 
 ## Follow-up
 

@@ -1,0 +1,10 @@
+diff --git a/xla/lit.bzl b/xla/lit.bzl
+--- a/xla/lit.bzl
++++ b/xla/lit.bzl
+@@ -416,5 +416,5 @@ def lit_test(
+     """
+     args = args or []
+-    data = (data or []) + ["//xla:sh_test_with_runfiles.py"]
++    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+     tools = tools or []
+     env = env or {}
