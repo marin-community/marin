@@ -186,3 +186,22 @@ run. A benchmark gate for the exact Grug shapes now exists at
   - [MaxText 262144-token ring results](https://github.com/AI-Hypercomputer/maxtext/pull/4537)
 - Next action: qualify the TE build on the current GB200 image and run the minimum four-GPU
   correctness/performance gate before changing the hero model.
+
+### 2026-08-10 14:48 PDT - GCPA-005 full 262144-token launch preparation
+
+- Hypothesis: TE Ring or AllGather can compile and execute the exact fixed-token hero attention shape
+  at global batch 16 on a `(data=16, context=4)` mesh across 64 GB200 GPUs.
+- Commit Hash: `e93589c5d8684744a5c666c11c2db9067b22654f`
+- Config: sequence 262144; batch 16; BF16; QH48; D128; local KVH12/SWA512 and global
+  KVH6/full-causal; THD padding-causal mask; CP4; one JAX process per GPU; one data shard per
+  four-GPU Iris task; Ring stripe 1 and AllGather stripe 512.
+- Live capacity: `cw-us-east-08a` reported 12 of 804 GB200s free, with 640 held by production, 136 by
+  interactive, and 16 by batch workloads. A 64-GPU interactive gang cannot admit immediately.
+- Implementation: add an Iris/Fray launcher that requests 16 four-GPU GB200 tasks, installs pinned
+  TE CUDA 13 wheels, starts four supervised JAX processes per task, calls `initialize_jax()` before
+  importing the benchmark, and records JSON only from process zero. The generic Grug dispatcher now
+  accepts additional pinned pip packages instead of duplicating its environment construction.
+- Gate order: use one currently available four-GPU node to validate the TE wheel tuple and API, then
+  submit the 16-node gang. Do not occupy 64 GPUs for dependency resolution or a known API mismatch.
+- Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
+  64-GPU job when the environment gate passes.

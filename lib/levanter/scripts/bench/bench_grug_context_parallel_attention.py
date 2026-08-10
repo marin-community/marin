@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Sequence
 from typing import Any, Literal
 
 import jax
@@ -459,7 +460,7 @@ def _benchmark(
         in_shardings=(qkv_shardings, sequence_descriptor_shardings, q_sharding),
         out_shardings=(None, qkv_shardings),
     )
-    mesh_resource = te_api.MeshResource(cp_resource="context")
+    mesh_resource = te_api.MeshResource(dp_resource="data", cp_resource="context")
     with jax.set_mesh(mesh), te_api.te.autocast(mesh_resource=mesh_resource):
         compile_time, steady_state_time = _time_jitted(
             function,
@@ -496,7 +497,7 @@ def _benchmark(
     )
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark Transformer Engine context-parallel attention at Grug hero shapes."
     )
@@ -509,11 +510,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--all-gather-stripe-size", type=int, default=512)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=5)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = _parse_args()
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
     os.environ.setdefault("NVTE_FUSED_RING_ATTENTION_USE_SCAN", "0")
     te_api = _load_transformer_engine()
     device_count = args.device_count or len(jax.devices())
@@ -553,7 +554,8 @@ def main() -> None:
                         device_count=device_count,
                         error=f"{type(exc).__name__}: {exc}",
                     )
-                print(json.dumps(asdict(result), sort_keys=True), flush=True)
+                if jax.process_index() == 0:
+                    print(json.dumps(asdict(result), sort_keys=True), flush=True)
 
 
 if __name__ == "__main__":
