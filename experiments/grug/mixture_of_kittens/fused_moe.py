@@ -420,17 +420,17 @@ def _custom_forward(
 
     def fused_fwd(
         *arguments: jax.Array,
-    ) -> tuple[tuple[jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MoKForwardContext]]:
-        output, dropped_assignments, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
-        return (output, dropped_assignments), (arguments, context)
+    ) -> tuple[tuple[jax.Array, jax.Array], tuple[jax.Array, ...]]:
+        output, dropped_assignments, _ = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
+        return (output, dropped_assignments), arguments
 
     def fused_bwd(
-        residual: tuple[tuple[jax.Array, ...], MoKForwardContext],
+        arguments: tuple[jax.Array, ...],
         output_gradients: tuple[jax.Array, jax.Array],
     ) -> tuple[jax.Array | None, ...]:
         output_gradient, _ = output_gradients
-        arguments, context = residual
         x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arguments
+        _, _, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
         gradients = _fused_backward(
             output_gradient,
             x,
@@ -448,9 +448,7 @@ def _custom_forward(
         )
         return gradients[0], None, *gradients[1:]
 
-    # An enclosing checkpoint must rebuild the opaque forward residuals instead of
-    # keeping one full context for every transformer layer.
-    fused.defvjp(fused_fwd, fused_bwd, optimize_remat=True)
+    fused.defvjp(fused_fwd, fused_bwd)
     return fused
 
 
@@ -484,4 +482,7 @@ def mixture_of_kittens_mlp(
         shared_up,
         shared_down,
     )
-    return tree_checkpoint_name(output, _CHECKPOINT_MOE_OUTPUT), dropped_assignments
+    return (
+        tree_checkpoint_name(output, _CHECKPOINT_MOE_OUTPUT),
+        tree_checkpoint_name(dropped_assignments, _CHECKPOINT_MOE_OUTPUT),
+    )
