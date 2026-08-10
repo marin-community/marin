@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
@@ -47,9 +47,6 @@ from rigging.timing import log_time
 logger = logging.getLogger(__name__)
 
 FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
-    max_actors=32,
-    actor_resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
-    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,

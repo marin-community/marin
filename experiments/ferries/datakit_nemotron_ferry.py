@@ -16,7 +16,7 @@ import json
 import logging
 import os
 
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
@@ -64,9 +64,6 @@ NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
 NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
 NEMOTRON_QUALITY_DIR = "quality=high"
 FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
-    max_actors=64,
-    actor_resources=ResourceConfig(cpu=2, ram="16g", disk="16g"),
-    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,

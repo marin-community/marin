@@ -14,12 +14,12 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.memory_store import MemoryStore
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
@@ -144,24 +144,17 @@ class _VerificationLayout:
 class FuzzyVerificationStoreConfig:
     """Resources and lookup sizing for candidate-document memory stores."""
 
-    max_actors: int
-    actor_resources: ResourceConfig
-    actor_config: ActorConfig
     recovery_timeout: float
     ready_timeout: float
     lookup_batch_size: int
 
     def __post_init__(self) -> None:
-        if self.max_actors < 1:
-            raise ValueError("max_actors must be at least 1")
         if self.recovery_timeout <= 0:
             raise ValueError("recovery_timeout must be positive")
         if self.ready_timeout <= 0:
             raise ValueError("ready_timeout must be positive")
         if self.lookup_batch_size < 1:
             raise ValueError("lookup_batch_size must be at least 1")
-        if self.actor_config.max_task_retries is None or self.actor_config.max_task_retries < 1:
-            raise ValueError("actor_config.max_task_retries must be positive")
 
 
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
@@ -762,16 +755,22 @@ def verify_fuzzy_dups(
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
 
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g")
-    ctx_kwargs: dict[str, Any] = {"name": "verify-fuzzy-dups", "resources": resources}
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
+    # The document store loads onto the worker pool, which must know its size,
+    # so an unset worker count falls back to one worker per shard.
+    if max_workers is None:
+        max_workers = min(len(shards), MAX_IRIS_WORKER_REPLICAS)
+    if max_workers < 1:
+        raise ValueError("max_workers must be at least 1")
+    ctx_kwargs: dict[str, Any] = {
+        "name": "verify-fuzzy-dups",
+        "resources": resources,
+        "max_workers": max_workers,
+    }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
+    # The document store lives in the workers' own memory, so the context must
+    # own an entered pool before the table loads.
+    ctx = ZephyrContext(**ctx_kwargs).start()
     shard_groups = [[shard] for shard in shards]
 
     try:
@@ -780,9 +779,6 @@ def verify_fuzzy_dups(
             Dataset.from_list(shard_groups).flat_map(_candidate_documents),
             name="fuzzy-verification-documents",
             hash_key=_document_partition,
-            num_actors=min(store_config.max_actors, len(shard_groups)),
-            actor_resources=store_config.actor_resources,
-            actor_config=store_config.actor_config,
             recovery_timeout=store_config.recovery_timeout,
             ready_timeout=store_config.ready_timeout,
         )

@@ -19,7 +19,7 @@ from itertools import groupby
 from typing import Any, Protocol
 
 import pyarrow.parquet as pq
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
@@ -65,9 +65,6 @@ WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk="8g")
 VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk="8g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_CONFIG = FuzzyVerificationStoreConfig(
-    max_actors=32,
-    actor_resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
-    actor_config=ActorConfig(max_concurrency=32, max_task_retries=1_000),
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,

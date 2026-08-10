@@ -9,7 +9,6 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
@@ -36,9 +35,6 @@ TEST_LOCAL_PARAMS = LocalRepresentativeParams(
     minimum_local_char_jaccard=0.9,
 )
 TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
-    max_actors=2,
-    actor_resources=ResourceConfig(cpu=1, ram="256m"),
-    actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
     recovery_timeout=30,
     ready_timeout=30,
     lookup_batch_size=2,
