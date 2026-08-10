@@ -156,7 +156,12 @@ def mixture_of_kittens_reference(
         raise AssertionError("The fallback MoE returned capacity data when only output was requested")
     gate = jnp.einsum("td,di->ti", x, shared_gate)
     up = jnp.einsum("td,di->ti", x, shared_up)
-    shared = jnp.einsum("ti,id->td", jax.nn.silu(gate) * up, shared_down)
+    shared = jnp.einsum(
+        "ti,id->td",
+        jax.nn.silu(gate) * up,
+        shared_down,
+        out_sharding=_batch_spec_from_x(x, mesh),
+    )
     return (routed.astype(jnp.float32) + shared.astype(jnp.float32)).astype(x.dtype)
 
 

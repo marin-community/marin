@@ -192,3 +192,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The job succeeded. The fused forward again had a maximum absolute error of 0.03125 and a mean absolute error of 0.00350. All eight gradient leaves matched the exact JAX fallback bit for bit.
 - Interpretation: The FFI boundary and custom VJP are correct at the small four-GPU shape. The next risk is full training shape, memory use, and the nightly JAX FFI ABI.
 - Next action: Run the local change gate, commit the fused increment, and submit a short full-model correctness run on the pinned nightly runtime.
+
+### 2026-08-10 09:23 UTC - Full-shape gate found an explicit-sharding gap
+
+- Hypothesis: The small-shape custom VJP also traces under the full Grug explicit mesh.
+- Commit Hash: `3e196aaf7`.
+- Commands: One four-GPU GB200 Iris run with one requested training step and the pinned nightly JAX runtime.
+- Config: E8, top-4, global batch 64, BF16 compute, fused forward, and the 32-update XLA fallback backward.
+- Result: The adapter built under the nightly FFI ABI, but training stopped during backward tracing before a step ran. The shared-expert down projection did not set its output sharding, so JAX rejected a contraction where both intermediate dimensions use the model axis. The later coordination error was only a result of the GPU task exit.
+- Interpretation: This is an explicit-mesh annotation error, not a kernel, CUDA, memory, or collective error. The standard model shared expert already sets the required batch output sharding.
+- Next action: Apply the same output-sharding rule to the fallback shared projection, rerun local checks, and repeat the one-step gate.
