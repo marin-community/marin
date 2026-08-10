@@ -3368,7 +3368,7 @@ author: dlwh
   StableHLO, optimized HLO, environment, invocation, and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.
 
-### 2026-08-09 - TLTC-XLA-063 natural-Grug Contract/Map ABI audit
+### 2026-08-09 - TLTC-XLA-064 natural-Grug Contract/Map ABI audit
 
 - The `shared_map_fused_reverses` HLO contains 13 existing calls. Generic
   low-rank recovery adds six forward/rematerialization calls and four JAX-owned
@@ -3391,7 +3391,7 @@ author: dlwh
   checks, and all 559 package tests pass. No GPU allocation or performance
   claim was made.
 
-### 2026-08-09 - TLTC-XLA-064 multi-output row-Fold schedule
+### 2026-08-09 - TLTC-XLA-065 multi-output row-Fold schedule
 
 - Revision `449bd8690d` adds a physical schedule parameter that lets each tiled
   row-axis Fold group own two logical output columns. Both columns retain the
@@ -3410,7 +3410,7 @@ author: dlwh
   group against matched XLA at the existing 2,048 by 4,096 RMS-style backward
   shape without changing block size or Fold semantics.
 
-### 2026-08-09 - TLTC-XLA-065 partitioned QuACK adapter boundary
+### 2026-08-09 - TLTC-XLA-066 partitioned QuACK adapter boundary
 
 - Revision `e536b01152` records the generic backend contract for the attached
   68-wide Contract with logical output partitions `[32, 32, 4]`. The plan is
@@ -3433,7 +3433,7 @@ author: dlwh
   will use a generic bounded scalar segmented Contract; composed multi-source
   TMA remains the high-throughput follow-up.
 
-### 2026-08-09 - TLTC-XLA-066 capture-safe Contract/Map recapture gate
+### 2026-08-09 - TLTC-XLA-063 capture-safe Contract/Map recapture gate
 
 - Revision `870ce22524` adds an explicit capture-safe physical candidate to the
   standalone Contract/Map harness. The launch-checked baseline retains exact
