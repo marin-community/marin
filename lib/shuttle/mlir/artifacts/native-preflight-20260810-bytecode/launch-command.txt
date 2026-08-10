@@ -1,0 +1,14 @@
+/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris \
+  --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml \
+  job run \
+  --no-wait \
+  --no-sync \
+  --enable-extra-resources \
+  --cpu 24 \
+  --memory 96GB \
+  --disk 250GB \
+  --max-retries 0 \
+  --timeout 14400 \
+  --priority interactive \
+  --job-name shuttle-native-mlir-preflight-20260810-bytecode \
+  -- bash run_native_preflight.sh
