@@ -1,8 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import types
 from dataclasses import replace
 
+import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from tile_lifetime import (
@@ -16,6 +20,13 @@ from tile_lifetime import (
     TileProgramStage,
     compile_gemm_program,
     optimize_tile_program,
+)
+from tile_lifetime.cuda_prepared_contract_codegen import (
+    PreparedContractOperandDelivery,
+    audit_cuda_prepared_contract_source,
+    execute_preparation_reference,
+    execute_prepared_contract_reference,
+    generate_cuda_prepared_contract,
 )
 from tile_lifetime.dense_flow import pairwise_silu_product_expression
 from tile_lifetime.plan import Attachment
@@ -222,10 +233,182 @@ def test_quack_codegen_composes_generated_a_transform_and_pairwise_map() -> None
 
     assert generated.has_transform
     assert not generated.writes_main_output
-    assert "activation * operand_0" in generated.source
+    assert "(activation) * (operand_0)" in generated.source
     assert "cute.exp" in generated.source
     assert "swiglu" not in generated.source
     assert tuple(operand.kind for operand in generated.operands) == (QuackOperandKind.COLUMN,)
+
+
+def _centered_affine_preparation(*, bias_operation: str = "add") -> GemmSkeleton:
+    return _gemm(
+        prologue=(
+            Attachment(
+                operation="subtract",
+                site=AttachmentSite.GEMM_PROLOGUE,
+                inputs=("x", "row_center"),
+                outputs=("centered",),
+                attributes=(("input.1_delivery", "row"),),
+            ),
+            Attachment(
+                operation="scale_row",
+                site=AttachmentSite.GEMM_PROLOGUE,
+                inputs=("centered", "row_scale"),
+                outputs=("scaled",),
+            ),
+            Attachment(
+                operation="multiply",
+                site=AttachmentSite.GEMM_PROLOGUE,
+                inputs=("scaled", "feature_scale"),
+                outputs=("affine_scaled",),
+                attributes=(("input.1_delivery", "feature"),),
+            ),
+            Attachment(
+                operation=bias_operation,
+                site=AttachmentSite.GEMM_PROLOGUE,
+                inputs=("affine_scaled", "feature_bias"),
+                outputs=("prepared",),
+                attributes=(("input.1_delivery", "feature"),),
+            ),
+        ),
+        epilogue=(),
+    )
+
+
+def test_centered_affine_preparation_generates_explicit_physical_program() -> None:
+    program = compile_gemm_program(_centered_affine_preparation())
+    quack = generate_quack_gemm(program)
+    bounded = generate_cuda_prepared_contract(program)
+    audit = audit_cuda_prepared_contract_source(bounded)
+
+    assert program.tile_program.primitives_at(TileProgramStage.PREPARATION) == (
+        TilePrimitive.SUBTRACT,
+        TilePrimitive.SCALE_ROW,
+        TilePrimitive.MULTIPLY,
+        TilePrimitive.ADD,
+        TilePrimitive.CONVERT,
+    )
+    assert tuple(operand.kind for operand in quack.operands) == (
+        QuackOperandKind.COLUMN,
+        QuackOperandKind.COLUMN,
+        QuackOperandKind.FEATURE,
+        QuackOperandKind.FEATURE,
+    )
+    assert quack.transform_auxiliary_count == 4
+    assert not quack.executable_with_single_auxiliary_transform_backend
+    assert "'operand_0': 'colvec_ktile_fp32'" in quack.source
+    assert "'operand_2': 'kvec_mtile_fp32'" in quack.source
+    assert "(((activation) - (operand_0)) * (operand_1)) * (operand_2)" in quack.source
+    compile(quack.source, "<generated-quack>", "exec")
+
+    assert tuple(operand.delivery for operand in bounded.operands) == (
+        PreparedContractOperandDelivery.ROW,
+        PreparedContractOperandDelivery.ROW,
+        PreparedContractOperandDelivery.FEATURE,
+        PreparedContractOperandDelivery.FEATURE,
+    )
+    assert audit.kernel_count == 1
+    assert audit.row_operand_count == 2
+    assert audit.feature_operand_count == 2
+    assert audit.has_explicit_fp32_preparation
+    assert audit.has_bf16_rne_mainloop_boundary
+    assert audit.has_ordered_fp32_accumulation
+    assert not audit.has_atomics
+    assert not audit.opaque_semantic_dependencies
+
+
+def test_centered_affine_quack_source_imports_against_optional_backend_surface(monkeypatch) -> None:
+    def decorator(*_args, **_kwargs):
+        return lambda function: function
+
+    cutlass = types.ModuleType("cutlass")
+    cute = types.ModuleType("cutlass.cute")
+    cutlass.cute = cute
+    quack = types.ModuleType("quack")
+    epilogue = types.ModuleType("quack.epilogue")
+    epilogue.gemm_epilogue = decorator
+    epilogue.pack = lambda left, right: (left, right)
+    epilogue.unpack = lambda pair: pair
+    epilogue_ops = types.ModuleType("quack.epilogue.ops")
+    epilogue_ops.ColVecLoad = object
+    epilogue_ops.ColVecReduce = object
+    epilogue_ops.RowVecLoad = object
+    epilogue_ops.TileLoad = object
+    operand_transform = types.ModuleType("quack.operand_transform")
+    operand_transform.a_transform = decorator
+    for name, module in {
+        "cutlass": cutlass,
+        "cutlass.cute": cute,
+        "quack": quack,
+        "quack.epilogue": epilogue,
+        "quack.epilogue.ops": epilogue_ops,
+        "quack.operand_transform": operand_transform,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    generated = generate_quack_gemm(compile_gemm_program(_centered_affine_preparation()))
+    namespace: dict[str, object] = {}
+    exec(compile(generated.source, "<generated-quack>", "exec"), namespace)
+    transform = namespace["generated_transform"]
+
+    assert callable(transform)
+    assert transform(2.0, 0.5, 2.0, 3.0, 4.0) == 13.0
+
+
+def test_centered_affine_preparation_reference_matches_natural_jax_boundary() -> None:
+    rng = np.random.default_rng(61)
+    program = compile_gemm_program(_centered_affine_preparation())
+    activation = np.asarray(jnp.asarray(rng.normal(size=(8, 32)), dtype=jnp.bfloat16), dtype=np.float32)
+    weight = np.asarray(jnp.asarray(rng.normal(size=(16, 32)), dtype=jnp.bfloat16), dtype=np.float32)
+    row_center = rng.normal(size=(8,)).astype(np.float32)
+    row_scale = (rng.random(size=(8,)) + 0.25).astype(np.float32)
+    feature_scale = np.asarray(jnp.asarray(rng.normal(size=(32,)), dtype=jnp.bfloat16), dtype=np.float32)
+    feature_bias = np.asarray(jnp.asarray(rng.normal(size=(32,)), dtype=jnp.bfloat16), dtype=np.float32)
+    values = {
+        "row_center": row_center,
+        "row_scale": row_scale,
+        "feature_scale": feature_scale,
+        "feature_bias": feature_bias,
+    }
+
+    actual_boundary = execute_preparation_reference(program, activation, values)
+    expected_boundary = np.asarray(
+        jnp.asarray(
+            (
+                (jnp.asarray(activation, dtype=jnp.float32) - row_center[:, None])
+                * row_scale[:, None]
+                * jnp.asarray(feature_scale, dtype=jnp.float32)[None, :]
+                + jnp.asarray(feature_bias, dtype=jnp.float32)[None, :]
+            ),
+            dtype=jnp.bfloat16,
+        ),
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(actual_boundary, expected_boundary)
+
+    actual_output = execute_prepared_contract_reference(program, activation, weight, values)
+    jax_output = np.asarray(
+        jnp.asarray(
+            jnp.asarray(expected_boundary, dtype=jnp.bfloat16) @ jnp.asarray(weight, dtype=jnp.bfloat16).T,
+            dtype=jnp.bfloat16,
+        ),
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(actual_output, jax_output)
+
+
+def test_centered_affine_map_mutation_reuses_prepared_contract_family() -> None:
+    baseline = generate_cuda_prepared_contract(compile_gemm_program(_centered_affine_preparation()))
+    mutated = generate_cuda_prepared_contract(
+        compile_gemm_program(_centered_affine_preparation(bias_operation="subtract"))
+    )
+
+    assert tuple(operand.delivery for operand in baseline.operands) == tuple(
+        operand.delivery for operand in mutated.operands
+    )
+    assert baseline.semantic_digest != mutated.semantic_digest
+    assert baseline.source_digest != mutated.source_digest
+    assert "__fadd_rn(prepared_2, operand_3[reduction])" in baseline.source
+    assert "__fsub_rn(prepared_2, operand_3[reduction])" in mutated.source
 
 
 def test_quack_codegen_rope_uses_runtime_tables_as_data() -> None:

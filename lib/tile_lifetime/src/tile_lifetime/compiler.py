@@ -737,6 +737,7 @@ def _centered_fold_scale_contract_plan(
                 site=AttachmentSite.GEMM_PROLOGUE,
                 inputs=(source.name, mean.name),
                 outputs=(centered,),
+                attributes=(("input.1_delivery", "row"),),
             ),
             Attachment(
                 operation="scale_row",
@@ -749,12 +750,14 @@ def _centered_fold_scale_contract_plan(
                 site=AttachmentSite.GEMM_PROLOGUE,
                 inputs=(row_scaled, region.feature_vector.name),
                 outputs=(feature_scaled,),
+                attributes=(("input.1_delivery", "feature"),),
             ),
             Attachment(
                 operation="add",
                 site=AttachmentSite.GEMM_PROLOGUE,
                 inputs=(feature_scaled, region.bias_vector.name),
                 outputs=(prepared,),
+                attributes=(("input.1_delivery", "feature"),),
             ),
         )
     else:

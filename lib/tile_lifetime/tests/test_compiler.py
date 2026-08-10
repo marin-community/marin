@@ -145,6 +145,13 @@ def test_centered_affine_normalization_uses_consumer_preparation_under_reassocia
         TilePrimitive.ADD,
         TilePrimitive.CONVERT,
     )
+    preparation = consumer_program.tile_program.operations_at(TileProgramStage.PREPARATION)
+    assert tuple(dict(operation.attributes).get("input.1_delivery") for operation in preparation[:-1]) == (
+        "row",
+        None,
+        "feature",
+        "feature",
+    )
     validate_plan_semantic_erasure(plan)
 
 

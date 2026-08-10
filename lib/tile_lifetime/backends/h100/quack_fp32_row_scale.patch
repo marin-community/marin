@@ -78,11 +78,12 @@ index 4d8b01d..d7d95f1 100644
 
 
  class SeedKind:
-@@ -266,5 +275,6 @@ ARG_KINDS = {
+@@ -266,5 +275,7 @@ ARG_KINDS = {
      "colvec_k32": StripKind(gran_m=1, gran_k=32),
      "colvec_k16": StripKind(gran_m=1, gran_k=16),
      "kvec_m64": StripKind(gran_m=64, gran_k=1),
 +    "colvec_ktile_fp32": StripKind(gran_m=1, gran_k=None, dtype=cutlass.Float32),
++    "kvec_mtile_fp32": StripKind(gran_m=None, gran_k=1, dtype=cutlass.Float32),
      "seed_i64x2": SeedKind(),
  }
 diff --git a/quack/operand_transform/transform.py b/quack/operand_transform/transform.py

@@ -23,6 +23,7 @@ class QuackOperandKind(StrEnum):
     TILE = "tile"
     ROW = "row"
     COLUMN = "column"
+    FEATURE = "feature"
     PAIR_COEFFICIENT_TILE = "pair_coefficient_tile"
 
 
@@ -56,6 +57,16 @@ class GeneratedQuackGemm:
     c_source: str | None
     has_transform: bool
     writes_main_output: bool
+
+    @property
+    def transform_auxiliary_count(self) -> int:
+        """Return the number of independently delivered A-transform values."""
+        return sum(operand.stage is TileProgramStage.PREPARATION for operand in self.operands)
+
+    @property
+    def executable_with_single_auxiliary_transform_backend(self) -> bool:
+        """Whether one auxiliary A-transform slot can deliver the operands."""
+        return self.transform_auxiliary_count <= 1
 
 
 def generate_quack_gemm(program: GemmProgram) -> GeneratedQuackGemm:
@@ -123,12 +134,26 @@ class _SourceBuilder:
             if operation.primitive is TilePrimitive.SCALE_ROW:
                 left = self._expression(expressions, operation.inputs[0], True)
                 right = self._external((operation.inputs[1],), QuackOperandKind.COLUMN, TileProgramStage.PREPARATION)
-                expression = f"{left} * {right}"
-            elif operation.primitive in {TilePrimitive.ADD, TilePrimitive.MULTIPLY}:
+                expression = f"({left}) * ({right})"
+            elif operation.primitive in {TilePrimitive.ADD, TilePrimitive.SUBTRACT, TilePrimitive.MULTIPLY}:
                 left = self._expression(expressions, operation.inputs[0], True)
-                right = self._expression(expressions, operation.inputs[1], True)
-                symbol = "+" if operation.primitive is TilePrimitive.ADD else "*"
-                expression = f"{left} {symbol} {right}"
+                delivery = dict(operation.attributes).get("input.1_delivery", "tile")
+                if delivery == "row":
+                    right = self._external((operation.inputs[1],), QuackOperandKind.COLUMN, TileProgramStage.PREPARATION)
+                elif delivery == "feature":
+                    right = self._external(
+                        (operation.inputs[1],), QuackOperandKind.FEATURE, TileProgramStage.PREPARATION
+                    )
+                elif delivery == "tile":
+                    right = self._expression(expressions, operation.inputs[1], True)
+                else:
+                    raise TileProgramError(f"unsupported preparation operand delivery {delivery!r}")
+                symbol = {
+                    TilePrimitive.ADD: "+",
+                    TilePrimitive.SUBTRACT: "-",
+                    TilePrimitive.MULTIPLY: "*",
+                }[operation.primitive]
+                expression = f"({left}) {symbol} ({right})"
             else:
                 raise TileProgramError(f"QuACK A-fragment code generation does not support {operation.primitive.value}")
             rendered = expression
@@ -140,10 +165,14 @@ class _SourceBuilder:
         result = expressions.get(self.program.mainloop_input.removesuffix(".mainloop_bf16"))
         if result is None:
             result = next(reversed(expressions.values()))
-        transform_operands = [operand for operand in self.operands if operand.kind is QuackOperandKind.COLUMN]
+        transform_operands = [operand for operand in self.operands if operand.stage is TileProgramStage.PREPARATION]
         args = ", ".join(operand.parameter for operand in transform_operands)
         parameters = f", {args}" if args else ""
-        kinds = ", ".join(f"{operand.parameter!r}: 'colvec_ktile_fp32'" for operand in transform_operands)
+        physical_kinds = {
+            QuackOperandKind.COLUMN: "colvec_ktile_fp32",
+            QuackOperandKind.FEATURE: "kvec_mtile_fp32",
+        }
+        kinds = ", ".join(f"{operand.parameter!r}: {physical_kinds[operand.kind]!r}" for operand in transform_operands)
         return (
             f"@a_transform(vec_size=8, args={{{kinds}}})\n"
             f"def generated_transform(activation{parameters}):\n" + "\n".join(body) + f"\n    return {result}\n\n"
@@ -173,9 +202,15 @@ class _SourceBuilder:
                 store_values[destination] = self._expression(expressions, operation.inputs[0], False)
                 continue
             if primitive is TilePrimitive.CONVERT:
+                if operation.inputs[0] not in expressions and not accumulator_bound:
+                    expressions[operation.inputs[0]] = "acc"
+                    accumulator_bound = True
                 expressions[operation.outputs[0]] = self._expression(expressions, operation.inputs[0], False)
                 continue
             if primitive is TilePrimitive.VIEW:
+                if operation.inputs[0] not in expressions and not accumulator_bound:
+                    expressions[operation.inputs[0]] = "acc"
+                    accumulator_bound = True
                 expressions[operation.outputs[0]] = self._expression(expressions, operation.inputs[0], False)
                 continue
             inputs = list(operation.inputs)
