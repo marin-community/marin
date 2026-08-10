@@ -294,6 +294,122 @@ module {
 // -----
 
 module {
+  func.func @index_elements(%lhs: tensor<2x3xindex>,
+      %rhs: tensor<3x4xindex>) -> tensor<2x4xf32> {
+    %result = "shuttle.region"(%lhs, %rhs) ({
+    ^bb0(%region_lhs: tensor<2x3xindex>, %region_rhs: tensor<3x4xindex>):
+      // expected-error @+1 {{the first dot_general slice supports only f32 operand elements}}
+      %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
+        accumulator_types = [f32],
+        algorithm = "dot_general",
+        indexing_maps = [
+          affine_map<(m, n, k) -> (m, k)>,
+          affine_map<(m, n, k) -> (k, n)>,
+          affine_map<(m, n, k) -> (m, n)>
+        ],
+        iterator_kinds = ["parallel", "parallel", "reduction"],
+        precision = ["DEFAULT", "DEFAULT"],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x3xindex>, tensor<3x4xindex>) -> tensor<2x4xf32>
+      "shuttle.yield"(%contract) : (tensor<2x4xf32>) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x3xindex>, tensor<3x4xindex>) -> tensor<2x4xf32>
+    return %result : tensor<2x4xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @operand_mismatch(%lhs: tensor<2x3xf32>,
+      %rhs: tensor<3x4xf64>) -> tensor<2x4xf32> {
+    %result = "shuttle.region"(%lhs, %rhs) ({
+    ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf64>):
+      // expected-error @+1 {{dot_general lhs and rhs element types must match}}
+      %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
+        accumulator_types = [f32],
+        algorithm = "dot_general",
+        indexing_maps = [
+          affine_map<(m, n, k) -> (m, k)>,
+          affine_map<(m, n, k) -> (k, n)>,
+          affine_map<(m, n, k) -> (m, n)>
+        ],
+        iterator_kinds = ["parallel", "parallel", "reduction"],
+        precision = ["DEFAULT", "DEFAULT"],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x3xf32>, tensor<3x4xf64>) -> tensor<2x4xf32>
+      "shuttle.yield"(%contract) : (tensor<2x4xf32>) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x3xf32>, tensor<3x4xf64>) -> tensor<2x4xf32>
+    return %result : tensor<2x4xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @invalid_widening(%lhs: tensor<2x3xf32>,
+      %rhs: tensor<3x4xf32>) -> tensor<2x4xf32> {
+    %result = "shuttle.region"(%lhs, %rhs) ({
+    ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf32>):
+      // expected-error @+1 {{the first dot_general slice requires an f32 accumulator}}
+      %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
+        accumulator_types = [f64],
+        algorithm = "dot_general",
+        indexing_maps = [
+          affine_map<(m, n, k) -> (m, k)>,
+          affine_map<(m, n, k) -> (k, n)>,
+          affine_map<(m, n, k) -> (m, n)>
+        ],
+        iterator_kinds = ["parallel", "parallel", "reduction"],
+        precision = ["DEFAULT", "DEFAULT"],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf32>
+      "shuttle.yield"(%contract) : (tensor<2x4xf32>) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf32>
+    return %result : tensor<2x4xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @unsupported_result(%lhs: tensor<2x3xf32>,
+      %rhs: tensor<3x4xf32>) -> tensor<2x4xf64> {
+    %result = "shuttle.region"(%lhs, %rhs) ({
+    ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf32>):
+      // expected-error @+1 {{the first dot_general slice requires f32 result elements}}
+      %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
+        accumulator_types = [f32],
+        algorithm = "dot_general",
+        indexing_maps = [
+          affine_map<(m, n, k) -> (m, k)>,
+          affine_map<(m, n, k) -> (k, n)>,
+          affine_map<(m, n, k) -> (m, n)>
+        ],
+        iterator_kinds = ["parallel", "parallel", "reduction"],
+        precision = ["DEFAULT", "DEFAULT"],
+        source = #shuttle.source_ref<0, 0, 0, 0>
+      } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf64>
+      "shuttle.yield"(%contract) : (tensor<2x4xf64>) -> ()
+    }) {
+      policy = #shuttle.policy<source_ordered>,
+      source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
+    } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf64>
+    return %result : tensor<2x4xf64>
+  }
+}
+
+// -----
+
+module {
   "shuttle.region"() ({
     // expected-error @+1 {{requires at least one input and one result}}
     "shuttle.contract"() {

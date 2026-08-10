@@ -70,8 +70,9 @@ combiner arguments and yields, and result elements use the same accumulator
 types; an output cast must be a separate `shuttle.map`.
 
 The first `shuttle.contract` surface is intentionally closed to two-input,
-one-result `dot_general`. Its indexing maps are symbol-free projected
-permutations of direct domain dimensions with consistent static extents.
-Inputs and results are ranked tensors, precision and iterator values are
-closed, and accumulator types are scalar numeric types. Contract accumulator
-types remain distinct from explicit result element types.
+one-result `dot_general` with f32 operands, accumulator, and result. Its
+indexing maps are symbol-free projected permutations of direct domain
+dimensions with consistent static extents. Inputs and results are ranked
+tensors, and precision and iterator values are closed. Wider or narrower
+element-type contracts require a separate StableHLO-lowering proof before they
+can enter this matrix.

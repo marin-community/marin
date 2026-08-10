@@ -165,6 +165,75 @@ LogicalResult verifyIndexingMaps(Operation *owner, ArrayAttr indexingMaps,
   return success();
 }
 
+LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
+  ArrayAttr indexingMaps = map.getIndexingMaps();
+  if (failed(verifyIndexingMaps(map, indexingMaps, indexedTypes))) {
+    return failure();
+  }
+  if (indexingMaps.empty()) {
+    return map.emitOpError("requires at least one indexing map");
+  }
+
+  AffineMap domain = cast<AffineMapAttr>(indexingMaps.front()).getValue();
+  SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
+  SmallVector<char> boundDimensions(domain.getNumDims(), 0);
+  bool hasRankedTensor = false;
+  for (auto [mapAttribute, indexedType] :
+       llvm::zip_equal(indexingMaps, indexedTypes)) {
+    AffineMap indexingMap = cast<AffineMapAttr>(mapAttribute).getValue();
+    if (indexingMap.getNumSymbols() != 0) {
+      return map.emitOpError(
+          "map indexing maps must not contain affine symbols");
+    }
+    if (!indexingMap.isProjectedPermutation()) {
+      return map.emitOpError(
+          "map indexing maps must be projected permutations of direct domain "
+          "dimensions");
+    }
+    auto tensorType = dyn_cast<RankedTensorType>(indexedType);
+    if (!tensorType) {
+      if (isa<ShapedType>(indexedType)) {
+        return map.emitOpError(
+            "map inputs and results must be scalars or ranked tensors");
+      }
+      if (indexingMap.getNumResults() != 0) {
+        return map.emitOpError(
+            "scalar inputs and results require zero-result indexing maps");
+      }
+      continue;
+    }
+
+    hasRankedTensor = true;
+    for (auto [resultPosition, expression] :
+         llvm::enumerate(indexingMap.getResults())) {
+      auto dimension = cast<AffineDimExpr>(expression);
+      const unsigned domainPosition = dimension.getPosition();
+      boundDimensions[domainPosition] = 1;
+      const int64_t extent = tensorType.getDimSize(resultPosition);
+      if (ShapedType::isDynamic(extent)) {
+        continue;
+      }
+      int64_t &knownExtent = domainExtents[domainPosition];
+      if (!ShapedType::isDynamic(knownExtent) && knownExtent != extent) {
+        return map.emitOpError(
+            "map indexing maps bind one domain dimension to inconsistent "
+            "static extents");
+      }
+      knownExtent = extent;
+    }
+  }
+  if (!hasRankedTensor && domain.getNumDims() != 0) {
+    return map.emitOpError(
+        "a scalar-only map requires a zero-dimensional indexing domain");
+  }
+  if (hasRankedTensor && llvm::is_contained(boundDimensions, 0)) {
+    return map.emitOpError(
+        "every map domain dimension must be bound by a ranked tensor "
+        "dimension");
+  }
+  return success();
+}
+
 LogicalResult verifyContractMaps(ContractOp contract, TypeRange indexedTypes) {
   ArrayAttr indexingMaps = contract.getIndexingMaps();
   if (failed(verifyIndexingMaps(contract, indexingMaps, indexedTypes))) {
@@ -261,6 +330,36 @@ LogicalResult verifyDotGeneralIterators(ContractOp contract) {
   return success();
 }
 
+LogicalResult verifyDotGeneralElementTypes(ContractOp contract) {
+  Type lhsElement = cast<RankedTensorType>(contract.getInputs()[0].getType())
+                        .getElementType();
+  Type rhsElement = cast<RankedTensorType>(contract.getInputs()[1].getType())
+                        .getElementType();
+  Type resultElement =
+      cast<RankedTensorType>(contract.getResults()[0].getType())
+          .getElementType();
+  Type accumulator =
+      cast<TypeAttr>(contract.getAccumulatorTypes()[0]).getValue();
+
+  if (lhsElement != rhsElement) {
+    return contract.emitOpError(
+        "dot_general lhs and rhs element types must match");
+  }
+  if (!lhsElement.isF32()) {
+    return contract.emitOpError(
+        "the first dot_general slice supports only f32 operand elements");
+  }
+  if (!accumulator.isF32()) {
+    return contract.emitOpError(
+        "the first dot_general slice requires an f32 accumulator");
+  }
+  if (!resultElement.isF32()) {
+    return contract.emitOpError(
+        "the first dot_general slice requires f32 result elements");
+  }
+  return success();
+}
+
 } // namespace
 
 void ShuttleDialect::initialize() {
@@ -312,7 +411,7 @@ LogicalResult MapOp::verifyRegions() {
   SmallVector<Type> indexedTypes;
   llvm::append_range(indexedTypes, getInputs().getTypes());
   llvm::append_range(indexedTypes, getResults().getTypes());
-  return verifyIndexingMaps(*this, getIndexingMaps(), indexedTypes);
+  return verifyMapIndexingMaps(*this, indexedTypes);
 }
 
 LogicalResult ContractOp::verify() {
@@ -364,6 +463,9 @@ LogicalResult ContractOp::verify() {
   if (getInputs().size() != 2 || getResults().size() != 1) {
     return emitOpError(
         "the 'dot_general' algorithm requires two inputs and one result");
+  }
+  if (failed(verifyDotGeneralElementTypes(*this))) {
+    return failure();
   }
   return verifyDotGeneralIterators(*this);
 }
