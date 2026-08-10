@@ -49,6 +49,7 @@ from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import DEFAULT_SCALE, select_sources, zephyr_datakit_steps
+from experiments.datakit.reports.dedup import COUNTER_PREFIX, dedup_report
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,15 @@ def _select_clusters(workload: dict, max_clusters: int, max_shards: int) -> dict
     return chosen
 
 
-def _write_narrowed_tree(chosen: dict[str, list[dict]], source_attrs: str, scratch: str, workers: int) -> int:
-    """Copy only the rows of the selected clusters, keeping the shard layout."""
+def _write_narrowed_tree(
+    chosen: dict[str, list[dict]], source_attrs: str, scratch: str, workers: int
+) -> tuple[int, int]:
+    """Copy only the rows of the selected clusters, keeping the shard layout.
+
+    Returns the row and canonical counts of the slice, which the report needs:
+    the candidate artifact's own counters describe the whole corpus, so using
+    them here would divide this slice's verified duplicates by 5.95B members.
+    """
     wanted: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
     for members in chosen.values():
         for member in members:
@@ -113,24 +121,26 @@ def _write_narrowed_tree(chosen: dict[str, list[dict]], source_attrs: str, scrat
     fs, root = url_to_fs(source_attrs.rstrip("/"))
     _, scratch_root = url_to_fs(scratch.rstrip("/"))
 
-    def narrow(item: tuple[tuple[str, str], set[str]]) -> int:
+    def narrow(item: tuple[tuple[str, str], set[str]]) -> tuple[int, int]:
         (tag, shard), ids = item
         with fs.open(f"{root}/{tag}/{shard}", "rb") as handle:
             table = pq.ParquetFile(handle).read(columns=CANDIDATE_COLUMNS)
         mask = pa.array([doc_id in ids for doc_id in table.column("id").to_pylist()])
         kept = table.filter(mask)
         if kept.num_rows == 0:
-            return 0
+            return 0, 0
         target = f"{scratch_root}/{tag}/{shard}"
         fs.makedirs(f"{scratch_root}/{tag}", exist_ok=True)
         with fs.open(target, "wb") as handle:
             pq.write_table(kept, handle)
-        return kept.num_rows
+        return kept.num_rows, sum(kept.column("is_cluster_canonical").to_pylist())
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        rows = sum(pool.map(narrow, wanted.items()))
-    logger.info("Narrowed tree: %d rows across %d shards", rows, len(wanted))
-    return rows
+        counts = list(pool.map(narrow, wanted.items()))
+    rows = sum(row_count for row_count, _ in counts)
+    canonicals = sum(canonical_count for _, canonical_count in counts)
+    logger.info("Narrowed tree: %d rows (%d canonical) across %d shards", rows, canonicals, len(wanted))
+    return rows, canonicals
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -143,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Selected %d complete clusters holding %d members", len(chosen), members)
 
     source_attrs = f"{args.candidates.rstrip('/')}/{args.candidate_attrs_subdir}"
-    rows = _write_narrowed_tree(chosen, source_attrs, args.scratch, workers=32)
+    rows, canonicals = _write_narrowed_tree(chosen, source_attrs, args.scratch, workers=32)
     if rows == 0:
         raise RuntimeError("narrowed candidate tree is empty")
     # The trees are co-partitioned, so verification can keep only the shard
@@ -227,6 +237,21 @@ def main(argv: list[str] | None = None) -> None:
     StoragePath(f"{args.output.rstrip('/')}/smoke_counters.json").write_bytes(
         json.dumps({"elapsed_seconds": elapsed, "clusters": len(chosen), "counters": counters}, indent=2).encode()
     )
+
+    # Scope the candidate counters to this slice so the report's ratios describe
+    # what actually ran rather than the whole corpus.
+    sliced = candidates.model_copy(
+        update={
+            "counters": {
+                f"{COUNTER_PREFIX}/cluster_members": rows,
+                f"{COUNTER_PREFIX}/canonicals": canonicals,
+                f"{COUNTER_PREFIX}/singletons_skipped": 0,
+            }
+        }
+    )
+    report = dedup_report(f"{args.output.rstrip('/')}/report", candidates=sliced, verified=verified)
+    logger.info("SMOKE report: %s", report.html_path)
+    logger.info("SMOKE report stats:\n%s", json.dumps(report.stats, indent=2, default=str))
 
 
 if __name__ == "__main__":
