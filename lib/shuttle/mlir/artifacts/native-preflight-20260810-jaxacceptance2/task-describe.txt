@@ -1,0 +1,46 @@
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance2/0
+State: failed  exit=1
+Resources: 24 cpu, 96 GiB, 250 GiB disk
+Error: test_bridge_test.log
+53d0ee78d52876e0868a788d0c9d5686d26b24d6b580997a0f73939701aa0740  /app/logs/bazel-test-pipeline_observer_test.log
+e9b015b0603d636f493504e10c42098bb56cf2f5621fb7c2f9d611b17aca2a8b  /app/logs/bazel-test-shuttle-mlir.log
+3b65a4e0f869ad14353ebc3541034e8e3e29e5315d2ac5d619b69299712d9aaa  /app/logs/bazel-test-xla-mlir_to_hlo_test.log
+c74f85f9da10961b0b81bc208c8130dd3358782e4597ce301cda4cf72d06557f  /app/logs/bazel-test-xla-mlir_to_hlo_unregistered_transform_test.log
+8029a54e1e378c2e46d18c6a093e29ead9e0f38e41fe1d81045fd0c0e3e02453  /app/logs/bazel-test-xla-pjrt_executable_test.log
+032612517c1c8e83b41ef446299ecad39da6e7bb9e952778397ddb3dda54d5f0  /app/logs/bazel-test-xla-stablehlo_module_transform_test.log
+fa6620bd8d866c795cf0c5ccacd5c2fc0ad58c4ff711ca2220b53a7559ade29b  /app/logs/bazel-test-xla_registration_test.log
+8f429945defa4a0cbf3bdc905c912c0da5bef762b33d5ae0c28d9f4e68951f8e  /app/logs/bazel-test-xla_registry_adapter_test.log
+9402a02d67a82f2994781bd4ed1cacf470e7e33bbee463e81680ebf343010993  /app/logs/bundled-source-sha256.txt
+725a7772f41e3640a8111c5669efe18f9c5ec8fb1cb37495ff7515ca2f64887e  /app/logs/jax-acceptance-cquery-proof.log
+e8b605a0fcf06cd0f3e5eae394455b4f77d5667150cd859957ee7194548a9851  /app/logs/jax-patch-sha256.txt
+d43cb1899f235d6490c5ff7baeadae1a62931dab94f33fb6ee45dc70572edc6c  /app/logs/jax-patch-stat.txt
+c392533ff0329d9e6d7a896486774890b9725667480e1879178ed6dbdc7b4c53  /app/logs/jaxlib-acceptance.log
+84fcf7cf9720e89ba0258205a1286006b5133327ffb3388b88e2469d8b90126a  /app/logs/jaxlib-wheel-build.log
+2186deddb23bbefe77b80d7f4e826ba6353f9c15bc7a6adb0a5d6e46b77c87e1  /app/logs/jaxlib-wheel-contents.txt
+82d025180b586adb1f6dbda9c21a25240f02b3cb5a1fb336861c10b8b1f9ca65  /app/logs/jaxlib-wheel-sha256.txt
+1e0b22f66ead7b9fc35b7787b3693cf1d8c90e353e510a87a90cc76ddd9c561d  /app/logs/lit-label-proof.txt
+858436d681258b3c97c6bccc4530fbf82439ddbc5c8c555c3239873332af2768  /app/logs/xla-patch-sha256.txt
+835786bd7f7cc0fb1188b402c9e60f8f5bc4ce274f3e29dec70211a9120d196a  /app/logs/xla-patch-stat.txt
+
+
+Attempts:
+  ATTEMPT  UID           STATE      EXIT  WORKER    REASON
+        0  e38ef9bc0c17  failed        1  -         test_bridge_test.log
+                                                    53d0ee78d52876e0868a788d0c9d5686d26b24…
+
+Root cause:
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 462, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 452, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 387, in run_worker
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 277, in run_concurrency_worker
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 184, in grouped_event_evidence
+      raise AssertionError("observer invocation did not match exactly one audited fixture contract")
+  AssertionError: observer invocation did not match exactly one audited fixture contract
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 462, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 456, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 408, in run_orchestrator
+    File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+      raise CalledProcessError(retcode, process.args,
+  subprocess.CalledProcessError: Command '['/app/acceptance-venv/bin/python', '/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py', '--worker', 'concurrency', '--baseline', '/app/acceptance-work/disabled-baseline.npz', '--cache-directory', '/app/acceptance-work/persistent-cache', '--key-map', '/app/acceptance-work/cache-keys.json', '--report', '/app/acceptance-work/concurrency.json']' returned non-zero exit status 1.

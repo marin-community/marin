@@ -1,0 +1,30 @@
+First failed gate: ordinary-JAX cache-disabled concurrency/lifetime acceptance worker
+Canonical Marin source: 7fd635f8a90a0f8299baf6ff58dcee7722aaa2ef
+Wheel result: built, hashed, installed, and imported
+Wheel path: /app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+Wheel SHA-256: beeae0e0cd9f7af8e80c92b9a1fc15970a4745eabb54c80be288747da5bac6c7
+Acceptance workers: baseline PASS; concurrency FAIL; populate NOT_RUN; reuse NOT_RUN
+
+Traceback (most recent call last):
+  File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 462, in <module>
+    raise SystemExit(main())
+  File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 452, in main
+    result = run_worker(arguments)
+  File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 387, in run_worker
+    return run_concurrency_worker(arguments.baseline)
+  File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 277, in run_concurrency_worker
+    evidence = grouped_event_evidence(retained)
+  File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 184, in grouped_event_evidence
+    raise AssertionError("observer invocation did not match exactly one audited fixture contract")
+AssertionError: observer invocation did not match exactly one audited fixture contract
+
+The orchestrator propagated:
+subprocess.CalledProcessError: Command '['/app/acceptance-venv/bin/python',
+'/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py', '--worker',
+'concurrency', '--baseline', '/app/acceptance-work/disabled-baseline.npz',
+'--cache-directory', '/app/acceptance-work/persistent-cache', '--key-map',
+'/app/acceptance-work/cache-keys.json', '--report',
+'/app/acceptance-work/concurrency.json']' returned non-zero exit status 1.
+
+No actual observer snapshot or per-contract mismatch was emitted. The terminal
+pod was deleted before its worker files could be retrieved.
