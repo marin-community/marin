@@ -102,6 +102,8 @@ def build_hero_run(
     num_steps: int,
     schedule_steps: int | None = None,
     seed: int = 0,
+    nodes: int = HERO_EP_NODES,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
@@ -127,11 +129,20 @@ def build_hero_run(
 
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``batch_size`` and ``schedule_steps`` change the token budget for the heuristic.
+
+    ``nodes`` sizes one expert mesh: the expert axis spans every GPU of that many workers, so the
+    default 16 nodes is the EP64 hero and 4 nodes is an EP16 slice of it. ``processes_per_task``
+    selects the process topology on each worker: 1 keeps one four-device JAX process per node,
+    ``HERO_GPUS_PER_NODE`` runs one single-device process per GPU.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    if nodes <= 0:
+        raise ValueError(f"nodes must be positive, got {nodes}")
+    if processes_per_task not in (1, HERO_GPUS_PER_NODE):
+        raise ValueError(f"processes_per_task must be 1 or {HERO_GPUS_PER_NODE}, got {processes_per_task}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if checkpoint_interval <= timedelta(0):
@@ -179,10 +190,11 @@ def build_hero_run(
         moe_implementation=moe_implementation,
         expert_chunks=1,
     )
+    expert_axis_size = nodes * HERO_GPUS_PER_NODE
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
     backend_tag = moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
@@ -196,7 +208,7 @@ def build_hero_run(
         watch_mode=watch_mode,
         # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
@@ -206,7 +218,7 @@ def build_hero_run(
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_EP_NODES * dp_racks,
+        replicas=nodes * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -276,7 +288,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -322,10 +334,26 @@ def build_hero_run(
     help="Trainer seed. Vary it across otherwise identical runs to measure run-to-run variance.",
 )
 @click.option(
+    "--nodes",
+    type=click.IntRange(min=1),
+    default=HERO_EP_NODES,
+    show_default=True,
+    help="GB200 workers per expert mesh. The expert axis spans every GPU of these nodes "
+    f"({HERO_GPUS_PER_NODE} per node), so 16 nodes is the EP64 hero and 4 nodes is EP16.",
+)
+@click.option(
+    "--processes-per-task",
+    type=click.Choice(["1", str(HERO_GPUS_PER_NODE)]),
+    default=str(HERO_PROCESSES_PER_TASK),
+    show_default=True,
+    help="JAX processes per worker: 1 is one four-device process per node, "
+    f"{HERO_GPUS_PER_NODE} is one single-device process per GPU (multi-controller).",
+)
+@click.option(
     "--num-experts",
     type=click.IntRange(min=1),
     default=None,
-    help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
+    help="Override the routed expert count. Must be divisible by the expert axis (4 x --nodes).",
 )
 @click.option(
     "--num-experts-per-token",
@@ -425,6 +453,8 @@ def main(
     num_steps: int,
     schedule_steps: int | None,
     seed: int,
+    nodes: int,
+    processes_per_task: str,
     batch_size: int,
     num_experts: int | None,
     num_experts_per_token: int | None,
@@ -447,6 +477,8 @@ def main(
         num_steps=num_steps,
         schedule_steps=schedule_steps,
         seed=seed,
+        nodes=nodes,
+        processes_per_task=int(processes_per_task),
         batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
