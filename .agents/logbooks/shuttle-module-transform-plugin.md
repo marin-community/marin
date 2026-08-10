@@ -210,3 +210,30 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   not authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-link/README.md`
+
+### 2026-08-10 - Native lit analysis after dialect-definition correction
+
+- Hypothesis: compiling the generated dialect definitions lets the ordered
+  native matrix link `shuttle-opt`, run lit, and reach the four patched XLA
+  tests.
+- Commit Hash: `3239a21e3f81a687e19e638fe8de5e993ca32332` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-label/`, requesting
+  24 CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; LLVM
+  `9a4faee1068c09efbf837cfb7b0f5693b24635f4`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: operation generation, `ShuttleDialect`, `ShuttlePasses`, and
+  `shuttle-opt` passed. `@shuttle_mlir//:mlir_tests` then failed during Bazel
+  analysis because `//xla` resolved as `@@shuttle_mlir//xla`. No lit case or
+  patched XLA test ran.
+- Interpretation: the generated dialect-definition blocker is closed. The
+  ordered run now exposes external-repository-unsafe lit tool wiring.
+- Next action: independently review repository-safe lit tool labels against the
+  pinned XLA Bazel graph before any new native run. This checkpoint does not
+  authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-label/README.md`
