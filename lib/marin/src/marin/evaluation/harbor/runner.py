@@ -41,12 +41,16 @@ from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-# Local scratch, used only to materialize a dataset before the isolated driver runs. Trial results
-# are written straight to the remote (or local) ``output_dir``, never staged here.
+# Pod-local scratch: the dataset is materialized here before the isolated driver runs, and Harbor
+# writes its job tree here too. Upstream Harbor does plain local-filesystem I/O on ``jobs_dir``
+# (``job_dir.mkdir``/``iterdir``), so it cannot write to a ``gs://``/``s3://`` URI. Marin hydrates any
+# prior trials from the durable ``output_dir`` copy before the run (resume) and uploads the finished
+# tree back after (durability); Harbor itself only ever sees the local path.
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
-# Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
+# Harbor writes its job tree under ``<jobs_dir>/<job_name>/<trial>/`` as trials finish; the durable
+# copy lives under ``output_dir/harbor_jobs/<job_name>/``.
 _HARBOR_JOBS_SUBDIR = "harbor_jobs"
-# Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
+# Trials normalize off independent per-trial reads on the local job tree; fan them out so a
 # several-hundred-trial dataset is not a sequential round-trip per trial.
 _TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
@@ -114,13 +118,29 @@ def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
 
 
 def _jobs_dir(output_dir: str) -> StoragePath:
-    """The durable directory Harbor writes its jobs under: ``output_dir/harbor_jobs``."""
+    """The durable directory Marin mirrors Harbor's jobs to: ``output_dir/harbor_jobs``."""
     return StoragePath.parse(output_dir) / _HARBOR_JOBS_SUBDIR
 
 
 def _job_dir(output_dir: str, job_name: str) -> StoragePath:
-    """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
+    """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>``."""
     return _jobs_dir(output_dir) / job_name
+
+
+def _local_jobs_dir() -> StoragePath:
+    """The pod-local root Harbor writes its jobs under; upstream Harbor requires a local path."""
+    return StoragePath.parse(str(_HARBOR_WORKDIR / _HARBOR_JOBS_SUBDIR))
+
+
+def _local_job_dir(job_name: str) -> StoragePath:
+    """The pod-local tree for one job: ``<local_jobs_dir>/<job_name>`` (Harbor appends the name)."""
+    return _local_jobs_dir() / job_name
+
+
+def _persist_trials(local_job_dir: StoragePath, remote_job_dir: StoragePath) -> None:
+    """Mirror the pod-local job tree up to its durable ``output_dir`` copy, if Harbor has written any."""
+    if local_job_dir.exists():
+        remote_job_dir.upload_from(str(local_job_dir), recursive=True)
 
 
 def _read_trial(result_file: StoragePath) -> HarborTrial:
@@ -245,19 +265,34 @@ def _run_harbor_job(
     driver_env: Mapping[str, str],
     inference_session: RemoteInferenceSession,
 ) -> HarborRunResult:
-    job_dir = _job_dir(output_dir, job_name)
-    logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
+    remote_job_dir = _job_dir(output_dir, job_name)
+    local_job_dir = _local_job_dir(job_name)
+    _local_jobs_dir().mkdirs()
+    if remote_job_dir.exists():
+        logger.info("hydrating Harbor job %s from durable trials at %s", job_name, remote_job_dir)
+        remote_job_dir.download_to(str(local_job_dir), recursive=True)
+    logger.info(
+        "starting Harbor job %s (dataset=%s env=%s jobs_dir=%s durable=%s)",
+        job_name,
+        dataset,
+        environment,
+        local_job_dir,
+        remote_job_dir,
+    )
     while True:
         try:
             run_harbor_driver(config, overlay, driver_env, inference_session.backend_state)
             break
         except HarborBackendsUnavailable as exc:
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
-            _remove_unscored_trials(job_dir)
+            _remove_unscored_trials(local_job_dir)
+            # Checkpoint completed trials durably before the recovery wait so a pod lost during it resumes.
+            _persist_trials(local_job_dir, remote_job_dir)
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
-    trials = _read_trials(job_dir)
+    trials = _read_trials(local_job_dir)
+    _persist_trials(local_job_dir, remote_job_dir)
     archive_path = _write_archive(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, archive_path)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
@@ -333,7 +368,7 @@ class HarborExecutor:
         )
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
-            jobs_dir=str(_jobs_dir(output_dir)),
+            jobs_dir=str(_local_jobs_dir()),
             dataset_path=str(dataset_path) if dataset_path is not None else None,
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,

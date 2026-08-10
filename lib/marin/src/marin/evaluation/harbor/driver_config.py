@@ -49,29 +49,12 @@ class HarborBackendsUnavailable(RuntimeError):
     """Harbor stopped because its model backends are not ready."""
 
 
-# Object-store credentials and config the isolated driver needs to write each trial straight to a
-# remote ``jobs_dir`` (CoreWeave S3, GCS). fsspec reads the ``FSSPEC_S3`` block natively; ``s3fs``
-# reads the ``AWS_*`` variables and ``gcsfs`` reads the ``GOOGLE_*`` ones. Resolved present-only from
-# the eval pod's ambient environment (an Iris CoreWeave task carries the ``AWS_*``/``FSSPEC_S3`` set
-# via ``iris-task-env``; GCS runs on the workload's metadata-server identity with no key file).
-_DRIVER_STORAGE_ENV_KEYS = (
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "AWS_ENDPOINT_URL",
-    "AWS_REGION",
-    "AWS_DEFAULT_REGION",
-    "FSSPEC_S3",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_CLOUD_PROJECT",
-)
-
 HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
 HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 
 # The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
 # resolution: the git-branch and pre-release pins (harbor, litellm) drift daily, and only the locked
-# set is validated to import and to carry the fsspec backends the remote ``jobs_dir`` needs.
+# set is validated to import against the pinned upstream Harbor runtime.
 _HARBOR_ENV_CONFIG = ("config", "external", "harbor")
 
 logger = logging.getLogger(__name__)
@@ -145,7 +128,7 @@ def _driver_command(command: str, *paths: Path) -> list[str]:
 
 
 def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:
-    environment = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS + _DRIVER_STORAGE_ENV_KEYS)
+    environment = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
     environment.update(driver_env or {})
     environment["PYTHONPATH"] = _DRIVER_PYTHONPATH
     return environment

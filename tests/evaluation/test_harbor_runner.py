@@ -26,6 +26,7 @@ from marin.evaluation.runner import EvaluationError
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
+from rigging.filesystem import factory as rigging_factory
 
 
 def _running_model() -> RunningModel:
@@ -181,12 +182,15 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
-    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
+    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem; leave local paths alone.
 
     Patches rigging's factory (``url_to_fs``/``open_url``), which every read and write resolves through
     at call time -- ``StoragePath`` verbs, ``atomic_rename``, and the finestore archive writer -- so the
-    whole executor path stays off real object storage.
+    remote object-store leg stays off real storage. Non-``protocol`` URLs (the pod-local ``jobs_dir`` the
+    isolated driver writes to) fall through to the real factory so genuine local I/O still hits disk.
     """
+    real_url_to_fs = rigging_factory.url_to_fs
+    real_open_url = rigging_factory.open_url
 
     class RemoteMemoryFileSystem(MemoryFileSystem):
         @classmethod
@@ -203,12 +207,15 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
     RemoteMemoryFileSystem.pseudo_dirs = [""]
     remote_fs = RemoteMemoryFileSystem()
 
-    def remote_url_to_fs(url: str, **_kwargs):
+    def remote_url_to_fs(url: str, **kwargs):
         path = StoragePath(url)
-        assert path.scheme == protocol
+        if path.scheme != protocol:
+            return real_url_to_fs(url, **kwargs)
         return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
 
     def remote_open_url(url: str, mode: str = "rb", **kwargs):
+        if StoragePath(url).scheme != protocol:
+            return real_open_url(url, mode, **kwargs)
         fs, path = remote_url_to_fs(url)
         return fs.open(path, mode, **kwargs)
 
@@ -217,48 +224,44 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
-def test_completed_trial_is_durable_across_driver_termination_and_restored(protocol, tmp_path, monkeypatch):
-    """A trial that finishes before the driver dies is durable at the remote path and restored intact.
+def test_completed_run_is_durable_on_remote_and_resumed_on_a_fresh_pod(protocol, tmp_path, monkeypatch):
+    """A finished run's trials land on the durable ``output_dir`` tree and a fresh pod resumes them.
 
-    Harbor writes each trial straight to the ``output_dir`` jobs tree, so a driver killed before it
-    returns leaves the completed trial on durable storage. A resumed run whose driver produces nothing
-    new must still report that trial, proving the runner reads it back from the durable path rather
-    than depending on a clean full-job return or a post-run upload sweep.
+    Upstream Harbor writes each trial to a local ``jobs_dir`` (it does plain local-filesystem I/O and
+    cannot write to a ``gs://``/``s3://`` URI), so Marin uploads the finished job tree to the remote
+    ``output_dir`` for durability. A re-launch on a pod with no local scratch must still report those
+    trials, proving they are hydrated back from the durable remote copy rather than surviving in
+    pod-local state.
     """
     _memory_remote(protocol, monkeypatch)
     output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
     executor = _harbor_executor(f"resume-{tmp_path.name}")
 
-    captured: dict = {}
-
-    def dying_driver(config, overlay, driver_env, _backend_state) -> None:
-        captured["jobs_dir"] = overlay.jobs_dir
-        captured["job_name"] = overlay.job_name
-        trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
+    def completing_driver(config, overlay, driver_env, _backend_state) -> None:
+        # The isolated driver writes to the local jobs_dir; it never sees the remote output_dir.
+        assert StoragePath(overlay.jobs_dir).scheme != protocol
+        trial = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        (trial / "agent").mkdir(parents=True, exist_ok=True)
         (trial / "result.json").write_text(
             json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
         )
         (trial / "agent" / "trajectory.json").write_text('{"steps": []}')
-        raise RuntimeError("preempted before seal")
 
-    monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
-    with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), output_dir, {})
-    assert exc_info.value.status is RunStatus.FAILED
+    # First pod runs to completion; Marin uploads the finished tree to the durable remote path.
+    monkeypatch.setattr(runner, "_HARBOR_WORKDIR", tmp_path / "pod-one")
+    monkeypatch.setattr(runner, "run_harbor_driver", completing_driver)
+    first = executor(_inference_session(), output_dir, {})
+    assert first.metrics[executor.config.record_dataset]["total"] == 1.0
+    assert StoragePath(f"{output_dir}/harbor_jobs").exists()
 
-    durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
-    assert durable.exists()
+    # A fresh pod with no local scratch and a driver that writes nothing new must still report the
+    # trial, so it can only have come from the durable remote copy hydrated back down.
+    monkeypatch.setattr(runner, "_HARBOR_WORKDIR", tmp_path / "pod-two")
+    monkeypatch.setattr(runner, "run_harbor_driver", lambda *args, **kwargs: None)
+    second = executor(_inference_session(), output_dir, {})
 
-    def resumed_driver(config, overlay, driver_env, _backend_state) -> None:
-        # Harbor's own resume finds the durable trial and writes nothing new this run.
-        return None
-
-    monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
-    outcome = executor(_inference_session(), output_dir, {})
-
-    # The resumed driver produced no trials, so total==1 means the durable trial was read back.
-    assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
-    assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
+    assert second.metrics[executor.config.record_dataset]["total"] == 1.0
+    assert second.metrics[executor.config.record_dataset]["accuracy"] == 1.0
     assert StoragePath(f"{output_dir}/SEALED").exists()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
