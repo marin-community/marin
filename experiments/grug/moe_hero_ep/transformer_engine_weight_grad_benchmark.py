@@ -127,12 +127,20 @@ def _cccl_include(package_roots: tuple[Path, ...]) -> Path | None:
     return None
 
 
-def _installed_header_include(header: str) -> Path | None:
+def _installed_header_path(header: str) -> Path | None:
     for package_root in site.getsitepackages():
         nvidia_root = Path(package_root) / "nvidia"
         for header_path in nvidia_root.rglob(header):
-            return header_path.parent
+            return header_path
     return None
+
+
+def _installed_nvidia_include_paths() -> tuple[Path, ...]:
+    include_paths = set()
+    for package_root in site.getsitepackages():
+        nvidia_root = Path(package_root) / "nvidia"
+        include_paths.update(path for path in nvidia_root.rglob("include") if path.is_dir())
+    return tuple(sorted(include_paths))
 
 
 def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None, str | None]:
@@ -181,10 +189,14 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     if cccl_include is None:
         error = f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION} did not contain nv/target"
         return None, 0.0, setup.stdout[-INSTALL_LOG_TAIL:], setup.stderr[-INSTALL_LOG_TAIL:], error, str(cuda_home), None
-    cudnn_include = _installed_header_include("cudnn.h")
-    nccl_include = _installed_header_include("nccl.h")
-    if cudnn_include is None or nccl_include is None:
-        error = f"staged SDK headers missing: cudnn={cudnn_include}, nccl={nccl_include}"
+    required_headers = {
+        "cudnn.h": _installed_header_path("cudnn.h"),
+        "nccl.h": _installed_header_path("nccl.h"),
+        "nvtx3/nvToolsExt.h": _installed_header_path("nvToolsExt.h"),
+    }
+    missing_headers = [name for name, path in required_headers.items() if path is None]
+    if missing_headers:
+        error = f"staged SDK headers missing: {missing_headers}"
         return (
             None,
             0.0,
@@ -194,7 +206,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
             str(cuda_home),
             str(cccl_include),
         )
-    include_paths = (cccl_include, cudnn_include, nccl_include)
+    include_paths = (cccl_include, *_installed_nvidia_include_paths())
     env["CPLUS_INCLUDE_PATH"] = f"{':'.join(str(path) for path in include_paths)}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     start = time.perf_counter()
