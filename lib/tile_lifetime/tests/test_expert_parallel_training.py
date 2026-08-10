@@ -12,11 +12,8 @@ import numpy as np
 from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_stablehlo_expert_parallel_region
 from tile_lifetime.cuda_expert_parallel_training_codegen import (
     expert_parallel_training_scalar_program,
-    expert_training_scalar_program_from_pair_map,
     render_cuda_expert_parallel_training_include,
-    verify_cuda_expert_training_include,
 )
-from tile_lifetime.cuda_map_fold_codegen import default_map_fold_semantics
 from tile_lifetime.expert_parallel_training import (
     ExpertParallelTrainingStageKind,
     derive_expert_parallel_training_plan,
@@ -214,22 +211,6 @@ def test_generated_training_scalar_program_is_mutation_driven() -> None:
     assert "generated_route_weight_fold_update" in rendered
     assert "swiglu" not in rendered.lower()
     assert "moe" not in rendered.lower()
-
-
-def test_checked_cuda_reverse_bodies_and_generic_loop_skeleton_are_auditable() -> None:
-    root = Path(__file__).resolve().parents[1]
-    include = root / "backends" / "sm100" / "mok_gmm_probe" / "generated_training.inc"
-    source = (include.parent / "mok_gmm_probe.cu").read_text()
-    program = expert_training_scalar_program_from_pair_map(default_map_fold_semantics().pair_map)
-
-    verify_cuda_expert_training_include(include, program)
-    assert "route_weighted_padded_pack_bf16_out" in source
-    assert "row_halves_pair_map_vjp_bf16_out" in source
-    assert "route_weight_feature_fold_out" in source
-    assert "indexed_ordered_source_fold_bf16_out" in source
-    assert "atomicAdd" not in source
-    assert "mok_forward" not in source
-    assert "deep_ep" not in source
 
 
 def test_four_rank_reference_backward_matches_jax_vjp_and_is_deterministic() -> None:

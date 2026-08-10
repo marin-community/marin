@@ -92,19 +92,29 @@ gradient buffers plus FP32 route-cotangent buffers. Output weight gradients are
 BF16, matching the natural JAX and MoK boundary, while their Contract
 accumulators remain FP32 physical state.
 
-The SM100 probe now contains generic CUDA loop skeletons for the remaining
-non-Contract stages: route-weighted output-cotangent packing, pair-Map VJP,
-route-weight feature Fold, and deterministic source Fold. Their scalar bodies
-are generated from the erased pair expression and generic multiply/add Fold
-algebra; changing the pair expression changes the generated program
-fingerprint without editing the loop skeleton.
+The current execution design is Torch-free. A generated XLA typed-FFI handler
+owns the edge-weight Map and source-ordered FP32 feature Fold that produces
+post-selection route-weight cotangents. Exact `RelationPlan` metadata binds
+each received source/rank row to its rank-local padded rows and preserves the
+original source-item/route-slot identity for return. The routed input-adjoint
+handler uses identity source indices so it emits one payload per padded
+relation row; JAX transport returns those payloads before the generated
+source-indexed Fold. Existing typed-FFI families remain assigned to the W2/W13
+input adjoints, group-batched weight Contracts, and source Fold.
 
-This is not yet a distributed GPU result. The CUDA extension still needs a
-one-device build/correctness smoke, the transposed-weight layouts for W2 and
-W13 input-adjoint Contracts need an explicit ABI check, and the BF16
-weight-adjoint Contract family must be connected to the four-rank runtime.
-External payload transport and JAX-owned router VJP then need a small
-multi-process correctness gate before a primary-shape replay.
+A one-device JAX test compares the new edge adapter with the VJP of the natural
+weighted Fold. Padded BF16 edge cotangents and FP32 route-weight cotangents are
+exact, and repeated execution is bitwise stable. The edge handler's generated
+CUDA source and compile plan depend only on JAX/XLA FFI and the CUDA runtime;
+the composed generic Contract handlers additionally use cuBLAS. The rejected
+`at::Tensor` probe bodies are not part of the current execution path.
+
+This is not yet a distributed GPU result. The typed-FFI handler has not been
+compiled or run on GB200, and the four-rank composition currently binds the
+existing HLO-derived handler families without instantiating one transformed
+natural-JAX distributed module. Fixed-capacity runtime RelationPlan shapes,
+transposed W2/W13 input-adjoint weight layouts, JAX collective payload return,
+and router-VJP wiring remain GPU/runtime gates.
 
 Therefore no four-rank GB200 replay is authorized by this checkpoint. A replay is
 allowed only after a source audit proves that the generated executor contains
@@ -116,7 +126,6 @@ The first authorized one-GB200 compile/correctness smoke did not reach holder
 submission. The corrected low-resource command failed because the local
 workspace bundle exceeded the controller client's 25 MB limit. No device was
 allocated or accessed, and the no-retry policy preserved this as a rejected
-bootstrap artifact. The audit also records that the current SM100 probe adapter
-is Torch-bound even though the scalar generator and CPU reference are
-Torch-free. Both the bootstrap and physical-adapter boundary must be corrected
-before the next GPU gate is proposed.
+bootstrap artifact. That failed artifact remains the historical record of the
+discarded Torch-bound adapter; a future smoke must use the typed-FFI path and a
+bootstrap that passes before allocation.
