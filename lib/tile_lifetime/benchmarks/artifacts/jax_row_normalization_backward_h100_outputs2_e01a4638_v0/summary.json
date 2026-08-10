@@ -1,0 +1,510 @@
+{
+  "benchmark": {
+    "counterbalance_period": 6,
+    "counterbalanced": true,
+    "cuda_profiler_range": false,
+    "expected_handler_executions_per_generated_variant": 3012,
+    "iterations_per_sample": 100,
+    "repeats": 30,
+    "timing": "host enqueue interval followed by jax.block_until_ready",
+    "warmups": 10
+  },
+  "component_profile": null,
+  "correctness": {
+    "deterministic_hashes": [
+      "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+      "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+    ],
+    "independent_natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    },
+    "natural_jax_vjp": {
+      "feature_scale_cotangent": {
+        "maximum_absolute_error": 0.00390625,
+        "mean_absolute_error": 9.5367431640625e-07
+      },
+      "input_cotangent": {
+        "maximum_absolute_error": 0.0078125,
+        "mean_absolute_error": 1.974205332544443e-08
+      }
+    }
+  },
+  "environment": {
+    "device": "NVIDIA H100 80GB HBM3",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1830, 2619"
+  },
+  "execution_order": [
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "matched_xla"
+    ],
+    [
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_1",
+      "generated_coalesce_compatible_row_stages_outputs_2"
+    ],
+    [
+      "matched_xla",
+      "generated_coalesce_compatible_row_stages_outputs_2",
+      "generated_coalesce_compatible_row_stages_outputs_1"
+    ]
+  ],
+  "frontend": {
+    "jax_owns_ad": true,
+    "named_semantics_erased": true,
+    "operation_kinds": {
+      "add": 2,
+      "broadcast_in_dim": 11,
+      "constant": 5,
+      "convert": 5,
+      "divide": 3,
+      "multiply": 10,
+      "reduce": 5,
+      "reshape": 2,
+      "rsqrt": 1
+    },
+    "source": "ordinary JAX function differentiated by jax.vjp and exported to StableHLO",
+    "stablehlo_sha256": "41ab4f9d10182dd738831cbc3008be2cfd8c8a2cc07c36825bd403fee27d8cb8"
+  },
+  "generated": {
+    "feature_groups_per_block": 32,
+    "feature_outputs_per_group": 2,
+    "handler_executions": 3012,
+    "pipeline_schedule": "coalesce_compatible_row_stages",
+    "runtime": "JAX CUDA typed FFI; no Torch dependency",
+    "semantic_fingerprints": [
+      "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+      "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+      "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+    ],
+    "source_sha256": "129a8586de148ce8159cccff4e8ce7d6637f1944249a581cc6f50de13139edc3",
+    "target": "shuttle.axis_fold_reverse_v1.coalesce_compatible_row_stages.outputs_2"
+  },
+  "generated_schedule_comparison": {
+    "generated_coalesce_compatible_row_stages_outputs_1": {
+      "correctness": {
+        "independent_natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        },
+        "natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        }
+      },
+      "deterministic_hashes": [
+        "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+        "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+      ],
+      "feature_outputs_per_group": 1,
+      "handler_executions": 3012,
+      "measurements": {
+        "median_ms": 0.08939919498516247,
+        "minimum_ms": 0.0891954999679001,
+        "samples_ms": [
+          0.08928930001275148,
+          0.08937616003095172,
+          0.08931614996981807,
+          0.0893895499757491,
+          0.08942633998231031,
+          0.0891954999679001,
+          0.0894092999806162,
+          0.0892762799776392,
+          0.08953438999014907,
+          0.08943549000832718,
+          0.08932974000344984,
+          0.08925891001126729,
+          0.08974896001745947,
+          0.08933556004194543,
+          0.08940883999457583,
+          0.08942864995333366,
+          0.08942774002207443,
+          0.08964972003013827,
+          0.09115364002354909,
+          0.08945033994677942,
+          0.0892939400364412,
+          0.08960179002315272,
+          0.08964741005911492,
+          0.08931054006097838,
+          0.08925696994992904,
+          0.08936802994867321,
+          0.0893611599894939,
+          0.0895327900070697,
+          0.08935808000387624,
+          0.08943972003180534
+        ]
+      },
+      "pipeline_schedule": "coalesce_compatible_row_stages",
+      "ratio_to_matched_xla": 1.4666272447679982,
+      "semantic_fingerprints": [
+        "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+        "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+        "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+      ],
+      "source_sha256": "cda342a8445c934f30b8bb829b7aeb708016d587fa203e05358c1c7029cebe0f",
+      "target": "shuttle.axis_fold_reverse_v1.coalesce_compatible_row_stages.outputs_1"
+    },
+    "generated_coalesce_compatible_row_stages_outputs_2": {
+      "correctness": {
+        "independent_natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        },
+        "natural_jax_vjp": {
+          "feature_scale_cotangent": {
+            "maximum_absolute_error": 0.00390625,
+            "mean_absolute_error": 9.5367431640625e-07
+          },
+          "input_cotangent": {
+            "maximum_absolute_error": 0.0078125,
+            "mean_absolute_error": 1.974205332544443e-08
+          }
+        }
+      },
+      "deterministic_hashes": [
+        "8e1957ee64710916f839397d1a2489910223006335999a94edc30cb5cca4051a",
+        "8bfb71bac6c3b6516379b66fa399a2ea65500cf94591aedbd2811a2422939a0d"
+      ],
+      "feature_outputs_per_group": 2,
+      "handler_executions": 3012,
+      "measurements": {
+        "median_ms": 0.12093192501197336,
+        "minimum_ms": 0.1208117699570721,
+        "samples_ms": [
+          0.12102681997930631,
+          0.12101503001758829,
+          0.12085260001185816,
+          0.12100940999516752,
+          0.12089695999748074,
+          0.12103551998734474,
+          0.12093704994185828,
+          0.1208117699570721,
+          0.12085087997547816,
+          0.1209476099757012,
+          0.12090033997083083,
+          0.12097265003831126,
+          0.12084663001587614,
+          0.12088234994735103,
+          0.12087024995707907,
+          0.12156549004430417,
+          0.12101412001356948,
+          0.12114384997403249,
+          0.12092614000721369,
+          0.12093634999473579,
+          0.12082273999112658,
+          0.12087998999049887,
+          0.1208910300192656,
+          0.12095551996026188,
+          0.1209245700010797,
+          0.12185094004962593,
+          0.12092750002921093,
+          0.12096489997929893,
+          0.12087707000318915,
+          0.12101715001335833
+        ]
+      },
+      "pipeline_schedule": "coalesce_compatible_row_stages",
+      "ratio_to_matched_xla": 1.983933479649759,
+      "semantic_fingerprints": [
+        "b3f5e0f44aa419e8d17bf72ab20cdf8cfb255935daaeac8a1fd73d7b2257ce77",
+        "e52f7572117426977dab4d3321d4f3ad3b0f24f650fec835bc027b1df74a22cf",
+        "9e3a14a6e0ec29444edd51467dbc334f02b529c3529156bbebd5fca067148a8a"
+      ],
+      "source_sha256": "129a8586de148ce8159cccff4e8ce7d6637f1944249a581cc6f50de13139edc3",
+      "target": "shuttle.axis_fold_reverse_v1.coalesce_compatible_row_stages.outputs_2"
+    }
+  },
+  "measurements": {
+    "generated_coalesce_compatible_row_stages_outputs_1": {
+      "median_ms": 0.08939919498516247,
+      "minimum_ms": 0.0891954999679001,
+      "samples_ms": [
+        0.08928930001275148,
+        0.08937616003095172,
+        0.08931614996981807,
+        0.0893895499757491,
+        0.08942633998231031,
+        0.0891954999679001,
+        0.0894092999806162,
+        0.0892762799776392,
+        0.08953438999014907,
+        0.08943549000832718,
+        0.08932974000344984,
+        0.08925891001126729,
+        0.08974896001745947,
+        0.08933556004194543,
+        0.08940883999457583,
+        0.08942864995333366,
+        0.08942774002207443,
+        0.08964972003013827,
+        0.09115364002354909,
+        0.08945033994677942,
+        0.0892939400364412,
+        0.08960179002315272,
+        0.08964741005911492,
+        0.08931054006097838,
+        0.08925696994992904,
+        0.08936802994867321,
+        0.0893611599894939,
+        0.0895327900070697,
+        0.08935808000387624,
+        0.08943972003180534
+      ]
+    },
+    "generated_coalesce_compatible_row_stages_outputs_2": {
+      "median_ms": 0.12093192501197336,
+      "minimum_ms": 0.1208117699570721,
+      "samples_ms": [
+        0.12102681997930631,
+        0.12101503001758829,
+        0.12085260001185816,
+        0.12100940999516752,
+        0.12089695999748074,
+        0.12103551998734474,
+        0.12093704994185828,
+        0.1208117699570721,
+        0.12085087997547816,
+        0.1209476099757012,
+        0.12090033997083083,
+        0.12097265003831126,
+        0.12084663001587614,
+        0.12088234994735103,
+        0.12087024995707907,
+        0.12156549004430417,
+        0.12101412001356948,
+        0.12114384997403249,
+        0.12092614000721369,
+        0.12093634999473579,
+        0.12082273999112658,
+        0.12087998999049887,
+        0.1208910300192656,
+        0.12095551996026188,
+        0.1209245700010797,
+        0.12185094004962593,
+        0.12092750002921093,
+        0.12096489997929893,
+        0.12087707000318915,
+        0.12101715001335833
+      ]
+    },
+    "matched_xla": {
+      "median_ms": 0.06095563498092815,
+      "minimum_ms": 0.060642570024356246,
+      "samples_ms": [
+        0.060894260022905655,
+        0.06091210001613945,
+        0.06098944999394007,
+        0.06083031999878585,
+        0.060796719990321435,
+        0.060642570024356246,
+        0.06092912997701205,
+        0.06089417001930997,
+        0.0609660900227027,
+        0.060848540015285835,
+        0.06093377000070177,
+        0.060843530009151436,
+        0.0609811599861132,
+        0.06145150997326709,
+        0.06091799994464964,
+        0.06084045999159571,
+        0.061151310001150705,
+        0.06088800000725314,
+        0.06107606997829862,
+        0.060945179939153604,
+        0.06102382998506073,
+        0.06087106004997622,
+        0.061060080042807385,
+        0.061100960010662675,
+        0.06109121000918094,
+        0.06107494002208114,
+        0.061073609977029264,
+        0.06110690999776125,
+        0.06112176000897307,
+        0.06138983000710141
+      ]
+    }
+  },
+  "numerical_contract": {
+    "accepted_reference": "natural JAX VJP with BF16 inputs and outputs",
+    "generated_reassociation": [
+      "deterministic_tree",
+      "deterministic_tree",
+      "deterministic_tree"
+    ],
+    "natural_jax_vjp": "source-ordered equivalence is not established because generated and XLA reductions may select different deterministic trees",
+    "policy": "allow_rounding_reorder"
+  },
+  "ratio_generated_to_matched_xla": 1.983933479649759,
+  "revisions": {
+    "shuttle": "e01a4638093556769d575418c0414a44ff8d0953"
+  },
+  "schema_version": 1,
+  "workload": {
+    "hidden": 4096,
+    "rows": 2048,
+    "statistic": "uncentered_second_moment"
+  }
+}

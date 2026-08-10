@@ -3423,3 +3423,36 @@ author: dlwh
 - Failure evidence, source audit, exact intended command, release proof, and
   corrected-bootstrap hashes are under
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_outputs2_bootstrap_failure_e01a4638_v0/`.
+
+### 2026-08-09 17:31 PDT - TLTC-XLA-067 fixed-cause H100 validation
+
+- With separate authorization, the exact corrected bundle and unchanged
+  benchmark command from the failed attempt were submitted once as
+  `/dlwh/shuttle-row-fold-output2-validation-h100-20260809`. Source revision
+  `e01a463809` compares the one-output and two-output generic coalesced AxisFold
+  schedules with matched XLA in one six-permutation process. The workload is
+  ordinary-JAX uncentered-normalization backward at rows 2,048, hidden 4,096,
+  BF16, 256 threads, 32 groups per block, and eight reduction lanes per group.
+- Thirty counterbalanced samples with 100 iterations each measure
+  `0.089399 ms` for one output per group, `0.120932 ms` for two outputs per
+  group, and `0.060956 ms` for matched XLA. The ratios to XLA are `1.466627x`
+  and `1.983933x`. The two-output candidate is `1.352718x` slower than the
+  one-output candidate and is rejected. The one-output result is `0.314%`
+  faster than the prior `0.089681 ms` result, consistent with reproducing that
+  baseline. Neither schedule meets the `1.20x` target.
+- Both generated physical schedules produce identical deterministic hashes.
+  Each handler executed exactly 3,012 times. Against both the matched and
+  independent natural JAX VJP, input-cotangent max/mean absolute error is
+  `0.0078125` / `1.9742053e-08`, and feature-scale-cotangent error is
+  `0.00390625` / `9.5367432e-07`. The numerical policy remains
+  `allow_rounding_reorder`; each generated reduction tree is deterministic,
+  but source-order equivalence with XLA is not claimed.
+- The batch job requested one H100, one CPU, 16 GB RAM, 50 GB disk, zero
+  retries, and no profiler. It succeeded with exit code zero after 18.02
+  seconds. After artifact retrieval, Iris reports one of one tasks succeeded,
+  the exact task-label pod is absent, and no `dev_gpu` holder session exists.
+  No tuning, retry, or second validation followed.
+- Raw distributions, execution order, generated source, matched optimized HLO,
+  toolchain, exact invocation, bundle/archive hashes, and release proof are
+  under
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_outputs2_e01a4638_v0/`.
