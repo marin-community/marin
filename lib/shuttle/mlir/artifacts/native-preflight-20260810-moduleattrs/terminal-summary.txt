@@ -1,0 +1,45 @@
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-moduleattrs (/dlwh/shuttle-native-mlir-preflight-20260810-moduleattrs)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: ansform_test.cc:150:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  150 |   TF_ASSERT_OK(registry.Register("duplicate", transform));
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:160:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  160 |   TF_ASSERT_OK(registry.Register("shuttle", AppendExecutionOrder("base")));
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:161:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  161 |   TF_ASSERT_OK(registry.Run(*module, "fast", "shuttle"));
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:174:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  174 |   TF_ASSERT_OK(registry.Register("shuttle", AppendExecutionOrder("base")));
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:191:3: error: use of undeclared identifier 'TF_EXPECT_OK'
+  191 |   TF_EXPECT_OK(run_status);
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:207:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  207 |   TF_ASSERT_OK(registry.Register("shuttle", [](mlir::ModuleOp module,
+      |   ^
+xla/pjrt/stablehlo_module_transform_test.cc:229:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+  229 |   TF_ASSERT_OK(registry.Register(
+      |   ^
+12 warnings and 13 errors generated.
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 134.122s, Critical Path: 66.40s
+INFO: 3419 processes: 1494 internal, 1925 local.
+ERROR: Build did NOT complete successfully
+//xla/pjrt:mlir_to_hlo_test                                           NO STATUS
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test                    NO STATUS
+//xla/pjrt:pjrt_executable_test                                       NO STATUS
+//xla/pjrt:stablehlo_module_transform_test                      FAILED TO BUILD
+
+Executed 0 out of 4 tests: 1 fails to build and 3 were skipped.
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T12:48:14Z
+
+
+  TASK  STATE      EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  13 minutes and 22.26 seconds  -           -          ansform_test.cc:150:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+                                                                                150 |   TF_ASSERT_OK(registry.Register("d...

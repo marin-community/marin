@@ -469,3 +469,32 @@ generated region helpers remain valid.
   tree.
 - Native compilation and execution of the four XLA tests remain pending. No
   remote build was launched for this source-only fix.
+
+## Hypothesis 12
+
+Copying the transformed module's properties, complete attribute dictionary,
+location, and body through the pinned `Operation` APIs should close the prior
+hook-library compile failure and expose the XLA test executables. Apply both
+reviewed patches, rerun all six Shuttle gates, and stop at the first failure in
+the four-test XLA gate.
+
+## Results 12
+
+- Remote proof confirms both reviewed XLA patches applied at exact XLA commit
+  `9b635916ecc6`, both reverse-application checks passed, the combined diff was
+  clean, every expected anchored label was present, and the exact anchored
+  XLA-owned runtime-label count was seven.
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, `@shuttle_mlir//:ShuttlePasses`,
+  `@shuttle_mlir//:shuttle-opt`, and the separate
+  `bazel build @shuttle_mlir//:mlir_tests` gate passed against the exact pins.
+- Lit executed all 11 fixtures and all 11 passed.
+- The XLA hook implementation advanced past the prior `ModuleOp::getAttrs`
+  failure. The four-test gate then failed compiling
+  `stablehlo_module_transform_test.cc` because `TF_ASSERT_OK` and
+  `TF_EXPECT_OK` were undeclared. Clang emitted 13 instances across that test
+  file.
+- Zero of four XLA tests executed: one failed to build and three had no status.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-moduleattrs/`.
+- This run used one submission with zero retries. No relaunch occurred.

@@ -1,0 +1,35 @@
+[12:35:14] git apply --check 0001-add-stablehlo-module-transform-hook.patch
+[12:35:14] git apply 0001-add-stablehlo-module-transform-hook.patch
+[12:35:14] git apply --check 0002-anchor-lit-labels-to-xla-repository.patch
+[12:35:14] git apply 0002-anchor-lit-labels-to-xla-repository.patch
+[12:35:14] git apply --reverse --check 0002-anchor-lit-labels-to-xla-repository.patch
+[12:35:14] git apply --reverse --check 0001-add-stablehlo-module-transform-hook.patch
+[12:35:14] git diff --check
+[12:35:14] all seven expected Label("//xla...") runtime labels found
+[12:35:14] exact anchored XLA runtime-label count: 7
+[12:35:55] @shuttle_mlir//:shuttle_ops_inc_gen: PASS, 1 action, 19.215s
+[12:36:47] @shuttle_mlir//:ShuttleDialect: PASS, 952 actions, 51.604s
+[12:36:53] @shuttle_mlir//:ShuttlePasses: PASS, 91 actions, 6.252s
+[12:45:45] @shuttle_mlir//:shuttle-opt: PASS, 5951 actions, 532.030s
+[12:45:57] bazel build @shuttle_mlir//:mlir_tests: PASS, 143 actions, 11.385s
+[12:45:59] bazel test @shuttle_mlir//:mlir_tests: PASS, 11/11, 2.674s
+[12:46:01] four patched XLA test targets analyzed
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:73:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:85:3: error: use of undeclared identifier 'TF_EXPECT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:113:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:128:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:130:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:132:3: error: use of undeclared identifier 'TF_EXPECT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:150:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:160:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:161:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:174:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:191:3: error: use of undeclared identifier 'TF_EXPECT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:207:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] xla/pjrt/stablehlo_module_transform_test.cc:229:3: error: use of undeclared identifier 'TF_ASSERT_OK'
+[12:48:13] 12 warnings and 13 errors generated
+[12:48:14] //xla/pjrt:stablehlo_module_transform_test: FAILED TO BUILD
+[12:48:14] remaining three XLA test targets: NO STATUS
+[12:48:14] Executed 0 out of 4 tests: 1 fails to build and 3 were skipped
+[12:48:14] preflight_exit_code=1
+[12:48:14] preflight_finished_utc=2026-08-10T12:48:14Z
