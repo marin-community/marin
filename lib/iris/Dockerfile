@@ -319,7 +319,7 @@ ENV PATH="${CUDA_HOME}/bin:${PATH}"
 # The runner loads these libraries from the selected NVCC toolkit before it
 # records any evidence. Resolve and load every required symbol without calling
 # a CUDA device API.
-RUN python - <<'PY'
+RUN /opt/h100-evidence-runtime/bin/python - <<'PY'
 from ctypes import CDLL
 from pathlib import Path
 
@@ -335,7 +335,7 @@ PY
 # Import and version validation is forced onto the CPU backend. It proves the
 # installed runtime is internally coherent without enumerating or initializing
 # a GPU during the image build.
-RUN JAX_PLATFORMS=cpu python - <<'PY'
+RUN JAX_PLATFORMS=cpu /opt/h100-evidence-runtime/bin/python - <<'PY'
 from importlib.metadata import version
 
 import jax

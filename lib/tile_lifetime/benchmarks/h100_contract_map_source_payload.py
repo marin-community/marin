@@ -12,7 +12,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 import tempfile
 import zipfile
 from collections.abc import Sequence
@@ -505,6 +504,7 @@ def restore_and_verify_source_payload(
 
 
 def runner_arguments(
+    runtime_python: Path,
     source_root: Path,
     source_sha: str,
     source_tree: str,
@@ -515,8 +515,10 @@ def runner_arguments(
 ) -> tuple[str, ...]:
     if not require_jax_version.strip():
         raise ValueError("required JAX version must be nonempty")
+    if not runtime_python.is_absolute() or not runtime_python.is_file() or not os.access(runtime_python, os.X_OK):
+        raise ValueError(f"runtime Python must be an absolute executable file: {runtime_python}")
     return (
-        sys.executable,
+        str(runtime_python),
         str(source_root / RUNNER_RELATIVE_PATH),
         "--execute",
         "--source-root",
@@ -578,6 +580,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument("--source-tree", required=True)
     run.add_argument("--artifact-directory", type=Path, required=True)
     run.add_argument("--require-jax-version", required=True)
+    run.add_argument("--runtime-python", type=Path, required=True)
     return parser.parse_args(argv)
 
 
@@ -599,6 +602,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.environ["PYTHONPATH"] = capsule_python_path(source_root, os.environ.get("PYTHONPATH"))
     arguments = runner_arguments(
+        args.runtime_python,
         source_root,
         args.source_sha,
         args.source_tree,

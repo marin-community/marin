@@ -45,6 +45,34 @@ def _source_repository(root: Path, *, symlink_license: bool = False) -> tuple[Pa
                 "schema_version": payload.SCHEMA_VERSION,
             }
             path.write_bytes(payload._canonical_json(allowlist))
+        elif relative == "lib/tile_lifetime/benchmarks/h100_contract_map_source_payload.py":
+            path.write_bytes(Path(payload.__file__).read_bytes())
+        elif relative == "lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py":
+            path.write_text(
+                """import json
+import sys
+from importlib.metadata import version
+from pathlib import Path
+
+import jax
+import numpy
+import shuttle
+
+artifact_directory = Path(sys.argv[sys.argv.index("--artifact-directory") + 1])
+artifact_directory.mkdir(parents=True)
+(artifact_directory / "runtime-imports.json").write_text(
+    json.dumps(
+        {
+            "jax": jax.__version__,
+            "numpy": numpy.__version__,
+            "python": sys.executable,
+            "shuttle": version("marin-shuttle"),
+        },
+        sort_keys=True,
+    )
+)
+"""
+            )
         elif relative == "LICENSE" and symlink_license:
             path.symlink_to("pyproject.toml")
         else:
@@ -245,6 +273,7 @@ def test_source_capsule_rejects_escaping_symlink_with_matching_transport_hashes(
 
 def test_source_capsule_runner_command_fixes_manifest_execute_and_tool_paths(tmp_path):
     arguments = payload.runner_arguments(
+        Path(sys.executable),
         tmp_path,
         "1" * 40,
         "2" * 40,
@@ -254,12 +283,78 @@ def test_source_capsule_runner_command_fixes_manifest_execute_and_tool_paths(tmp
         "0.10.1",
     )
 
+    assert arguments[0] == sys.executable
     assert arguments[2:4] == ("--execute", "--source-root")
     assert arguments[arguments.index("--source-tree") + 1] == "2" * 40
     assert arguments[arguments.index("--source-capsule-manifest-sha256") + 1] == "3" * 64
     assert arguments[arguments.index("--nvcc") + 1] == "/usr/local/cuda-13.2/bin/nvcc"
     assert arguments[arguments.index("--ncu") + 1] == "/usr/local/bin/ncu"
     assert arguments[arguments.index("--nsys") + 1] == "/usr/local/bin/nsys"
+
+    with pytest.raises(ValueError, match="absolute executable file"):
+        payload.runner_arguments(
+            Path("python"),
+            tmp_path,
+            "1" * 40,
+            "2" * 40,
+            tmp_path / payload.MANIFEST_FILENAME,
+            "3" * 64,
+            tmp_path.parent / "artifacts",
+            "0.10.1",
+        )
+
+
+def test_source_capsule_launcher_uses_selected_runtime_without_path_fallback(tmp_path):
+    remote, result, commit, tree = _prepared_remote(tmp_path)
+    selected_python = Path(sys.executable)
+    bootstrap_python = selected_python.resolve()
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    marker = tmp_path / "unqualified-python-ran"
+    poison_python = poison / "python"
+    poison_python.write_text(f"#!/bin/sh\ntouch {marker}\nexit 97\n")
+    poison_python.chmod(0o755)
+    artifacts = tmp_path / "artifacts"
+    environment = dict(os.environ)
+    environment["JAX_PLATFORMS"] = "cpu"
+    environment["PATH"] = str(poison)
+    environment.pop("PYTHONPATH", None)
+
+    subprocess.run(
+        (
+            str(bootstrap_python),
+            str(remote / payload.LAUNCHER_FILENAME),
+            "run",
+            "--workspace",
+            str(remote),
+            "--launcher-sha256",
+            result["launcher_sha256"],
+            "--manifest-sha256",
+            result["manifest_sha256"],
+            "--source-sha",
+            commit,
+            "--source-tree",
+            tree,
+            "--artifact-directory",
+            str(artifacts),
+            "--require-jax-version",
+            "0.10.1",
+            "--runtime-python",
+            str(selected_python),
+        ),
+        cwd=remote,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    imports = json.loads((artifacts / "runtime-imports.json").read_text())
+    assert Path(imports["python"]) == selected_python
+    assert imports["jax"] == "0.10.1"
+    assert imports["numpy"]
+    assert imports["shuttle"] == "0.1.0"
+    assert not marker.exists()
 
 
 def test_source_capsule_python_path_prefers_capsule_package_and_benchmark_roots(tmp_path):
