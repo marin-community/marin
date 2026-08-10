@@ -6,10 +6,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 from pathlib import Path
 
-from tile_lifetime.h100_contract_map_benchmark import require_gpu_execution_ready, staging_manifest
+_GPU_EXECUTION_REFUSAL = (
+    "H100 execution is disabled for the architecture-nonconforming staging harness; "
+    "SOURCE_ORDERED, FAST, and resource collectors require review"
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -26,11 +30,14 @@ def _arguments() -> argparse.Namespace:
 
 def main() -> None:
     args = _arguments()
-    result = staging_manifest(shuttle_revision=args.shuttle_revision)
+    if args.execute_gpu:
+        raise RuntimeError(_GPU_EXECUTION_REFUSAL)
+
+    # tile_lifetime.__init__ imports JAX, so module loading belongs after the package-independent launch gate.
+    benchmark_module = importlib.import_module("tile_lifetime.h100_contract_map_benchmark")
+    result = benchmark_module.staging_manifest(shuttle_revision=args.shuttle_revision)
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     args.json_output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    if args.execute_gpu:
-        require_gpu_execution_ready()
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
