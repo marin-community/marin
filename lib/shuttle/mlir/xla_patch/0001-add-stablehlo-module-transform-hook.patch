@@ -182,7 +182,7 @@ index f21c0c2..908620d 100644
 +
  // Converts an MHLO/CHLO module string to an XLA computation.
 diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
-index 4a560ef..d6ddfcf 100644
+index 4a560ef..b8908a9 100644
 --- a/xla/pjrt/mlir_to_hlo_test.cc
 +++ b/xla/pjrt/mlir_to_hlo_test.cc
 @@ -25,2 +25,3 @@ limitations under the License.
@@ -211,7 +211,7 @@ index 4a560ef..d6ddfcf 100644
 +}
 +
  TEST(MlirToHloTest, StablehloTest) {
-@@ -65,2 +81,38 @@ TEST(MlirToHloTest, StablehloTest) {
+@@ -65,2 +81,39 @@ TEST(MlirToHloTest, StablehloTest) {
 
 +TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
 +  constexpr absl::string_view kProgram =
@@ -238,7 +238,8 @@ index 4a560ef..d6ddfcf 100644
 +      *module, computation, /*use_tuple_args=*/false,
 +      /*return_tuple=*/false, compile_options));
 +  auto forwarded_options =
-+      module->getAttrOfType<mlir::StringAttr>("test.forwarded_options");
++      module->getOperation()->getAttrOfType<mlir::StringAttr>(
++          "test.forwarded_options");
 +  ASSERT_TRUE(forwarded_options);
 +  EXPECT_EQ(forwarded_options.getValue(), "{\"numerics\":\"source_ordered\"}");
 +  EXPECT_TRUE(compile_options.executable_build_options.debug_options()
@@ -377,10 +378,10 @@ index ff5cfaa..aa2da23 100644
    xla_computation.mutable_proto()->set_pjrt_id(module_id);
 diff --git a/xla/pjrt/stablehlo_module_transform.cc b/xla/pjrt/stablehlo_module_transform.cc
 new file mode 100644
-index 0000000..868f3d3
+index 0000000..377d2df
 --- /dev/null
 +++ b/xla/pjrt/stablehlo_module_transform.cc
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,108 @@
 +/* Copyright 2026 The OpenXLA Authors.
 +
 +Licensed under the Apache License, Version 2.0 (the "License");
@@ -478,7 +479,12 @@ index 0000000..868f3d3
 +        "StableHLO module transforms produced an invalid MLIR module");
 +  }
 +
-+  module->setAttrs(transformed->getAttrs());
++  mlir::Operation* module_operation = module.getOperation();
++  mlir::Operation* transformed_operation = transformed->getOperation();
++  module_operation->copyProperties(
++      transformed_operation->getPropertiesStorage());
++  module_operation->setAttrs(transformed_operation->getAttrDictionary());
++  module_operation->setLoc(transformed_operation->getLoc());
 +  module.getBodyRegion().takeBody(transformed->getBodyRegion());
 +  return absl::OkStatus();
 +}
@@ -565,10 +571,10 @@ index 0000000..7743931
 +#endif  // XLA_PJRT_STABLEHLO_MODULE_TRANSFORM_H_
 diff --git a/xla/pjrt/stablehlo_module_transform_test.cc b/xla/pjrt/stablehlo_module_transform_test.cc
 new file mode 100644
-index 0000000..958ad94
+index 0000000..800160e
 --- /dev/null
 +++ b/xla/pjrt/stablehlo_module_transform_test.cc
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,243 @@
 +/* Copyright 2026 The OpenXLA Authors.
 +
 +Licensed under the Apache License, Version 2.0 (the "License");
@@ -636,9 +642,16 @@ index 0000000..958ad94
 +  mlir::MLIRContext context;
 +  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
 +                          ParseMlirModuleString(kProgram, context));
++  module->getOperation()->setAttr(
++      "sym_name", mlir::StringAttr::get(&context, "before_transform"));
++  mlir::Location transformed_location =
++      mlir::NameLoc::get(mlir::StringAttr::get(&context, "transformed_module"));
 +  StablehloModuleTransformRegistry registry;
 +  TF_ASSERT_OK(registry.Register(
-+      "shuttle", [](mlir::ModuleOp module, absl::string_view options) {
++      "shuttle",
++      [transformed_location](mlir::ModuleOp module, absl::string_view options) {
++        module->removeAttr("sym_name");
++        module->setLoc(transformed_location);
 +        mlir::Operation& function = module.getBody()->front();
 +        mlir::Operation& operation = function.getRegion(0).front().front();
 +        operation.setAttr("test.marker",
@@ -653,6 +666,8 @@ index 0000000..958ad94
 +  auto marker = operation.getAttrOfType<mlir::StringAttr>("test.marker");
 +  ASSERT_TRUE(marker);
 +  EXPECT_EQ(marker.getValue(), "source_ordered");
++  EXPECT_FALSE(module->getOperation()->hasAttr("sym_name"));
++  EXPECT_EQ(module->getOperation()->getLoc(), transformed_location);
 +}
 +
 +TEST(StablehloModuleTransformRegistryTest, FailsClosedWithoutRegistration) {
@@ -678,7 +693,7 @@ index 0000000..958ad94
 +  EXPECT_THAT(registry.Run(*module, "fast", "shuttle"),
 +              StatusIs(absl::StatusCode::kFailedPrecondition,
 +                       HasSubstr("not registered: shuttle")));
-+  EXPECT_FALSE(module->hasAttr("test.order"));
++  EXPECT_FALSE(module->getOperation()->hasAttr("test.order"));
 +}
 +
 +TEST(StablehloModuleTransformRegistryTest,
@@ -693,7 +708,8 @@ index 0000000..958ad94
 +
 +  TF_EXPECT_OK(registry.Run(*module, "fast", "shuttle"));
 +
-+  auto order = module->getAttrOfType<mlir::StringAttr>("test.order");
++  auto order =
++      module->getOperation()->getAttrOfType<mlir::StringAttr>("test.order");
 +  ASSERT_TRUE(order);
 +  EXPECT_EQ(order.getValue(), "shuttle");
 +}
@@ -750,7 +766,8 @@ index 0000000..958ad94
 +  register_thread.join();
 +
 +  TF_EXPECT_OK(run_status);
-+  auto order = module->getAttrOfType<mlir::StringAttr>("test.order");
++  auto order =
++      module->getOperation()->getAttrOfType<mlir::StringAttr>("test.order");
 +  ASSERT_TRUE(order);
 +  EXPECT_EQ(order.getValue(), "base");
 +  if (!register_status.ok()) {
