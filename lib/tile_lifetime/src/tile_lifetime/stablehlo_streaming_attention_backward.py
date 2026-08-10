@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover generic streaming reverse algebra from a JAX-owned attention VJP."""
+"""Experimental whole-pattern recovery for historical attention prototypes.
+
+The operation-by-operation generic StableHLO algebra importer is reusable
+substrate. This module remains only to reproduce older component artifacts.
+"""
 
 from __future__ import annotations
 
@@ -68,16 +72,16 @@ class RecoveredStableHLOStreamingAttentionBackward:
     source_operation_ids: tuple[int, ...]
 
 
-def recover_stablehlo_streaming_attention_backward(
+def recover_experimental_whole_pattern_streaming_attention_backward(
     graph: StableHLOGraph,
     *,
     schedule: StreamingTileSchedule,
 ) -> RecoveredStableHLOStreamingAttentionBackward:
-    """Recover a generic Contract/Map/Fold reverse from ordinary JAX VJP HLO.
+    """Reconstruct an attention-shaped reverse for historical experiments.
 
-    JAX remains the automatic-differentiation owner. This pass assigns generic
-    roles to the generic forward/reverse Contracts and normalized-exponential Folds;
-    it never recognizes or dispatches on an attention/model name.
+    This pass uses an exact whole-graph pattern and rebuilds a canonical tensor
+    program. It is not accepted as clean frontend provenance, even though JAX
+    remains the automatic-differentiation owner and no model-name key is used.
     """
     if len(graph.inputs) != 4 or len(graph.outputs) not in (3, 4):
         raise StableHLOStreamingAttentionBackwardError(

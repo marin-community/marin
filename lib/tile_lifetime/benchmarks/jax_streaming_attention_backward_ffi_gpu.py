@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compile and benchmark the natural-signature JAX attention reverse FFI."""
+"""Historical component benchmark for the recompute/combined attention FFI.
+
+This remains useful as isolated physical evidence, but it is not the accepted
+public Shuttle attention source boundary. A separate unaccepted diagnostic
+imports an ordinary JAX plus ``jax.vjp`` graph, regenerates a reverse, and
+compares separate forward-state and saved-state targets against Grug FA4 in
+``experimental_jax_streaming_attention_saved_state_fa4_gpu.py``.
+"""
 
 from __future__ import annotations
 
@@ -45,7 +52,9 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
 )
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
-from tile_lifetime.stablehlo_streaming_attention_backward import recover_stablehlo_streaming_attention_backward
+from tile_lifetime.stablehlo_streaming_attention_backward import (
+    recover_experimental_whole_pattern_streaming_attention_backward,
+)
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,
@@ -287,7 +296,7 @@ def main() -> None:
     stablehlo_path = args.build_directory / "source_vjp_stablehlo.mlir.bc"
     stablehlo_path.write_bytes(hlo)
     graph = import_stablehlo(hlo, input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES)
-    recovered = recover_stablehlo_streaming_attention_backward(
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(
         graph,
         schedule=StreamingTileSchedule(
             query_tile_size=args.block_m,
@@ -488,6 +497,7 @@ def main() -> None:
     ]
     result = {
         "schema_version": 1,
+        "claim_status": "historical_component_only_not_accepted_public_frontend",
         "boundary": (
             "natural JAX Q/K/V/output-cotangent to output plus Q/K/V cotangents; "
             "forward state produced and consumed inside one timed call"

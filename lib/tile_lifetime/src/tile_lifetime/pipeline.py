@@ -69,8 +69,8 @@ class FrontendProvenance:
 
 
 @dataclass(frozen=True)
-class StableHLOStreamingAttentionCompilation:
-    """Generic streaming program with frontend and erasure evidence."""
+class ExperimentalWholePatternStreamingAttentionCompilation:
+    """Historical named-attention recovery retained for bounded comparisons."""
 
     program: StreamingAttentionProgram
     provenance: FrontendProvenance
@@ -86,14 +86,19 @@ class StableHLODenseCompilation:
     status: FrontendCompilationStatus
 
 
-def compile_stablehlo_streaming_attention_program(
+def compile_experimental_whole_pattern_stablehlo_streaming_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
     output_name: str,
     schedule: StreamingTileSchedule,
-) -> StableHLOStreamingAttentionCompilation:
-    """Recover ordinary StableHLO attention into generic Contract/Map/Fold."""
+) -> ExperimentalWholePatternStreamingAttentionCompilation:
+    """Reconstruct a named attention operation before erasing it.
+
+    This whole-pattern path is not accepted clean frontend provenance. The
+    operation-by-operation StableHLO importer is reusable substrate. Attention
+    selectors remain experimental.
+    """
     stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
     recovered = recover_attention_region(stablehlo_graph, output_name=output_name)
     operations = recovered.graph.operations
@@ -110,7 +115,7 @@ def compile_stablehlo_streaming_attention_program(
             ),
         ),
     )
-    compilation = StableHLOStreamingAttentionCompilation(
+    compilation = ExperimentalWholePatternStreamingAttentionCompilation(
         program=program,
         provenance=FrontendProvenance(
             source_kind=FrontendSourceKind.STABLEHLO_ARTIFACT,
@@ -119,14 +124,14 @@ def compile_stablehlo_streaming_attention_program(
         ),
         semantic_erasure_report=report,
     )
-    validate_stablehlo_streaming_attention_compilation(compilation)
+    validate_experimental_whole_pattern_streaming_attention_compilation(compilation)
     return compilation
 
 
-def validate_stablehlo_streaming_attention_compilation(
-    compilation: StableHLOStreamingAttentionCompilation,
+def validate_experimental_whole_pattern_streaming_attention_compilation(
+    compilation: ExperimentalWholePatternStreamingAttentionCompilation,
 ) -> None:
-    """Reject hand-authored or named scheduling inputs on the current path."""
+    """Reject hand-authored inputs even on the historical comparison path."""
     if compilation.provenance.source_kind is not FrontendSourceKind.STABLEHLO_ARTIFACT:
         raise SemanticErasureError("current frontend candidates must originate from a StableHLO artifact")
     erased = ErasedTensorProgram(compilation.program.source, compilation.semantic_erasure_report)

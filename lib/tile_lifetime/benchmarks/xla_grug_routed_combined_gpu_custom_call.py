@@ -67,7 +67,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import (
-    recover_stablehlo_streaming_attention_backward,
+    recover_experimental_whole_pattern_streaming_attention_backward,
 )
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (
@@ -386,7 +386,7 @@ def _attention_reverse_program() -> tuple[Any, Any, bytes]:
     )
     source_stablehlo = export_debug_streaming_attention_backward(config)
     graph = import_stablehlo(source_stablehlo, input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES)
-    recovered = recover_stablehlo_streaming_attention_backward(
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(
         graph,
         schedule=StreamingTileSchedule(query_tile_size=4, key_value_tile_size=4, pipeline_depth=2),
     )
