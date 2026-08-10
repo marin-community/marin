@@ -1,0 +1,489 @@
+9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+e362d244b0da6a4f5ab88ce987b60cf9cda44dbc2726690a808f8ae1009d68dd  /private/tmp/shuttle-native-tenth-client-root.O3hMDa/payload/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99  /private/tmp/shuttle-native-tenth-client-root.O3hMDa/payload/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+ xla/lit.bzl                                | 14 ++++----
+ xla/pjrt/BUILD                             | 55 ++++++++++++++++++++++++++++++
+ xla/pjrt/cpu/cpu_client.cc                 |  5 ++-
+ xla/pjrt/gpu/se_gpu_pjrt_compiler.cc       |  5 ++-
+ xla/pjrt/interpreter/interpreter_client.cc |  5 ++-
+ xla/pjrt/mlir_to_hlo.cc                    | 32 +++++++++++++++++
+ xla/pjrt/mlir_to_hlo.h                     | 11 ++++++
+ xla/pjrt/mlir_to_hlo_test.cc               | 52 ++++++++++++++++++++++++++++
+ xla/pjrt/pjrt_executable_test.cc           | 25 ++++++++++++++
+ xla/pjrt/pjrt_stream_executor_client.cc    |  5 ++-
+ xla/xla.proto                              |  6 +++-
+ 11 files changed, 195 insertions(+), 20 deletions(-)
+225:            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+256:        cfg = Label("//xla:lit.cfg.py"),
+419:    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+451:            Label("//xla/stream_executor/cuda:all_runtime"),
+452:            Label("//xla/tsl/cuda:nvshmem_stub"),
+454:            Label("//xla/tsl/cuda:nccl"),
+510:                   Label("//xla:lit_google_cfg.py"),
+anchored_xla_runtime_label_count=7
+diff --git a/xla/lit.bzl b/xla/lit.bzl
+index 120101d..f5b81f8 100644
+--- a/xla/lit.bzl
++++ b/xla/lit.bzl
+@@ -222,7 +222,7 @@ def lit_test_suite_for_gpus(
+             "--param=GPU=%s" % (gpu),
+         ]
+         gpu_data = data + [
+-            "//xla/backends/gpu/target_config:all_gpu_specs",
++            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+         ]
+         lit_test_suite(
+             "%s_%s" % (name, gpu),
+@@ -253,7 +253,7 @@ def lit_device_test(
+         backends = [],
+         args = [],
+         data = [],
+-        cfg = "//xla:lit.cfg.py",
++        cfg = Label("//xla:lit.cfg.py"),
+         tools = None,
+         visibility = None,
+         env = {},
+@@ -416,7 +416,7 @@ def lit_test(
+     See https://llvm.org/docs/CommandGuide/lit.html for details on lit
+     """
+     args = args or []
+-    data = (data or []) + ["//xla:sh_test_with_runfiles.py"]
++    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
+     tools = tools or []
+     env = env or {}
+
+@@ -448,10 +448,10 @@ def lit_test(
+         bin_dir = bin_dir,
+         lib_dir = lib_dir,
+         deps = if_cuda_is_configured([
+-            "//xla/stream_executor/cuda:all_runtime",
+-            "//xla/tsl/cuda:nvshmem_stub",
++            Label("//xla/stream_executor/cuda:all_runtime"),
++            Label("//xla/tsl/cuda:nvshmem_stub"),
+         ]) + if_nccl([
+-            "//xla/tsl/cuda:nccl",
++            Label("//xla/tsl/cuda:nccl"),
+         ]),
+         visibility = ["//visibility:private"],
+         **kwargs
+@@ -507,7 +507,7 @@ def lit_test(
+                    tools_on_path_target_name,
+                ] + data + if_oss(["@pypi//lit"]) +
+                if_google([
+-                   "//xla:lit_google_cfg.py",
++                   Label("//xla:lit_google_cfg.py"),
+                ]),
+         visibility = visibility,
+         env = env,
+diff --git a/xla/pjrt/BUILD b/xla/pjrt/BUILD
+index ef7d2a5..a5bbbb3 100644
+--- a/xla/pjrt/BUILD
++++ b/xla/pjrt/BUILD
+@@ -938,12 +938,47 @@ xla_cc_test(
+     ],
+ )
+
++cc_library(
++    name = "stablehlo_module_transform",
++    srcs = ["stablehlo_module_transform.cc"],
++    hdrs = ["stablehlo_module_transform.h"],
++    visibility = ["//visibility:public"],
++    deps = [
++        "@com_google_absl//absl/base:core_headers",
++        "@com_google_absl//absl/base:no_destructor",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/strings",
++        "@com_google_absl//absl/synchronization",
++        "@llvm-project//mlir:IR",
++    ],
++)
++
++xla_cc_test(
++    name = "stablehlo_module_transform_test",
++    srcs = ["stablehlo_module_transform_test.cc"],
++    deps = [
++        ":mlir_to_hlo",
++        ":stablehlo_module_transform",
++        "//xla/hlo/testlib:test",
++        "//xla/tsl/platform:statusor",
++        "@com_google_absl//absl/base:core_headers",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:status_matchers",
++        "@com_google_absl//absl/strings:string_view",
++        "@com_google_absl//absl/synchronization",
++        "@com_google_googletest//:gtest_main",
++        "@llvm-project//mlir:IR",
++    ],
++)
++
+ cc_library(
+     name = "mlir_to_hlo",
+     srcs = ["mlir_to_hlo.cc"],
+     hdrs = ["mlir_to_hlo.h"],
+     visibility = internal_visibility([":friends"]),
+     deps = [
++        ":pjrt_executable",
++        ":stablehlo_module_transform",
+         "//xla:util",
+         "//xla/client:executable_build_options",
+         "//xla/hlo/builder:xla_computation",
+@@ -992,6 +1027,9 @@ xla_cc_test(
+     srcs = ["mlir_to_hlo_test.cc"],
+     deps = [
+         ":mlir_to_hlo",
++        ":pjrt_executable",
++        ":stablehlo_module_transform",
++        "//xla/hlo/builder:xla_computation",
+         "//xla/hlo/testlib:test",
+         "//xla/tsl/platform:statusor",
+         "@com_google_absl//absl/status",
+@@ -1004,6 +1042,23 @@ xla_cc_test(
+     ],
+ )
+
++xla_cc_test(
++    name = "mlir_to_hlo_unregistered_transform_test",
++    srcs = ["mlir_to_hlo_unregistered_transform_test.cc"],
++    deps = [
++        ":mlir_to_hlo",
++        ":pjrt_executable",
++        "//xla/hlo/builder:xla_computation",
++        "//xla/hlo/testlib:test",
++        "//xla/tsl/platform:statusor",
++        "@com_google_absl//absl/status",
++        "@com_google_absl//absl/status:status_matchers",
++        "@com_google_absl//absl/strings:string_view",
++        "@com_google_googletest//:gtest_main",
++        "@llvm-project//mlir:IR",
++    ],
++)
++
+ cc_library(
+     name = "pjrt_future",
+     hdrs = ["pjrt_future.h"],
+diff --git a/xla/pjrt/cpu/cpu_client.cc b/xla/pjrt/cpu/cpu_client.cc
+index ac6829f..c82d9d4 100644
+--- a/xla/pjrt/cpu/cpu_client.cc
++++ b/xla/pjrt/cpu/cpu_client.cc
+@@ -643,11 +643,10 @@ PjRtCpuClient::CompileAndAssignDevices(MaybeOwningMlirModule module,
+   TF_RETURN_IF_ERROR(pjrt::MaybeDumpCompileInputs(options, module.mlir_module(),
+                                                   *topology_, module_id));
+   XlaComputation xla_computation;
+-  ExecutableBuildOptions& exec_build_options = options.executable_build_options;
+-  TF_RETURN_IF_ERROR(MlirToXlaComputation(
++  TF_RETURN_IF_ERROR(MlirToXlaComputationWithPjRtOptions(
+       module.mlir_module(), xla_computation,
+       /*use_tuple_args=*/options.parameter_is_tupled_arguments,
+-      /*return_tuple=*/false, &exec_build_options));
++      /*return_tuple=*/false, options));
+   xla_computation.mutable_proto()->set_pjrt_id(module_id);
+
+   if (options.argument_layouts) {
+diff --git a/xla/pjrt/gpu/se_gpu_pjrt_compiler.cc b/xla/pjrt/gpu/se_gpu_pjrt_compiler.cc
+index 0917c68..0ebbd3e 100644
+--- a/xla/pjrt/gpu/se_gpu_pjrt_compiler.cc
++++ b/xla/pjrt/gpu/se_gpu_pjrt_compiler.cc
+@@ -344,11 +344,10 @@ StreamExecutorGpuCompiler::Compile(CompileOptions options,
+   }
+
+   XlaComputation xla_computation;
+-  TF_RETURN_IF_ERROR(MlirToXlaComputation(
++  TF_RETURN_IF_ERROR(MlirToXlaComputationWithPjRtOptions(
+       module.mlir_module(), xla_computation,
+       /*use_tuple_args=*/options.parameter_is_tupled_arguments,
+-      /*return_tuple=*/false,
+-      /*exec_build_options=*/&options.executable_build_options,
++      /*return_tuple=*/false, options,
+       mlir::mhlo::getGpuChloToHighLevelMhloOptions()));
+
+   // If the compile options specify argument layout, then let's
+diff --git a/xla/pjrt/interpreter/interpreter_client.cc b/xla/pjrt/interpreter/interpreter_client.cc
+index 77070e5..9333534 100644
+--- a/xla/pjrt/interpreter/interpreter_client.cc
++++ b/xla/pjrt/interpreter/interpreter_client.cc
+@@ -380,11 +380,10 @@ absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
+ InterpreterClient::CompileAndLoad(MaybeOwningMlirModule module,
+                                   CompileOptions options) {
+   XlaComputation xla_computation;
+-  ExecutableBuildOptions& exec_build_options = options.executable_build_options;
+-  TF_RETURN_IF_ERROR(MlirToXlaComputation(
++  TF_RETURN_IF_ERROR(MlirToXlaComputationWithPjRtOptions(
+       module.mlir_module(), xla_computation,
+       /*use_tuple_args=*/options.parameter_is_tupled_arguments,
+-      /*return_tuple=*/false, &exec_build_options));
++      /*return_tuple=*/false, options));
+
+   // If the compile options specify argument layout, then let's
+   // fall back to using the options to determine layouts.
+diff --git a/xla/pjrt/mlir_to_hlo.cc b/xla/pjrt/mlir_to_hlo.cc
+index 994bcac..c1cc7b7 100644
+--- a/xla/pjrt/mlir_to_hlo.cc
++++ b/xla/pjrt/mlir_to_hlo.cc
+@@ -69,6 +69,8 @@ limitations under the License.
+ #include "xla/mlir_hlo/mhlo/IR/register.h"
+ #include "xla/mlir_hlo/mhlo/transforms/passes.h"
+ #include "xla/mlir_hlo/stablehlo_ext/transforms/passes.h"
++#include "xla/pjrt/pjrt_executable.h"
++#include "xla/pjrt/stablehlo_module_transform.h"
+ #include "xla/service/spmd/shardy/constants.h"
+ #include "xla/service/spmd/shardy/sdy_round_trip/pipelines.h"
+ #include "xla/service/spmd/shardy/stablehlo_round_trip/stablehlo_export.h"
+@@ -80,7 +82,20 @@ limitations under the License.
+ namespace xla {
+ namespace {
+ using mlir::mhlo::ChloLegalizeToHighLevelMhloPassOptions;
++
++constexpr absl::string_view kShuttleEnableOption = "xla_shuttle_enable";
++constexpr absl::string_view kShuttleOptionsOption = "xla_shuttle_options";
++
++absl::Status ApplyStablehloTransformOptionOverrides(
++    CompileOptions& compile_options) {
++  for (const auto& [key, value] : compile_options.env_option_overrides) {
++    if (key == kShuttleEnableOption || key == kShuttleOptionsOption) {
++      TF_RETURN_IF_ERROR(compile_options.ApplyOption(key, value));
++    }
++  }
++  return absl::OkStatus();
+ }
++}  // namespace
+
+ void RegisterAllHloDialects(mlir::DialectRegistry& registry) {
+   registry.insert<mlir::arith::ArithDialect>();
+@@ -169,6 +184,13 @@ absl::Status MlirToXlaComputation(
+     use_tuple_args = false;
+   }
+
++  if (exec_build_options && exec_build_options->has_debug_options() &&
++      exec_build_options->debug_options().xla_shuttle_enable()) {
++    TF_RETURN_IF_ERROR(StablehloModuleTransformRegistry::Global().Run(
++        module, exec_build_options->debug_options().xla_shuttle_options(),
++        /*required_transform=*/"shuttle"));
++  }
++
+   TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> hlo_module,
+                       xla::ConvertStablehloToHloWithOptions(
+                           module, use_tuple_args, return_tuple));
+@@ -177,6 +199,16 @@ absl::Status MlirToXlaComputation(
+   return absl::OkStatus();
+ }
+
++absl::Status MlirToXlaComputationWithPjRtOptions(
++    mlir::ModuleOp module, XlaComputation& xla_computation, bool use_tuple_args,
++    bool return_tuple, CompileOptions& compile_options,
++    const ChloLegalizeToHighLevelMhloPassOptions& chlo_opts) {
++  TF_RETURN_IF_ERROR(ApplyStablehloTransformOptionOverrides(compile_options));
++  return MlirToXlaComputation(
++      module, xla_computation, use_tuple_args, return_tuple,
++      &compile_options.executable_build_options, chlo_opts);
++}
++
+ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> ParseMlirModuleString(
+     absl::string_view mlir_module_str, mlir::MLIRContext& context) {
+   mlir::DialectRegistry registry;
+diff --git a/xla/pjrt/mlir_to_hlo.h b/xla/pjrt/mlir_to_hlo.h
+index f21c0c2..908620d 100644
+--- a/xla/pjrt/mlir_to_hlo.h
++++ b/xla/pjrt/mlir_to_hlo.h
+@@ -34,6 +34,8 @@ limitations under the License.
+
+ namespace xla {
+
++struct CompileOptions;
++
+ // Registers all MLIR dialects that are necessary for using MLIR HLO modules.
+ void RegisterAllHloDialects(mlir::DialectRegistry& registry);
+
+@@ -50,6 +52,15 @@ absl::Status MlirToXlaComputation(
+     const mlir::mhlo::ChloLegalizeToHighLevelMhloPassOptions& chlo_opts =
+         mlir::mhlo::getDefaultChloToHighLevelMhloOptions());
+
++// Applies StableHLO transform option overrides before converting an MLIR
++// module to XLA HLO. Other PJRT environment overrides remain deferred to the
++// existing backend compilation boundary.
++absl::Status MlirToXlaComputationWithPjRtOptions(
++    mlir::ModuleOp module, XlaComputation& xla_computation, bool use_tuple_args,
++    bool return_tuple, CompileOptions& compile_options,
++    const mlir::mhlo::ChloLegalizeToHighLevelMhloPassOptions& chlo_opts =
++        mlir::mhlo::getDefaultChloToHighLevelMhloOptions());
++
+ // Converts an MHLO/CHLO module string to an XLA computation.
+ absl::Status ParseMlirModuleStringAndConvertToXlaComputation(
+     absl::string_view mlir_module_str, XlaComputation& xla_computation,
+diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
+index 4a560ef..d6ddfcf 100644
+--- a/xla/pjrt/mlir_to_hlo_test.cc
++++ b/xla/pjrt/mlir_to_hlo_test.cc
+@@ -23,11 +23,15 @@ limitations under the License.
+ #include "absl/status/status_matchers.h"
+ #include "absl/strings/str_cat.h"
+ #include "absl/strings/string_view.h"
++#include "mlir/IR/BuiltinAttributes.h"
+ #include "mlir/IR/BuiltinOps.h"
+ #include "mlir/IR/MLIRContext.h"
+ #include "mlir/IR/OwningOpRef.h"
+ #include "stablehlo/api/PortableApi.h"
++#include "xla/hlo/builder/xla_computation.h"
+ #include "xla/hlo/testlib/test.h"
++#include "xla/pjrt/pjrt_executable.h"
++#include "xla/pjrt/stablehlo_module_transform.h"
+ #include "xla/tsl/platform/statusor.h"
+
+ namespace xla {
+@@ -45,6 +49,18 @@ MATCHER_P(IsVhloArtifact, version, "") {
+                             arg, result_listener);
+ }
+
++const absl::Status& RegisterOptionForwardingTestTransform() {
++  static const absl::Status status =
++      StablehloModuleTransformRegistry::Global().Register(
++          "shuttle", [](mlir::ModuleOp module, absl::string_view options) {
++            module->setAttr(
++                "test.forwarded_options",
++                mlir::StringAttr::get(module.getContext(), options));
++            return absl::OkStatus();
++          });
++  return status;
++}
++
+ TEST(MlirToHloTest, StablehloTest) {
+   constexpr absl::string_view kProgram =
+       R"(
+@@ -63,6 +79,42 @@ TEST(MlirToHloTest, StablehloTest) {
+   EXPECT_THAT(blob, IsVhloArtifact("1.0.0"));
+ }
+
++TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
++  constexpr absl::string_view kProgram =
++      R"(
++    func.func @negate(%arg0: tensor<f32>) -> tensor<f32> {
++      %0 = stablehlo.negate %arg0 : tensor<f32>
++      return %0 : tensor<f32>
++    }
++  )";
++  mlir::MLIRContext context;
++  TF_ASSERT_OK_AND_ASSIGN(mlir::OwningOpRef<mlir::ModuleOp> module,
++                          ParseMlirModuleString(kProgram, context));
++  TF_ASSERT_OK(RegisterOptionForwardingTestTransform());
++  CompileOptions compile_options;
++  compile_options.executable_build_options.mutable_debug_options()
++      ->set_xla_cpu_enable_fast_math(true);
++  compile_options.env_option_overrides = {
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options", std::string("{\"numerics\":\"source_ordered\"}")},
++      {"xla_cpu_enable_fast_math", false}};
++  XlaComputation computation;
++
++  TF_EXPECT_OK(MlirToXlaComputationWithPjRtOptions(
++      *module, computation, /*use_tuple_args=*/false,
++      /*return_tuple=*/false, compile_options));
++  auto forwarded_options =
++      module->getAttrOfType<mlir::StringAttr>("test.forwarded_options");
++  ASSERT_TRUE(forwarded_options);
++  EXPECT_EQ(forwarded_options.getValue(), "{\"numerics\":\"source_ordered\"}");
++  EXPECT_TRUE(compile_options.executable_build_options.debug_options()
++                  .xla_cpu_enable_fast_math());
++
++  TF_EXPECT_OK(compile_options.ApplyAllOptionOverrides());
++  EXPECT_FALSE(compile_options.executable_build_options.debug_options()
++                   .xla_cpu_enable_fast_math());
++}
++
+ TEST(MlirToHloTest, StablehloPluginNewerThanFramework) {
+   constexpr absl::string_view kProgram =
+       R"(
+diff --git a/xla/pjrt/pjrt_executable_test.cc b/xla/pjrt/pjrt_executable_test.cc
+index 50111fd..f94b6f7 100644
+--- a/xla/pjrt/pjrt_executable_test.cc
++++ b/xla/pjrt/pjrt_executable_test.cc
+@@ -117,6 +117,8 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+       {"xla_gpu_graph_min_graph_size", std::string("2")},
+       {"xla_gpu_auto_spmd_partitioning_memory_budget_ratio", 0.9},
+       {"xla_gpu_pgle_profile_file_or_directory_path", std::string("abc")},
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options", std::string("{\"numerics\":\"fast\"}")},
+       // Repeated fields.
+       {"xla_gpu_disable_async_collectives", std::string("2,REDUCESCATTER")},
+       {"xla_disable_hlo_passes",
+@@ -134,6 +136,8 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+   EXPECT_FLOAT_EQ(
+       debug_options.xla_gpu_auto_spmd_partitioning_memory_budget_ratio(), 0.9);
+   EXPECT_EQ(debug_options.xla_gpu_pgle_profile_file_or_directory_path(), "abc");
++  EXPECT_TRUE(debug_options.xla_shuttle_enable());
++  EXPECT_EQ(debug_options.xla_shuttle_options(), "{\"numerics\":\"fast\"}");
+   EXPECT_THAT(debug_options.xla_gpu_disable_async_collectives(),
+               testing::ElementsAre(xla::DebugOptions::ALLGATHER,
+                                    xla::DebugOptions::REDUCESCATTER));
+@@ -151,6 +155,27 @@ TEST(ExecuteOptionsTest, ApplyOptionsCanParseStringsAndEnums) {
+   EXPECT_TRUE(debug_options.xla_gpu_enable_command_buffer().empty());
+ }
+
++TEST(CompileOptionsTest, ShuttleOptionsRemainDistinctWhenSerialized) {
++  CompileOptions source_ordered;
++  source_ordered.env_option_overrides = {
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options",
++       std::string("{\"numerics\":\"source_ordered\"}")}};
++  TF_ASSERT_OK(source_ordered.ApplyAllOptionOverrides());
++  TF_ASSERT_OK_AND_ASSIGN(CompileOptionsProto source_ordered_proto,
++                          source_ordered.ToProto());
++
++  CompileOptions fast;
++  fast.env_option_overrides = {
++      {"xla_shuttle_enable", true},
++      {"xla_shuttle_options", std::string("{\"numerics\":\"fast\"}")}};
++  TF_ASSERT_OK(fast.ApplyAllOptionOverrides());
++  TF_ASSERT_OK_AND_ASSIGN(CompileOptionsProto fast_proto, fast.ToProto());
++
++  EXPECT_NE(source_ordered_proto.SerializeAsString(),
++            fast_proto.SerializeAsString());
++}
++
+ TEST(CompiledMemoryStatsTest, Serialization) {
+   CompiledMemoryStats stats;
+   stats.generated_code_size_in_bytes = 2;
+diff --git a/xla/pjrt/pjrt_stream_executor_client.cc b/xla/pjrt/pjrt_stream_executor_client.cc
+index ff5cfaa..aa2da23 100644
+--- a/xla/pjrt/pjrt_stream_executor_client.cc
++++ b/xla/pjrt/pjrt_stream_executor_client.cc
+@@ -2431,15 +2431,14 @@ PjRtStreamExecutorClient::Compile(MaybeOwningMlirModule module,
+                                                   *topology, module_id));
+
+   XlaComputation xla_computation;
+-  ExecutableBuildOptions& exec_build_options = options.executable_build_options;
+   auto chlo_opts = gpu_run_options_ == nullptr
+                        ? mlir::mhlo::getDefaultChloToHighLevelMhloOptions()
+                        : mlir::mhlo::getGpuChloToHighLevelMhloOptions();
+
+-  TF_RETURN_IF_ERROR(MlirToXlaComputation(
++  TF_RETURN_IF_ERROR(MlirToXlaComputationWithPjRtOptions(
+       module.mlir_module(), xla_computation,
+       /*use_tuple_args=*/options.parameter_is_tupled_arguments,
+-      /*return_tuple=*/false, &exec_build_options, chlo_opts));
++      /*return_tuple=*/false, options, chlo_opts));
+   xla_computation.mutable_proto()->set_pjrt_id(module_id);
+
+   // If the compile options specify argument layout, then let's
+diff --git a/xla/xla.proto b/xla/xla.proto
+index 9636f61..0e28a88 100644
+--- a/xla/xla.proto
++++ b/xla/xla.proto
+@@ -176,6 +176,10 @@ message DebugOptions {
+   // 2: recognize dot general against constants.
+   // 3: recognize dot operations with additional multiplicative factors.
+   optional int32 xla_recognize_reduction_optimization_level = 463;
++  // Run registered StableHLO module transforms before conversion to HLO.
++  optional bool xla_shuttle_enable = 481;
++  // Serialized options passed unchanged to registered StableHLO transforms.
++  optional string xla_shuttle_options = 482;
+   // go/keep-sorted end
+
+   //--------------------------------------------------------------------------//
+@@ -1543,7 +1547,7 @@ message DebugOptions {
+   // Note: when adding a new flag, please add it to one of the hardware-specific
+   // or hardware-agnostic sections at the top of this proto message.
+
+-  // Next id: 481
++  // Next id: 483
+
+   // Extra options to pass to the compilation backend (e.g. LLVM); specific
+   // interpretation of these values is left to the backend.
