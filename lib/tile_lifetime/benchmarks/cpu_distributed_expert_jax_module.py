@@ -9,6 +9,7 @@ import base64
 import gzip
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import jax
@@ -24,6 +25,7 @@ from tile_lifetime.distributed_expert_jax_module import (
     audit_shard_mapped_handler_module_stablehlo,
     build_natural_router_relation,
     build_relation_return_metadata,
+    compare_numerical_arrays,
     evaluate_decomposed_training_reference,
     evaluate_natural_jax_training,
     jax_payload_all_to_all,
@@ -33,6 +35,10 @@ from tile_lifetime.distributed_expert_jax_module import (
 )
 from tile_lifetime.expert_parallel_training import derive_expert_parallel_training_plan
 from tile_lifetime.xla_routed_shared_map_training_ffi import plan_routed_shared_map_training_typed_ffi
+from tile_lifetime.xla_segmented_input_adjoint_ffi import (
+    audit_segmented_input_adjoint_resources,
+    plan_segmented_input_adjoint_ffi,
+)
 
 _ROOT = Path(__file__).parents[1]
 _NATURAL_HLO = _ROOT / "benchmarks/artifacts/xla_grug_routed_combined_gpu_gb200_v0/original-gpu-pre-scheduler-hlo.txt.gz"
@@ -229,6 +235,7 @@ def main() -> None:
     )
     maximum_errors = {}
     mean_errors = {}
+    numerical_errors = {}
     deterministic = {}
     for name in natural.__dataclass_fields__:
         expected = np.asarray(getattr(natural, name), dtype=np.float32)
@@ -237,6 +244,7 @@ def main() -> None:
         error = np.abs(actual - expected)
         maximum_errors[name] = float(np.max(error))
         mean_errors[name] = float(np.mean(error))
+        numerical_errors[name] = asdict(compare_numerical_arrays(expected, actual))
         deterministic[name] = bool(np.array_equal(actual, repeated))
     handler_hlo = lower_handler_module_stablehlo(plan)
     handler_occurrences = audit_handler_module_stablehlo(plan, handler_hlo)
@@ -245,6 +253,13 @@ def main() -> None:
     integrated_audit = audit_shard_mapped_handler_module_stablehlo(plan, integrated_hlo)
     sent_payload, returned_payload, collective_hlo = _payload_roundtrip(mesh)
     expected_edges, returned_input_edges, returned_route_edges = _edge_return_roundtrip(plan, mesh)
+    primary_input_adjoint = plan_segmented_input_adjoint_ffi(
+        templates.recovered_input_adjoint,
+        segment_count=96,
+        capacity=256,
+        input_features=7168,
+        intermediate_features=3072,
+    )
     summary = {
         "kind": "fixed_capacity_distributed_expert_jax_module_cpu",
         "devices": [device.device_kind for device in jax.devices("cpu")],
@@ -271,8 +286,13 @@ def main() -> None:
         "route_edge_return_identity_exact": bool(np.array_equal(expected_edges, returned_route_edges)),
         "collective_boundaries": [boundary.__dict__ for boundary in plan.collectives],
         "input_adjoint_weight_abi": plan.input_adjoint_weight_abi.__dict__,
+        "input_adjoint_resources": asdict(plan.input_adjoint_resources),
+        "primary_input_adjoint_resources_per_rank": asdict(
+            audit_segmented_input_adjoint_resources(primary_input_adjoint)
+        ),
         "maximum_absolute_error": maximum_errors,
         "mean_absolute_error": mean_errors,
+        "numerical_error": numerical_errors,
         "deterministic": deterministic,
         "torch_free": "torch" not in handler_hlo.lower(),
     }

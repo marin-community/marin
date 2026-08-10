@@ -97,10 +97,22 @@ owns the edge-weight Map and source-ordered FP32 feature Fold that produces
 post-selection route-weight cotangents. Exact `RelationPlan` metadata binds
 each received source/rank row to its rank-local padded rows and preserves the
 original source-item/route-slot identity for return. The routed input-adjoint
-handler uses identity source indices so it emits one payload per padded
-relation row; JAX transport returns those payloads before the generated
-source-indexed Fold. Existing typed-FFI families remain assigned to the W2/W13
-input adjoints, group-batched weight Contracts, and source Fold.
+handler consumes explicit fixed-capacity `[expert, capacity, feature]` segments
+and emits one input-cotangent payload per padded relation row. It performs one
+group-batched W2 input-adjoint Contract, the generated pair-Map VJP, and one
+group-batched W13 input-adjoint Contract. Transport remains outside the handler
+and returns those payloads before the generated source-indexed Fold. Separate
+typed-FFI families remain assigned to the two group-batched weight Contracts
+and source Fold.
+
+An earlier specialization was rejected before GPU execution because it expanded
+every local row across the entire expert axis. At the primary per-rank shape
+`E=96, C=256, H=7168, I=3072`, it implied 106,803,757,056 bytes of
+intermediates, 14,495,514,624 scalar Map items, and 96 times the required
+Contract work. The replacement's non-allocating audit reports 805,306,368 bytes
+across projection scratch and outputs, 150,994,944 Map items addressed with
+64-bit indices, and 3,246,995,275,776 Contract FLOPs. This is a static resource
+claim, not a latency result.
 
 A one-device JAX test compares the new edge adapter with the VJP of the natural
 weighted Fold. Padded BF16 edge cotangents and FP32 route-weight cotangents are
@@ -114,10 +126,12 @@ only naming its generator. A fixed-capacity `RelationPlan` gives every expert
 the same physical row capacity and uses a dense source/rank exchange domain, so
 routing mutations change runtime indices and validity without changing handler
 shapes. The transformed StableHLO contains one call each for the edge Map/Fold,
-input-adjoint Contract/Map/Contract/identity-Fold, two weight Contracts, and the
+input-adjoint segmented Contract/Map/Contract, two weight Contracts, and the
 post-return source Fold. Forward-layout W2 and W13 weights are explicitly
-transposed into the input-adjoint Contract ABI. The router pullback remains
-ordinary JAX dot, gather, Map, and Fold algebra.
+transposed within each expert into the input-adjoint Contract ABI. Concatenated
+W13 weight cotangents are split into natural gate/up optimizer storage outside
+the generic handler. The router pullback remains ordinary JAX dot, gather, Map,
+and Fold algebra.
 
 On four forced CPU devices, JAX lowers one shard-mapped reverse graph containing
 the five generic handlers, all three payload-only transports, the generated
@@ -127,7 +141,9 @@ Torch or opaque semantic target. The same devices execute an independent exact
 payload-only all-to-all round trip. The natural JAX whole-program VJP and the
 decomposed generated-stage reference agree within `0.000717` maximum and
 `0.000134` mean absolute error under the BF16 policy; every decomposed output
-and cotangent repeats bitwise. Evidence is stored under
+and cotangent repeats bitwise. A nonsquare hidden/intermediate fixture, an empty
+expert, and nonuniform occupancy cover the segmented and transposed input-weight
+ABI. Evidence is stored under
 `benchmarks/artifacts/distributed_expert_jax_module_cpu_v0`.
 
 This is still not a distributed GPU result. CPU cannot compile the CUDA

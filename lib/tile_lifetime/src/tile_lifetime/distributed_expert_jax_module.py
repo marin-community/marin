@@ -18,27 +18,28 @@ from tile_lifetime.expert_parallel_training_runtime import execute_distributed_e
 from tile_lifetime.jax_relation_edge_reverse_ffi import call_cuda_relation_edge_reverse_ffi
 from tile_lifetime.jax_routed_reverse_ffi import (
     call_cuda_group_batched_contract_ffi,
-    call_cuda_routed_input_adjoint_ffi,
+    call_cuda_segmented_input_adjoint_ffi,
     call_cuda_source_indexed_fold_ffi,
 )
 from tile_lifetime.relation import RelationPlan, build_fixed_capacity_relation_plan
 from tile_lifetime.xla_hlo_recovery import EntryRegionValue
 from tile_lifetime.xla_relation_program_recovery import (
-    RoutedInputAdjointFfiOperand,
-    RoutedInputAdjointFfiOperandRole,
     RoutedInputAdjointTypedFfiCodegenPlan,
     RoutedWeightGradientFfiOperand,
     RoutedWeightGradientFfiOperandRole,
     RoutedWeightGradientTypedFfiCodegenPlan,
-    SegmentedLayoutIndexMap,
-)
-from tile_lifetime.xla_routed_input_adjoint_ffi import (
-    GeneratedRoutedInputAdjointFfi,
-    generate_cuda_routed_input_adjoint_ffi,
 )
 from tile_lifetime.xla_routed_weight_gradient_ffi import (
     GeneratedGroupBatchedContractFfi,
     generate_cuda_group_batched_contract_ffi,
+)
+from tile_lifetime.xla_segmented_input_adjoint_ffi import (
+    GeneratedSegmentedInputAdjointFfi,
+    SegmentedInputAdjointFfiPlan,
+    SegmentedInputAdjointResourceAudit,
+    audit_segmented_input_adjoint_resources,
+    generate_cuda_segmented_input_adjoint_ffi,
+    plan_segmented_input_adjoint_ffi,
 )
 from tile_lifetime.xla_source_indexed_fold_ffi import (
     GeneratedSourceIndexedFoldFfi,
@@ -72,10 +73,10 @@ class InputAdjointWeightAbi:
     """Forward storage and generated reverse Contract weight layouts."""
 
     stored_down: tuple[int, int, int]
-    generated_down_input_adjoint: tuple[int, int]
+    generated_down_input_adjoint: tuple[int, int, int]
     stored_gate_up: tuple[int, int, int]
-    generated_gate_up_input_adjoint: tuple[int, int]
-    transformation: str = "transpose each forward Contract weight, concatenate gate/up, then reshape"
+    generated_gate_up_input_adjoint: tuple[int, int, int]
+    transformation: str = "transpose each forward Contract weight within each segment, then concatenate gate/up"
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,8 @@ class GeneratedDistributedExpertHandlers:
     """Instantiated generic reverse handler sources for one rank shape."""
 
     relation_edge_target: str
-    input_adjoint_plan: RoutedInputAdjointTypedFfiCodegenPlan
-    input_adjoint: GeneratedRoutedInputAdjointFfi
+    input_adjoint_plan: SegmentedInputAdjointFfiPlan
+    input_adjoint: GeneratedSegmentedInputAdjointFfi
     weight_gradient_plans: tuple[RoutedWeightGradientTypedFfiCodegenPlan, RoutedWeightGradientTypedFfiCodegenPlan]
     weight_gradients: tuple[GeneratedGroupBatchedContractFfi, GeneratedGroupBatchedContractFfi]
     source_fold_plan: SourceIndexedFoldTypedFfiPlan
@@ -111,6 +112,7 @@ class DistributedExpertJaxModulePlan:
     destination_capacity: int
     handlers: GeneratedDistributedExpertHandlers
     input_adjoint_weight_abi: InputAdjointWeightAbi
+    input_adjoint_resources: SegmentedInputAdjointResourceAudit
     collectives: tuple[JaxPayloadCollectiveBoundary, ...]
     ad_owner: str = "JAX VJP over ordinary router Contract, top-k values, and normalized route weights"
     runtime_dependencies: tuple[str, ...] = ("JAX/XLA typed FFI", "CUDA runtime", "cuBLAS")
@@ -126,6 +128,44 @@ class DistributedExpertTrainingResult:
     gate_weight_cotangent: np.ndarray
     up_weight_cotangent: np.ndarray
     down_weight_cotangent: np.ndarray
+
+
+@dataclass(frozen=True)
+class NumericalErrorMetrics:
+    """Pointwise absolute, relative, and BF16-representable deviation."""
+
+    maximum_absolute: float
+    mean_absolute: float
+    maximum_relative: float
+    mean_relative: float
+    maximum_bf16_ulp: int
+
+
+def compare_numerical_arrays(expected: np.ndarray, actual: np.ndarray) -> NumericalErrorMetrics:
+    """Report pointwise error without hiding near-zero or BF16-scale deviations."""
+    expected_f32 = np.asarray(expected, dtype=np.float32)
+    actual_f32 = np.asarray(actual, dtype=np.float32)
+    if expected_f32.shape != actual_f32.shape:
+        raise ValueError(f"comparison shape mismatch: {expected_f32.shape} != {actual_f32.shape}")
+    absolute = np.abs(actual_f32 - expected_f32)
+    relative = absolute / np.maximum(np.abs(expected_f32), np.finfo(np.float32).tiny)
+    expected_bf16 = np.asarray(jnp.asarray(expected_f32, dtype=jnp.bfloat16), dtype=np.float32)
+    actual_bf16 = np.asarray(jnp.asarray(actual_f32, dtype=jnp.bfloat16), dtype=np.float32)
+    expected_ordered = _ordered_bf16(expected_bf16)
+    actual_ordered = _ordered_bf16(actual_bf16)
+    return NumericalErrorMetrics(
+        maximum_absolute=float(np.max(absolute, initial=0.0)),
+        mean_absolute=float(np.mean(absolute)) if absolute.size else 0.0,
+        maximum_relative=float(np.max(relative, initial=0.0)),
+        mean_relative=float(np.mean(relative)) if relative.size else 0.0,
+        maximum_bf16_ulp=int(np.max(np.abs(actual_ordered - expected_ordered), initial=0)),
+    )
+
+
+def _ordered_bf16(values: np.ndarray) -> np.ndarray:
+    bits = (np.asarray(values, dtype=np.float32).view(np.uint32) >> np.uint32(16)).astype(np.uint16)
+    magnitude = (bits & np.uint16(0x7FFF)).astype(np.int64)
+    return np.where(bits & np.uint16(0x8000), 0x8000 - magnitude, 0x8000 + magnitude)
 
 
 def plan_distributed_expert_jax_module(
@@ -157,21 +197,28 @@ def plan_distributed_expert_jax_module(
     if len(edge_shapes) != 1:
         raise ValueError("fixed-capacity relation produced rank-dependent edge handler shapes")
     relation_edge = composition.ranks[0].edge_reverse
-    local_rows = local_experts * destination_capacity
-    specialized_input = _specialize_input_adjoint(
+    specialized_input = plan_segmented_input_adjoint_ffi(
         input_adjoint_template,
-        local_rows=local_rows,
-        local_experts=local_experts,
-        hidden=config.hidden,
-        intermediate=config.intermediate,
+        segment_count=local_experts,
+        capacity=destination_capacity,
+        input_features=config.hidden,
+        intermediate_features=config.intermediate,
     )
-    specialized_weights = tuple(
+    specialized_weights = (
         _specialize_weight_gradient(
-            template,
+            weight_gradient_templates[0],
             groups=local_experts,
             reduction=destination_capacity,
-        )
-        for template in weight_gradient_templates
+            lhs_features=config.hidden,
+            rhs_features=2 * config.intermediate,
+        ),
+        _specialize_weight_gradient(
+            weight_gradient_templates[1],
+            groups=local_experts,
+            reduction=destination_capacity,
+            lhs_features=config.intermediate,
+            rhs_features=config.hidden,
+        ),
     )
     specialized_source_fold = _specialize_source_fold(
         source_fold_template,
@@ -182,7 +229,7 @@ def plan_distributed_expert_jax_module(
     handlers = GeneratedDistributedExpertHandlers(
         relation_edge_target=relation_edge.target,
         input_adjoint_plan=specialized_input,
-        input_adjoint=generate_cuda_routed_input_adjoint_ffi(
+        input_adjoint=generate_cuda_segmented_input_adjoint_ffi(
             specialized_input,
             target=f"{target_prefix}.input_adjoint",
         ),
@@ -213,7 +260,11 @@ def plan_distributed_expert_jax_module(
         JaxPayloadCollectiveBoundary(
             "input_adjoint_return_transport",
             "destination owners -> source owners",
-            (local_rows, config.hidden),
+            (
+                relation.destination_rank_count,
+                config.source_items_per_rank * relation.route_slots,
+                config.hidden,
+            ),
         ),
         JaxPayloadCollectiveBoundary(
             "route_weight_return_transport",
@@ -230,10 +281,11 @@ def plan_distributed_expert_jax_module(
         handlers=handlers,
         input_adjoint_weight_abi=InputAdjointWeightAbi(
             stored_down=(local_experts, config.intermediate, config.hidden),
-            generated_down_input_adjoint=(local_experts * config.hidden, config.intermediate),
+            generated_down_input_adjoint=(local_experts, config.hidden, config.intermediate),
             stored_gate_up=(local_experts, config.hidden, config.intermediate),
-            generated_gate_up_input_adjoint=(local_experts * 2 * config.intermediate, config.hidden),
+            generated_gate_up_input_adjoint=(local_experts, 2 * config.intermediate, config.hidden),
         ),
+        input_adjoint_resources=audit_segmented_input_adjoint_resources(specialized_input),
         collectives=collectives,
     )
     verify_distributed_expert_jax_module(plan)
@@ -435,11 +487,25 @@ def prepare_input_adjoint_weights(
     """Transpose natural forward weights into generic reverse Contract operands."""
     if gate_weight.shape != up_weight.shape:
         raise ValueError("gate and up forward Contract weights must share one layout")
-    down_rhs = jnp.swapaxes(down_weight, -1, -2).reshape(-1, down_weight.shape[-2])
+    down_rhs = jnp.swapaxes(down_weight, -1, -2)
     gate_rhs = jnp.swapaxes(gate_weight, -1, -2)
     up_rhs = jnp.swapaxes(up_weight, -1, -2)
-    gate_up_rhs = jnp.concatenate((gate_rhs, up_rhs), axis=1).reshape(-1, gate_weight.shape[-2])
+    gate_up_rhs = jnp.concatenate((gate_rhs, up_rhs), axis=1)
     return down_rhs, gate_up_rhs
+
+
+def rebind_pair_weight_cotangent(
+    pair_weight_cotangent: jax.Array,
+    *,
+    intermediate_features: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Split a generic concatenated pair-Map Contract result into natural parameter storage."""
+    if pair_weight_cotangent.ndim != 3 or pair_weight_cotangent.shape[-1] != 2 * intermediate_features:
+        raise ValueError("pair weight cotangent does not match the natural two-operand Map storage")
+    return (
+        pair_weight_cotangent[..., :intermediate_features],
+        pair_weight_cotangent[..., intermediate_features:],
+    )
 
 
 def selected_route_weights(source: jax.Array, router_weight: jax.Array, route_indices: jax.Array) -> jax.Array:
@@ -520,7 +586,6 @@ def lower_shard_mapped_handler_module_stablehlo(
         route_padded_rows,
         route_weights,
         saved_edge_output,
-        row_local_expert,
         row_valid,
         saved_pair,
         padded_source,
@@ -543,7 +608,6 @@ def lower_shard_mapped_handler_module_stablehlo(
             route_padded_rows[0],
             route_weights[0],
             saved_edge_output[0],
-            row_local_expert[0],
             row_valid[0],
             saved_pair[0],
             padded_source[0],
@@ -585,10 +649,15 @@ def lower_shard_mapped_handler_module_stablehlo(
             router_weight,
             route_indices[0],
         )
+        gate_cotangent, up_cotangent = rebind_pair_weight_cotangent(
+            w13_cotangent,
+            intermediate_features=plan.config.intermediate,
+        )
         return (
             input_cotangent[None],
             jax.lax.psum(router_weight_cotangent, "expert"),
-            w13_cotangent[None],
+            gate_cotangent[None],
+            up_cotangent[None],
             w2_cotangent[None],
         )
 
@@ -597,7 +666,6 @@ def lower_shard_mapped_handler_module_stablehlo(
         jax.sharding.PartitionSpec("expert", None, None),
         jax.sharding.PartitionSpec("expert", None, None),
         jax.sharding.PartitionSpec("expert", None, None),
-        jax.sharding.PartitionSpec("expert", None),
         jax.sharding.PartitionSpec("expert", None),
         jax.sharding.PartitionSpec("expert", None, None),
         jax.sharding.PartitionSpec("expert", None, None, None),
@@ -614,6 +682,7 @@ def lower_shard_mapped_handler_module_stablehlo(
     out_specs = (
         jax.sharding.PartitionSpec("expert", None, None),
         jax.sharding.PartitionSpec(None, None),
+        jax.sharding.PartitionSpec("expert", None, None, None),
         jax.sharding.PartitionSpec("expert", None, None, None),
         jax.sharding.PartitionSpec("expert", None, None, None),
     )
@@ -651,13 +720,18 @@ def _local_handler_function(plan: DistributedExpertJaxModulePlan):
     source_finalize = _local_source_finalize_function(plan)
 
     def transformed(*arguments):
-        destination = destination_handlers(*arguments[:12])
-        input_cotangent, router_weight_cotangent = source_finalize(*arguments[12:])
+        destination = destination_handlers(*arguments[:11])
+        input_cotangent, router_weight_cotangent = source_finalize(*arguments[11:])
+        gate_cotangent, up_cotangent = rebind_pair_weight_cotangent(
+            destination[2],
+            intermediate_features=plan.config.intermediate,
+        )
         return (
             input_cotangent,
             router_weight_cotangent,
             destination[0],
-            destination[2],
+            gate_cotangent,
+            up_cotangent,
             destination[3],
         )
 
@@ -678,7 +752,6 @@ def _local_destination_handler_function(plan: DistributedExpertJaxModulePlan):
         route_padded_rows,
         route_weights,
         saved_edge_output,
-        row_local_expert,
         row_valid,
         saved_pair,
         padded_source,
@@ -695,34 +768,15 @@ def _local_destination_handler_function(plan: DistributedExpertJaxModulePlan):
             route_weights,
             saved_edge_output,
         )
-        segment = jax.nn.one_hot(row_local_expert, local_experts, dtype=jnp.bfloat16)
-        segment = segment * row_valid[:, None].astype(jnp.bfloat16)
-        first_lhs = (padded_cotangent[:, None, :] * segment[:, :, None]).reshape(local_rows, local_experts * hidden)
-        segment_validity = jnp.broadcast_to(
-            segment.T[:, :, None].astype(jnp.bool_),
-            (local_experts, local_rows, 2 * intermediate),
-        )
         down_rhs, gate_up_rhs = prepare_input_adjoint_weights(down_weight, gate_weight, up_weight)
-        input_operands = _input_adjoint_operands(
-            handlers.input_adjoint_plan,
-            second_contract_rhs=gate_up_rhs,
-            fold_initial=jnp.zeros((local_rows, hidden), dtype=jnp.bfloat16),
-            fold_indices=jnp.arange(local_rows, dtype=jnp.int32)[:, None],
-            segment_validity=segment_validity,
-            first_contract_lhs=first_lhs,
-            first_contract_rhs=down_rhs,
-            map_auxiliary=saved_pair,
-        )
-        pair_cotangent_panels, edge_input_cotangent = call_cuda_routed_input_adjoint_ffi(
+        pair_cotangent, segmented_input_cotangent = call_cuda_segmented_input_adjoint_ffi(
             handlers.input_adjoint,
             handlers.input_adjoint_plan,
-            input_operands,
-        )
-        pair_cotangent = jnp.stack(
-            tuple(
-                pair_cotangent_panels[expert, expert * capacity : (expert + 1) * capacity]
-                for expert in range(local_experts)
-            )
+            padded_cotangent.reshape(local_experts, capacity, hidden),
+            saved_pair.reshape(local_experts, capacity, 2 * intermediate),
+            row_valid.reshape(local_experts, capacity),
+            down_rhs,
+            gate_up_rhs,
         )
         w13_cotangent = call_cuda_group_batched_contract_ffi(
             handlers.weight_gradients[0],
@@ -736,7 +790,12 @@ def _local_destination_handler_function(plan: DistributedExpertJaxModulePlan):
             saved_hidden,
             padded_cotangent.reshape(local_experts, capacity, hidden),
         )
-        return edge_input_cotangent, route_weight_cotangent, w13_cotangent, w2_cotangent
+        return (
+            segmented_input_cotangent.reshape(local_rows, hidden),
+            route_weight_cotangent,
+            w13_cotangent,
+            w2_cotangent,
+        )
 
     return destination_handlers
 
@@ -788,7 +847,6 @@ def _local_handler_arguments(plan: DistributedExpertJaxModulePlan) -> tuple[jax.
         jnp.zeros((received_rows, route_slots), dtype=jnp.int32),
         jnp.zeros((received_rows, route_slots), dtype=jnp.float32),
         jnp.zeros((local_rows, hidden), dtype=jnp.bfloat16),
-        jnp.zeros((local_rows,), dtype=jnp.int32),
         jnp.zeros((local_rows,), dtype=jnp.bool_),
         jnp.zeros((local_rows, 2 * intermediate), dtype=jnp.bfloat16),
         jnp.zeros((local_experts, capacity, hidden), dtype=jnp.bfloat16),
@@ -820,10 +878,6 @@ def _shard_mapped_handler_arguments(plan: DistributedExpertJaxModulePlan) -> tup
         jnp.asarray(np.stack(tuple(rank.metadata.route_padded_rows for rank in plan.composition.ranks))),
         jnp.asarray(np.stack(tuple(rank.metadata.route_weights for rank in plan.composition.ranks))),
         jnp.zeros((rank_count, local_rows, hidden), dtype=jnp.bfloat16),
-        jnp.broadcast_to(
-            jnp.arange(local_rows, dtype=jnp.int32)[None, :] // capacity,
-            (rank_count, local_rows),
-        ),
         jnp.asarray(return_metadata.valid),
         jnp.zeros((rank_count, local_rows, 2 * intermediate), dtype=jnp.bfloat16),
         jnp.zeros((rank_count, local_experts, capacity, hidden), dtype=jnp.bfloat16),
@@ -839,104 +893,14 @@ def _shard_mapped_handler_arguments(plan: DistributedExpertJaxModulePlan) -> tup
     )
 
 
-def _input_adjoint_operands(
-    plan: RoutedInputAdjointTypedFfiCodegenPlan,
-    **values: jax.Array,
-) -> tuple[jax.Array, ...]:
-    return tuple(values[operand.role.value] for operand in plan.operands)
-
-
-def _specialize_input_adjoint(
-    template: RoutedInputAdjointTypedFfiCodegenPlan,
-    *,
-    local_rows: int,
-    local_experts: int,
-    hidden: int,
-    intermediate: int,
-) -> RoutedInputAdjointTypedFfiCodegenPlan:
-    if tuple(output.feature_extent for output in template.map_stage.scalar_outputs) != (
-        intermediate,
-        intermediate,
-    ):
-        raise ValueError("natural reverse Map template does not match the requested intermediate dimension")
-    first_contract = replace(template.contracts[0], output_shape=f"bf16[{local_rows},{intermediate}]{{1,0}}")
-    second_contract = replace(template.contracts[1], output_shape=f"bf16[{local_rows},{hidden}]{{1,0}}")
-    index_map = SegmentedLayoutIndexMap(
-        logical_edge_count=local_rows,
-        logical_feature_extent=2 * intermediate,
-        segment_count=local_experts,
-        padded_row_extent=local_rows,
-        row_stride=1,
-        row_offset=0,
-        feature_stride=1,
-        segment_stride=2 * intermediate,
-    )
-    segmented_layout = replace(
-        template.segmented_layout,
-        index_map=index_map,
-        physical_shape=f"bf16[{local_rows},{local_experts * 2 * intermediate}]{{1,0}}",
-        weight_shape=f"bf16[{local_experts * 2 * intermediate},{hidden}]{{1,0}}",
-    )
-    map_stage = replace(
-        template.map_stage,
-        logical_row_extent=local_rows,
-        physical_output_shape=segmented_layout.physical_shape,
-        segmented_layout=segmented_layout,
-    )
-    fold_stage = replace(template.fold_stage, output_shape=f"bf16[{local_rows},{hidden}]{{1,0}}")
-    shapes = {
-        RoutedInputAdjointFfiOperandRole.SECOND_CONTRACT_RHS: (
-            "second_contract_rhs",
-            f"bf16[{local_experts * 2 * intermediate},{hidden}]{{1,0}}",
-        ),
-        RoutedInputAdjointFfiOperandRole.FOLD_INITIAL: ("fold_initial", f"bf16[{local_rows},{hidden}]{{1,0}}"),
-        RoutedInputAdjointFfiOperandRole.FOLD_INDICES: ("fold_indices", f"s32[{local_rows},1]{{1,0}}"),
-        RoutedInputAdjointFfiOperandRole.SEGMENT_VALIDITY: (
-            "segment_validity",
-            f"pred[{local_experts},{local_rows},{2 * intermediate}]{{2,1,0}}",
-        ),
-        RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_LHS: (
-            "first_contract_lhs",
-            f"bf16[{local_rows},{local_experts * hidden}]{{1,0}}",
-        ),
-        RoutedInputAdjointFfiOperandRole.FIRST_CONTRACT_RHS: (
-            "first_contract_rhs",
-            f"bf16[{local_experts * hidden},{intermediate}]{{1,0}}",
-        ),
-        RoutedInputAdjointFfiOperandRole.MAP_AUXILIARY: (
-            "map_auxiliary",
-            f"bf16[{local_rows},{2 * intermediate}]{{1,0}}",
-        ),
-    }
-    operands = tuple(
-        RoutedInputAdjointFfiOperand(operand.role, EntryRegionValue(*shapes[operand.role]))
-        for operand in template.operands
-    )
-    region = replace(
-        template.region,
-        contracts=(first_contract, second_contract),
-        map_stage=map_stage,
-        fold_stage=fold_stage,
-    )
-    return replace(
-        template,
-        region=region,
-        contracts=(first_contract, second_contract),
-        map_stage=map_stage,
-        fold_stage=fold_stage,
-        operands=operands,
-        segmented_layout=segmented_layout,
-    )
-
-
 def _specialize_weight_gradient(
     template: RoutedWeightGradientTypedFfiCodegenPlan,
     *,
     groups: int,
     reduction: int,
+    lhs_features: int,
+    rhs_features: int,
 ) -> RoutedWeightGradientTypedFfiCodegenPlan:
-    lhs_features = _last_dimension(template.operands[0].value.shape)
-    rhs_features = _last_dimension(template.operands[1].value.shape)
     lhs = RoutedWeightGradientFfiOperand(
         RoutedWeightGradientFfiOperandRole.LHS,
         EntryRegionValue("lhs", f"bf16[{groups},{reduction},{lhs_features}]{{2,1,0}}"),
@@ -973,8 +937,3 @@ def _specialize_source_fold(
         output_shape=output_shape,
         external_users=(),
     )
-
-
-def _last_dimension(shape: str) -> int:
-    dimensions = shape.split("[", 1)[1].split("]", 1)[0]
-    return int(dimensions.rsplit(",", 1)[-1])
