@@ -6,7 +6,6 @@ import importlib
 import io
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -287,19 +286,6 @@ def test_real_repository_capsule_iris_bundle_is_complete_and_under_limit(tmp_pat
         ("git", "clone", "--quiet", "--no-local", "--depth=1", repository.as_uri(), str(source)),
         check=True,
     )
-    for relative in (
-        payload.ALLOWLIST_RELATIVE_PATH,
-        Path(".agents/projects/tile_lifetime_compiler/h100_contract_map_backend_evidence.md"),
-        Path("lib/tile_lifetime/benchmarks/h100_contract_map_source_payload.py"),
-        Path("lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py"),
-    ):
-        destination = source / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(repository / relative, destination)
-    _git(source, "config", "user.name", "Capsule Test")
-    _git(source, "config", "user.email", "capsule@example.com")
-    _git(source, "add", ".")
-    _git(source, "commit", "--quiet", "-m", "candidate capsule")
     source_sha = _git(source, "rev-parse", "HEAD")
     source_tree = _git(source, "rev-parse", "HEAD^{tree}")
     prepared = tmp_path / "prepared"
