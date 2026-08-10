@@ -203,5 +203,24 @@ run. A benchmark gate for the exact Grug shapes now exists at
   accepts additional pinned pip packages instead of duplicating its environment construction.
 - Gate order: use one currently available four-GPU node to validate the TE wheel tuple and API, then
   submit the 16-node gang. Do not occupy 64 GPUs for dependency resolution or a known API mismatch.
+- Source-build probe: job `/dlwh/grug-cp-te-build-bench-20260810-1454` tried TE commit
+  `598b9eacbe9fc34ec105cf8c12f303108ca434ca` on one four-GB200 node. CMake selected
+  `/app/.venv/bin/nvcc` but failed compiler identification because `cuda_runtime.h` was absent. The
+  Iris GPU setup stages CUDA 13 compiler binaries and runtime libraries, not CUDA development
+  headers. The job failed before kernel compilation and released the node.
+- Qualified base tuple from that task: Python 3.12.13; JAX, jaxlib, and CUDA 13 plugin 0.11.0; CUDA
+  runtime 13.0.96; cuDNN 9.19.0.56; NCCL 2.30.7; four visible GB200 GPUs. TE was absent before the
+  probe.
+- Decision: retain commit `598b9eacbe9fc34ec105cf8c12f303108ca434ca` as source/API provenance.
+  Run the published TE 2.17.1 CUDA 13 wheels next; do not add CUDA headers to Marin's task image
+  unless the release wheel lacks the required CP API.
+- Release-build probe: parent `/dlwh/grug-cp-te217-s262k-ring1-coord`, child
+  `/dlwh/grug-cp-te217-s262k-ring1-coord/grug-train-grug-cp-te217-s262k-ring1`. The aarch64
+  `transformer-engine-jax==2.17.1` package is an sdist. Its isolated build omitted
+  `nvtx3/nvToolsExt.h`, pulled both CUDA 12 and explicit CUDA 13 core packages, and failed before JAX
+  initialization. The child and its four-GB200 allocation terminated cleanly.
+- Environment fix: install only `transformer_engine[jax]==2.17.1` with `uv pip install
+  --no-build-isolation`. The non-isolated setup can see the existing CUDA 13 compiler and
+  `nvidia-nvtx-cu12` header package, allowing TE's setup logic to select its matching core package.
 - Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
   64-GPU job when the environment gate passes.

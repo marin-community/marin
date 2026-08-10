@@ -24,9 +24,11 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 HERO_NODES_PER_RACK = 16
 HERO_GPUS_PER_NODE = 4
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
-TRANSFORMER_ENGINE_PACKAGES = (
+TRANSFORMER_ENGINE_PIP_ARGS = (
+    # The aarch64 JAX package is an sdist. Its isolated build omits the NVTX headers and cannot
+    # detect the CUDA 13 toolchain already installed by Marin's GPU extra.
+    "--no-build-isolation",
     "transformer_engine[jax]==2.17.1",
-    "transformer_engine_cu13==2.17.1",
 )
 BENCHMARK_PATH = Path("lib/levanter/scripts/bench/bench_grug_context_parallel_attention.py")
 
@@ -97,7 +99,7 @@ def run_context_parallel_attention_benchmark(config: ContextParallelAttentionBen
         resources=config.resources,
         max_retries_failure=0,
         processes_per_task=HERO_PROCESSES_PER_TASK,
-        pip_packages=TRANSFORMER_ENGINE_PACKAGES,
+        pip_packages=TRANSFORMER_ENGINE_PIP_ARGS,
     )
 
 
