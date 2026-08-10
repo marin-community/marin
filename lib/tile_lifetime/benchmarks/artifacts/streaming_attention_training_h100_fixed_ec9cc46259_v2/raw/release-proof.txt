@@ -1,0 +1,8 @@
+Task: /dlwh/shuttle-attn-training-h100-actual-20260809
+Terminal state: failed (exit 1)
+
+Release query:
+kubectl --context coreweave -n iris get pods -l iris.task_id=dlwh-shuttle-attn-training-h100-actual-20260809-0
+
+Result:
+No resources found

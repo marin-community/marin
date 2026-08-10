@@ -1,0 +1,19 @@
+{
+  "architecture": "compute_90",
+  "cccl": "13.3.3.4.1",
+  "command": [
+    "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc",
+    "--std=c++17",
+    "--compile",
+    "--gpu-architecture=compute_90",
+    "/tmp/shuttle-attention-training-h100-fixed/header-smoke/cuda13_header_smoke.cu",
+    "--output-file",
+    "/tmp/shuttle-attention-training-h100-fixed/header-smoke/cuda13_header_smoke.o"
+  ],
+  "nvcc": "/uv/cache/archive-v0/bhuxRAeuB0_bBRrhZjq7J/nvidia/cu13/bin/nvcc",
+  "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:12:51_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0",
+  "object_bytes": 10288,
+  "status": "cuda13_headers_compiled",
+  "stderr": "",
+  "stdout": ""
+}
