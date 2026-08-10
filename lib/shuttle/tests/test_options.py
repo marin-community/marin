@@ -27,11 +27,14 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
     assert options == {
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
-            '{"numerics":"source_ordered","schema_version":1,'
+            '{"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
     }
+    assert options_digest(numerics=Numerics.SOURCE_ORDERED, tuning=_tuning()) == (
+        "710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359"
+    )
 
 
 def test_numerical_policies_have_distinct_option_payloads_and_digests() -> None:
@@ -56,7 +59,7 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
     options = compiler_options(numerics=Numerics.FAST, tuning=tuning)
 
     assert options["xla_shuttle_options"] == (
-        '{"numerics":"fast","schema_version":1,'
+        '{"numerics":"fast","pipeline_abi_version":1,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )

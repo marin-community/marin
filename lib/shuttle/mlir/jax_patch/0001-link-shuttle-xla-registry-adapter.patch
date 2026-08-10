@@ -1,0 +1,11 @@
+diff --git a/jaxlib/BUILD b/jaxlib/BUILD
+--- a/jaxlib/BUILD
++++ b/jaxlib/BUILD
+@@ -410,6 +410,7 @@ nanobind_pywrap_extension(
+         "@llvm-project//llvm:Support",
+         "@llvm-project//mlir:IR",
+         "@nanobind",
++        "@shuttle_mlir//:ShuttleXlaRegistryAdapter",
+         "@tsl//tsl/platform",
+         "@xla//third_party/python_runtime:headers",  # buildcleaner: keep
+         "@xla//xla:literal",

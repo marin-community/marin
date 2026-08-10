@@ -141,9 +141,29 @@ cc_library(
     strip_include_prefix = "include",
     deps = [
         ":ShuttlePasses",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
+    ],
+)
+
+# Link this target into the final CPU jaxlib module. Keeping static
+# registration in a separate alwayslink library preserves XLA's generic hook.
+cc_library(
+    name = "ShuttleXlaRegistryAdapter",
+    srcs = ["lib/Transforms/XlaRegistryRegistration.cc"],
+    alwayslink = True,
+    deps = [
+        ":ShuttleXlaRegistration",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@xla//xla/pjrt:stablehlo_module_transform",
     ],
 )
 
@@ -201,6 +221,41 @@ cc_test(
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:SCFDialect",
         "@stablehlo//:register",
+    ],
+)
+
+cc_test(
+    name = "xla_registration_test",
+    srcs = ["test/xla-registration-test.cc"],
+    deps = [
+        ":ShuttleXlaRegistration",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@stablehlo//:register",
+    ],
+)
+
+cc_test(
+    name = "xla_registry_adapter_test",
+    srcs = ["test/xla-registry-adapter-test.cc"],
+    deps = [
+        ":ShuttlePasses",
+        ":ShuttleXlaRegistryAdapter",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:SCFDialect",
+        "@stablehlo//:register",
+        "@xla//xla/pjrt:stablehlo_module_transform",
     ],
 )
 

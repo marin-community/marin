@@ -60,6 +60,12 @@ Unknown fields and workload labels are rejected. `SOURCE_ORDERED` and `FAST`
 always have distinct option and cache identities, even while they select the
 same physical implementation.
 
+The canonical JSON contains `schema_version = 1` and
+`pipeline_abi_version = 1`. The schema version changes when the wire shape
+changes. The pipeline ABI version changes when existing fields acquire new
+compiler semantics, ensuring that such changes cannot reuse an executable
+compiled under the earlier semantics.
+
 ## First dialect slice
 
 The first native slice contains only the operations required to prove a generic

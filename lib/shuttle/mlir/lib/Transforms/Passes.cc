@@ -57,6 +57,16 @@ namespace mlir::shuttle {
 
 namespace {
 
+ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
+  ShuttlePipelineOptions options;
+  options.numerics = numerics;
+  if (numerics == NumericalPolicy::Fast) {
+    options.canonicalOptions =
+        R"json({"numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+  }
+  return options;
+}
+
 constexpr llvm::StringLiteral kSourceRefsAttribute = "shuttle.source_refs";
 constexpr llvm::StringLiteral kSelectedAttribute = "shuttle.selected";
 constexpr llvm::StringLiteral kFunctionOrdinalAttribute =
@@ -345,7 +355,8 @@ DictionaryAttr zeroResultRecord(Operation *operation) {
 
 FailureOr<DictionaryAttr>
 buildCoverageManifest(ModuleOp module, ArrayRef<CandidateComponent> components,
-                      NumericalPolicy numerics, StringRef canonicalTuning) {
+                      NumericalPolicy numerics, StringRef canonicalOptions,
+                      StringRef canonicalTuning) {
   MLIRContext *context = module.getContext();
   llvm::SmallDenseSet<Attribute> selected;
   SmallVector<Attribute> selectedRegions;
@@ -444,15 +455,17 @@ buildCoverageManifest(ModuleOp module, ArrayRef<CandidateComponent> components,
   }
 
   std::string tuningDigest = sha256(canonicalTuning);
-  std::string semanticPolicy =
-      (policyName(numerics) + "\n" + tuningDigest).str();
   NamedAttribute fields[] = {
       NamedAttribute(StringAttr::get(context, "version"),
                      IntegerAttr::get(IntegerType::get(context, 64), 1)),
       NamedAttribute(StringAttr::get(context, "policy"),
                      StringAttr::get(context, policyName(numerics))),
       NamedAttribute(StringAttr::get(context, "policy_digest"),
-                     StringAttr::get(context, sha256(semanticPolicy))),
+                     StringAttr::get(context, sha256(canonicalOptions))),
+      NamedAttribute(StringAttr::get(context, "canonical_options"),
+                     StringAttr::get(context, canonicalOptions)),
+      NamedAttribute(StringAttr::get(context, "canonical_tuning"),
+                     StringAttr::get(context, canonicalTuning)),
       NamedAttribute(StringAttr::get(context, kManifestComplete),
                      ArrayAttr::get(context, complete)),
       NamedAttribute(StringAttr::get(context, kManifestSelectedRegions),
@@ -524,11 +537,11 @@ struct AnnotateSourcePass
 struct FormStructuralRegionsPass
     : impl::ShuttleFormStructuralRegionsPassBase<FormStructuralRegionsPass> {
   FormStructuralRegionsPass() = default;
-  explicit FormStructuralRegionsPass(NumericalPolicy numerics)
-      : numerics(numerics) {}
   FormStructuralRegionsPass(NumericalPolicy numerics,
+                            std::string canonicalOptions,
                             std::string canonicalTuning)
-      : numerics(numerics), canonicalTuning(std::move(canonicalTuning)) {}
+      : numerics(numerics), canonicalOptions(std::move(canonicalOptions)),
+        canonicalTuning(std::move(canonicalTuning)) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -561,8 +574,8 @@ struct FormStructuralRegionsPass
     }
 
     SmallVector<CandidateComponent> components = candidateComponents(module);
-    FailureOr<DictionaryAttr> manifest =
-        buildCoverageManifest(module, components, numerics, canonicalTuning);
+    FailureOr<DictionaryAttr> manifest = buildCoverageManifest(
+        module, components, numerics, canonicalOptions, canonicalTuning);
     if (failed(manifest)) {
       signalPassFailure();
       return;
@@ -671,7 +684,8 @@ private:
   }
 
   NumericalPolicy numerics = NumericalPolicy::SourceOrdered;
-  std::string canonicalTuning = "{}";
+  std::string canonicalOptions = ShuttlePipelineOptions{}.canonicalOptions;
+  std::string canonicalTuning = ShuttlePipelineOptions{}.canonicalTuning;
 };
 
 ArrayAttr affineMapsAttr(MLIRContext *context, ArrayRef<AffineMap> maps) {
@@ -1153,20 +1167,27 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
   auto selectedGroups = manifest.getAs<ArrayAttr>(kManifestSelectedRegions);
   auto policy = manifest.getAs<StringAttr>("policy");
   auto policyDigest = manifest.getAs<StringAttr>("policy_digest");
+  auto canonicalOptions = manifest.getAs<StringAttr>("canonical_options");
+  auto canonicalTuning = manifest.getAs<StringAttr>("canonical_tuning");
   auto tuningDigest = manifest.getAs<StringAttr>("tuning_digest");
   FailureOr<llvm::SmallDenseSet<Attribute>> selected =
       selectedManifestSources(manifest);
   FailureOr<llvm::SmallDenseSet<Attribute>> excluded =
       excludedManifestSources(manifest);
   if (!completeArray || !selectedGroups || !policy || !policyDigest ||
-      !tuningDigest || failed(selected) || failed(excluded)) {
+      !canonicalOptions || !canonicalTuning || !tuningDigest ||
+      failed(selected) || failed(excluded)) {
     return module.emitError("has a malformed Shuttle coverage manifest");
   }
+  std::string policyPrefix = "{\"numerics\":\"";
+  policyPrefix.append(policy.getValue().data(), policy.getValue().size());
+  policyPrefix.push_back('"');
   if ((policy.getValue() != "source_ordered" && policy.getValue() != "fast") ||
       tuningDigest.getValue().size() != 64 ||
       !llvm::all_of(tuningDigest.getValue(), llvm::isHexDigit) ||
-      policyDigest.getValue() !=
-          sha256((policy.getValue() + "\n" + tuningDigest.getValue()).str())) {
+      tuningDigest.getValue() != sha256(canonicalTuning.getValue()) ||
+      policyDigest.getValue() != sha256(canonicalOptions.getValue()) ||
+      !canonicalOptions.getValue().starts_with(policyPrefix)) {
     return module.emitError("has inconsistent Shuttle policy digests");
   }
   llvm::SmallDenseSet<Attribute> complete = attributeSet(completeArray);
@@ -1864,8 +1885,8 @@ void buildShuttleStablehloCorePipeline(
     OpPassManager &manager, const ShuttlePipelineOptions &options,
     const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation) {
   manager.addPass(createAnnotateSourcePass());
-  manager.addPass(createFormStructuralRegionsPass(options.numerics,
-                                                  options.canonicalTuning));
+  manager.addPass(createFormStructuralRegionsPass(
+      options.numerics, options.canonicalOptions, options.canonicalTuning));
   manager.addPass(createConvertStablehloToAlgebraPass());
   manager.addPass(createVerifySourceCoveragePass());
   manager.addPass(std::make_unique<EmitObserverPass>(
@@ -1943,15 +1964,11 @@ std::unique_ptr<Pass> createFormStructuralRegionsPass() {
 }
 
 std::unique_ptr<Pass>
-createFormStructuralRegionsPass(NumericalPolicy numerics) {
-  return std::make_unique<FormStructuralRegionsPass>(numerics);
-}
-
-std::unique_ptr<Pass>
 createFormStructuralRegionsPass(NumericalPolicy numerics,
+                                std::string canonicalOptions,
                                 std::string canonicalTuning) {
   return std::make_unique<FormStructuralRegionsPass>(
-      numerics, std::move(canonicalTuning));
+      numerics, std::move(canonicalOptions), std::move(canonicalTuning));
 }
 
 std::unique_ptr<Pass> createConvertStablehloToAlgebraPass() {
@@ -1995,14 +2012,15 @@ void registerShuttleStablehloPipelines() {
       "Run the complete source-ordered Shuttle StableHLO pipeline",
       [](OpPassManager &manager) {
         buildShuttleStablehloPipeline(
-            manager, ShuttlePipelineOptions{NumericalPolicy::SourceOrdered});
+            manager,
+            commandLinePipelineOptions(NumericalPolicy::SourceOrdered));
       });
   PassPipelineRegistration<>(
       "shuttle-stablehlo-fast-pipeline",
       "Run the complete fast-policy Shuttle StableHLO pipeline",
       [](OpPassManager &manager) {
         buildShuttleStablehloPipeline(
-            manager, ShuttlePipelineOptions{NumericalPolicy::Fast});
+            manager, commandLinePipelineOptions(NumericalPolicy::Fast));
       });
 }
 

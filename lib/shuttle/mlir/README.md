@@ -4,9 +4,9 @@ This directory implements the bounded native compiler-unit slice for generic
 f32 Contract and scalar Map graphs. `shuttle-opt` partitions typed StableHLO,
 converts selected regions to Shuttle algebra, checks total source coverage,
 lowers from the authoritative algebra, and removes all Shuttle semantics before
-StableHLO-to-HLO conversion. It is not the ordinary-JAX integration: the XLA
-transform hook, compiler-option schema, and persistent-cache protocol remain
-separate reviewed work.
+StableHLO-to-HLO conversion. The native compiler-option parser and pinned
+XLA/JAX registration overlays live here, but an ordinary-JAX build and the
+persistent-cache protocol remain separate acceptance work.
 
 The native code builds inside the dependency graph of the XLA revision pinned
 by JAX/JAXlib 0.10.1:
@@ -15,8 +15,9 @@ by JAX/JAXlib 0.10.1:
 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
 ```
 
-Build from a checkout of that exact XLA commit, with this directory registered
-as a local external repository:
+Build from a checkout of that exact XLA commit with the patches under
+`xla_patch` applied and this directory registered as a local external
+repository:
 
 ```starlark
 # Add to the XLA checkout's WORKSPACE for a local developer build.
@@ -33,9 +34,12 @@ bazel build @shuttle_mlir//:shuttle_ops_inc_gen
 bazel build @shuttle_mlir//:ShuttleDialect
 bazel build @shuttle_mlir//:shuttle-opt
 bazel build @shuttle_mlir//:ShuttleXlaRegistration
+bazel build @shuttle_mlir//:ShuttleXlaRegistryAdapter
 bazel build @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:pipeline_observer_test
+bazel test @shuttle_mlir//:xla_registration_test
+bazel test @shuttle_mlir//:xla_registry_adapter_test
 ```
 
 The generated-operations target is the fast preflight for ODS and TableGen
@@ -87,10 +91,14 @@ Current implemented behavior is deliberately narrow:
 - Observer subscriptions are separate from `ShuttlePipelineOptions` and
   `shuttlePipelineIdentity`; installing an observer does not change the
   compiled module or semantic cache identity.
-- `ShuttleXlaRegistration` exposes `runShuttleXlaTransform`, the composite
-  callback that runs the same pipeline and observer registry. The unapplied XLA
-  registry patch still owns transactional cloning, canonical option parsing,
-  and static registration; this target does not establish ordinary-JAX use.
+- `ShuttleXlaRegistration` parses the exact canonical Python compiler-options
+  schema and invokes the shared production builder. Numerical policy, schema
+  version, pipeline ABI version, and the complete tuning object are part of
+  `canonicalOptions`; observer policy identity hashes that full cache key.
+- `ShuttleXlaRegistryAdapter` is an `alwayslink` translation unit that
+  automatically registers the keyed `shuttle` callback in XLA's generic
+  registry. The separate pinned JAX patch links it at final CPU `_jax`
+  composition; GPU PJRT plugin linkage remains a later checkpoint.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle
