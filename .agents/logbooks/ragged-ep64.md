@@ -17,7 +17,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The process-per-GPU, four-node exact proxy now trains with finite loss and zero routing drops. The original ragged transfer launched only one block per peer and reached 11.28% MFU. Splitting each peer slice into 32 logical updates raises the grid from 16 to 512 blocks and reaches 18.08% MFU. Reusing the existing QuACK/CuTe SM100 grouped GEMMs for activation-path expert compute reaches the best stable result, 19.63% mean MFU. XProf and bounded XLA/NCCL/Pallas changes did not cross 20%; the active campaign now screens alternative grouped-Wgrad backends and a persistent MoE schedule against the measured 17.3% kernel target.
+The process-per-GPU, four-node exact proxy now trains with finite loss and zero routing drops. The original ragged transfer launched only one block per peer and reached 11.28% MFU. Splitting each peer slice into 32 logical updates raises the grid from 16 to 512 blocks and reaches 18.08% MFU. Reusing the existing QuACK/CuTe SM100 grouped GEMMs for activation-path expert compute reaches the best stable result, 19.63% mean MFU. The first alternative Wgrad screen is positive: cuDNN Frontend reduces the exact standalone `dw13`/`dw2` pair by 29.04%, enough to project 20.26% MFU before adapter overhead. Transformer Engine and Mixture-of-Kittens screens remain active before a four-node integration.
 
 ## Current Baseline
 
@@ -31,7 +31,7 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 ### Active
 
 - `RA2A-TE`: Transformer Engine JAX BF16 grouped GEMM supports the exact `dw13` and `dw2` weight-gradient layouts and reduces their combined time by at least 17.3%. Next test: exact one-GB200 harness.
-- `RA2A-CUDNN`: cuDNN Frontend grouped Wgrad supports the exact layouts and clears the same target when Transformer Engine is unavailable or insufficient. Next test: API probe, then exact one-GB200 harness.
+- `RA2A-CUDNN`: cuDNN Frontend grouped Wgrad supports the exact layouts and clears the target in a one-GB200 screen. Next test: a JAX FFI adapter with per-expert 256-row alignment, then the exact four-node run if adapter overhead remains below 0.2436 seconds/step.
 - `RA2A-MOK`: Mixture-of-Kittens' persistent forward/backward schedule retains a material advantage at the exact hero-layer geometry. Next test: four-GB200 process-per-GPU oracle before JAX integration.
 - `RA2A-OFFLOAD`: step-boundary optimizer-state staging can hide at least 0.3606 seconds/step without exceeding HBM. Next test: semantic host/device trace or Nsight Systems after compute screening.
 
@@ -61,6 +61,7 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - 2026-08-08: Reduce the send/recv peer FIFO before changing the XLA memory fraction. The failing executable already exceeds XLA's rematerialization target, while `NCCL_BUFFSIZE` directly controls the late allocation that failed.
 - 2026-08-08: Do not reduce the FIFO below 1 MiB after `RA2A-003`: allocation already succeeded, and a smaller FIFO cannot explain or repair the new low-power collective spin. Test grouped NCCL launch next.
 - 2026-08-10: Reopen #8077 for alternative grouped-MoE implementations outside the sealed flag sweep. Require a 17.3% combined exact-shape Wgrad reduction before a four-node training arm; run Transformer Engine, cuDNN Frontend, and Mixture-of-Kittens screens serially and retain process-per-GPU for distributed tests.
+- 2026-08-10: Promote cuDNN Frontend's 256x256 grouped-Wgrad configuration to JAX-adapter work. Its exact one-GB200 result exceeds the kernel gate by 11.7 percentage points and projects 0.2436 seconds/step of integration-overhead budget before falling back below 20% MFU.
 
 ## Negative Results Index
 
@@ -1032,3 +1033,13 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Serialized queue: Transformer Engine API/exact-shape screen; cuDNN API/exact-shape screen; four-GPU exact-shape MoK oracle; winning four-node same-rack S33 integration; one semantic optimizer-offload profile and targeted overlap treatment.
 - Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5243442771
 - Next action: probe the installed GPU image and dependency lock for Transformer Engine/cuDNN APIs, then extend the one-GB200 harness with the smallest viable backend adapter.
+
+### 2026-08-10 17:17 UTC - cuDNN grouped Wgrad clears the kernel gate
+
+- Run: `ra2a-s39-cudnn-wgrad-bench-20260810-coord`; child `/power/ra2a-s39-cudnn-wgrad-bench-20260810-coord/cudnn-ragged-weight-grad-gb200`. Both tasks succeeded without failure, retry, or preemption on one NVIDIA GB200.
+- Harness: commit `1b0d2bf9f2` dynamically installs `nvidia-cudnn-frontend==1.27.0` and measures the exact S34 physical rows and Wgrad dimensions. The active group sizes `[116218, 116217, 116217]` become three 116224-row groups by placing 6, 7, and 7 zeros in the existing 20-row routing tail; no additional physical rows are allocated. Every tested output matched a Torch BF16 dense reference exactly.
+- Best configuration: 256x256 MMA tile with a 2x1 cluster. `dw13` fell from the production Pallas microbenchmark's 30.3105 milliseconds to 20.6860 milliseconds, a 31.75% reduction. `dw2` fell from 12.3833 to 9.6076 milliseconds, a 22.41% reduction. Combined time fell from 42.6938 to 30.2937 milliseconds, a 29.04% reduction. The 128x128 alternatives were slower on both shapes.
+- Projection: scaling the S34 `dw13` and `dw2` kernel totals by their respective measured ratios saves 0.6041 seconds/step. Applied to S33, that predicts 18.8387 seconds/step and 20.2586% MFU before padding, adapter, or launch overhead. The path can absorb at most 0.2436 seconds/step of integration overhead and still reach 20%.
+- Confidence: exploratory. This is one standalone Torch/cuDNN Frontend run with five steady-state samples per shape, not yet a JAX FFI or full-training measurement. The result is large enough to justify adapter work, but the projection is not a training result.
+- Artifact: `s3://marin-us-east-02a/marin/benchmarks/cudnn-ragged-weight-grad-gb200/2026.08.10.39`.
+- Next action: run the serialized Transformer Engine exact-shape feasibility probe, then design the smallest JAX FFI wrapper around the cuDNN Frontend operation while the four-GPU MoK oracle remains queued.
