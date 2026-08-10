@@ -3525,3 +3525,40 @@ author: dlwh
   toolchain, exact invocation, bundle/archive hashes, and release proof are
   under
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_outputs2_e01a4638_v0/`.
+
+### 2026-08-09 18:20 PDT - TLTC-XLA-071 partitioned SM90 mainloop boundary
+
+- Dao-AILab/QuACK revision
+  `84ef91df9bec87c7e4938517234fafb07ef844dd` and the locked
+  `quack-kernels==0.5.0` wheel were inspected directly. Exact hashes for the
+  mainloop, epilogue, and wheel sources are recorded in
+  `lib/tile_lifetime/docs/quack_partitioned_mainloop_lineage.md`. Neither
+  implementation exposes a segmented RHS tensor or partitioned-accumulator
+  interface. `concat_layout` only relabels one allocation.
+- `plan_quack_partitioned_mainloop` now lowers an arbitrary static-RHS
+  `PartitionedGemmProgram` into one kernel, one ordered K loop, one shared A
+  stage, and coordinate-aligned WGMMA groups. The natural `[32,32,4]` RHS
+  extents legalize to MMA-N widths `[32,32,8]`; the final group retains four
+  valid lanes. Equal-width groups expose congruent coordinates to the
+  generated scalar AST, followed by declared BF16 round-to-nearest-even
+  boundaries and direct scalar/passthrough stores.
+- The SiLU-to-tanh semantic mutation preserves the tiled groups and output
+  domains while changing the generated scalar source and physical digest.
+  Fifteen focused tests pass. Touched-file Pyrefly reports zero errors. The
+  package-wide test collection in this narrow worktree remains blocked by the
+  missing optional `haliax` dependency in three unrelated benchmark-import
+  tests.
+- A first reusable external patch adds tuple-oriented SM90 helpers for
+  validating RHS segments, constructing congruent accumulator groups, issuing
+  every group's WGMMA work before the common stage is released, and applying
+  the BF16 boundary. This is not yet an executable Contract: stock
+  `GemmSm90.__call__` and `kernel` still own one B descriptor, accumulator, and
+  output. A generated producer/scheduler/direct-store kernel remains required
+  before allocating H100.
+- The patch applies cleanly as a new module and passes Python source
+  compilation. A standalone H100 preflight now checks the QuACK revision,
+  patch digest, patched-module import, and helper symbols; it intentionally
+  fails until the complete generic `PartitionedGemmSm90` executor exists, so a
+  stock single-RHS or split-GEMM fallback cannot be mistaken for this result.
+- No GPU was requested. This checkpoint narrows the clean backend extension;
+  it does not establish physical correctness or performance.

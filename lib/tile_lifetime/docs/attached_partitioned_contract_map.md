@@ -149,3 +149,9 @@ The smallest implementation sequence is:
 Until those steps execute on GPU, the adapter plan is an implementation
 contract only. It does not establish physical ownership or satisfy a
 performance acceptance row.
+
+The follow-up [source-lineage audit](quack_partitioned_mainloop_lineage.md)
+also checks the locked `quack-kernels==0.5.0` package and narrows the first
+tiled implementation to one shared A stage plus coordinate-aligned WGMMA
+groups for each RHS segment. The newer package does not remove the segmented
+operand limitation.
