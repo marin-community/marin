@@ -153,6 +153,11 @@ def _with_routing_columns(
     )
 
 
+def _column_routing_exprs(key: ColumnExpr, sort_by: ColumnExpr | None) -> tuple[pl.Expr, pl.Expr]:
+    """Polars expressions for ``col(...)`` key/sort columns already present on a frame."""
+    return pl.col(key.name), pl.col(sort_by.name) if sort_by is not None else pl.lit(None)
+
+
 def _columns_to_dataframe(
     payloads: list[bytes],
     key_values: list[Any],
@@ -504,6 +509,34 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
     return combined
 
 
+def _combine_scatter_buffer(
+    buffer: pl.DataFrame,
+    key: Callable | ColumnExpr,
+    sort_by: Callable | ColumnExpr | None,
+    combiner_fn: Callable,
+) -> pl.DataFrame | None:
+    """Run *combiner_fn* per shard and rebuild routing columns. Empty → ``None``."""
+    frames: list[pl.DataFrame] = []
+    key_fn = key.evaluate if isinstance(key, ColumnExpr) else key
+    for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
+        rows = list(_dataframe_to_items(group))
+        rows = _apply_combiner(rows, key_fn, combiner_fn)
+        if not rows:
+            continue
+        # Shard is already assigned; rebuild sort keys then restore it.
+        if _PAYLOAD_COL in group.columns:
+            df = _items_to_dataframe(rows, key, sort_by, num_output_shards=1)
+        else:
+            assert isinstance(key, ColumnExpr)
+            assert sort_by is None or isinstance(sort_by, ColumnExpr)
+            key_expr, sort_value_expr = _column_routing_exprs(key, sort_by)
+            df = _with_routing_columns(pl.DataFrame(rows), key_expr, sort_value_expr, num_output_shards=1)
+        frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
+    if not frames:
+        return None
+    return pl.concat(frames, how="vertical_relaxed", rechunk=True)
+
+
 class ScatterWriter:
     """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
 
@@ -577,24 +610,10 @@ class ScatterWriter:
         self._buffer_estimated_bytes = 0
 
         if self._combiner_fn is not None:
-            frames: list[pl.DataFrame] = []
-            for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
-                rows = list(_dataframe_to_items(group))
-                key_fn = self._key.evaluate if isinstance(self._key, ColumnExpr) else self._key
-                rows = _apply_combiner(rows, key_fn, self._combiner_fn)
-                if not rows:
-                    continue
-                # Shard is already assigned; rebuild sort keys then restore it.
-                if _PAYLOAD_COL in group.columns:
-                    df = _items_to_dataframe(rows, self._key, self._sort_by, num_output_shards=1)
-                else:
-                    key_expr = pl.col(self._key.name)
-                    sort_value_expr = pl.col(self._sort_by.name) if self._sort_by is not None else pl.lit(None)
-                    df = _with_routing_columns(pl.DataFrame(rows), key_expr, sort_value_expr, num_output_shards=1)
-                frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
-            if not frames:
+            combined = _combine_scatter_buffer(buffer, self._key, self._sort_by, self._combiner_fn)
+            if combined is None:
                 return
-            buffer = pl.concat(frames, how="vertical_relaxed", rechunk=True)
+            buffer = combined
 
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer
@@ -678,8 +697,7 @@ class ScatterWriter:
                 self._sort_by, ColumnExpr
             ), f"DataFrame/RecordBatch scatter items require sort_by=zephyr.expr.col(...), got {self._sort_by!r}"
 
-        key_expr = pl.col(self._key.name)
-        sort_value_expr = pl.col(self._sort_by.name) if self._sort_by is not None else pl.lit(None)
+        key_expr, sort_value_expr = _column_routing_exprs(self._key, self._sort_by)
         self.write(_with_routing_columns(df, key_expr, sort_value_expr, self._num_output_shards))
 
     def close(self) -> ListShard:

@@ -177,33 +177,27 @@ def _make_normalize_batch_fn(
     max_whitespace_run_chars: int,
     bare: bool = False,
     drop_fields: tuple[str, ...] = (),
-) -> Callable[[pa.RecordBatch], Iterator[pl.DataFrame]]:
-    """Return a batch transform: RecordBatch → zero or one normalized DataFrames.
+) -> Callable[[pa.RecordBatch | pl.DataFrame], Iterator[pl.DataFrame]]:
+    """Return a batch → zero-or-one normalized DataFrame transform.
 
-    Vectorized equivalent of the old per-record filter + normalize + whitespace
-    compaction path:
-
-    1. Drop rows with missing/blank ``text_field`` (count
-       ``normalize/empty_text_filtered``).
-    2. Compact over-long whitespace runs (count
-       ``COMPACTED_WHITESPACE_COUNTER`` for changed rows).
-    3. Generate deterministic ``id`` via xxh3_128 of the (possibly compacted)
-       text.
-    4. Rename *id_field* → ``source_id`` when present; keep other columns
-       unless *bare* or *drop_fields* removes them.
+    Drops blank ``text_field`` rows (``normalize/empty_text_filtered``),
+    compacts over-long whitespace runs (``COMPACTED_WHITESPACE_COUNTER``),
+    assigns deterministic ``id`` via xxh3_128 of the compacted text, and
+    renames *id_field* → ``source_id`` when present. Other columns are kept
+    unless *bare* or *drop_fields* removes them.
 
     *bare* keeps only ``id``, ``text``, and (when present) ``source_id`` —
     required when extra columns vary across shards and would break a uniform
-    Parquet schema.
-
-    Yields nothing when every row in the batch is filtered out, so Scatter
-    never sees an empty frame missing the ``id`` routing column.
+    Parquet schema. Yields nothing when every row is filtered out.
     """
     whitespace_pattern = rf"(\s{{{max_whitespace_run_chars}}})\s+"
 
-    def normalize_batch(batch: pa.RecordBatch) -> Iterator[pl.DataFrame]:
-        df = pl.from_arrow(batch)
-        assert isinstance(df, pl.DataFrame)
+    def normalize_batch(batch: pa.RecordBatch | pl.DataFrame) -> Iterator[pl.DataFrame]:
+        if isinstance(batch, pa.RecordBatch):
+            df = pl.from_arrow(batch)
+            assert isinstance(df, pl.DataFrame)
+        else:
+            df = batch
 
         if text_field not in df.columns:
             if df.height:
@@ -405,10 +399,9 @@ def _build_pipeline(
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*.
 
-    Loads inputs as Arrow batches, normalizes each batch in Polars, then
-    hands the resulting DataFrames straight to ``group_by``. ``col("id")``
-    lets Scatter ingest each batch via ``write_batch`` (vectorized Polars
-    routing, no per-row Python conversion) — same pattern as fuzzy_dups.
+    Loads inputs as columnar batches, normalizes each batch, then
+    ``group_by(key=col("id"), sort_by=col("id"), ...)`` so Scatter can ingest
+    DataFrames directly.
     """
     normalize_batch = _make_normalize_batch_fn(
         text_field,
