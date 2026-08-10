@@ -1,0 +1,17 @@
+Job: /dlwh/shuttle-attn-training-h100-20260809 (/dlwh/shuttle-attn-training-h100-20260809)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: + rm -rf /tmp/attn-venv /tmp/cuda132-toolkit /tmp/attn-training-h100
++ uv venv /tmp/attn-venv --python 3.12
+Using CPython 3.12.13
+Creating virtual environment at: /tmp/attn-venv
+Activate with: source /tmp/attn-venv/bin/activate
++ uv pip install --python /tmp/attn-venv/bin/python 'jax[cuda13]==0.10.1' torch==2.11.0 'triton>=3.6.0,<3.7' 'nvidia-cuda-cccl-cu13>=13.0'
+Using Python 3.12.13 environment at: /tmp/attn-venv
+  × No solution found when resolving dependencies:
+  ╰─▶ Because only nvidia-cuda-cccl-cu13<=0.0.1 is available and you require
+      nvidia-cuda-cccl-cu13>=13.0, we can conclude that your requirements
+      are unsatisfiable.
+
+  TASK  STATE      EXIT  DURATION      PEAK MEM    CUR MEM
+     0  failed        1  5.26 seconds  -           -

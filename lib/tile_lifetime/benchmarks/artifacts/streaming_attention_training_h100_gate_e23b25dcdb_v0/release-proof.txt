@@ -1,0 +1,18 @@
+Iris terminal state:
+
+  Job: /dlwh/shuttle-attn-training-h100-20260809
+  State: failed
+  Failures: 1
+  Preemptions: 0
+  Task 0 exit code: 1
+  Task 0 duration: 5.26 seconds
+  Maximum retries: 0
+
+Exact Kubernetes task-label query after failure retrieval:
+
+  kubectl --kubeconfig ~/.kube/coreweave-iris \
+    --context marin-rn02a_RNO2A --namespace iris get pods \
+    -l iris.task_id=dlwh-shuttle-attn-training-h100-20260809-0 \
+    -o name
+
+The query returned no pod names. No holder session was created.
