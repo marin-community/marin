@@ -239,14 +239,12 @@ def generate_streaming_attention_backward_ffi(
         StreamingAttentionBackwardFfiBuffer(name, DType.BF16, shape, layout_by_name[name])
         for name, shape in output_shapes.items()
     )
+    forward_output_strides = _contiguous_strides(output_shape)
     kernels: list[TritonAotKernelPlan] = []
     if state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE:
         output_by_name = {output.name: output for output in outputs}
-        forward_output_strides = (
-            output_by_name["forward_output"].strides
-            if result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS
-            else _contiguous_strides(output_shape)
-        )
+        if result_policy is StreamingAttentionBackwardResultPolicy.FORWARD_OUTPUT_AND_GRADIENTS:
+            forward_output_strides = output_by_name["forward_output"].strides
         kernels.append(
             _forward_aot_plan(
                 query_shape,
@@ -266,6 +264,7 @@ def generate_streaming_attention_backward_ffi(
             program.output_scale,
             schedule,
             outputs=outputs,
+            forward_output_strides=forward_output_strides,
             num_warps=num_warps,
             num_stages=num_stages,
         )
@@ -647,6 +646,7 @@ def _reverse_aot_plans(
     schedule: StreamingAttentionBackwardTileSchedule,
     *,
     outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
+    forward_output_strides: tuple[int, ...],
     num_warps: int,
     num_stages: int,
 ) -> tuple[TritonAotKernelPlan, TritonAotKernelPlan]:
@@ -681,7 +681,7 @@ def _reverse_aot_plans(
         *(str(value) for value in q_strides),
         *(str(value) for value in k_strides),
         *(str(value) for value in k_strides),
-        *(str(value) for value in q_strides),
+        *(str(value) for value in forward_output_strides),
         *(str(value) for value in q_strides),
         *(str(value) for value in query_cotangent_strides),
         str(block_m),

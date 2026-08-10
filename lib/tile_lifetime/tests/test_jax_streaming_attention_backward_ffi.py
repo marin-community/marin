@@ -160,6 +160,7 @@ def test_training_plan_returns_recomputed_forward_output_without_output_scratch(
         "value_cotangent",
     )
     assert generated.aot_kernels[0].signature[26:30] == tuple(str(stride) for stride in generated.outputs[0].strides)
+    assert generated.aot_kernels[1].signature[27:31] == tuple(str(stride) for stride in generated.outputs[0].strides)
     assert tuple(kernel.kernel_name for kernel in generated.aot_kernels) == (
         "_streaming_grouped_query_forward",
         "_streaming_dq_kernel",
