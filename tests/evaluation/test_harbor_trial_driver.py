@@ -155,7 +155,13 @@ def _run_single_turn_aime_agent(
             max_tokens=256,
             request_retry_initial=0.001,
         )
-        asyncio.run(agent.run("Solve this AIME problem", Environment(), object()))
+        # Invoke the callbacks exactly as upstream Harbor's trial runner does: by keyword.
+        async def _drive():
+            environment = Environment()
+            await agent.setup(environment=environment)
+            await agent.run(instruction="Solve this AIME problem", environment=environment, context=object())
+
+        asyncio.run(_drive())
         print(json.dumps({{
             "answer": agent_module.Path({str(answer_path)!r}).read_text(),
             "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
