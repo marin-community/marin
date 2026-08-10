@@ -9,6 +9,7 @@ import asyncio
 import json
 import re
 import shlex
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -18,8 +19,6 @@ from typing import Any
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.models.agent.context import AgentContext  # pyrefly: ignore[missing-import]
-from rigging.timing import ExponentialBackoff, retry_with_backoff
-from upath import UPath  # pyrefly: ignore[missing-import]
 
 _BOXED_ANSWER = re.compile(r"\\boxed\s*\{\s*([0-9]{1,3})\s*\}")
 _STANDALONE_INTEGER = re.compile(r"(?<![0-9])([0-9]{1,3})(?![0-9])")
@@ -33,6 +32,26 @@ def _model_request_should_retry(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in _RETRYABLE_HTTP_STATUS
     return isinstance(exc, (TimeoutError, urllib.error.URLError))
+
+
+def _request_json(request: urllib.request.Request, *, timeout: float, max_attempts: int, retry_initial: float) -> object:
+    """POST ``request`` and return the parsed JSON body, retrying transient failures with backoff.
+
+    The retry is inlined instead of reusing ``rigging.timing`` so this agent stays importable in
+    Harbor's isolated driver environment, which installs only upstream Harbor and the standard
+    library.
+    """
+    delay = min(retry_initial, _MAX_RETRY_DELAY)
+    for attempt in range(max_attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.load(response)
+        except Exception as exc:
+            if attempt == max_attempts - 1 or not _model_request_should_retry(exc):
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2.0, _MAX_RETRY_DELAY)
+    raise AssertionError("unreachable: the loop returns on success or raises on the final attempt")
 
 
 def _completion_content(
@@ -67,22 +86,7 @@ def _completion_content(
         method="POST",
     )
 
-    def request_payload() -> object:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)
-
-    payload = retry_with_backoff(
-        request_payload,
-        retryable=_model_request_should_retry,
-        max_attempts=max_attempts,
-        backoff=ExponentialBackoff(
-            initial=min(retry_initial, _MAX_RETRY_DELAY),
-            maximum=_MAX_RETRY_DELAY,
-            factor=2.0,
-            jitter=0,
-        ),
-        operation="Harbor model request",
-    )
+    payload = _request_json(request, timeout=timeout, max_attempts=max_attempts, retry_initial=retry_initial)
     if not isinstance(payload, Mapping):
         raise ValueError("model response must be a JSON object")
     choices = payload.get("choices")
@@ -120,7 +124,7 @@ class SingleTurnAimeAgent(BaseAgent):
 
     def __init__(
         self,
-        logs_dir: Path | UPath,
+        logs_dir: Path,
         model_name: str,
         api_base: str,
         answer_path: str,
