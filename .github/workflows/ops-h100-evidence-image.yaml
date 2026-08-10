@@ -44,6 +44,20 @@ jobs:
           fi
           echo "full_sha=$full_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Docker build context inputs
+        id: context
+        run: |
+          context_manifest="lib/iris/images/h100-evidence-debian12-amd64.sha256"
+          dockerignore="lib/iris/Dockerfile.dockerignore"
+          if [[ ! -s "$context_manifest" ]]; then
+            echo "required Docker context manifest is missing or empty: $context_manifest" >&2
+            exit 1
+          fi
+          if ! grep -Fxq "!$context_manifest" "$dockerignore"; then
+            echo "Dockerfile-specific ignore rules exclude required manifest: $context_manifest" >&2
+            exit 1
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
