@@ -3368,6 +3368,48 @@ author: dlwh
   StableHLO, optimized HLO, environment, invocation, and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.
 
+### 2026-08-09 - TLTC-XLA-064 multi-output row-Fold schedule
+
+- Revision `449bd8690d` adds a physical schedule parameter that lets each tiled
+  row-axis Fold group own two logical output columns. Both columns retain the
+  same deterministic lane tree as the one-output schedule. The warp mapping
+  keeps each output lane contiguous across group lanes and predicates tail
+  columns.
+- The semantic fingerprint and CPU Fold results are unchanged across one- and
+  two-output schedules. The generated Torch-free typed-FFI source exposes the
+  schedule explicitly, and ordinary uncentered and centered JAX normalization
+  VJPs select it through the same generic `AxisFoldProgram`.
+- All 553 tile-lifetime tests passed, including an odd-width 35-column case and
+  the centered LayerNorm-style reverse path. Changed-file pre-commit and
+  Pyrefly passed.
+- This is a static/code-generation checkpoint. CUDA compilation and H100/GB200
+  latency are unmeasured. The next experiment compares one and two outputs per
+  group against matched XLA at the existing 2,048 by 4,096 RMS-style backward
+  shape without changing block size or Fold semantics.
+
+### 2026-08-09 - TLTC-XLA-065 partitioned QuACK adapter boundary
+
+- Revision `e536b01152` records the generic backend contract for the attached
+  68-wide Contract with logical output partitions `[32, 32, 4]`. The plan is
+  pinned to QuACK `84ef91df9bec87c7e4938517234fafb07ef844dd` and retains the
+  generated scalar AST, BF16 round-to-nearest-even partition boundaries, and
+  direct mapped/passthrough output stores.
+- The three right-hand operands are distinct natural-HLO parameters. QuACK's
+  existing `acc_pair` cannot map corresponding coordinates from `[0:32]` and
+  `[32:64]` while retaining `[64:68]`, and alias coalescing cannot combine the
+  source allocations. A high-throughput backend therefore needs a generic
+  segmented RHS source whose intersecting TMA transfers contribute to one B
+  stage, plus coordinate-aware accumulator views and partition-local stores.
+- The existing multi-output shared-memory/TMA store driver is reusable. The
+  missing reusable hooks are a segmented B descriptor, an epilogue partition
+  descriptor/cache key, coordinate-tensor partition views, and an explicit
+  input-N-range to output-local-N map in `TileStore`.
+- The adapter remains a plan, not physical ownership. It passed 556 package
+  tests and mutation coverage for SiLU-to-tanh, but no kernel is registered and
+  no GPU performance or correctness claim exists. The first executable proof
+  will use a generic bounded scalar segmented Contract; composed multi-source
+  TMA remains the high-throughput follow-up.
+
 ### 2026-08-09 - TLTC-XLA-063 natural-Grug Contract/Map ABI audit
 
 - The `shared_map_fused_reverses` HLO contains 13 existing calls. Generic
